@@ -1,5 +1,4 @@
 using Piston.Core;
-using Piston.Core.Models;
 using Piston.Core.Orchestration;
 using Piston.Core.Services;
 using SharpConsoleUI;
@@ -10,7 +9,9 @@ using Piston.Views;
 var state = new PistonState();
 var fileWatcher = new FileWatcherService();
 var buildService = new BuildService();
-var orchestrator = new PistonOrchestrator(fileWatcher, buildService, state);
+var trxParser = new TrxResultParser();
+var testRunner = new TestRunnerService(trxParser);
+var orchestrator = new PistonOrchestrator(fileWatcher, buildService, testRunner, state);
 
 // --- Start TUI ---
 var driver = new NetConsoleDriver(RenderMode.Buffer);

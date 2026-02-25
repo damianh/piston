@@ -7,20 +7,22 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 {
     private readonly IFileWatcherService _fileWatcher;
     private readonly IBuildService _buildService;
+    private readonly ITestRunnerService _testRunner;
     private readonly PistonState _state;
 
     private CancellationTokenSource? _cts;
     private string? _solutionPath;
-    private Task _currentRun = Task.CompletedTask;
     private readonly SemaphoreSlim _runLock = new(1, 1);
 
     public PistonOrchestrator(
         IFileWatcherService fileWatcher,
         IBuildService buildService,
+        ITestRunnerService testRunner,
         PistonState state)
     {
         _fileWatcher = fileWatcher;
         _buildService = buildService;
+        _testRunner = testRunner;
         _state = state;
 
         _fileWatcher.FileChanged += OnFileChanged;
@@ -60,32 +62,47 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     {
         if (_solutionPath is null) return;
 
-        // Fire-and-forget; cancellation of prior run happens inside TriggerRunAsync
+        // Fire-and-forget; cancellation of prior run handled inside TriggerRunAsync
         _ = TriggerRunAsync(_solutionPath);
     }
 
     private async Task TriggerRunAsync(string solutionPath)
     {
-        // Cancel any in-progress run
+        // Issue a new CTS, cancelling whatever was running before
         var oldCts = _cts;
         var newCts = new CancellationTokenSource();
         _cts = newCts;
         oldCts?.Cancel();
+        oldCts?.Dispose();
 
-        // Serialize runs so only one executes at a time
-        await _runLock.WaitAsync(newCts.Token).ConfigureAwait(false);
+        // Serialize: only one pipeline runs at a time
         try
         {
-            if (newCts.Token.IsCancellationRequested) return;
+            await _runLock.WaitAsync(newCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return; // Superseded before we even started
+        }
 
-            // --- Build phase ---
+        try
+        {
+            var ct = newCts.Token;
+
+            // --- Build ---
             _state.Phase = PistonPhase.Building;
             _state.NotifyChanged();
 
-            var buildResult = await _buildService.BuildAsync(solutionPath, newCts.Token).ConfigureAwait(false);
+            BuildResult buildResult;
+            try
+            {
+                buildResult = await _buildService.BuildAsync(solutionPath, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { return; }
+
             _state.LastBuild = buildResult;
 
-            if (newCts.Token.IsCancellationRequested) return;
+            if (ct.IsCancellationRequested) return;
 
             if (buildResult.Status == BuildStatus.Failed)
             {
@@ -94,7 +111,21 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                 return;
             }
 
-            // TestRunnerService will be wired in Phase 3 — for now return to Watching
+            // --- Test ---
+            _state.Phase = PistonPhase.Testing;
+            _state.NotifyChanged();
+
+            IReadOnlyList<TestSuite> suites;
+            try
+            {
+                suites = await _testRunner.RunTestsAsync(solutionPath, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) { return; }
+
+            if (ct.IsCancellationRequested) return;
+
+            _state.TestSuites = suites;
+            _state.LastRunTime = DateTimeOffset.UtcNow;
             _state.Phase = PistonPhase.Watching;
             _state.NotifyChanged();
         }

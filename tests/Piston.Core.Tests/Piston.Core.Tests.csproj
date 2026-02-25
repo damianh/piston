@@ -16,4 +16,8 @@
     <ProjectReference Include="..\..\src\Piston.Core\Piston.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="Services\Fixtures\**\*.trx" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
