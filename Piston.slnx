@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Piston.Core/Piston.Core.csproj" />
+    <Project Path="src/Piston/Piston.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Piston.Core.Tests/Piston.Core.Tests.csproj" />
+  </Folder>
+</Solution>
