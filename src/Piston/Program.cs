@@ -108,6 +108,11 @@ static async Task RunAsync(FileInfo? solutionArg, int cliDebounceMs, string? cli
         windowSystem.Shutdown();  // triggers normal driver.Stop() cleanup
     };
 
+    // Switch to the alternate screen buffer so the TUI doesn't mix with the
+    // shell's scroll-back history.  Restore it on both normal and abrupt exit.
+    Console.Write("\x1b[?1049h");   // enter alternate screen
+    AppDomain.CurrentDomain.ProcessExit += (_, _) => Console.Write("\x1b[?1049l");
+
     PistonWindow.Create(windowSystem, state, orchestrator, options);
 
     // 7. Start watching in background (after TUI is set up)
@@ -119,6 +124,8 @@ static async Task RunAsync(FileInfo? solutionArg, int cliDebounceMs, string? cli
     // 9. Graceful shutdown
     orchestrator.Stop();
     orchestrator.Dispose();
+
+    Console.Write("\x1b[?1049l");   // leave alternate screen
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
