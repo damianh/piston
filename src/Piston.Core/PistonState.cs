@@ -10,6 +10,12 @@ public sealed class PistonState
     public IReadOnlyList<TestSuite> TestSuites { get; set; } = [];
     public DateTimeOffset? LastRunTime { get; set; }
 
+    /// <summary>
+    /// Optional substring or regex to filter which tests appear in the tree.
+    /// Null means show all tests.
+    /// </summary>
+    public string? TestFilter { get; set; }
+
     public int TotalPassed => TestSuites.SelectMany(s => s.Tests).Count(t => t.Status == TestStatus.Passed);
     public int TotalFailed => TestSuites.SelectMany(s => s.Tests).Count(t => t.Status == TestStatus.Failed);
     public int TotalSkipped => TestSuites.SelectMany(s => s.Tests).Count(t => t.Status == TestStatus.Skipped);
