@@ -40,6 +40,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         _state.NotifyChanged();
 
         _fileWatcher.Start(solutionDir);
+
+        // Kick off an initial build+test run so results appear on startup
+        // without waiting for the first file-change event.
+        _ = TriggerRunAsync(solutionPath);
+
         return Task.CompletedTask;
     }
 
