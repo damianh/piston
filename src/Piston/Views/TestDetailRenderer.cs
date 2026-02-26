@@ -39,9 +39,9 @@ public static class TestDetailRenderer
         // Status + duration
         var statusMarkup = test.Status switch
         {
-            TestStatus.Passed  => "[green]PASSED[/]",
-            TestStatus.Failed  => "[red]FAILED[/]",
-            TestStatus.Skipped => "[yellow]SKIPPED[/]",
+            TestStatus.Passed  => "[green3]PASSED[/]",
+            TestStatus.Failed  => "[red3]FAILED[/]",
+            TestStatus.Skipped => "[gold1]SKIPPED[/]",
             TestStatus.Running => "[cyan]RUNNING[/]",
             _                  => "[dim]NOT RUN[/]",
         };
@@ -52,7 +52,7 @@ public static class TestDetailRenderer
         if (!string.IsNullOrWhiteSpace(test.ErrorMessage))
         {
             sb.AppendLine();
-            sb.AppendLine("[red]Error:[/]");
+            sb.AppendLine("[red3]Error:[/]");
             sb.AppendLine(Escape(test.ErrorMessage));
         }
 
@@ -83,9 +83,9 @@ public static class TestDetailRenderer
 
         return $"[bold]{Escape(suite.Name)}[/]\n\n" +
                $"Tests:    [bold]{suite.Tests.Count}[/]\n" +
-               $"Passed:   [green]{passed}[/]\n" +
-               $"Failed:   [red]{failed}[/]\n" +
-               $"Skipped:  [yellow]{skipped}[/]\n" +
+               $"Passed:   [green3]{passed}[/]\n" +
+               $"Failed:   [red3]{failed}[/]\n" +
+               $"Skipped:  [gold1]{skipped}[/]\n" +
                $"Duration: [dim]{suite.TotalDuration.TotalSeconds:F2}s[/]";
     }
 

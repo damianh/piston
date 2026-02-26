@@ -7,6 +7,7 @@ using SharpConsoleUI.Builders;
 using SharpConsoleUI.Controls;
 using SharpConsoleUI.Events;
 using SharpConsoleUI.Layout;
+using Color = Spectre.Console.Color;
 
 namespace Piston.Views;
 
@@ -38,15 +39,18 @@ public static class PistonWindow
             .WithName("lastrun")
             .Build();
 
-        var headerBar = Controls.HorizontalGrid()
+        var headerBar = Controls.Toolbar()
+            .Add(phaseMarkup)
+            .AddSeparator()
+            .Add(solutionMarkup)
+            .AddSeparator()
+            .Add(lastRunMarkup)
+            .WithBackgroundColor(Color.Grey11)
             .StickyTop()
-            .Column(col => col.Add(phaseMarkup))
-            .Column(col => col.Add(solutionMarkup))
-            .Column(col => col.Add(lastRunMarkup))
             .Build();
 
         // --- Main content: test tree (left) + detail panel (right) ---
-        var detailContent = Controls.Markup("[dim]Select a test to view details.[/]")
+        var detailContent = Controls.Markup(WelcomeMarkup())
             .WithName("detail-content")
             .Build();
 
@@ -66,8 +70,8 @@ public static class PistonWindow
 
         var mainGrid = Controls.HorizontalGrid()
             .WithVerticalAlignment(VerticalAlignment.Fill)
-            .Column(col => col.Width(30).Add(testTree))
-            .Column(col => col.Width(1))
+            .Column(col => col.Width(40).Add(testTree))
+            .WithSplitterAfter(0)
             .Column(col => col.Add(detailPanel))
             .Build();
 
@@ -227,28 +231,35 @@ public static class PistonWindow
     private static string RenderBuildErrors(BuildResult? build)
     {
         if (build is null || build.Errors.Count == 0)
-            return "[red bold]BUILD FAILED[/]\n\n[dim]No error details available.[/]";
+            return "[red3 bold]BUILD FAILED[/]\n\n[dim]No error details available.[/]";
 
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine("[red bold]BUILD FAILED[/]");
+        sb.AppendLine("[red3 bold]BUILD FAILED[/]");
         sb.AppendLine();
         sb.AppendLine($"[dim]{build.Errors.Count} error(s)  –  {build.Duration.TotalSeconds:F2}s[/]");
         sb.AppendLine();
         foreach (var error in build.Errors)
-            sb.AppendLine($"[red]{EscapeMarkup(error)}[/]");
+            sb.AppendLine($"[red3]{EscapeMarkup(error)}[/]");
         return sb.ToString().TrimEnd();
     }
 
     private static string EscapeMarkup(string text) =>
         text.Replace("[", "[[").Replace("]", "]]");
 
+    private static string WelcomeMarkup() =>
+        "[dim]Watching for changes…[/]\n\n" +
+        "[dim]  R[/]  force re-run\n" +
+        "[dim]  F[/]  filter tests\n" +
+        "[dim]  C[/]  clear results\n" +
+        "[dim]  Q[/]  quit";
+
     private static string PhaseMarkup(PistonPhase phase) => phase switch
     {
         PistonPhase.Idle     => "[dim]◌ IDLE[/]",
-        PistonPhase.Watching => "[green]● WATCHING[/]",
-        PistonPhase.Building => "[yellow]⟳ BUILDING[/]",
+        PistonPhase.Watching => "[green3]● WATCHING[/]",
+        PistonPhase.Building => "[gold1]⟳ BUILDING[/]",
         PistonPhase.Testing  => "[cyan]⟳ TESTING[/]",
-        PistonPhase.Error    => "[red]✗ ERROR[/]",
+        PistonPhase.Error    => "[red3]✗ ERROR[/]",
         _                    => "[dim]◌ IDLE[/]",
     };
 

@@ -100,15 +100,15 @@ public static class TestTreeBuilder
     private static string SuiteIcon(int failed, int skipped, int total)
     {
         if (total == 0) return "[dim]◌[/]";
-        if (failed > 0) return "[red]✗[/]";
-        if (skipped > 0) return "[yellow]●[/]";
-        return "[green]✓[/]";
+        if (failed > 0) return "[red3]✗[/]";
+        if (skipped > 0) return "[gold1]●[/]";
+        return "[green3]✓[/]";
     }
 
     private static string ClassLabel(string classKey, IReadOnlyList<TestResult> classTests)
     {
         var failed = classTests.Count(t => t.Status == TestStatus.Failed);
-        var icon   = failed > 0 ? "[red]✗[/]" : "[green]✓[/]";
+        var icon   = failed > 0 ? "[red3]✗[/]" : "[green3]✓[/]";
         var simpleName = classKey.Contains('.')
             ? classKey[(classKey.LastIndexOf('.') + 1)..]
             : classKey;
@@ -117,9 +117,9 @@ public static class TestTreeBuilder
 
     private static string TestLabel(TestResult test) => test.Status switch
     {
-        TestStatus.Passed  => $"[green]✓[/] {test.DisplayName}",
-        TestStatus.Failed  => $"[red]✗[/] {test.DisplayName}",
-        TestStatus.Skipped => $"[yellow]●[/] {test.DisplayName}",
+        TestStatus.Passed  => $"[green3]✓[/] {test.DisplayName}",
+        TestStatus.Failed  => $"[red3]✗[/] {test.DisplayName}",
+        TestStatus.Skipped => $"[gold1]●[/] {test.DisplayName}",
         TestStatus.Running => $"[cyan]⟳[/] {test.DisplayName}",
         _                  => $"[dim]◌[/] {test.DisplayName}",
     };

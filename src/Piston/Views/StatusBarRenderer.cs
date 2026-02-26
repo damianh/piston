@@ -13,7 +13,7 @@ public static class StatusBarRenderer
     public static string Render(int passed, int failed, int skipped, DateTimeOffset? lastRunTime, string? filter = null)
     {
         var filterPart = filter is not null
-            ? $"  [dim]filter:[/] [yellow]{Escape(filter)}[/]"
+            ? $"  [dim]filter:[/] [gold1]{Escape(filter)}[/]"
             : string.Empty;
 
         return $"{CountsMarkup(passed, failed, skipped)}{filterPart}  │  {LastRunMarkup(lastRunTime)}  │  " +
@@ -26,7 +26,7 @@ public static class StatusBarRenderer
         if (total == 0)
             return "[dim]No tests[/]";
 
-        return $"[green]✓ {passed}[/]  [red]✗ {failed}[/]  [yellow]● {skipped}[/]";
+        return $"[green3]✓ {passed}[/]  [red3]✗ {failed}[/]  [gold1]● {skipped}[/]";
     }
 
     private static string LastRunMarkup(DateTimeOffset? lastRunTime) =>
