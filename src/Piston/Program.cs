@@ -99,6 +99,15 @@ static async Task RunAsync(FileInfo? solutionArg, int cliDebounceMs, string? cli
     var driver = new NetConsoleDriver(RenderMode.Buffer);
     var windowSystem = new ConsoleWindowSystem(driver);
 
+    // Route Ctrl+C through the TUI's own shutdown path so the driver can
+    // run its full terminal-cleanup sequence (disabling mouse tracking etc.)
+    // rather than relying on the emergency AppDomain.ProcessExit handler.
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;          // prevent abrupt process kill
+        windowSystem.Shutdown();  // triggers normal driver.Stop() cleanup
+    };
+
     PistonWindow.Create(windowSystem, state, orchestrator, options);
 
     // 7. Start watching in background (after TUI is set up)
