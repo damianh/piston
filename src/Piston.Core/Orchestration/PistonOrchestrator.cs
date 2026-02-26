@@ -41,8 +41,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
         _fileWatcher.Start(solutionDir);
 
-        // Kick off an initial build+test run so results appear on startup
-        // without waiting for the first file-change event.
+        // Kick off an initial build+test run immediately on startup.
         _ = TriggerRunAsync(solutionPath);
 
         return Task.CompletedTask;
@@ -66,8 +65,6 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     private void OnFileChanged(FileChangeEvent evt)
     {
         if (_solutionPath is null) return;
-
-        // Fire-and-forget; cancellation of prior run handled inside TriggerRunAsync
         _ = TriggerRunAsync(_solutionPath);
     }
 
@@ -94,7 +91,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         {
             var ct = newCts.Token;
 
-            // --- Build ---
+            // ── Build ─────────────────────────────────────────────────────
             _state.Phase = PistonPhase.Building;
             _state.NotifyChanged();
 
@@ -103,11 +100,22 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             {
                 buildResult = await _buildService.BuildAsync(solutionPath, ct).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) { return; }
+            catch (OperationCanceledException)
+            {
+                _state.Phase = PistonPhase.Watching;
+                _state.NotifyChanged();
+                return;
+            }
 
             _state.LastBuild = buildResult;
+            _state.LastBuildDuration = buildResult.Duration;
 
-            if (ct.IsCancellationRequested) return;
+            if (ct.IsCancellationRequested)
+            {
+                _state.Phase = PistonPhase.Watching;
+                _state.NotifyChanged();
+                return;
+            }
 
             if (buildResult.Status == BuildStatus.Failed)
             {
@@ -116,32 +124,120 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                 return;
             }
 
-            // --- Test ---
+            // ── Test ──────────────────────────────────────────────────────
             _state.Phase = PistonPhase.Testing;
+
+            // Seed InProgressSuites with last known results, all marked as Running.
+            // This gives immediate "everything is running" feedback in the tree.
+            _state.InProgressSuites = SeedAsRunning(_state.TestSuites);
             _state.NotifyChanged();
+
+            var testStart = DateTimeOffset.UtcNow;
+
+            void OnProgress(IReadOnlyList<TestSuite> liveSuites)
+            {
+                // Merge live stdout results into the last known suites so that tests
+                // not yet reported still show their previous (Running) status.
+                _state.InProgressSuites = MergeProgress(_state.TestSuites, liveSuites);
+                _state.NotifyChanged();
+            }
 
             IReadOnlyList<TestSuite> suites;
             try
             {
-                suites = await _testRunner.RunTestsAsync(solutionPath, ct).ConfigureAwait(false);
+                var result = await _testRunner.RunTestsAsync(
+                    solutionPath,
+                    _state.TestFilter,
+                    OnProgress,
+                    ct).ConfigureAwait(false);
+                suites = result.Suites;
+                _state.LastTestRunnerError = result.RunnerError;
             }
-            catch (OperationCanceledException) { return; }
+            catch (OperationCanceledException)
+            {
+                _state.Phase = PistonPhase.Watching;
+                _state.NotifyChanged();
+                return;
+            }
 
-            if (ct.IsCancellationRequested) return;
+            if (ct.IsCancellationRequested)
+            {
+                _state.Phase = PistonPhase.Watching;
+                _state.NotifyChanged();
+                return;
+            }
 
             _state.TestSuites = suites;
+            _state.InProgressSuites = [];
             _state.LastRunTime = DateTimeOffset.UtcNow;
+            _state.LastTestDuration = DateTimeOffset.UtcNow - testStart;
             _state.Phase = PistonPhase.Watching;
             _state.NotifyChanged();
         }
         catch (OperationCanceledException)
         {
-            // Superseded by a newer run — silent
+            // Superseded by a newer run — reset phase cleanly
+            _state.Phase = PistonPhase.Watching;
+            _state.NotifyChanged();
         }
         finally
         {
             _runLock.Release();
         }
+    }
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Returns a copy of <paramref name="suites"/> with every test status set to Running.
+    /// Used to seed the live overlay at the start of a test phase.
+    /// </summary>
+    private static IReadOnlyList<TestSuite> SeedAsRunning(IReadOnlyList<TestSuite> suites)
+    {
+        if (suites.Count == 0) return [];
+
+        return suites
+            .Select(s => s with
+            {
+                Tests = s.Tests
+                    .Select(t => t with { Status = TestStatus.Running })
+                    .ToList()
+            })
+            .ToList();
+    }
+
+    /// <summary>
+    /// Merges live stdout progress into the last known suite results.
+    /// Tests reported by stdout get their new status; unreported tests keep their
+    /// Running seed status.
+    /// </summary>
+    private static IReadOnlyList<TestSuite> MergeProgress(
+        IReadOnlyList<TestSuite> lastSuites,
+        IReadOnlyList<TestSuite> liveSuites)
+    {
+        if (liveSuites.Count == 0) return SeedAsRunning(lastSuites);
+
+        // Build a lookup from the flat live list
+        var liveByFqn = liveSuites
+            .SelectMany(s => s.Tests)
+            .ToDictionary(t => t.FullyQualifiedName, t => t.Status, StringComparer.Ordinal);
+
+        if (lastSuites.Count == 0)
+        {
+            // No prior results — just show the live tests grouped into one synthetic suite
+            return liveSuites;
+        }
+
+        return lastSuites
+            .Select(s => s with
+            {
+                Tests = s.Tests
+                    .Select(t => liveByFqn.TryGetValue(t.FullyQualifiedName, out var liveStatus)
+                        ? t with { Status = liveStatus }
+                        : t with { Status = TestStatus.Running })
+                    .ToList()
+            })
+            .ToList();
     }
 
     public void Dispose()

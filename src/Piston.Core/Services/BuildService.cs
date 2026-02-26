@@ -21,7 +21,7 @@ public sealed class BuildService : IBuildService
         var warnings = new List<string>();
         var sw = Stopwatch.StartNew();
 
-        var psi = new ProcessStartInfo("dotnet", $"build \"{solutionPath}\" --no-restore")
+        var psi = new ProcessStartInfo("dotnet", $"build \"{solutionPath}\"")
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,

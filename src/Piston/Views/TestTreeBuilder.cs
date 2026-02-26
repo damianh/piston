@@ -7,7 +7,7 @@ namespace Piston.Views;
 
 /// <summary>
 /// Builds a SharpConsoleUI <see cref="TreeControl"/> node hierarchy from
-/// <see cref="TestSuite"/> data: Suite → Class → Method.
+/// <see cref="TestSuite"/> data: Project → Namespace → Class → Method.
 /// Optionally filters by a substring or regex pattern.
 /// </summary>
 public static class TestTreeBuilder
@@ -16,10 +16,6 @@ public static class TestTreeBuilder
     /// Replaces the contents of <paramref name="tree"/> with nodes built from
     /// <paramref name="suites"/>. Safe to call from the async window thread.
     /// </summary>
-    /// <param name="filter">
-    /// Optional substring or regex. When non-null, only tests whose
-    /// <see cref="TestResult.FullyQualifiedName"/> matches are shown.
-    /// </param>
     public static void Rebuild(TreeControl tree, IReadOnlyList<TestSuite> suites, string? filter = null)
     {
         var matcher = BuildMatcher(filter);
@@ -36,7 +32,6 @@ public static class TestTreeBuilder
 
         foreach (var suite in suites)
         {
-            // Apply filter: keep only matching tests
             var visibleTests = matcher is null
                 ? suite.Tests
                 : suite.Tests.Where(t => matcher(t.FullyQualifiedName)).ToList();
@@ -50,28 +45,58 @@ public static class TestTreeBuilder
                 IsExpanded = true,
             };
 
-            var byClass = visibleTests
-                .GroupBy(t => ClassKey(t.FullyQualifiedName))
+            // Group by namespace, then by class within each namespace
+            var byNamespace = visibleTests
+                .GroupBy(t => NamespaceKey(t.FullyQualifiedName))
                 .OrderBy(g => g.Key);
 
-            foreach (var classGroup in byClass)
+            foreach (var nsGroup in byNamespace)
             {
-                var classTests = classGroup.ToList();
-                var classNode = new TreeNode(ClassLabel(classGroup.Key, classTests))
-                {
-                    Tag = new TestNodeTag.Group(classGroup.Key),
-                    IsExpanded = true,
-                };
+                var nsTests = nsGroup.ToList();
 
-                foreach (var test in classTests.OrderBy(t => t.DisplayName))
+                // If namespace is empty, add class nodes directly under the suite
+                IEnumerable<(string classKey, IEnumerable<TestResult> tests)> classGroups =
+                    nsGroup
+                        .GroupBy(t => ClassKey(t.FullyQualifiedName))
+                        .OrderBy(g => g.Key)
+                        .Select(g => (g.Key, (IEnumerable<TestResult>)g));
+
+                if (string.IsNullOrEmpty(nsGroup.Key))
                 {
-                    classNode.AddChild(new TreeNode(TestLabel(test))
+                    foreach (var (classKey, classTests) in classGroups)
                     {
-                        Tag = new TestNodeTag.Test(test),
-                    });
+                        var classTestList = classTests.ToList();
+                        var classNode = new TreeNode(ClassLabel(classKey, classTestList))
+                        {
+                            Tag = new TestNodeTag.Group(classKey),
+                            IsExpanded = true,
+                        };
+                        AddTestLeaves(classNode, classTestList);
+                        suiteNode.AddChild(classNode);
+                    }
                 }
+                else
+                {
+                    var nsNode = new TreeNode(NamespaceLabel(nsGroup.Key, nsTests))
+                    {
+                        Tag = new TestNodeTag.Group(nsGroup.Key),
+                        IsExpanded = true,
+                    };
 
-                suiteNode.AddChild(classNode);
+                    foreach (var (classKey, classTests) in classGroups)
+                    {
+                        var classTestList = classTests.ToList();
+                        var classNode = new TreeNode(ClassLabel(classKey, classTestList))
+                        {
+                            Tag = new TestNodeTag.Group(classKey),
+                            IsExpanded = true,
+                        };
+                        AddTestLeaves(classNode, classTestList);
+                        nsNode.AddChild(classNode);
+                    }
+
+                    suiteNode.AddChild(nsNode);
+                }
             }
 
             tree.AddRootNode(suiteNode);
@@ -86,33 +111,45 @@ public static class TestTreeBuilder
         }
     }
 
-    // ── Label helpers ──────────────────────────────────────────────────────────
+    // ── Node label helpers ────────────────────────────────────────────────────
 
     private static string SuiteLabel(TestSuite suite, IEnumerable<TestResult> visibleTests)
     {
         var tests   = visibleTests.ToList();
         var passed  = tests.Count(t => t.Status == TestStatus.Passed);
         var failed  = tests.Count(t => t.Status == TestStatus.Failed);
-        var icon    = SuiteIcon(failed, tests.Count(t => t.Status == TestStatus.Skipped), tests.Count);
+        var running = tests.Count(t => t.Status == TestStatus.Running);
+        var icon    = SuiteIcon(failed, running, tests.Count(t => t.Status == TestStatus.Skipped), tests.Count);
         return $"{icon} {suite.Name} [dim]({passed}✓ {failed}✗)[/]";
     }
 
-    private static string SuiteIcon(int failed, int skipped, int total)
+    private static string SuiteIcon(int failed, int running, int skipped, int total)
     {
-        if (total == 0) return "[dim]◌[/]";
-        if (failed > 0) return "[red3]✗[/]";
+        if (total == 0)  return "[dim]◌[/]";
+        if (failed > 0)  return "[red3]✗[/]";
+        if (running > 0) return "[cyan]⟳[/]";
         if (skipped > 0) return "[gold1]●[/]";
         return "[green3]✓[/]";
     }
 
+    private static string NamespaceLabel(string ns, IReadOnlyList<TestResult> tests)
+    {
+        var failed  = tests.Count(t => t.Status == TestStatus.Failed);
+        var running = tests.Count(t => t.Status == TestStatus.Running);
+        var icon    = failed > 0 ? "[red3]✗[/]" : running > 0 ? "[cyan]⟳[/]" : "[green3]✓[/]";
+        // Use only the last namespace segment for readability
+        var simple = ns.Contains('.') ? ns[(ns.LastIndexOf('.') + 1)..] : ns;
+        return $"{icon} {simple}";
+    }
+
     private static string ClassLabel(string classKey, IReadOnlyList<TestResult> classTests)
     {
-        var failed = classTests.Count(t => t.Status == TestStatus.Failed);
-        var icon   = failed > 0 ? "[red3]✗[/]" : "[green3]✓[/]";
-        var simpleName = classKey.Contains('.')
-            ? classKey[(classKey.LastIndexOf('.') + 1)..]
-            : classKey;
-        return $"{icon} {simpleName}";
+        var failed  = classTests.Count(t => t.Status == TestStatus.Failed);
+        var running = classTests.Count(t => t.Status == TestStatus.Running);
+        var icon    = failed > 0 ? "[red3]✗[/]" : running > 0 ? "[cyan]⟳[/]" : "[green3]✓[/]";
+        // classKey is the simple class name (last segment before method)
+        var simple = classKey.Contains('.') ? classKey[(classKey.LastIndexOf('.') + 1)..] : classKey;
+        return $"{icon} {simple}";
     }
 
     private static string TestLabel(TestResult test) => test.Status switch
@@ -124,20 +161,42 @@ public static class TestTreeBuilder
         _                  => $"[dim]◌[/] {test.DisplayName}",
     };
 
-    // ── Utility ────────────────────────────────────────────────────────────────
+    private static void AddTestLeaves(TreeNode parent, IEnumerable<TestResult> tests)
+    {
+        foreach (var test in tests.OrderBy(t => t.DisplayName))
+            parent.AddChild(new TreeNode(TestLabel(test)) { Tag = new TestNodeTag.Test(test) });
+    }
 
-    /// <summary>Returns everything before the last dot in a FQN.</summary>
+    // ── FQN decomposition ────────────────────────────────────────────────────
+    //
+    // FQN structure:  Namespace.Parts.ClassName.MethodName
+    //   namespace  = everything before the last two dot-segments
+    //   classKey   = second-to-last segment (qualified: Namespace.ClassName)
+    //   method     = last segment
+    //
+    // Example: "MyApp.Tests.Integration.MyClass.MyMethod"
+    //   namespace = "MyApp.Tests.Integration"
+    //   classKey  = "MyApp.Tests.Integration.MyClass"
+    //   method    = "MyMethod"
+
+    /// <summary>Returns the namespace portion of a FQN (everything before the last two segments).</summary>
+    private static string NamespaceKey(string fqn)
+    {
+        var parts = fqn.Split('.');
+        return parts.Length <= 2
+            ? string.Empty
+            : string.Join('.', parts[..^2]);
+    }
+
+    /// <summary>Returns namespace + class (everything before the last segment).</summary>
     private static string ClassKey(string fqn)
     {
         var idx = fqn.LastIndexOf('.');
         return idx < 0 ? fqn : fqn[..idx];
     }
 
-    /// <summary>
-    /// Builds a predicate for <paramref name="filter"/>.
-    /// Tries to compile it as a regex; falls back to case-insensitive substring if it's not valid regex.
-    /// Returns null when filter is null/empty.
-    /// </summary>
+    // ── Utility ──────────────────────────────────────────────────────────────
+
     private static Func<string, bool>? BuildMatcher(string? filter)
     {
         if (string.IsNullOrWhiteSpace(filter)) return null;
@@ -149,7 +208,6 @@ public static class TestTreeBuilder
         }
         catch (ArgumentException)
         {
-            // Not a valid regex — use substring match
             return s => s.Contains(filter, StringComparison.OrdinalIgnoreCase);
         }
     }

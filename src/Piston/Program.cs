@@ -113,7 +113,7 @@ static async Task RunAsync(FileInfo? solutionArg, int cliDebounceMs, string? cli
     Console.Write("\x1b[?1049h");   // enter alternate screen
     AppDomain.CurrentDomain.ProcessExit += (_, _) => Console.Write("\x1b[?1049l");
 
-    PistonWindow.Create(windowSystem, state, orchestrator, options);
+    PistonWindow.Create(windowSystem, state, orchestrator);
 
     // 7. Start watching in background (after TUI is set up)
     await orchestrator.StartAsync(options.SolutionPath);

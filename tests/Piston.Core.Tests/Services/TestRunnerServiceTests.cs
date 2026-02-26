@@ -60,10 +60,10 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
     {
         var sut = new TestRunnerService(new TrxResultParser());
 
-        var suites = await sut.RunTestsAsync(_projectFile, CancellationToken.None);
+        var result = await sut.RunTestsAsync(_projectFile, filter: null, onProgress: null, CancellationToken.None);
 
-        Assert.NotEmpty(suites);
-        var allTests = suites.SelectMany(s => s.Tests).ToList();
+        Assert.NotEmpty(result.Suites);
+        var allTests = result.Suites.SelectMany(s => s.Tests).ToList();
         Assert.Contains(allTests, t => t.Status == TestStatus.Passed);
         Assert.Contains(allTests, t => t.Status == TestStatus.Failed);
     }
@@ -75,9 +75,9 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
-        var suites = await sut.RunTestsAsync(_projectFile, cts.Token);
+        var result = await sut.RunTestsAsync(_projectFile, filter: null, onProgress: null, cts.Token);
 
-        Assert.Empty(suites);
+        Assert.Empty(result.Suites);
     }
 
     [Fact]
@@ -85,9 +85,9 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
     {
         var sut = new TestRunnerService(new TrxResultParser());
 
-        var suites = await sut.RunTestsAsync(_projectFile, CancellationToken.None);
+        var result = await sut.RunTestsAsync(_projectFile, filter: null, onProgress: null, CancellationToken.None);
 
-        var allTests = suites.SelectMany(s => s.Tests).ToList();
+        var allTests = result.Suites.SelectMany(s => s.Tests).ToList();
         Assert.All(allTests, t =>
             Assert.Contains("RunnerTest.Tests.", t.FullyQualifiedName));
     }

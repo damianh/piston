@@ -21,8 +21,7 @@ public static class PistonWindow
     public static void Create(
         ConsoleWindowSystem windowSystem,
         PistonState state,
-        IPistonOrchestrator orchestrator,
-        PistonOptions? options = null)
+        IPistonOrchestrator orchestrator)
     {
         _windowSystem = windowSystem;
         _state = state;
@@ -35,8 +34,17 @@ public static class PistonWindow
         var solutionMarkup = Controls.Markup("[dim]No solution loaded[/]")
             .WithName("solution")
             .Build();
+        var countsMarkup = Controls.Markup("[dim]--/--/--[/]")
+            .WithName("counts")
+            .Build();
         var lastRunMarkup = Controls.Markup("[dim]Last run: --:--:--[/]")
             .WithName("lastrun")
+            .Build();
+        var buildTimeMarkup = Controls.Markup("[dim]build --s[/]")
+            .WithName("buildtime")
+            .Build();
+        var testTimeMarkup = Controls.Markup("[dim]test --s[/]")
+            .WithName("testtime")
             .Build();
 
         var headerBar = Controls.Toolbar()
@@ -44,7 +52,13 @@ public static class PistonWindow
             .AddSeparator()
             .Add(solutionMarkup)
             .AddSeparator()
+            .Add(countsMarkup)
+            .AddSeparator()
             .Add(lastRunMarkup)
+            .AddSeparator()
+            .Add(buildTimeMarkup)
+            .AddSeparator()
+            .Add(testTimeMarkup)
             .WithBackgroundColor(Color.Grey11)
             .StickyTop()
             .Build();
@@ -142,16 +156,19 @@ public static class PistonWindow
     {
         if (_state is null) return;
 
-        var lastPhase        = (PistonPhase)(-1);
-        var lastSolutionPath = (string?)null;
-        var lastRunTime      = (DateTimeOffset?)null;
-        var lastPassed       = -1;
-        var lastFailed       = -1;
-        var lastSkipped      = -1;
-        var lastSuiteCount   = -1;
-        var lastSuiteHash    = 0;
-        var lastFilter       = "\x00"; // sentinel — forces first render
-        var lastBuild        = (BuildResult?)null;
+        var lastPhase          = (PistonPhase)(-1);
+        var lastSolutionPath   = (string?)null;
+        var lastRunTime        = (DateTimeOffset?)null;
+        var lastPassed         = -1;
+        var lastFailed         = -1;
+        var lastSkipped        = -1;
+        var lastSuiteCount     = -1;
+        var lastSuiteHash      = 0;
+        var lastFilter         = "\x00"; // sentinel — forces first render
+        var lastBuild          = (BuildResult?)null;
+        var lastRenderedRunTime  = (DateTimeOffset?)null;
+        var lastBuildDuration  = (TimeSpan?)null;
+        var lastTestDuration   = (TimeSpan?)null;
 
         while (!ct.IsCancellationRequested)
         {
@@ -176,6 +193,14 @@ public static class PistonWindow
                     if (detailControl is not null)
                         detailControl.Text = RenderBuildErrors(currentBuild);
                 }
+                else if (_state.Phase == PistonPhase.Watching
+                         && _state.TestSuites.Count == 0
+                         && !string.IsNullOrWhiteSpace(_state.LastTestRunnerError))
+                {
+                    var detailControl = window.FindControl<MarkupControl>("detail-content");
+                    if (detailControl is not null)
+                        detailControl.Text = RenderRunnerError(_state.LastTestRunnerError);
+                }
             }
 
             // --- Solution name ---
@@ -194,9 +219,10 @@ public static class PistonWindow
             var failed  = _state.TotalFailed;
             var skipped = _state.TotalSkipped;
             var filter  = _state.TestFilter;
+            var filterChanged = filter != lastFilter;
 
             if (passed != lastPassed || failed != lastFailed || skipped != lastSkipped
-                || _state.LastRunTime != lastRunTime || filter != lastFilter)
+                || _state.LastRunTime != lastRunTime || filterChanged)
             {
                 lastPassed  = passed;
                 lastFailed  = failed;
@@ -209,10 +235,54 @@ public static class PistonWindow
                     statusControl.Text = StatusBarRenderer.Render(passed, failed, skipped, lastRunTime, filter);
             }
 
-            // --- Test tree (rebuild when suites or filter change) ---
-            var suites    = _state.TestSuites;
+            // --- Last run time in toolbar ---
+            if (_state.LastRunTime != lastRenderedRunTime)
+            {
+                lastRenderedRunTime = _state.LastRunTime;
+                var lastRunControl = window.FindControl<MarkupControl>("lastrun");
+                if (lastRunControl is not null)
+                    lastRunControl.Text = lastRenderedRunTime.HasValue
+                        ? $"[dim]Last run: {lastRenderedRunTime.Value.ToLocalTime():HH:mm:ss}[/]"
+                        : "[dim]Last run: --:--:--[/]";
+            }
+
+            // --- Test counts in toolbar ---
+            if (passed != lastPassed || failed != lastFailed || skipped != lastSkipped)
+            {
+                var countsControl = window.FindControl<MarkupControl>("counts");
+                if (countsControl is not null)
+                    countsControl.Text = CountsMarkup(passed, failed, skipped);
+            }
+
+            // --- Build duration in toolbar ---
+            if (_state.LastBuildDuration != lastBuildDuration)
+            {
+                lastBuildDuration = _state.LastBuildDuration;
+                var buildTimeControl = window.FindControl<MarkupControl>("buildtime");
+                if (buildTimeControl is not null)
+                    buildTimeControl.Text = lastBuildDuration.HasValue
+                        ? $"[dim]build {lastBuildDuration.Value.TotalSeconds:F1}s[/]"
+                        : "[dim]build --s[/]";
+            }
+
+            // --- Test duration in toolbar ---
+            if (_state.LastTestDuration != lastTestDuration)
+            {
+                lastTestDuration = _state.LastTestDuration;
+                var testTimeControl = window.FindControl<MarkupControl>("testtime");
+                if (testTimeControl is not null)
+                    testTimeControl.Text = lastTestDuration.HasValue
+                        ? $"[dim]test {lastTestDuration.Value.TotalSeconds:F1}s[/]"
+                        : "[dim]test --s[/]";
+            }
+
+            // --- Test tree (rebuild when suites/in-progress or filter change) ---
+            // During Testing phase, show InProgressSuites for live feedback.
+            var suites    = _state.Phase == PistonPhase.Testing && _state.InProgressSuites.Count > 0
+                ? _state.InProgressSuites
+                : _state.TestSuites;
             var suiteHash = ComputeSuitesHash(suites);
-            if (suites.Count != lastSuiteCount || suiteHash != lastSuiteHash || filter != lastFilter)
+            if (suites.Count != lastSuiteCount || suiteHash != lastSuiteHash || filterChanged)
             {
                 lastSuiteCount = suites.Count;
                 lastSuiteHash  = suiteHash;
@@ -227,6 +297,17 @@ public static class PistonWindow
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
+
+    private static string RenderRunnerError(string error)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("[red3 bold]TEST RUNNER ERROR[/]");
+        sb.AppendLine();
+        sb.AppendLine("[dim]dotnet test produced no results. Runner output:[/]");
+        sb.AppendLine();
+        sb.AppendLine($"[red3]{EscapeMarkup(error)}[/]");
+        return sb.ToString().TrimEnd();
+    }
 
     private static string RenderBuildErrors(BuildResult? build)
     {
@@ -252,6 +333,16 @@ public static class PistonWindow
         "[dim]  F[/]  filter tests\n" +
         "[dim]  C[/]  clear results\n" +
         "[dim]  Q[/]  quit";
+
+    private static string CountsMarkup(int passed, int failed, int skipped)
+    {
+        if (passed == 0 && failed == 0 && skipped == 0)
+            return "[dim]--/--/--[/]";
+        var p = passed  > 0 ? $"[green3]{passed}✓[/]"  : $"[dim]0✓[/]";
+        var f = failed  > 0 ? $"[red3]{failed}✗[/]"    : $"[dim]0✗[/]";
+        var s = skipped > 0 ? $"[gold1]{skipped}⊘[/]"  : $"[dim]0⊘[/]";
+        return $"{p} {f} {s}";
+    }
 
     private static string PhaseMarkup(PistonPhase phase) => phase switch
     {

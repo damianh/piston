@@ -34,8 +34,16 @@ public sealed class TrxResultParser : ITestResultParser
             .Select(r => ParseTestResult(r, classNames, ns))
             .ToList();
 
-        // Derive suite name from the TRX file name (strip .trx extension)
-        var suiteName = Path.GetFileNameWithoutExtension(trxFilePath);
+        // Prefer the TestRun/@name attribute (e.g. "MyProject.Tests@machine 2024-01-01 …")
+        // which contains the assembly name. Strip everything from '@' onward, then
+        // fall back to the TRX filename if the attribute is absent or empty.
+        var runName = (string?)doc.Root?.Attribute("name") ?? string.Empty;
+        var atIndex = runName.IndexOf('@');
+        var suiteName = atIndex > 0
+            ? runName[..atIndex].Trim()
+            : !string.IsNullOrWhiteSpace(runName)
+                ? runName.Trim()
+                : Path.GetFileNameWithoutExtension(trxFilePath);
 
         // Parse suite-level timestamp and total duration from Times element
         var timesEl = doc.Descendants(ns + "Times").FirstOrDefault();
