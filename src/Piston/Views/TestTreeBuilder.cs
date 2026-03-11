@@ -7,8 +7,8 @@ namespace Piston.Views;
 
 /// <summary>
 /// Builds a SharpConsoleUI <see cref="TreeControl"/> node hierarchy from
-/// <see cref="TestSuite"/> data: Project → Namespace → Class → Method.
-/// Optionally filters by a substring or regex pattern.
+/// <see cref="TestSuite"/> data. Supports multiple grouping strategies, status filters,
+/// duration display, pinned tests, and stale-result dimming.
 /// </summary>
 public static class TestTreeBuilder
 {
@@ -16,7 +16,12 @@ public static class TestTreeBuilder
     /// Replaces the contents of <paramref name="tree"/> with nodes built from
     /// <paramref name="suites"/>. Safe to call from the async window thread.
     /// </summary>
-    public static void Rebuild(TreeControl tree, IReadOnlyList<TestSuite> suites, string? filter = null)
+    public static void Rebuild(
+        TreeControl tree,
+        IReadOnlyList<TestSuite> suites,
+        string? filter = null,
+        ViewState? viewState = null,
+        DateTimeOffset? lastFileChangeTime = null)
     {
         var matcher = BuildMatcher(filter);
 
@@ -28,14 +33,38 @@ public static class TestTreeBuilder
             return;
         }
 
+        switch (viewState?.Grouping ?? GroupingMode.ProjectNamespaceClass)
+        {
+            case GroupingMode.ByStatus:
+                RebuildByStatus(tree, suites, matcher, viewState, lastFileChangeTime);
+                break;
+            case GroupingMode.Flat:
+                RebuildFlat(tree, suites, matcher, viewState, lastFileChangeTime);
+                break;
+            default:
+                RebuildByProjectNsClass(tree, suites, matcher, viewState, lastFileChangeTime);
+                break;
+        }
+    }
+
+    // ── Grouping strategies ──────────────────────────────────────────────────
+
+    private static void RebuildByProjectNsClass(
+        TreeControl tree,
+        IReadOnlyList<TestSuite> suites,
+        Func<string, bool>? matcher,
+        ViewState? viewState,
+        DateTimeOffset? lastFileChangeTime)
+    {
+        // Pinned section always at top, regardless of filters
+        if (viewState is not null)
+            AddPinnedSection(tree, suites, viewState, lastFileChangeTime);
+
         var anyVisible = false;
 
         foreach (var suite in suites)
         {
-            var visibleTests = matcher is null
-                ? suite.Tests
-                : suite.Tests.Where(t => matcher(t.FullyQualifiedName)).ToList();
-
+            var visibleTests = GetVisibleTests(suite.Tests, matcher, viewState);
             if (visibleTests.Count == 0) continue;
             anyVisible = true;
 
@@ -54,7 +83,6 @@ public static class TestTreeBuilder
             {
                 var nsTests = nsGroup.ToList();
 
-                // If namespace is empty, add class nodes directly under the suite
                 IEnumerable<(string classKey, IEnumerable<TestResult> tests)> classGroups =
                     nsGroup
                         .GroupBy(t => ClassKey(t.FullyQualifiedName))
@@ -71,7 +99,7 @@ public static class TestTreeBuilder
                             Tag = new TestNodeTag.Group(classKey),
                             IsExpanded = true,
                         };
-                        AddTestLeaves(classNode, classTestList);
+                        AddTestLeaves(classNode, classTestList, suite, viewState, lastFileChangeTime);
                         suiteNode.AddChild(classNode);
                     }
                 }
@@ -91,7 +119,7 @@ public static class TestTreeBuilder
                             Tag = new TestNodeTag.Group(classKey),
                             IsExpanded = true,
                         };
-                        AddTestLeaves(classNode, classTestList);
+                        AddTestLeaves(classNode, classTestList, suite, viewState, lastFileChangeTime);
                         nsNode.AddChild(classNode);
                     }
 
@@ -103,12 +131,177 @@ public static class TestTreeBuilder
         }
 
         if (!anyVisible)
+            AddNoResultsNode(tree, null);
+    }
+
+    private static void RebuildByStatus(
+        TreeControl tree,
+        IReadOnlyList<TestSuite> suites,
+        Func<string, bool>? matcher,
+        ViewState? viewState,
+        DateTimeOffset? lastFileChangeTime)
+    {
+        // Pinned section always at top
+        if (viewState is not null)
+            AddPinnedSection(tree, suites, viewState, lastFileChangeTime);
+
+        var allTests = suites
+            .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
+            .Where(x => matcher is null || matcher(x.Test.FullyQualifiedName))
+            .ToList();
+
+        if (allTests.Count == 0)
         {
-            var msg = filter is not null
-                ? $"No tests match filter: {filter}"
-                : "No tests discovered";
-            tree.AddRootNode(new TreeNode(msg) { Tag = new TestNodeTag.Group("") });
+            AddNoResultsNode(tree, null);
+            return;
         }
+
+        var groups = new[]
+        {
+            ("✗ Failed",  TestStatus.Failed,  viewState?.ShowFailed  ?? true),
+            ("⟳ Running", TestStatus.Running, true),
+            ("✓ Passed",  TestStatus.Passed,  viewState?.ShowPassed  ?? true),
+            ("● Skipped", TestStatus.Skipped, viewState?.ShowSkipped ?? true),
+            ("◌ Not Run", TestStatus.NotRun,  viewState?.ShowNotRun  ?? true),
+        };
+
+        foreach (var (label, status, show) in groups)
+        {
+            if (!show) continue;
+            var grouped = allTests.Where(x => x.Test.Status == status).ToList();
+            if (grouped.Count == 0) continue;
+
+            var icon = status switch
+            {
+                TestStatus.Failed  => "[red3]",
+                TestStatus.Running => "[cyan]",
+                TestStatus.Passed  => "[green3]",
+                TestStatus.Skipped => "[gold1]",
+                _                  => "[dim]",
+            };
+            var rootNode = new TreeNode($"{icon}{label}[/] [dim]({grouped.Count})[/]")
+            {
+                Tag = new TestNodeTag.Group(label),
+                IsExpanded = true,
+            };
+
+            foreach (var (suite, test) in grouped.OrderBy(x => x.Test.DisplayName))
+            {
+                var isStale  = IsStale(suite, lastFileChangeTime);
+                var isPinned = viewState?.PinnedTestFqns.Contains(test.FullyQualifiedName) ?? false;
+                rootNode.AddChild(new TreeNode(TestLabel(test, isStale, isPinned)) { Tag = new TestNodeTag.Test(test) });
+            }
+
+            tree.AddRootNode(rootNode);
+        }
+    }
+
+    private static void RebuildFlat(
+        TreeControl tree,
+        IReadOnlyList<TestSuite> suites,
+        Func<string, bool>? matcher,
+        ViewState? viewState,
+        DateTimeOffset? lastFileChangeTime)
+    {
+        // Pinned section always at top
+        if (viewState is not null)
+            AddPinnedSection(tree, suites, viewState, lastFileChangeTime);
+
+        var allTests = suites
+            .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
+            .Where(x => matcher is null || matcher(x.Test.FullyQualifiedName))
+            .Where(x => IsStatusVisible(x.Test.Status, viewState))
+            .OrderBy(x => x.Test.DisplayName)
+            .ToList();
+
+        if (allTests.Count == 0)
+        {
+            AddNoResultsNode(tree, null);
+            return;
+        }
+
+        foreach (var (suite, test) in allTests)
+        {
+            var isStale  = IsStale(suite, lastFileChangeTime);
+            var isPinned = viewState?.PinnedTestFqns.Contains(test.FullyQualifiedName) ?? false;
+            tree.AddRootNode(new TreeNode(TestLabel(test, isStale, isPinned)) { Tag = new TestNodeTag.Test(test) });
+        }
+    }
+
+    // ── Pinned section helper ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Inserts a "★ Pinned" root node at the top of the tree containing all pinned tests,
+    /// regardless of current filters. Called before other grouping methods.
+    /// </summary>
+    private static void AddPinnedSection(
+        TreeControl tree,
+        IReadOnlyList<TestSuite> suites,
+        ViewState viewState,
+        DateTimeOffset? lastFileChangeTime)
+    {
+        if (viewState.PinnedTestFqns.Count == 0) return;
+
+        var pinnedTests = suites
+            .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
+            .Where(x => viewState.PinnedTestFqns.Contains(x.Test.FullyQualifiedName))
+            .OrderBy(x => x.Test.DisplayName)
+            .ToList();
+
+        if (pinnedTests.Count == 0) return;
+
+        var pinnedRoot = new TreeNode($"[gold1]★ Pinned[/] [dim]({pinnedTests.Count})[/]")
+        {
+            Tag = new TestNodeTag.Group("★ Pinned"),
+            IsExpanded = true,
+        };
+
+        foreach (var (suite, test) in pinnedTests)
+        {
+            var isStale = IsStale(suite, lastFileChangeTime);
+            pinnedRoot.AddChild(new TreeNode(TestLabel(test, isStale, isPinned: true)) { Tag = new TestNodeTag.Test(test) });
+        }
+
+        tree.AddRootNode(pinnedRoot);
+    }
+
+    // ── Filtering helpers ────────────────────────────────────────────────────
+
+    private static IReadOnlyList<TestResult> GetVisibleTests(
+        IReadOnlyList<TestResult> tests,
+        Func<string, bool>? matcher,
+        ViewState? viewState)
+    {
+        IEnumerable<TestResult> filtered = tests;
+        if (matcher is not null)
+            filtered = filtered.Where(t => matcher(t.FullyQualifiedName));
+        filtered = filtered.Where(t => IsStatusVisible(t.Status, viewState));
+        return filtered.ToList();
+    }
+
+    private static bool IsStatusVisible(TestStatus status, ViewState? viewState)
+    {
+        if (viewState is null) return true;
+        return status switch
+        {
+            TestStatus.Passed  => viewState.ShowPassed,
+            TestStatus.Failed  => viewState.ShowFailed,
+            TestStatus.Skipped => viewState.ShowSkipped,
+            TestStatus.NotRun  => viewState.ShowNotRun,
+            TestStatus.Running => true, // always show running
+            _                  => true,
+        };
+    }
+
+    private static bool IsStale(TestSuite suite, DateTimeOffset? lastFileChangeTime) =>
+        lastFileChangeTime.HasValue && suite.Timestamp < lastFileChangeTime.Value;
+
+    private static void AddNoResultsNode(TreeControl tree, string? filter)
+    {
+        var msg = filter is not null
+            ? $"No tests match filter: {filter}"
+            : "No tests discovered";
+        tree.AddRootNode(new TreeNode(msg) { Tag = new TestNodeTag.Group("") });
     }
 
     // ── Node label helpers ────────────────────────────────────────────────────
@@ -120,7 +313,7 @@ public static class TestTreeBuilder
         var failed  = tests.Count(t => t.Status == TestStatus.Failed);
         var running = tests.Count(t => t.Status == TestStatus.Running);
         var icon    = SuiteIcon(failed, running, tests.Count(t => t.Status == TestStatus.Skipped), tests.Count);
-        return $"{icon} {suite.Name} [dim]({passed}✓ {failed}✗)[/]";
+        return $"{icon} {EscapeMarkup(suite.Name)} [dim]({passed}✓ {failed}✗)[/]";
     }
 
     private static string SuiteIcon(int failed, int running, int skipped, int total)
@@ -139,7 +332,7 @@ public static class TestTreeBuilder
         var icon    = failed > 0 ? "[red3]✗[/]" : running > 0 ? "[cyan]⟳[/]" : "[green3]✓[/]";
         // Use only the last namespace segment for readability
         var simple = ns.Contains('.') ? ns[(ns.LastIndexOf('.') + 1)..] : ns;
-        return $"{icon} {simple}";
+        return $"{icon} {EscapeMarkup(simple)}";
     }
 
     private static string ClassLabel(string classKey, IReadOnlyList<TestResult> classTests)
@@ -149,22 +342,49 @@ public static class TestTreeBuilder
         var icon    = failed > 0 ? "[red3]✗[/]" : running > 0 ? "[cyan]⟳[/]" : "[green3]✓[/]";
         // classKey is the simple class name (last segment before method)
         var simple = classKey.Contains('.') ? classKey[(classKey.LastIndexOf('.') + 1)..] : classKey;
-        return $"{icon} {simple}";
+        return $"{icon} {EscapeMarkup(simple)}";
     }
 
-    private static string TestLabel(TestResult test) => test.Status switch
+    private static string TestLabel(TestResult test, bool isStale = false, bool isPinned = false)
     {
-        TestStatus.Passed  => $"[green3]✓[/] {test.DisplayName}",
-        TestStatus.Failed  => $"[red3]✗[/] {test.DisplayName}",
-        TestStatus.Skipped => $"[gold1]●[/] {test.DisplayName}",
-        TestStatus.Running => $"[cyan]⟳[/] {test.DisplayName}",
-        _                  => $"[dim]◌[/] {test.DisplayName}",
-    };
+        var icon = test.Status switch
+        {
+            TestStatus.Passed  => "[green3]✓[/]",
+            TestStatus.Failed  => "[red3]✗[/]",
+            TestStatus.Skipped => "[gold1]●[/]",
+            TestStatus.Running => "[cyan]⟳[/]",
+            _                  => "[dim]◌[/]",
+        };
+        var pin      = isPinned ? "★ " : "";
+        var name     = EscapeMarkup(test.DisplayName);
+        var duration = test.Duration > TimeSpan.Zero && test.Status != TestStatus.Running
+            ? $" [dim]{FormatDuration(test.Duration)}[/]"
+            : "";
 
-    private static void AddTestLeaves(TreeNode parent, IEnumerable<TestResult> tests)
+        if (isStale)
+            return $"[dim]{icon} {pin}{name}{duration}[/]";
+
+        return $"{icon} {pin}{name}{duration}";
+    }
+
+    private static string FormatDuration(TimeSpan d) =>
+        d.TotalMilliseconds < 1000
+            ? $"{(int)d.TotalMilliseconds}ms"
+            : $"{d.TotalSeconds:F1}s";
+
+    private static void AddTestLeaves(
+        TreeNode parent,
+        IEnumerable<TestResult> tests,
+        TestSuite suite,
+        ViewState? viewState,
+        DateTimeOffset? lastFileChangeTime)
     {
         foreach (var test in tests.OrderBy(t => t.DisplayName))
-            parent.AddChild(new TreeNode(TestLabel(test)) { Tag = new TestNodeTag.Test(test) });
+        {
+            var isStale  = IsStale(suite, lastFileChangeTime);
+            var isPinned = viewState?.PinnedTestFqns.Contains(test.FullyQualifiedName) ?? false;
+            parent.AddChild(new TreeNode(TestLabel(test, isStale, isPinned)) { Tag = new TestNodeTag.Test(test) });
+        }
     }
 
     // ── FQN decomposition ────────────────────────────────────────────────────
@@ -196,6 +416,9 @@ public static class TestTreeBuilder
     }
 
     // ── Utility ──────────────────────────────────────────────────────────────
+
+    private static string EscapeMarkup(string text) =>
+        text.Replace("[", "[[").Replace("]", "]]");
 
     private static Func<string, bool>? BuildMatcher(string? filter)
     {

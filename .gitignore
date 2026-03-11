@@ -34,4 +34,4 @@ nuget.config
 Thumbs.db
 
 # Piston-specific
-.weave/state.json
+.weave/

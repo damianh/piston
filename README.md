@@ -43,6 +43,15 @@ piston --filter "CustomerTests"
 | `R` | Force re-run (rebuild + test) |
 | `F` | Open filter prompt |
 | `C` | Clear test results |
+| `G` | Cycle grouping mode (Project/NS/Class → By Status → Flat) |
+| `E` | Expand / collapse all tree nodes |
+| `P` | Pin / unpin selected test (pinned tests stay at top) |
+| `1` | Toggle visibility of Passed tests |
+| `2` | Toggle visibility of Failed tests |
+| `3` | Toggle visibility of Skipped tests |
+| `4` | Toggle visibility of Not Run tests |
+| `]` | Jump to next failing test |
+| `[` | Jump to previous failing test |
 | `Q` / `Ctrl+C` | Quit |
 
 ## Configuration file

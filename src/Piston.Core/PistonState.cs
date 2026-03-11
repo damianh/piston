@@ -35,6 +35,22 @@ public sealed class PistonState
     /// </summary>
     public string? TestFilter { get; set; }
 
+    // ── Progress tracking (populated by orchestrator during Testing phase) ──
+
+    /// <summary>Total number of tests expected in the current run. Set when entering Testing phase.</summary>
+    public int TotalExpectedTests { get; set; }
+
+    /// <summary>Number of tests that have completed (non-Running) in the current run.</summary>
+    public int CompletedTests { get; set; }
+
+    // ── Verified/stale tracking ──
+
+    /// <summary>Timestamp of the most recent file change that triggered a run. Null until first file change.</summary>
+    public DateTimeOffset? LastFileChangeTime { get; set; }
+
+    /// <summary>Number of tests whose suite Timestamp is >= LastFileChangeTime (i.e. re-verified since last change).</summary>
+    public int VerifiedSinceChangeCount { get; set; }
+
     public int TotalPassed => TestSuites.SelectMany(s => s.Tests).Count(t => t.Status == TestStatus.Passed);
     public int TotalFailed => TestSuites.SelectMany(s => s.Tests).Count(t => t.Status == TestStatus.Failed);
     public int TotalSkipped => TestSuites.SelectMany(s => s.Tests).Count(t => t.Status == TestStatus.Skipped);

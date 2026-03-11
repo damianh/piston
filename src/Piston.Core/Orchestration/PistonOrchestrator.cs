@@ -65,6 +65,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     private void OnFileChanged(FileChangeEvent evt)
     {
         if (_solutionPath is null) return;
+        _state.LastFileChangeTime = evt.Timestamp; // capture for staleness/verified tracking
         _ = TriggerRunAsync(_solutionPath);
     }
 
@@ -130,6 +131,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             // Seed InProgressSuites with last known results, all marked as Running.
             // This gives immediate "everything is running" feedback in the tree.
             _state.InProgressSuites = SeedAsRunning(_state.TestSuites);
+
+            // Seed progress counters for the progress bar
+            _state.TotalExpectedTests = _state.TestSuites.SelectMany(s => s.Tests).Count();
+            _state.CompletedTests = 0;
+
             _state.NotifyChanged();
 
             var testStart = DateTimeOffset.UtcNow;
@@ -139,6 +145,12 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                 // Merge live stdout results into the last known suites so that tests
                 // not yet reported still show their previous (Running) status.
                 _state.InProgressSuites = MergeProgress(_state.TestSuites, liveSuites);
+
+                // Update completed count for the progress bar
+                _state.CompletedTests = _state.InProgressSuites
+                    .SelectMany(s => s.Tests)
+                    .Count(t => t.Status != TestStatus.Running);
+
                 _state.NotifyChanged();
             }
 
@@ -171,6 +183,21 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             _state.InProgressSuites = [];
             _state.LastRunTime = DateTimeOffset.UtcNow;
             _state.LastTestDuration = DateTimeOffset.UtcNow - testStart;
+
+            // Compute how many tests are verified since the last file change
+            if (_state.LastFileChangeTime.HasValue)
+            {
+                var changeTime = _state.LastFileChangeTime.Value;
+                _state.VerifiedSinceChangeCount = suites
+                    .Where(s => s.Timestamp >= changeTime)
+                    .SelectMany(s => s.Tests)
+                    .Count();
+            }
+            else
+            {
+                _state.VerifiedSinceChangeCount = suites.SelectMany(s => s.Tests).Count();
+            }
+
             _state.Phase = PistonPhase.Watching;
             _state.NotifyChanged();
         }
