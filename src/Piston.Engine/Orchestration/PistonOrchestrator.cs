@@ -8,6 +8,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     private readonly IFileWatcherService _fileWatcher;
     private readonly IBuildService _buildService;
     private readonly ITestRunnerService _testRunner;
+    private readonly IImpactAnalyzer _impactAnalyzer;
     private readonly PistonState _state;
 
     private CancellationTokenSource? _cts;
@@ -18,17 +19,19 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         IFileWatcherService fileWatcher,
         IBuildService buildService,
         ITestRunnerService testRunner,
+        IImpactAnalyzer impactAnalyzer,
         PistonState state)
     {
         _fileWatcher = fileWatcher;
         _buildService = buildService;
         _testRunner = testRunner;
+        _impactAnalyzer = impactAnalyzer;
         _state = state;
 
         _fileWatcher.FileChanged += OnFileChanged;
     }
 
-    public Task StartAsync(string solutionPath)
+    public async Task StartAsync(string solutionPath)
     {
         _solutionPath = solutionPath;
         _state.SolutionPath = solutionPath;
@@ -39,18 +42,30 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         _state.Phase = PistonPhase.Watching;
         _state.NotifyChanged();
 
+        // Initialize the impact analyzer on a background thread
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _impactAnalyzer.InitializeAsync(solutionPath, CancellationToken.None)
+                    .ConfigureAwait(false);
+            }
+            catch
+            {
+                // Graph load failure is non-fatal — falls back to full runs
+            }
+        });
+
         _fileWatcher.Start(solutionDir);
 
         // Kick off an initial build+test run immediately on startup.
-        _ = TriggerRunAsync(solutionPath);
-
-        return Task.CompletedTask;
+        _ = TriggerRunAsync(solutionPath, null);
     }
 
     public async Task ForceRunAsync()
     {
         if (_solutionPath is null) return;
-        await TriggerRunAsync(_solutionPath);
+        await TriggerRunAsync(_solutionPath, null);
     }
 
     public void Stop()
@@ -62,14 +77,15 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         _state.NotifyChanged();
     }
 
-    private void OnFileChanged(FileChangeEvent evt)
+    private void OnFileChanged(FileChangeBatch batch)
     {
         if (_solutionPath is null) return;
-        _state.LastFileChangeTime = evt.Timestamp; // capture for staleness/verified tracking
-        _ = TriggerRunAsync(_solutionPath);
+        _state.LastFileChangeTime = batch.Timestamp;
+        _state.LastChangedFiles = batch.Changes.Select(e => e.FilePath).ToList();
+        _ = TriggerRunAsync(_solutionPath, batch);
     }
 
-    private async Task TriggerRunAsync(string solutionPath)
+    private async Task TriggerRunAsync(string solutionPath, FileChangeBatch? batch)
     {
         // Issue a new CTS, cancelling whatever was running before
         var oldCts = _cts;
@@ -92,14 +108,48 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         {
             var ct = newCts.Token;
 
-            // ── Build ─────────────────────────────────────────────────────
+            // ── Analyzing ─────────────────────────────────────────────────────
+            _state.Phase = PistonPhase.Analyzing;
+            _state.NotifyChanged();
+
+            ImpactAnalysisResult impactResult;
+            try
+            {
+                impactResult = batch is not null
+                    ? _impactAnalyzer.Analyze(batch.Changes)
+                    : _impactAnalyzer.AnalyzeFullRun();
+            }
+            catch (OperationCanceledException)
+            {
+                _state.Phase = PistonPhase.Watching;
+                _state.NotifyChanged();
+                return;
+            }
+
+            _state.AffectedProjects = impactResult.AffectedProjectPaths.Count > 0
+                ? impactResult.AffectedProjectPaths
+                : null;
+            _state.AffectedTestProjects = impactResult.AffectedTestProjectPaths.Count > 0
+                ? impactResult.AffectedTestProjectPaths
+                : null;
+
+            if (ct.IsCancellationRequested)
+            {
+                _state.Phase = PistonPhase.Watching;
+                _state.NotifyChanged();
+                return;
+            }
+
+            // ── Build ─────────────────────────────────────────────────────────
             _state.Phase = PistonPhase.Building;
             _state.NotifyChanged();
+
+            IReadOnlyList<string>? buildTargets = impactResult.IsFullRun ? null : impactResult.AffectedProjectPaths;
 
             BuildResult buildResult;
             try
             {
-                buildResult = await _buildService.BuildAsync(solutionPath, ct).ConfigureAwait(false);
+                buildResult = await _buildService.BuildAsync(solutionPath, buildTargets, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -122,18 +172,22 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             {
                 _state.Phase = PistonPhase.Error;
                 _state.NotifyChanged();
+                ScheduleGraphRebuildIfNeeded(impactResult);
                 return;
             }
 
-            // ── Test ──────────────────────────────────────────────────────
+            // ── Test ──────────────────────────────────────────────────────────
             _state.Phase = PistonPhase.Testing;
 
-            // Seed InProgressSuites with last known results, all marked as Running.
-            // This gives immediate "everything is running" feedback in the tree.
-            _state.InProgressSuites = SeedAsRunning(_state.TestSuites);
+            IReadOnlyList<string>? testTargets = impactResult.IsFullRun ? null : impactResult.AffectedTestProjectPaths;
 
-            // Seed progress counters for the progress bar
-            _state.TotalExpectedTests = _state.TestSuites.SelectMany(s => s.Tests).Count();
+            // Seed InProgressSuites — for selective runs, only seed the affected suites
+            var suitesToSeed = testTargets is not null
+                ? _state.TestSuites.Where(s => IsSuiteAffected(s, testTargets)).ToList()
+                : _state.TestSuites;
+
+            _state.InProgressSuites = SeedAsRunning(suitesToSeed);
+            _state.TotalExpectedTests = suitesToSeed.SelectMany(s => s.Tests).Count();
             _state.CompletedTests = 0;
 
             _state.NotifyChanged();
@@ -142,27 +196,23 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
             void OnProgress(IReadOnlyList<TestSuite> liveSuites)
             {
-                // Merge live stdout results into the last known suites so that tests
-                // not yet reported still show their previous (Running) status.
-                _state.InProgressSuites = MergeProgress(_state.TestSuites, liveSuites);
-
-                // Update completed count for the progress bar
+                _state.InProgressSuites = MergeProgress(suitesToSeed, liveSuites);
                 _state.CompletedTests = _state.InProgressSuites
                     .SelectMany(s => s.Tests)
                     .Count(t => t.Status != TestStatus.Running);
-
                 _state.NotifyChanged();
             }
 
-            IReadOnlyList<TestSuite> suites;
+            IReadOnlyList<TestSuite> newSuites;
             try
             {
                 var result = await _testRunner.RunTestsAsync(
                     solutionPath,
+                    testTargets,
                     _state.TestFilter,
                     OnProgress,
                     ct).ConfigureAwait(false);
-                suites = result.Suites;
+                newSuites = result.Suites;
                 _state.LastTestRunnerError = result.RunnerError;
             }
             catch (OperationCanceledException)
@@ -179,7 +229,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                 return;
             }
 
-            _state.TestSuites = suites;
+            // Merge selective results with preserved results from untouched test projects
+            _state.TestSuites = impactResult.IsFullRun
+                ? newSuites
+                : MergeTestSuites(_state.TestSuites, newSuites);
+
             _state.InProgressSuites = [];
             _state.LastRunTime = DateTimeOffset.UtcNow;
             _state.LastTestDuration = DateTimeOffset.UtcNow - testStart;
@@ -188,18 +242,20 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             if (_state.LastFileChangeTime.HasValue)
             {
                 var changeTime = _state.LastFileChangeTime.Value;
-                _state.VerifiedSinceChangeCount = suites
+                _state.VerifiedSinceChangeCount = newSuites
                     .Where(s => s.Timestamp >= changeTime)
                     .SelectMany(s => s.Tests)
                     .Count();
             }
             else
             {
-                _state.VerifiedSinceChangeCount = suites.SelectMany(s => s.Tests).Count();
+                _state.VerifiedSinceChangeCount = _state.TestSuites.SelectMany(s => s.Tests).Count();
             }
 
             _state.Phase = PistonPhase.Watching;
             _state.NotifyChanged();
+
+            ScheduleGraphRebuildIfNeeded(impactResult);
         }
         catch (OperationCanceledException)
         {
@@ -215,14 +271,62 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    private void ScheduleGraphRebuildIfNeeded(ImpactAnalysisResult impactResult)
+    {
+        if (impactResult.RequiresGraphRebuild)
+            _impactAnalyzer.InvalidateGraph();
+    }
+
+    /// <summary>
+    /// Determines whether a test suite is in the set of affected test project paths.
+    /// Matches by suite name suffix against project directory/name heuristic.
+    /// Falls back to including all suites when uncertain.
+    /// </summary>
+    private static bool IsSuiteAffected(TestSuite suite, IReadOnlyList<string> testProjectPaths)
+    {
+        // If we have test project paths, check if the suite's source matches any
+        return testProjectPaths.Any(p =>
+        {
+            var projectDir = Path.GetDirectoryName(p);
+            return projectDir is not null &&
+                suite.Name.Contains(Path.GetFileNameWithoutExtension(p), StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    /// <summary>
+    /// Merges new suite results from a selective run into the existing full suite list.
+    /// Suites from the new run replace their counterparts (matched by name).
+    /// Suites not in the new run are preserved as-is.
+    /// </summary>
+    private static IReadOnlyList<TestSuite> MergeTestSuites(
+        IReadOnlyList<TestSuite> existing,
+        IReadOnlyList<TestSuite> newResults)
+    {
+        if (newResults.Count == 0) return existing;
+        if (existing.Count == 0) return newResults;
+
+        var newByName = newResults.ToDictionary(s => s.Name, StringComparer.OrdinalIgnoreCase);
+
+        // Replace existing suites that appear in new results; add any new ones not in existing
+        var merged = existing
+            .Select(s => newByName.TryGetValue(s.Name, out var updated) ? updated : s)
+            .ToList();
+
+        foreach (var newSuite in newResults)
+        {
+            if (!existing.Any(s => string.Equals(s.Name, newSuite.Name, StringComparison.OrdinalIgnoreCase)))
+                merged.Add(newSuite);
+        }
+
+        return merged;
+    }
+
     /// <summary>
     /// Returns a copy of <paramref name="suites"/> with every test status set to Running.
     /// Used to seed the live overlay at the start of a test phase.
     /// </summary>
-    private static IReadOnlyList<TestSuite> SeedAsRunning(IReadOnlyList<TestSuite> suites)
+    private static IReadOnlyList<TestSuite> SeedAsRunning(IEnumerable<TestSuite> suites)
     {
-        if (suites.Count == 0) return [];
-
         return suites
             .Select(s => s with
             {
@@ -239,23 +343,25 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     /// Running seed status.
     /// </summary>
     private static IReadOnlyList<TestSuite> MergeProgress(
-        IReadOnlyList<TestSuite> lastSuites,
+        IEnumerable<TestSuite> lastSuites,
         IReadOnlyList<TestSuite> liveSuites)
     {
-        if (liveSuites.Count == 0) return SeedAsRunning(lastSuites);
+        var lastSuiteList = lastSuites as IReadOnlyList<TestSuite> ?? lastSuites.ToList();
+
+        if (liveSuites.Count == 0) return SeedAsRunning(lastSuiteList);
 
         // Build a lookup from the flat live list
         var liveByFqn = liveSuites
             .SelectMany(s => s.Tests)
             .ToDictionary(t => t.FullyQualifiedName, t => t.Status, StringComparer.Ordinal);
 
-        if (lastSuites.Count == 0)
+        if (!lastSuiteList.Any())
         {
             // No prior results — just show the live tests grouped into one synthetic suite
             return liveSuites;
         }
 
-        return lastSuites
+        return lastSuiteList
             .Select(s => s with
             {
                 Tests = s.Tests

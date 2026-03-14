@@ -20,7 +20,10 @@ public sealed record StateSnapshotNotification(
     int CompletedTests,
     int VerifiedSinceChangeCount,
     DateTimeOffset? LastFileChangeTime,
-    string? SolutionPath
+    string? SolutionPath,
+    IReadOnlyList<string>? AffectedProjects,
+    IReadOnlyList<string>? AffectedTestProjects,
+    IReadOnlyList<string>? LastChangedFiles
 );
 
 public sealed record TestProgressNotification(

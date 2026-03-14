@@ -30,6 +30,7 @@ internal static class DtoMapper
     {
         PistonPhase.Idle      => PistonPhaseDto.Idle,
         PistonPhase.Watching  => PistonPhaseDto.Watching,
+        PistonPhase.Analyzing => PistonPhaseDto.Analyzing,
         PistonPhase.Building  => PistonPhaseDto.Building,
         PistonPhase.Testing   => PistonPhaseDto.Testing,
         PistonPhase.Error     => PistonPhaseDto.Error,
@@ -78,6 +79,9 @@ internal static class DtoMapper
             CompletedTests:         state.CompletedTests,
             VerifiedSinceChangeCount: state.VerifiedSinceChangeCount,
             LastFileChangeTime:     state.LastFileChangeTime,
-            SolutionPath:           state.SolutionPath
+            SolutionPath:           state.SolutionPath,
+            AffectedProjects:       state.AffectedProjects,
+            AffectedTestProjects:   state.AffectedTestProjects,
+            LastChangedFiles:       state.LastChangedFiles
         );
 }

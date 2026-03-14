@@ -21,8 +21,52 @@ public sealed class TestRunnerService : ITestRunnerService
         _parser = parser;
     }
 
+    public Task<TestRunResult> RunTestsAsync(
+        string solutionPath,
+        string? filter,
+        Action<IReadOnlyList<TestSuite>>? onProgress,
+        CancellationToken ct) =>
+        RunTestsAsync(solutionPath, null, filter, onProgress, ct);
+
     public async Task<TestRunResult> RunTestsAsync(
         string solutionPath,
+        IReadOnlyList<string>? testProjectPaths,
+        string? filter,
+        Action<IReadOnlyList<TestSuite>>? onProgress,
+        CancellationToken ct)
+    {
+        if (testProjectPaths is null || testProjectPaths.Count == 0)
+            return await RunSingleTestCommandAsync(solutionPath, filter, onProgress, ct).ConfigureAwait(false);
+
+        // Run each test project individually and merge results
+        var allSuites = new List<TestSuite>();
+        string? lastRunnerError = null;
+
+        foreach (var projectPath in testProjectPaths)
+        {
+            if (ct.IsCancellationRequested)
+                return new TestRunResult(allSuites, null);
+
+            try
+            {
+                var result = await RunSingleTestCommandAsync(projectPath, filter, onProgress, ct)
+                    .ConfigureAwait(false);
+
+                allSuites.AddRange(result.Suites);
+                if (result.RunnerError is not null)
+                    lastRunnerError = result.RunnerError;
+            }
+            catch (OperationCanceledException)
+            {
+                return new TestRunResult(allSuites, null);
+            }
+        }
+
+        return new TestRunResult(allSuites, lastRunnerError);
+    }
+
+    private async Task<TestRunResult> RunSingleTestCommandAsync(
+        string targetPath,
         string? filter,
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct)
@@ -32,7 +76,7 @@ public sealed class TestRunnerService : ITestRunnerService
 
         try
         {
-            var args = $"test \"{solutionPath}\" --no-build --verbosity normal " +
+            var args = $"test \"{targetPath}\" --no-build --verbosity normal " +
                        $"--logger \"trx;LogFileName=piston-results.trx\" " +
                        $"--results-directory \"{resultsDir}\"";
 

@@ -48,6 +48,15 @@ public sealed class PistonState
     /// <summary>Timestamp of the most recent file change that triggered a run. Null until first file change.</summary>
     public DateTimeOffset? LastFileChangeTime { get; set; }
 
+    /// <summary>The changed files that triggered the current/last run.</summary>
+    public IReadOnlyList<string>? LastChangedFiles { get; set; }
+
+    /// <summary>Projects affected by the last file change (populated during Analyzing phase).</summary>
+    public IReadOnlyList<string>? AffectedProjects { get; set; }
+
+    /// <summary>Test projects selected for execution (populated during Analyzing phase).</summary>
+    public IReadOnlyList<string>? AffectedTestProjects { get; set; }
+
     /// <summary>Number of tests whose suite Timestamp is >= LastFileChangeTime (i.e. re-verified since last change).</summary>
     public int VerifiedSinceChangeCount { get; set; }
 

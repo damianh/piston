@@ -7,10 +7,10 @@ public sealed class FileWatcherService : IFileWatcherService
     private readonly TimeSpan _debounceInterval;
     private FileSystemWatcher? _watcher;
     private Timer? _debounceTimer;
-    private FileChangeEvent? _pendingEvent;
+    private readonly Dictionary<string, FileChangeEvent> _pendingEvents = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _lock = new();
 
-    public event Action<FileChangeEvent>? FileChanged;
+    public event Action<FileChangeBatch>? FileChanged;
 
     public FileWatcherService(TimeSpan? debounceInterval = null)
     {
@@ -49,7 +49,7 @@ public sealed class FileWatcherService : IFileWatcherService
         {
             _debounceTimer?.Dispose();
             _debounceTimer = null;
-            _pendingEvent = null;
+            _pendingEvents.Clear();
         }
     }
 
@@ -82,7 +82,8 @@ public sealed class FileWatcherService : IFileWatcherService
     {
         lock (_lock)
         {
-            _pendingEvent = evt;
+            // Deduplicate: same file path keeps the latest event
+            _pendingEvents[evt.FilePath] = evt;
             _debounceTimer?.Dispose();
             _debounceTimer = new Timer(FireDebounced, null, _debounceInterval, Timeout.InfiniteTimeSpan);
         }
@@ -90,17 +91,25 @@ public sealed class FileWatcherService : IFileWatcherService
 
     private void FireDebounced(object? state)
     {
-        FileChangeEvent? evt;
+        FileChangeBatch? batch;
         lock (_lock)
         {
-            evt = _pendingEvent;
-            _pendingEvent = null;
+            if (_pendingEvents.Count == 0)
+            {
+                _debounceTimer?.Dispose();
+                _debounceTimer = null;
+                return;
+            }
+
+            var changes = _pendingEvents.Values.ToList();
+            var timestamp = changes.Max(e => e.Timestamp);
+            batch = new FileChangeBatch(changes, timestamp);
+            _pendingEvents.Clear();
             _debounceTimer?.Dispose();
             _debounceTimer = null;
         }
 
-        if (evt is not null)
-            FileChanged?.Invoke(evt);
+        FileChanged?.Invoke(batch);
     }
 
     public void Dispose() => Stop();

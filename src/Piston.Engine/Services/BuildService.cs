@@ -15,13 +15,50 @@ public sealed class BuildService : IBuildService
     private static readonly Regex WarningPattern =
         new(@":\s*warning\s+\w+\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    public async Task<BuildResult> BuildAsync(string solutionPath, CancellationToken ct)
+    public Task<BuildResult> BuildAsync(string solutionPath, CancellationToken ct) =>
+        BuildAsync(solutionPath, null, ct);
+
+    public async Task<BuildResult> BuildAsync(
+        string solutionPath,
+        IReadOnlyList<string>? projectPaths,
+        CancellationToken ct)
+    {
+        if (projectPaths is null || projectPaths.Count == 0)
+            return await RunBuildAsync($"build \"{solutionPath}\"", ct).ConfigureAwait(false);
+
+        // Build each project individually and aggregate results
+        var allErrors = new List<string>();
+        var allWarnings = new List<string>();
+        var totalDuration = TimeSpan.Zero;
+        var overallStatus = BuildStatus.Succeeded;
+
+        foreach (var projectPath in projectPaths)
+        {
+            if (ct.IsCancellationRequested)
+                return new BuildResult(BuildStatus.Failed, allErrors, allWarnings, totalDuration);
+
+            var result = await RunBuildAsync(
+                $"build \"{projectPath}\" --no-restore",
+                ct).ConfigureAwait(false);
+
+            allErrors.AddRange(result.Errors);
+            allWarnings.AddRange(result.Warnings);
+            totalDuration += result.Duration;
+
+            if (result.Status == BuildStatus.Failed)
+                overallStatus = BuildStatus.Failed;
+        }
+
+        return new BuildResult(overallStatus, allErrors, allWarnings, totalDuration);
+    }
+
+    private static async Task<BuildResult> RunBuildAsync(string args, CancellationToken ct)
     {
         var errors = new List<string>();
         var warnings = new List<string>();
         var sw = Stopwatch.StartNew();
 
-        var psi = new ProcessStartInfo("dotnet", $"build \"{solutionPath}\"")
+        var psi = new ProcessStartInfo("dotnet", args)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -30,8 +67,6 @@ public sealed class BuildService : IBuildService
         };
 
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
-
-        var outputTcs = new TaskCompletionSource<bool>();
 
         process.OutputDataReceived += (_, e) =>
         {

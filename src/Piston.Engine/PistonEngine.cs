@@ -1,3 +1,4 @@
+using Piston.Engine.Impact;
 using Piston.Engine.Orchestration;
 using Piston.Engine.Services;
 
@@ -10,12 +11,17 @@ public sealed class PistonEngine : IEngine
 
     public PistonEngine(PistonOptions options)
     {
+        // Register MSBuild before any Microsoft.Build.* types are loaded.
+        // This must happen before MsBuildSolutionGraph (or any class referencing MSBuild) is JIT-compiled.
+        MsBuildLocatorGuard.EnsureRegistered();
+
         _state = new PistonState { TestFilter = options.TestFilter };
         var fileWatcher = new FileWatcherService(options.DebounceInterval);
         var buildService = new BuildService();
         var trxParser = new TrxResultParser();
         var testRunner = new TestRunnerService(trxParser);
-        _orchestrator = new PistonOrchestrator(fileWatcher, buildService, testRunner, _state);
+        var impactAnalyzer = new ImpactAnalyzer(solutionPath => new MsBuildSolutionGraph(solutionPath));
+        _orchestrator = new PistonOrchestrator(fileWatcher, buildService, testRunner, impactAnalyzer, _state);
     }
 
     public PistonState State => _state;

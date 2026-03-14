@@ -4,6 +4,7 @@ public enum PistonPhaseDto
 {
     Idle,
     Watching,
+    Analyzing,
     Building,
     Testing,
     Error

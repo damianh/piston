@@ -25,4 +25,22 @@ public interface ITestRunnerService
         string? filter,
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct);
+
+    /// <summary>
+    /// Runs tests for specific test projects when <paramref name="testProjectPaths"/> is provided,
+    /// or all test projects in the solution when <paramref name="testProjectPaths"/> is null.
+    /// </summary>
+    /// <param name="solutionPath">Path to the .sln or .slnx file (used when testProjectPaths is null).</param>
+    /// <param name="testProjectPaths">
+    /// Specific test project paths to run. When null, runs the entire solution.
+    /// </param>
+    /// <param name="filter">Optional dotnet-test filter expression. Null means run all tests.</param>
+    /// <param name="onProgress">Live progress callback. May be null.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<TestRunResult> RunTestsAsync(
+        string solutionPath,
+        IReadOnlyList<string>? testProjectPaths,
+        string? filter,
+        Action<IReadOnlyList<TestSuite>>? onProgress,
+        CancellationToken ct);
 }

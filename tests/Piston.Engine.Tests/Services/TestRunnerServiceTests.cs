@@ -92,6 +92,40 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
             Assert.Contains("RunnerTest.Tests.", t.FullyQualifiedName));
     }
 
+    [Fact]
+    public async Task RunTestsAsync_WithNullTestProjectPaths_RunsAllTestsInTarget()
+    {
+        // null testProjectPaths → runs the target path as-is (backward compat)
+        var sut = new TestRunnerService(new TrxResultParser());
+
+        var result = await sut.RunTestsAsync(
+            solutionPath: _projectFile,
+            testProjectPaths: null,
+            filter: null,
+            onProgress: null,
+            CancellationToken.None);
+
+        Assert.NotEmpty(result.Suites);
+    }
+
+    [Fact]
+    public async Task RunTestsAsync_WithExplicitTestProjectPath_RunsOnlyThatProject()
+    {
+        var sut = new TestRunnerService(new TrxResultParser());
+
+        var result = await sut.RunTestsAsync(
+            solutionPath: _projectFile,
+            testProjectPaths: [_projectFile],
+            filter: null,
+            onProgress: null,
+            CancellationToken.None);
+
+        Assert.NotEmpty(result.Suites);
+        var allTests = result.Suites.SelectMany(s => s.Tests).ToList();
+        Assert.Contains(allTests, t => t.Status == TestStatus.Passed);
+        Assert.Contains(allTests, t => t.Status == TestStatus.Failed);
+    }
+
     private static async Task RunDotnetAsync(string args, string workDir)
     {
         using var p = new System.Diagnostics.Process
