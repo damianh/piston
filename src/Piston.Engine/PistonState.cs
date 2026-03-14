@@ -43,6 +43,16 @@ public sealed class PistonState
     /// <summary>Number of tests that have completed (non-Running) in the current run.</summary>
     public int CompletedTests { get; set; }
 
+    /// <summary>Total number of test projects in the current run.</summary>
+    public int TotalTestProjects { get; set; }
+
+    /// <summary>Number of test projects that have completed in the current run.</summary>
+    public int CompletedTestProjects { get; set; }
+
+    /// <summary>Per-project status: project path → completed/running/error.</summary>
+    public IReadOnlyDictionary<string, ProjectRunStatus> ProjectStatuses { get; set; }
+        = new Dictionary<string, ProjectRunStatus>();
+
     // ── Verified/stale tracking ──
 
     /// <summary>Timestamp of the most recent file change that triggered a run. Null until first file change.</summary>

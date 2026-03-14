@@ -26,7 +26,10 @@ public sealed record StateSnapshotNotification(
     IReadOnlyList<string>? LastChangedFiles,
     bool CoverageEnabled,
     bool HasCoverageData,
-    string? CoverageImpactDetail
+    string? CoverageImpactDetail,
+    int TotalTestProjects,
+    int CompletedTestProjects,
+    IReadOnlyDictionary<string, ProjectRunStatusDto>? ProjectStatuses
 );
 
 public sealed record TestProgressNotification(

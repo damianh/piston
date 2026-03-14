@@ -1,5 +1,3 @@
-using System.Diagnostics;
-using System.Text.RegularExpressions;
 using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
@@ -7,18 +5,17 @@ namespace Piston.Engine.Services;
 public sealed class TestRunnerService : ITestRunnerService
 {
     private readonly ITestResultParser _parser;
-
-    // Matches dotnet test --verbosity normal output lines such as:
-    //   "  Passed Namespace.Class.Method [7 ms]"
-    //   "  Failed Namespace.Class.Method [< 1 ms]"
-    //   "  Skipped Namespace.Class.Method"
-    private static readonly Regex ResultLineRegex = new(
-        @"^\s+(Passed|Failed|Skipped|not run)\s+(.+?)(?:\s+\[.*?\])?\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private readonly ITestProcessPool? _pool;
 
     public TestRunnerService(ITestResultParser parser)
     {
         _parser = parser;
+    }
+
+    public TestRunnerService(ITestResultParser parser, ITestProcessPool pool)
+    {
+        _parser = parser;
+        _pool = pool;
     }
 
     public Task<TestRunResult> RunTestsAsync(
@@ -26,7 +23,16 @@ public sealed class TestRunnerService : ITestRunnerService
         string? filter,
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct) =>
-        RunTestsAsync(solutionPath, null, filter, collectCoverage: false, onProgress, ct);
+        RunTestsAsync(solutionPath, null, filter, collectCoverage: false, onProgress, onProjectCompleted: null, ct);
+
+    public Task<TestRunResult> RunTestsAsync(
+        string solutionPath,
+        IReadOnlyList<string>? testProjectPaths,
+        string? filter,
+        bool collectCoverage,
+        Action<IReadOnlyList<TestSuite>>? onProgress,
+        CancellationToken ct) =>
+        RunTestsAsync(solutionPath, testProjectPaths, filter, collectCoverage, onProgress, onProjectCompleted: null, ct);
 
     public async Task<TestRunResult> RunTestsAsync(
         string solutionPath,
@@ -34,12 +40,74 @@ public sealed class TestRunnerService : ITestRunnerService
         string? filter,
         bool collectCoverage,
         Action<IReadOnlyList<TestSuite>>? onProgress,
+        Action<ProjectTestResult>? onProjectCompleted,
         CancellationToken ct)
     {
         if (testProjectPaths is null || testProjectPaths.Count == 0)
-            return await RunSingleTestCommandAsync(solutionPath, filter, collectCoverage, onProgress, ct).ConfigureAwait(false);
+        {
+            // Single target (whole solution path) — run directly
+            var single = await TestProcessRunner.RunAsync(solutionPath, filter, collectCoverage, onProgress, _parser, ct)
+                .ConfigureAwait(false);
+            return new TestRunResult(single.Suites, single.RunnerError, single.CoverageReportPaths);
+        }
 
-        // Run each test project individually and merge results
+        // Multiple projects — use pool if available, otherwise sequential
+        if (_pool is not null && testProjectPaths.Count > 1)
+        {
+            return await RunWithPoolAsync(testProjectPaths, filter, collectCoverage, onProgress, onProjectCompleted, ct)
+                .ConfigureAwait(false);
+        }
+
+        return await RunSequentialAsync(testProjectPaths, filter, collectCoverage, onProgress, onProjectCompleted, ct)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<TestRunResult> RunWithPoolAsync(
+        IReadOnlyList<string> testProjectPaths,
+        string? filter,
+        bool collectCoverage,
+        Action<IReadOnlyList<TestSuite>>? onProgress,
+        Action<ProjectTestResult>? onProjectCompleted,
+        CancellationToken ct)
+    {
+        var requests = testProjectPaths
+            .Select(p => new ProjectTestRequest(p, filter, collectCoverage))
+            .ToList();
+
+        // Wrap the onProgress callback so it can fire from concurrent projects
+        Action<ProjectTestResult>? wrappedOnProjectCompleted = onProjectCompleted is not null || onProgress is not null
+            ? result =>
+            {
+                onProjectCompleted?.Invoke(result);
+            }
+            : null;
+
+        var results = await _pool!.RunProjectsAsync(requests, wrappedOnProjectCompleted, ct)
+            .ConfigureAwait(false);
+
+        var allSuites = new List<TestSuite>();
+        var allCoveragePaths = new List<string>();
+        string? lastRunnerError = null;
+
+        foreach (var result in results)
+        {
+            allSuites.AddRange(result.Suites);
+            allCoveragePaths.AddRange(result.CoverageReportPaths);
+            if (result.RunnerError is not null)
+                lastRunnerError = result.RunnerError;
+        }
+
+        return new TestRunResult(allSuites, lastRunnerError, allCoveragePaths);
+    }
+
+    private async Task<TestRunResult> RunSequentialAsync(
+        IReadOnlyList<string> testProjectPaths,
+        string? filter,
+        bool collectCoverage,
+        Action<IReadOnlyList<TestSuite>>? onProgress,
+        Action<ProjectTestResult>? onProjectCompleted,
+        CancellationToken ct)
+    {
         var allSuites = new List<TestSuite>();
         var allCoveragePaths = new List<string>();
         string? lastRunnerError = null;
@@ -51,13 +119,15 @@ public sealed class TestRunnerService : ITestRunnerService
 
             try
             {
-                var result = await RunSingleTestCommandAsync(projectPath, filter, collectCoverage, onProgress, ct)
+                var result = await TestProcessRunner.RunAsync(projectPath, filter, collectCoverage, onProgress, _parser, ct)
                     .ConfigureAwait(false);
 
                 allSuites.AddRange(result.Suites);
                 allCoveragePaths.AddRange(result.CoverageReportPaths);
                 if (result.RunnerError is not null)
                     lastRunnerError = result.RunnerError;
+
+                onProjectCompleted?.Invoke(result);
             }
             catch (OperationCanceledException)
             {
@@ -66,191 +136,5 @@ public sealed class TestRunnerService : ITestRunnerService
         }
 
         return new TestRunResult(allSuites, lastRunnerError, allCoveragePaths);
-    }
-
-    private async Task<TestRunResult> RunSingleTestCommandAsync(
-        string targetPath,
-        string? filter,
-        bool collectCoverage,
-        Action<IReadOnlyList<TestSuite>>? onProgress,
-        CancellationToken ct)
-    {
-        var resultsDir = Path.Combine(Path.GetTempPath(), $"piston-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(resultsDir);
-
-        try
-        {
-            var args = $"test \"{targetPath}\" --no-build --verbosity normal " +
-                       $"--logger \"trx;LogFileName=piston-results.trx\" " +
-                       $"--results-directory \"{resultsDir}\"";
-
-            if (collectCoverage)
-                args += " --collect \"XPlat Code Coverage\"";
-
-            if (!string.IsNullOrWhiteSpace(filter))
-                args += $" --filter \"{filter}\"";
-
-            var psi = new ProcessStartInfo("dotnet", args)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                UseShellExecute        = false,
-                CreateNoWindow         = true,
-            };
-
-            // Live progress state: FQN → current status (starts as Running when first seen)
-            var liveResults = new Dictionary<string, (TestStatus Status, string DisplayName)>(
-                StringComparer.Ordinal);
-            var liveResultsLock = new object();
-
-            // Collect stderr lines for error surfacing
-            var stderrLines = new System.Collections.Concurrent.ConcurrentBag<string>();
-
-            // Throttle: fire onProgress at most every 150ms
-            var lastProgressFire = DateTimeOffset.MinValue;
-            const int progressThrottleMs = 150;
-
-            using var process = new Process { StartInfo = psi };
-
-            process.OutputDataReceived += (_, e) =>
-            {
-                if (e.Data is null) return;
-                var m = ResultLineRegex.Match(e.Data);
-                if (!m.Success) return;
-
-                var outcomeStr = m.Groups[1].Value;
-                var fqn        = m.Groups[2].Value.Trim();
-
-                var status = outcomeStr.ToLowerInvariant() switch
-                {
-                    "passed"  => TestStatus.Passed,
-                    "failed"  => TestStatus.Failed,
-                    "skipped" => TestStatus.Skipped,
-                    _         => TestStatus.NotRun,
-                };
-
-                // Use last segment of FQN as display name
-                var dot = fqn.LastIndexOf('.');
-                var displayName = dot >= 0 ? fqn[(dot + 1)..] : fqn;
-
-                lock (liveResultsLock)
-                {
-                    liveResults[fqn] = (status, displayName);
-                }
-
-                if (onProgress is null) return;
-
-                var now = DateTimeOffset.UtcNow;
-                bool shouldFire;
-                lock (liveResultsLock)
-                {
-                    shouldFire = (now - lastProgressFire).TotalMilliseconds >= progressThrottleMs;
-                    if (shouldFire) lastProgressFire = now;
-                }
-
-                if (shouldFire)
-                    onProgress(BuildLiveSnapshot(liveResults, liveResultsLock));
-            };
-
-            process.ErrorDataReceived += (_, e) =>
-            {
-                if (e.Data is not null && e.Data.Trim().Length > 0)
-                    stderrLines.Add(e.Data.Trim());
-            };
-
-            process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-
-            try
-            {
-                await process.WaitForExitAsync(ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
-                return new TestRunResult([], null, []);
-            }
-
-            // Fire one final progress update with everything that arrived
-            onProgress?.Invoke(BuildLiveSnapshot(liveResults, liveResultsLock));
-
-            // Parse TRX files for authoritative results (durations, error messages, stack traces)
-            var trxFiles = Directory.GetFiles(resultsDir, "*.trx", SearchOption.AllDirectories);
-
-            var suites = new List<TestSuite>();
-            foreach (var trx in trxFiles)
-            {
-                try { suites.AddRange(_parser.Parse(trx)); }
-                catch { /* malformed TRX — skip */ }
-            }
-
-            // Surface stderr when there are no results (likely a runner-level failure)
-            string? runnerError = null;
-            if (suites.Count == 0 && !stderrLines.IsEmpty)
-                runnerError = string.Join(Environment.NewLine, stderrLines.OrderBy(x => x));
-
-            // Glob for Cobertura XML files if coverage was collected
-            IReadOnlyList<string> coverageReportPaths = [];
-            if (collectCoverage)
-            {
-                coverageReportPaths = Directory.GetFiles(
-                    resultsDir, "coverage.cobertura.xml", SearchOption.AllDirectories);
-            }
-
-            // When coverage was collected, return paths without deleting the results dir.
-            // The caller is responsible for cleanup after consuming the coverage files.
-            if (collectCoverage && coverageReportPaths.Count > 0)
-                return new TestRunResult(suites, runnerError, coverageReportPaths);
-
-            return new TestRunResult(suites, runnerError, coverageReportPaths);
-        }
-        finally
-        {
-            // Only clean up immediately when we are not returning coverage paths to the caller.
-            // When coverage is enabled and paths were found, the caller cleans up the results dir.
-            // However, since we return from within the try block in that case, the finally still runs.
-            // We guard against double-delete by checking coverage: if collectCoverage is false,
-            // we always clean up. If collectCoverage is true, we do NOT delete here — the caller
-            // is responsible for cleanup via the returned CoverageReportPaths directory.
-            if (!collectCoverage)
-            {
-                try { Directory.Delete(resultsDir, recursive: true); } catch { /* ignore */ }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Converts the current live dictionary into a list of <see cref="TestSuite"/> objects
-    /// grouped by namespace (suite name = "…" placeholder since we don't know project names
-    /// until TRX is parsed, so we use a single synthetic suite).
-    /// </summary>
-    private static IReadOnlyList<TestSuite> BuildLiveSnapshot(
-        Dictionary<string, (TestStatus Status, string DisplayName)> liveResults,
-        object lockObj)
-    {
-        List<KeyValuePair<string, (TestStatus Status, string DisplayName)>> snapshot;
-        lock (lockObj)
-        {
-            snapshot = [.. liveResults];
-        }
-
-        if (snapshot.Count == 0) return [];
-
-        // Group by suite (we can't know project names at this stage, use empty suite name —
-        // the orchestrator will merge this into the last known suites for display purposes)
-        var results = snapshot
-            .Select(kvp => new TestResult(
-                FullyQualifiedName: kvp.Key,
-                DisplayName:        kvp.Value.DisplayName,
-                Status:             kvp.Value.Status,
-                Duration:           TimeSpan.Zero,
-                Output:             null,
-                ErrorMessage:       null,
-                StackTrace:         null,
-                Source:             null))
-            .ToList();
-
-        return [new TestSuite("…", results, DateTimeOffset.UtcNow, TimeSpan.Zero)];
     }
 }

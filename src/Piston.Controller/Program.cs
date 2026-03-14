@@ -26,24 +26,30 @@ var coverageOpt = new Option<bool>(
     description: "Enable code coverage collection during test runs.",
     getDefaultValue: () => false);
 
+var parallelismOpt = new Option<int>(
+    name: "--parallelism",
+    description: "Maximum number of concurrent dotnet test processes. 0 = auto (ProcessorCount / 2).",
+    getDefaultValue: () => 0);
+
 var rootCommand = new RootCommand("Piston — continuous test runner for .NET")
 {
     solutionArg,
     debounceOpt,
     filterOpt,
     coverageOpt,
+    parallelismOpt,
 };
 
-rootCommand.SetHandler(async (FileInfo? solutionFile, int debounceMs, string? filter, bool coverage) =>
+rootCommand.SetHandler(async (FileInfo? solutionFile, int debounceMs, string? filter, bool coverage, int parallelism) =>
 {
-    await RunAsync(solutionFile, debounceMs, filter, coverage);
-}, solutionArg, debounceOpt, filterOpt, coverageOpt);
+    await RunAsync(solutionFile, debounceMs, filter, coverage, parallelism);
+}, solutionArg, debounceOpt, filterOpt, coverageOpt, parallelismOpt);
 
 return await rootCommand.InvokeAsync(args);
 
 // ── Main entrypoint ────────────────────────────────────────────────────────────
 
-static async Task RunAsync(FileInfo? solutionArg, int cliDebounceMs, string? cliFilter, bool cliCoverage)
+static async Task RunAsync(FileInfo? solutionArg, int cliDebounceMs, string? cliFilter, bool cliCoverage, int cliParallelism)
 {
     // 1. Find solution path
     string solutionPath;
@@ -72,12 +78,21 @@ static async Task RunAsync(FileInfo? solutionArg, int cliDebounceMs, string? cli
     // Coverage: CLI --coverage flag OR config coverageEnabled = true
     var coverageEnabled = cliCoverage || (config.CoverageEnabled ?? false);
 
+    // Parallelism: CLI > config > 0 (auto)
+    var processPoolSize = cliParallelism > 0 ? cliParallelism
+        : config.Parallelism is > 0 ? config.Parallelism.Value
+        : 0;
+
+    var processRecycleAfter = config.ProcessRecycleAfter is > 0 ? config.ProcessRecycleAfter.Value : 50;
+
     var options = new PistonOptions
     {
-        SolutionPath     = solutionPath,
-        DebounceInterval = TimeSpan.FromMilliseconds(debounceMs),
-        TestFilter       = filter,
-        CoverageEnabled  = coverageEnabled,
+        SolutionPath       = solutionPath,
+        DebounceInterval   = TimeSpan.FromMilliseconds(debounceMs),
+        TestFilter         = filter,
+        CoverageEnabled    = coverageEnabled,
+        ProcessPoolSize    = processPoolSize,
+        ProcessRecycleAfter = processRecycleAfter,
     };
 
     // 4. Validate .NET SDK is available

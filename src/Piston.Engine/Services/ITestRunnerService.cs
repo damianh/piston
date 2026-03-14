@@ -46,4 +46,17 @@ public interface ITestRunnerService
         bool collectCoverage,
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct);
+
+    /// <summary>
+    /// Runs tests with per-project progress reporting. Each project completion fires onProjectCompleted.
+    /// </summary>
+    Task<TestRunResult> RunTestsAsync(
+        string solutionPath,
+        IReadOnlyList<string>? testProjectPaths,
+        string? filter,
+        bool collectCoverage,
+        Action<IReadOnlyList<TestSuite>>? onProgress,
+        Action<ProjectTestResult>? onProjectCompleted,
+        CancellationToken ct);
 }
+

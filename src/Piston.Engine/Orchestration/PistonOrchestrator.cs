@@ -245,16 +245,54 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             _state.TotalExpectedTests = suitesToSeed.SelectMany(s => s.Tests).Count();
             _state.CompletedTests = 0;
 
+            // Per-project progress tracking
+            _state.TotalTestProjects = testTargets?.Count ?? 0;
+            _state.CompletedTestProjects = 0;
+            _state.ProjectStatuses = testTargets is not null
+                ? testTargets.ToDictionary(p => p, _ => Models.ProjectRunStatus.Pending)
+                : new Dictionary<string, Models.ProjectRunStatus>();
+
             _state.NotifyChanged();
 
             var testStart = DateTimeOffset.UtcNow;
+            var liveResultsLock = new object();
 
             void OnProgress(IReadOnlyList<TestSuite> liveSuites)
             {
-                _state.InProgressSuites = MergeProgress(suitesToSeed, liveSuites);
-                _state.CompletedTests = _state.InProgressSuites
-                    .SelectMany(s => s.Tests)
-                    .Count(t => t.Status != TestStatus.Running);
+                lock (liveResultsLock)
+                {
+                    _state.InProgressSuites = MergeProgress(suitesToSeed, liveSuites);
+                    _state.CompletedTests = _state.InProgressSuites
+                        .SelectMany(s => s.Tests)
+                        .Count(t => t.Status != TestStatus.Running);
+                }
+                _state.NotifyChanged();
+            }
+
+            void OnProjectCompleted(Models.ProjectTestResult result)
+            {
+                lock (liveResultsLock)
+                {
+                    _state.CompletedTestProjects++;
+
+                    if (_state.ProjectStatuses is Dictionary<string, Models.ProjectRunStatus> mutableStatuses)
+                    {
+                        mutableStatuses[result.ProjectPath] = result.Crashed
+                            ? Models.ProjectRunStatus.Crashed
+                            : result.RunnerError is not null && result.Suites.Count == 0
+                                ? Models.ProjectRunStatus.Failed
+                                : Models.ProjectRunStatus.Completed;
+                    }
+
+                    // Merge the completed project's suites into InProgressSuites
+                    if (result.Suites.Count > 0)
+                    {
+                        _state.InProgressSuites = MergeProgress(suitesToSeed, result.Suites);
+                        _state.CompletedTests = _state.InProgressSuites
+                            .SelectMany(s => s.Tests)
+                            .Count(t => t.Status != TestStatus.Running);
+                    }
+                }
                 _state.NotifyChanged();
             }
 
@@ -273,6 +311,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                     effectiveFilter,
                     _coverageEnabled,
                     OnProgress,
+                    OnProjectCompleted,
                     ct).ConfigureAwait(false);
                 newSuites            = result.Suites;
                 coverageReportPaths  = result.CoverageReportPaths;

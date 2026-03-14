@@ -23,4 +23,16 @@ public sealed class PistonOptions
     /// <c>--collect "XPlat Code Coverage"</c> (coverlet). Default is false (opt-in).
     /// </summary>
     public bool CoverageEnabled { get; init; } = false;
+
+    /// <summary>
+    /// Maximum number of concurrent <c>dotnet test</c> processes.
+    /// 0 means auto-detect: <c>Math.Max(1, Environment.ProcessorCount / 2)</c>.
+    /// </summary>
+    public int ProcessPoolSize { get; init; } = 0;
+
+    /// <summary>
+    /// Number of runs after which a pool slot is considered "stale" and logged as a warning.
+    /// Default is 50.
+    /// </summary>
+    public int ProcessRecycleAfter { get; init; } = 50;
 }

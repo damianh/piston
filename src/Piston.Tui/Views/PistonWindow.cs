@@ -185,6 +185,8 @@ public static class PistonWindow
         var lastTotalForVerify = -1;
         var lastCompletedTests = -1;
         var lastTotalTests     = -1;
+        var lastCompletedProjects = -1;
+        var lastTotalProjects  = -1;
 
         // ViewState change tracking
         var lastShowPassed     = true;
@@ -337,10 +339,16 @@ public static class PistonWindow
             // --- Progress bar in toolbar (during Testing phase) ---
             var completedTests = snap.CompletedTests;
             var totalTests     = snap.TotalExpectedTests;
-            if (completedTests != lastCompletedTests || totalTests != lastTotalTests || phaseChanged)
+            var completedProjects = snap.CompletedTestProjects;
+            var totalProjects  = snap.TotalTestProjects;
+            if (completedTests != lastCompletedTests || totalTests != lastTotalTests
+                || completedProjects != lastCompletedProjects || totalProjects != lastTotalProjects
+                || phaseChanged)
             {
-                lastCompletedTests = completedTests;
-                lastTotalTests     = totalTests;
+                lastCompletedTests    = completedTests;
+                lastTotalTests        = totalTests;
+                lastCompletedProjects = completedProjects;
+                lastTotalProjects     = totalProjects;
                 var progressControl = window.FindControl<MarkupControl>("progress");
                 if (progressControl is not null)
                 {
@@ -349,8 +357,16 @@ public static class PistonWindow
                         var pct    = (int)(100.0 * completedTests / totalTests);
                         var filled = pct / 5; // 20-char bar
                         var empty  = 20 - filled;
+                        var projectInfo = snap.TotalTestProjects > 0
+                            ? $" [{snap.CompletedTestProjects}/{snap.TotalTestProjects} projects]"
+                            : string.Empty;
                         progressControl.Text =
-                            $"[cyan]{new string('█', filled)}[/][dim]{new string('░', empty)}[/] {pct}%";
+                            $"[cyan]{new string('█', filled)}[/][dim]{new string('░', empty)}[/] {pct}%{EscapeMarkup(projectInfo)}";
+                    }
+                    else if (snap.Phase == PistonPhaseDto.Testing && snap.TotalTestProjects > 0)
+                    {
+                        progressControl.Text =
+                            $"[dim]{snap.CompletedTestProjects}/{snap.TotalTestProjects} projects[/]";
                     }
                     else
                     {

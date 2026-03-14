@@ -20,4 +20,16 @@ internal sealed class PistonConfig
     /// Corresponds to the <c>--coverage</c> CLI flag.
     /// </summary>
     public bool? CoverageEnabled { get; set; }
+
+    /// <summary>
+    /// Maximum number of concurrent <c>dotnet test</c> processes.
+    /// 0 means auto-detect. Corresponds to the <c>--parallelism</c> CLI flag.
+    /// </summary>
+    public int? Parallelism { get; set; }
+
+    /// <summary>
+    /// Number of runs after which a pool slot logs a recycling warning.
+    /// Default is 50.
+    /// </summary>
+    public int? ProcessRecycleAfter { get; set; }
 }

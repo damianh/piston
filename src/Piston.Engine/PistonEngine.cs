@@ -10,6 +10,7 @@ public sealed class PistonEngine : IEngine
     private readonly PistonState _state;
     private readonly PistonOrchestrator _orchestrator;
     private readonly ICoverageStore? _coverageStore;
+    private readonly ITestProcessPool _pool;
 
     public PistonEngine(PistonOptions options)
     {
@@ -26,7 +27,13 @@ public sealed class PistonEngine : IEngine
         var fileWatcher = new FileWatcherService(options.DebounceInterval);
         var buildService = new BuildService();
         var trxParser = new TrxResultParser();
-        var testRunner = new TestRunnerService(trxParser);
+
+        var effectivePoolSize = options.ProcessPoolSize > 0
+            ? options.ProcessPoolSize
+            : Math.Max(1, Environment.ProcessorCount / 2);
+        _pool = new TestProcessPool(effectivePoolSize, options.ProcessRecycleAfter, trxParser);
+
+        var testRunner = new TestRunnerService(trxParser, _pool);
 
         ICoverageProcessor? coverageProcessor = null;
 
@@ -76,5 +83,6 @@ public sealed class PistonEngine : IEngine
     {
         _orchestrator.Dispose();
         _coverageStore?.Dispose();
+        _pool.Dispose();
     }
 }

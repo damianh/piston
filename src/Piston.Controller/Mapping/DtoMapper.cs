@@ -37,6 +37,16 @@ internal static class DtoMapper
         _                     => PistonPhaseDto.Idle,
     };
 
+    internal static ProjectRunStatusDto ToDto(this ProjectRunStatus status) => status switch
+    {
+        ProjectRunStatus.Pending   => ProjectRunStatusDto.Pending,
+        ProjectRunStatus.Running   => ProjectRunStatusDto.Running,
+        ProjectRunStatus.Completed => ProjectRunStatusDto.Completed,
+        ProjectRunStatus.Failed    => ProjectRunStatusDto.Failed,
+        ProjectRunStatus.Crashed   => ProjectRunStatusDto.Crashed,
+        _                          => ProjectRunStatusDto.Pending,
+    };
+
     internal static TestResultDto ToDto(this TestResult result) =>
         new(
             result.FullyQualifiedName,
@@ -85,6 +95,13 @@ internal static class DtoMapper
             LastChangedFiles:       state.LastChangedFiles,
             CoverageEnabled:        state.CoverageEnabled,
             HasCoverageData:        state.HasCoverageData,
-            CoverageImpactDetail:   state.CoverageImpactDetail
+            CoverageImpactDetail:   state.CoverageImpactDetail,
+            TotalTestProjects:      state.TotalTestProjects,
+            CompletedTestProjects:  state.CompletedTestProjects,
+            ProjectStatuses:        state.ProjectStatuses.Count > 0
+                ? state.ProjectStatuses.ToDictionary(
+                    kvp => kvp.Key,
+                    kvp => kvp.Value.ToDto())
+                : null
         );
 }
