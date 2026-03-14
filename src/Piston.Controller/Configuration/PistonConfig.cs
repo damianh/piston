@@ -32,4 +32,17 @@ internal sealed class PistonConfig
     /// Default is 50.
     /// </summary>
     public int? ProcessRecycleAfter { get; set; }
+
+    /// <summary>
+    /// Override the named pipe name used in headless mode.
+    /// When omitted, the pipe name is auto-generated from the solution path.
+    /// Corresponds to the <c>--pipe-name</c> CLI flag.
+    /// </summary>
+    public string? PipeName { get; set; }
+
+    /// <summary>
+    /// When true, defaults to headless mode (no TUI).
+    /// Corresponds to the <c>--headless</c> CLI flag.
+    /// </summary>
+    public bool? Headless { get; set; }
 }

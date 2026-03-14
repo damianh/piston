@@ -12,4 +12,9 @@
     <ProjectReference Include="..\Piston.Protocol\Piston.Protocol.csproj" />
     <ProjectReference Include="..\Piston.Tui\Piston.Tui.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>Piston.Protocol.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
 </Project>

@@ -1,7 +1,9 @@
 using System.CommandLine;
 using Microsoft.Extensions.Configuration;
 using Piston.Controller.Configuration;
+using Piston.Controller.Protocol;
 using Piston.Engine;
+using Piston.Protocol.Transports;
 
 // ── CLI definition ─────────────────────────────────────────────────────────────
 
@@ -31,6 +33,18 @@ var parallelismOpt = new Option<int>(
     description: "Maximum number of concurrent dotnet test processes. 0 = auto (ProcessorCount / 2).",
     getDefaultValue: () => 0);
 
+var headlessOpt = new Option<bool>(
+    name: "--headless",
+    description: "Run in headless mode (no TUI). Listens on a named pipe.");
+
+var pipeNameOpt = new Option<string?>(
+    name: "--pipe-name",
+    description: "Override the named pipe name (default: auto-generated from solution path).");
+
+var connectOpt = new Option<string?>(
+    name: "--connect",
+    description: "Connect to a running headless controller via named pipe.");
+
 var rootCommand = new RootCommand("Piston — continuous test runner for .NET")
 {
     solutionArg,
@@ -38,20 +52,61 @@ var rootCommand = new RootCommand("Piston — continuous test runner for .NET")
     filterOpt,
     coverageOpt,
     parallelismOpt,
+    headlessOpt,
+    pipeNameOpt,
+    connectOpt,
 };
 
-rootCommand.SetHandler(async (FileInfo? solutionFile, int debounceMs, string? filter, bool coverage, int parallelism) =>
+rootCommand.SetHandler(async (
+    FileInfo? solutionFile,
+    int debounceMs,
+    string? filter,
+    bool coverage,
+    int parallelism,
+    bool headless,
+    string? pipeName,
+    string? connect) =>
 {
-    await RunAsync(solutionFile, debounceMs, filter, coverage, parallelism);
-}, solutionArg, debounceOpt, filterOpt, coverageOpt, parallelismOpt);
+    // Task 15: validate exclusivity
+    if (headless && connect is not null)
+    {
+        Console.Error.WriteLine("error: Cannot use --headless and --connect together.");
+        Environment.Exit(1);
+        return;
+    }
+
+    if (connect is not null && (debounceMs > 0 || filter is not null || coverage || parallelism > 0))
+    {
+        Console.Error.WriteLine("warning: Engine options (--debounce, --filter, --coverage, --parallelism) are ignored in --connect mode.");
+    }
+
+    if (connect is not null)
+    {
+        await RunConnectAsync(connect);
+        return;
+    }
+
+    if (headless)
+    {
+        await RunHeadlessAsync(solutionFile, debounceMs, filter, coverage, parallelism, pipeName);
+        return;
+    }
+
+    await RunEmbeddedAsync(solutionFile, debounceMs, filter, coverage, parallelism);
+},
+solutionArg, debounceOpt, filterOpt, coverageOpt, parallelismOpt, headlessOpt, pipeNameOpt, connectOpt);
 
 return await rootCommand.InvokeAsync(args);
 
-// ── Main entrypoint ────────────────────────────────────────────────────────────
+// ── Embedded mode (default) ────────────────────────────────────────────────────
 
-static async Task RunAsync(FileInfo? solutionArg, int cliDebounceMs, string? cliFilter, bool cliCoverage, int cliParallelism)
+static async Task RunEmbeddedAsync(
+    FileInfo? solutionArg,
+    int cliDebounceMs,
+    string? cliFilter,
+    bool cliCoverage,
+    int cliParallelism)
 {
-    // 1. Find solution path
     string solutionPath;
     try
     {
@@ -64,38 +119,10 @@ static async Task RunAsync(FileInfo? solutionArg, int cliDebounceMs, string? cli
         return;
     }
 
-    // 2. Load .piston.json from solution directory (optional)
     var solutionDir = Path.GetDirectoryName(solutionPath)!;
-    var config = LoadConfig(solutionDir);
+    var config      = LoadConfig(solutionDir);
+    var options     = BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
 
-    // 3. Merge options: CLI > config > defaults
-    var debounceMs = cliDebounceMs > 0 ? cliDebounceMs
-        : config.DebounceMs is > 0 ? config.DebounceMs.Value
-        : 300;
-
-    var filter = cliFilter ?? config.TestFilter;
-
-    // Coverage: CLI --coverage flag OR config coverageEnabled = true
-    var coverageEnabled = cliCoverage || (config.CoverageEnabled ?? false);
-
-    // Parallelism: CLI > config > 0 (auto)
-    var processPoolSize = cliParallelism > 0 ? cliParallelism
-        : config.Parallelism is > 0 ? config.Parallelism.Value
-        : 0;
-
-    var processRecycleAfter = config.ProcessRecycleAfter is > 0 ? config.ProcessRecycleAfter.Value : 50;
-
-    var options = new PistonOptions
-    {
-        SolutionPath       = solutionPath,
-        DebounceInterval   = TimeSpan.FromMilliseconds(debounceMs),
-        TestFilter         = filter,
-        CoverageEnabled    = coverageEnabled,
-        ProcessPoolSize    = processPoolSize,
-        ProcessRecycleAfter = processRecycleAfter,
-    };
-
-    // 4. Validate .NET SDK is available
     if (!DotnetSdkAvailable())
     {
         Console.Error.WriteLine("error: 'dotnet' SDK not found on PATH. Install .NET 10 SDK from https://dot.net");
@@ -103,17 +130,106 @@ static async Task RunAsync(FileInfo? solutionArg, int cliDebounceMs, string? cli
         return;
     }
 
-    // 5. Create embedded client (hosts engine in-process)
     await using var client = new Piston.Controller.EmbeddedEngineClient(options);
-
-    // 6. Start engine
     await client.StartAsync(solutionPath);
-
-    // 7. Run TUI (blocks until Q / Ctrl+C)
     Piston.Tui.PistonTui.Run(client);
-
-    // 8. Graceful shutdown
     client.Stop();
+}
+
+// ── Headless mode ──────────────────────────────────────────────────────────────
+
+static async Task RunHeadlessAsync(
+    FileInfo? solutionArg,
+    int cliDebounceMs,
+    string? cliFilter,
+    bool cliCoverage,
+    int cliParallelism,
+    string? cliPipeName)
+{
+    string solutionPath;
+    try
+    {
+        solutionPath = ResolveSolutionPath(solutionArg);
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        Environment.Exit(1);
+        return;
+    }
+
+    var solutionDir = Path.GetDirectoryName(solutionPath)!;
+    var config      = LoadConfig(solutionDir);
+    var options     = BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
+
+    if (!DotnetSdkAvailable())
+    {
+        Console.Error.WriteLine("error: 'dotnet' SDK not found on PATH. Install .NET 10 SDK from https://dot.net");
+        Environment.Exit(1);
+        return;
+    }
+
+    var pipeName = cliPipeName
+        ?? config.PipeName
+        ?? NamedPipeListener.GeneratePipeName(solutionPath);
+
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        cts.Cancel();
+    };
+
+    using var engine = new PistonEngine(options);
+
+    Console.Error.WriteLine($"[piston] Starting engine for: {solutionPath}");
+    await engine.StartAsync(solutionPath);
+
+    Console.Error.WriteLine($"[piston] Listening on pipe: {pipeName}");
+    Console.WriteLine($"PIPE:{pipeName}");
+
+    var listener = new NamedPipeListener(pipeName);
+    await using var router = new ProtocolRouter(engine, listener);
+
+    try
+    {
+        await router.RunAsync(cts.Token);
+    }
+    catch (OperationCanceledException)
+    {
+        // Normal shutdown
+    }
+
+    Console.Error.WriteLine("[piston] Shutting down.");
+    engine.Stop();
+}
+
+// ── Connect mode ───────────────────────────────────────────────────────────────
+
+static async Task RunConnectAsync(string pipeName)
+{
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        cts.Cancel();
+    };
+
+    await using var client = new Piston.Controller.RemoteEngineClient(pipeName);
+
+    try
+    {
+        await client.ConnectAsync(cts.Token);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine(
+            $"error: Could not connect to headless controller at pipe '{pipeName}'. Is it running?\n  {ex.Message}");
+        Environment.Exit(1);
+        return;
+    }
+
+    Piston.Tui.PistonTui.Run(client);
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -132,8 +248,7 @@ static string ResolveSolutionPath(FileInfo? solutionArg)
         return solutionArg.FullName;
     }
 
-    // Auto-discover in current directory
-    var cwd = Directory.GetCurrentDirectory();
+    var cwd        = Directory.GetCurrentDirectory();
     var candidates = Directory.GetFiles(cwd, "*.sln")
         .Concat(Directory.GetFiles(cwd, "*.slnx"))
         .ToList();
@@ -167,9 +282,41 @@ static PistonConfig LoadConfig(string solutionDir)
     }
     catch
     {
-        // Malformed config — ignore and use defaults
         return new PistonConfig();
     }
+}
+
+static PistonOptions BuildOptions(
+    string solutionPath,
+    int cliDebounceMs,
+    string? cliFilter,
+    bool cliCoverage,
+    int cliParallelism,
+    PistonConfig config)
+{
+    var debounceMs = cliDebounceMs > 0 ? cliDebounceMs
+        : config.DebounceMs is > 0 ? config.DebounceMs.Value
+        : 300;
+
+    var filter = cliFilter ?? config.TestFilter;
+
+    var coverageEnabled = cliCoverage || (config.CoverageEnabled ?? false);
+
+    var processPoolSize = cliParallelism > 0 ? cliParallelism
+        : config.Parallelism is > 0 ? config.Parallelism.Value
+        : 0;
+
+    var processRecycleAfter = config.ProcessRecycleAfter is > 0 ? config.ProcessRecycleAfter.Value : 50;
+
+    return new PistonOptions
+    {
+        SolutionPath        = solutionPath,
+        DebounceInterval    = TimeSpan.FromMilliseconds(debounceMs),
+        TestFilter          = filter,
+        CoverageEnabled     = coverageEnabled,
+        ProcessPoolSize     = processPoolSize,
+        ProcessRecycleAfter = processRecycleAfter,
+    };
 }
 
 static bool DotnetSdkAvailable()

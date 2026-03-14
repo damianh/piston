@@ -7,5 +7,6 @@
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Piston.Engine.Tests/Piston.Engine.Tests.csproj" />
+    <Project Path="tests/Piston.Protocol.Tests/Piston.Protocol.Tests.csproj" />
   </Folder>
 </Solution>

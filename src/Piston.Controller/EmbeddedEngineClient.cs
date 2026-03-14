@@ -47,7 +47,7 @@ internal sealed class EmbeddedEngineClient : IEngineClient
         StateChanged?.Invoke(snapshot);
         PhaseChanged?.Invoke(new PhaseChangedNotification(snapshot.Phase, null));
 
-        if (snapshot.Phase == Protocol.Dtos.PistonPhaseDto.Testing)
+        if (snapshot.Phase == Piston.Protocol.Dtos.PistonPhaseDto.Testing)
         {
             TestProgressChanged?.Invoke(new TestProgressNotification(
                 snapshot.InProgressSuites,
@@ -55,7 +55,7 @@ internal sealed class EmbeddedEngineClient : IEngineClient
                 snapshot.TotalExpectedTests));
         }
 
-        if (snapshot.Phase == Protocol.Dtos.PistonPhaseDto.Error && snapshot.LastBuild is not null)
+        if (snapshot.Phase == Piston.Protocol.Dtos.PistonPhaseDto.Error && snapshot.LastBuild is not null)
         {
             BuildError?.Invoke(new BuildErrorNotification(snapshot.LastBuild));
         }
