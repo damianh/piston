@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <PackageReference Include="SharpConsoleUI" Version="2.4.32" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Piston.Protocol\Piston.Protocol.csproj" />
+  </ItemGroup>
+</Project>

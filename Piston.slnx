@@ -1,9 +1,11 @@
 <Solution>
   <Folder Name="/src/">
-    <Project Path="src/Piston.Core/Piston.Core.csproj" />
-    <Project Path="src/Piston/Piston.csproj" />
+    <Project Path="src/Piston.Protocol/Piston.Protocol.csproj" />
+    <Project Path="src/Piston.Engine/Piston.Engine.csproj" />
+    <Project Path="src/Piston.Controller/Piston.Controller.csproj" />
+    <Project Path="src/Piston.Tui/Piston.Tui.csproj" />
   </Folder>
   <Folder Name="/tests/">
-    <Project Path="tests/Piston.Core.Tests/Piston.Core.Tests.csproj" />
+    <Project Path="tests/Piston.Engine.Tests/Piston.Engine.Tests.csproj" />
   </Folder>
 </Solution>
