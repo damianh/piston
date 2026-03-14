@@ -1,3 +1,4 @@
+using Piston.Engine.Coverage;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
 
@@ -6,6 +7,7 @@ namespace Piston.Engine.Impact;
 internal sealed class ImpactAnalyzer : IImpactAnalyzer
 {
     private readonly Func<string, ISolutionGraph> _graphFactory;
+    private readonly ICoverageStore? _coverageStore;
     private ISolutionGraph? _graph;
     private string? _solutionPath;
     private bool _rebuildScheduled;
@@ -13,6 +15,12 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
     public ImpactAnalyzer(Func<string, ISolutionGraph> graphFactory)
     {
         _graphFactory = graphFactory;
+    }
+
+    public ImpactAnalyzer(Func<string, ISolutionGraph> graphFactory, ICoverageStore? coverageStore)
+    {
+        _graphFactory  = graphFactory;
+        _coverageStore = coverageStore;
     }
 
     public async Task InitializeAsync(string solutionPath, CancellationToken ct)
@@ -124,12 +132,56 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
             .Where(p => !graph.IsTestProject(p))
             .ToList();
 
-        return new ImpactAnalysisResult(
+        var tier2Result = new ImpactAnalysisResult(
             AffectedProjectPaths: buildProjects,
             AffectedTestProjectPaths: [.. affectedTestProjects],
             RequiresGraphRebuild: requiresGraphRebuild,
             IsFullRun: false
         );
+
+        // ── Tier 3: coverage-based test-level narrowing ────────────────────────
+        if (_coverageStore is not null)
+        {
+            var csChanges = changes
+                .Where(c => c.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (csChanges.Count > 0)
+            {
+                var tier3Fqns    = new HashSet<string>(StringComparer.Ordinal);
+                var allHaveCoverage = true;
+
+                foreach (var change in csChanges)
+                {
+                    var normalizedPath = Path.GetFullPath(change.FilePath);
+
+                    if (!_coverageStore.HasCoverageData(normalizedPath))
+                    {
+                        allHaveCoverage = false;
+                        // Still mark stale so future runs don't use this file's old coverage
+                        _ = _coverageStore.MarkFileStaleAsync(normalizedPath);
+                    }
+                    else
+                    {
+                        var tests = _coverageStore.GetTestsCoveringFile(normalizedPath);
+                        foreach (var t in tests)
+                            tier3Fqns.Add(t);
+
+                        // Mark stale after reading: prevents the next run from using
+                        // this coverage until it has been refreshed by a new test run
+                        _ = _coverageStore.MarkFileStaleAsync(normalizedPath);
+                    }
+                }
+
+                if (allHaveCoverage && tier3Fqns.Count > 0)
+                {
+                    // Tier 3 narrowed the run — attach the FQN list
+                    return tier2Result with { AffectedTestFqns = [.. tier3Fqns] };
+                }
+            }
+        }
+
+        return tier2Result;
     }
 
     public ImpactAnalysisResult AnalyzeFullRun() => FullRunResult();

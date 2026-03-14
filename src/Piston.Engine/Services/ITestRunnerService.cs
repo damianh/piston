@@ -5,7 +5,8 @@ namespace Piston.Engine.Services;
 /// <summary>Result of a test run, including authoritative suites and any runner-level error output.</summary>
 public sealed record TestRunResult(
     IReadOnlyList<TestSuite> Suites,
-    string? RunnerError);
+    string? RunnerError,
+    IReadOnlyList<string> CoverageReportPaths);
 
 public interface ITestRunnerService
 {
@@ -35,12 +36,14 @@ public interface ITestRunnerService
     /// Specific test project paths to run. When null, runs the entire solution.
     /// </param>
     /// <param name="filter">Optional dotnet-test filter expression. Null means run all tests.</param>
+    /// <param name="collectCoverage">When true, adds <c>--collect "XPlat Code Coverage"</c> to the dotnet test args.</param>
     /// <param name="onProgress">Live progress callback. May be null.</param>
     /// <param name="ct">Cancellation token.</param>
     Task<TestRunResult> RunTestsAsync(
         string solutionPath,
         IReadOnlyList<string>? testProjectPaths,
         string? filter,
+        bool collectCoverage,
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct);
 }

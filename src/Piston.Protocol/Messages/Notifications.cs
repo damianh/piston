@@ -23,7 +23,10 @@ public sealed record StateSnapshotNotification(
     string? SolutionPath,
     IReadOnlyList<string>? AffectedProjects,
     IReadOnlyList<string>? AffectedTestProjects,
-    IReadOnlyList<string>? LastChangedFiles
+    IReadOnlyList<string>? LastChangedFiles,
+    bool CoverageEnabled,
+    bool HasCoverageData,
+    string? CoverageImpactDetail
 );
 
 public sealed record TestProgressNotification(

@@ -26,48 +26,52 @@ public sealed class TestRunnerService : ITestRunnerService
         string? filter,
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct) =>
-        RunTestsAsync(solutionPath, null, filter, onProgress, ct);
+        RunTestsAsync(solutionPath, null, filter, collectCoverage: false, onProgress, ct);
 
     public async Task<TestRunResult> RunTestsAsync(
         string solutionPath,
         IReadOnlyList<string>? testProjectPaths,
         string? filter,
+        bool collectCoverage,
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct)
     {
         if (testProjectPaths is null || testProjectPaths.Count == 0)
-            return await RunSingleTestCommandAsync(solutionPath, filter, onProgress, ct).ConfigureAwait(false);
+            return await RunSingleTestCommandAsync(solutionPath, filter, collectCoverage, onProgress, ct).ConfigureAwait(false);
 
         // Run each test project individually and merge results
         var allSuites = new List<TestSuite>();
+        var allCoveragePaths = new List<string>();
         string? lastRunnerError = null;
 
         foreach (var projectPath in testProjectPaths)
         {
             if (ct.IsCancellationRequested)
-                return new TestRunResult(allSuites, null);
+                return new TestRunResult(allSuites, null, allCoveragePaths);
 
             try
             {
-                var result = await RunSingleTestCommandAsync(projectPath, filter, onProgress, ct)
+                var result = await RunSingleTestCommandAsync(projectPath, filter, collectCoverage, onProgress, ct)
                     .ConfigureAwait(false);
 
                 allSuites.AddRange(result.Suites);
+                allCoveragePaths.AddRange(result.CoverageReportPaths);
                 if (result.RunnerError is not null)
                     lastRunnerError = result.RunnerError;
             }
             catch (OperationCanceledException)
             {
-                return new TestRunResult(allSuites, null);
+                return new TestRunResult(allSuites, null, allCoveragePaths);
             }
         }
 
-        return new TestRunResult(allSuites, lastRunnerError);
+        return new TestRunResult(allSuites, lastRunnerError, allCoveragePaths);
     }
 
     private async Task<TestRunResult> RunSingleTestCommandAsync(
         string targetPath,
         string? filter,
+        bool collectCoverage,
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct)
     {
@@ -79,6 +83,9 @@ public sealed class TestRunnerService : ITestRunnerService
             var args = $"test \"{targetPath}\" --no-build --verbosity normal " +
                        $"--logger \"trx;LogFileName=piston-results.trx\" " +
                        $"--results-directory \"{resultsDir}\"";
+
+            if (collectCoverage)
+                args += " --collect \"XPlat Code Coverage\"";
 
             if (!string.IsNullOrWhiteSpace(filter))
                 args += $" --filter \"{filter}\"";
@@ -162,7 +169,7 @@ public sealed class TestRunnerService : ITestRunnerService
             catch (OperationCanceledException)
             {
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
-                return new TestRunResult([], null);
+                return new TestRunResult([], null, []);
             }
 
             // Fire one final progress update with everything that arrived
@@ -183,11 +190,33 @@ public sealed class TestRunnerService : ITestRunnerService
             if (suites.Count == 0 && !stderrLines.IsEmpty)
                 runnerError = string.Join(Environment.NewLine, stderrLines.OrderBy(x => x));
 
-            return new TestRunResult(suites, runnerError);
+            // Glob for Cobertura XML files if coverage was collected
+            IReadOnlyList<string> coverageReportPaths = [];
+            if (collectCoverage)
+            {
+                coverageReportPaths = Directory.GetFiles(
+                    resultsDir, "coverage.cobertura.xml", SearchOption.AllDirectories);
+            }
+
+            // When coverage was collected, return paths without deleting the results dir.
+            // The caller is responsible for cleanup after consuming the coverage files.
+            if (collectCoverage && coverageReportPaths.Count > 0)
+                return new TestRunResult(suites, runnerError, coverageReportPaths);
+
+            return new TestRunResult(suites, runnerError, coverageReportPaths);
         }
         finally
         {
-            try { Directory.Delete(resultsDir, recursive: true); } catch { /* ignore */ }
+            // Only clean up immediately when we are not returning coverage paths to the caller.
+            // When coverage is enabled and paths were found, the caller cleans up the results dir.
+            // However, since we return from within the try block in that case, the finally still runs.
+            // We guard against double-delete by checking coverage: if collectCoverage is false,
+            // we always clean up. If collectCoverage is true, we do NOT delete here — the caller
+            // is responsible for cleanup via the returned CoverageReportPaths directory.
+            if (!collectCoverage)
+            {
+                try { Directory.Delete(resultsDir, recursive: true); } catch { /* ignore */ }
+            }
         }
     }
 

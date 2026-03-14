@@ -14,4 +14,10 @@ internal sealed class PistonConfig
 
     /// <summary>Default test filter substring/regex applied on startup.</summary>
     public string? TestFilter { get; set; }
+
+    /// <summary>
+    /// When true, enables code coverage collection during test runs.
+    /// Corresponds to the <c>--coverage</c> CLI flag.
+    /// </summary>
+    public bool? CoverageEnabled { get; set; }
 }

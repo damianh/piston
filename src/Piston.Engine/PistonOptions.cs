@@ -17,4 +17,10 @@ public sealed class PistonOptions
     /// Null means show all tests.
     /// </summary>
     public string? TestFilter { get; init; }
+
+    /// <summary>
+    /// When true, enables code coverage collection during test runs via
+    /// <c>--collect "XPlat Code Coverage"</c> (coverlet). Default is false (opt-in).
+    /// </summary>
+    public bool CoverageEnabled { get; init; } = false;
 }

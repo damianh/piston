@@ -1,3 +1,4 @@
+using Piston.Engine.Coverage;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
 
@@ -10,6 +11,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     private readonly ITestRunnerService _testRunner;
     private readonly IImpactAnalyzer _impactAnalyzer;
     private readonly PistonState _state;
+    private readonly ICoverageStore? _coverageStore;
+    private readonly ICoverageProcessor? _coverageProcessor;
+    private readonly bool _coverageEnabled;
 
     private CancellationTokenSource? _cts;
     private string? _solutionPath;
@@ -22,11 +26,33 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         IImpactAnalyzer impactAnalyzer,
         PistonState state)
     {
-        _fileWatcher = fileWatcher;
-        _buildService = buildService;
-        _testRunner = testRunner;
+        _fileWatcher    = fileWatcher;
+        _buildService   = buildService;
+        _testRunner     = testRunner;
         _impactAnalyzer = impactAnalyzer;
-        _state = state;
+        _state          = state;
+
+        _fileWatcher.FileChanged += OnFileChanged;
+    }
+
+    internal PistonOrchestrator(
+        IFileWatcherService fileWatcher,
+        IBuildService buildService,
+        ITestRunnerService testRunner,
+        IImpactAnalyzer impactAnalyzer,
+        PistonState state,
+        ICoverageStore? coverageStore,
+        ICoverageProcessor? coverageProcessor,
+        bool coverageEnabled)
+    {
+        _fileWatcher      = fileWatcher;
+        _buildService     = buildService;
+        _testRunner       = testRunner;
+        _impactAnalyzer   = impactAnalyzer;
+        _state            = state;
+        _coverageStore    = coverageStore;
+        _coverageProcessor = coverageProcessor;
+        _coverageEnabled  = coverageEnabled;
 
         _fileWatcher.FileChanged += OnFileChanged;
     }
@@ -41,6 +67,20 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
         _state.Phase = PistonPhase.Watching;
         _state.NotifyChanged();
+
+        // Initialize the coverage store when enabled
+        if (_coverageEnabled && _coverageStore is not null)
+        {
+            try
+            {
+                await _coverageStore.InitializeAsync(solutionDir).ConfigureAwait(false);
+                _state.HasCoverageData = false;
+            }
+            catch
+            {
+                // Coverage store initialization failure is non-fatal
+            }
+        }
 
         // Initialize the impact analyzer on a background thread
         _ = Task.Run(async () =>
@@ -181,6 +221,21 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
             IReadOnlyList<string>? testTargets = impactResult.IsFullRun ? null : impactResult.AffectedTestProjectPaths;
 
+            // Build the effective test filter:
+            //   - If Tier 3 produced FQNs, build a dotnet-test filter expression
+            //   - If the user also has a TestFilter, AND the two together
+            string? effectiveFilter = BuildEffectiveFilter(impactResult, _state.TestFilter);
+
+            // Update coverage impact detail for TUI
+            if (impactResult.AffectedTestFqns is { Count: > 0 } fqns)
+            {
+                _state.CoverageImpactDetail = $"Tier 3: {fqns.Count} test(s) (coverage)";
+            }
+            else
+            {
+                _state.CoverageImpactDetail = null;
+            }
+
             // Seed InProgressSuites — for selective runs, only seed the affected suites
             var suitesToSeed = testTargets is not null
                 ? _state.TestSuites.Where(s => IsSuiteAffected(s, testTargets)).ToList()
@@ -203,16 +258,24 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                 _state.NotifyChanged();
             }
 
+            // Generate a run ID before running tests (per plan: CreateRunId before ProcessCoverageAsync)
+            long runId = _coverageEnabled && _coverageStore is not null
+                ? _coverageStore.CreateRunId()
+                : 0;
+
             IReadOnlyList<TestSuite> newSuites;
+            IReadOnlyList<string> coverageReportPaths;
             try
             {
                 var result = await _testRunner.RunTestsAsync(
                     solutionPath,
                     testTargets,
-                    _state.TestFilter,
+                    effectiveFilter,
+                    _coverageEnabled,
                     OnProgress,
                     ct).ConfigureAwait(false);
-                newSuites = result.Suites;
+                newSuites            = result.Suites;
+                coverageReportPaths  = result.CoverageReportPaths;
                 _state.LastTestRunnerError = result.RunnerError;
             }
             catch (OperationCanceledException)
@@ -227,6 +290,33 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                 _state.Phase = PistonPhase.Watching;
                 _state.NotifyChanged();
                 return;
+            }
+
+            // ── Coverage processing ────────────────────────────────────────────
+            if (_coverageEnabled && _coverageStore is not null && _coverageProcessor is not null
+                && coverageReportPaths.Count > 0 && newSuites.Count > 0)
+            {
+                var testFqns = newSuites
+                    .SelectMany(s => s.Tests)
+                    .Select(t => t.FullyQualifiedName)
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
+
+                try
+                {
+                    await _coverageProcessor.ProcessCoverageAsync(runId, coverageReportPaths, testFqns, _coverageStore)
+                        .ConfigureAwait(false);
+                    _state.HasCoverageData = true;
+                }
+                catch
+                {
+                    // Coverage processing failure is non-fatal
+                }
+                finally
+                {
+                    // Clean up temp results directories after coverage has been processed
+                    CleanUpCoverageResultsDirs(coverageReportPaths);
+                }
             }
 
             // Merge selective results with preserved results from untouched test projects
@@ -270,6 +360,49 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Builds the effective dotnet-test filter expression, combining Tier 3 FQN filter
+    /// with the user's optional test filter.
+    /// </summary>
+    private static string? BuildEffectiveFilter(ImpactAnalysisResult impactResult, string? userFilter)
+    {
+        string? tier3Filter = null;
+
+        if (impactResult.AffectedTestFqns is { Count: > 0 } fqns)
+        {
+            // Limit to 100 FQNs to avoid command-line length issues; fall back to Tier 2 if over limit
+            if (fqns.Count <= 100)
+            {
+                tier3Filter = string.Join("|",
+                    fqns.Select(f => $"FullyQualifiedName={f}"));
+            }
+        }
+
+        if (tier3Filter is null)
+            return userFilter;
+
+        if (string.IsNullOrWhiteSpace(userFilter))
+            return tier3Filter;
+
+        return $"({tier3Filter})&({userFilter})";
+    }
+
+    private static void CleanUpCoverageResultsDirs(IReadOnlyList<string> coverageReportPaths)
+    {
+        // Each report is in a subdirectory under the results temp dir.
+        // Walk up two levels: coverage.cobertura.xml → guid subdir → results dir
+        var resultsDirs = coverageReportPaths
+            .Select(p => Path.GetDirectoryName(Path.GetDirectoryName(p)))
+            .Where(d => d is not null)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        foreach (var dir in resultsDirs)
+        {
+            try { Directory.Delete(dir!, recursive: true); } catch { /* ignore */ }
+        }
+    }
 
     private void ScheduleGraphRebuildIfNeeded(ImpactAnalysisResult impactResult)
     {

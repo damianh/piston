@@ -60,6 +60,17 @@ public sealed class PistonState
     /// <summary>Number of tests whose suite Timestamp is >= LastFileChangeTime (i.e. re-verified since last change).</summary>
     public int VerifiedSinceChangeCount { get; set; }
 
+    // ── Coverage status ───────────────────────────────────────────────────────
+
+    /// <summary>Whether coverage collection is active for this session.</summary>
+    public bool CoverageEnabled { get; set; }
+
+    /// <summary>Whether any coverage data has been stored in the current session.</summary>
+    public bool HasCoverageData { get; set; }
+
+    /// <summary>Human-readable Tier 3 impact detail, e.g. "Tier 3: 5 test(s) (coverage)". Null when using Tier 2.</summary>
+    public string? CoverageImpactDetail { get; set; }
+
     public int TotalPassed => TestSuites.SelectMany(s => s.Tests).Count(t => t.Status == TestStatus.Passed);
     public int TotalFailed => TestSuites.SelectMany(s => s.Tests).Count(t => t.Status == TestStatus.Failed);
     public int TotalSkipped => TestSuites.SelectMany(s => s.Tests).Count(t => t.Status == TestStatus.Skipped);

@@ -18,6 +18,7 @@
 
   <ItemGroup>
     <None Include="Services\Fixtures\**\*.trx" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Coverage\Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

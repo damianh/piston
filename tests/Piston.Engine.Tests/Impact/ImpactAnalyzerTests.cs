@@ -1,6 +1,7 @@
 using Piston.Engine.Impact;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
+using Piston.Engine.Tests.Coverage;
 using Xunit;
 
 namespace Piston.Engine.Tests.Impact;
@@ -241,5 +242,103 @@ public sealed class ImpactAnalyzerTests : IDisposable
         var result = analyzer.Analyze([Change(slnxPath)]);
 
         Assert.True(result.IsFullRun);
+    }
+
+    // ── Tier 3 tests ───────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Tier3_WhenCoverageDataExistsForAllChangedFiles_ResultContainsAffectedTestFqns()
+    {
+        var coverageStore = new StubCoverageStore();
+        var libCodeFull   = Path.GetFullPath(_libCode);
+
+        // Pre-configure coverage store to indicate libCode is covered by Test1
+        coverageStore.FilesWithCoverage.Add(libCodeFull);
+        coverageStore.TestsCoveringFile[libCodeFull] = ["Lib.Tests.LibTests.Test1"];
+
+        var analyzer = new ImpactAnalyzer(_factory, coverageStore);
+        await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
+
+        var result = analyzer.Analyze([Change(_libCode)]);
+
+        Assert.False(result.IsFullRun);
+        Assert.NotNull(result.AffectedTestFqns);
+        Assert.Contains("Lib.Tests.LibTests.Test1", result.AffectedTestFqns!);
+    }
+
+    [Fact]
+    public async Task Tier3_WhenOneCoverageFileMissing_FallsBackToNullFqns()
+    {
+        var coverageStore = new StubCoverageStore();
+        var libCodeFull   = Path.GetFullPath(_libCode);
+
+        // Only libCode has coverage; appProgram does NOT
+        coverageStore.FilesWithCoverage.Add(libCodeFull);
+        coverageStore.TestsCoveringFile[libCodeFull] = ["Lib.Tests.Test1"];
+        // _appProgram is NOT in FilesWithCoverage
+
+        var analyzer = new ImpactAnalyzer(_factory, coverageStore);
+        await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
+
+        // Change both files — one lacks coverage
+        var result = analyzer.Analyze([Change(_libCode), Change(_appProgram)]);
+
+        Assert.False(result.IsFullRun);
+        // Falls back to Tier 2: AffectedTestFqns should be null
+        Assert.Null(result.AffectedTestFqns);
+    }
+
+    [Fact]
+    public async Task Tier3_WhenCoverageStoreIsNull_Tier2BehaviorUnchanged()
+    {
+        // No coverage store — should behave exactly like pre-coverage Tier 2
+        var analyzer = new ImpactAnalyzer(_factory, coverageStore: null);
+        await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
+
+        var result = analyzer.Analyze([Change(_libCode)]);
+
+        Assert.False(result.IsFullRun);
+        Assert.Null(result.AffectedTestFqns);
+        Assert.Contains(_testsCsproj, result.AffectedTestProjectPaths, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Tier3_StaleMarkingCalledForChangedCsFiles()
+    {
+        var coverageStore = new StubCoverageStore();
+        var libCodeFull   = Path.GetFullPath(_libCode);
+
+        coverageStore.FilesWithCoverage.Add(libCodeFull);
+        coverageStore.TestsCoveringFile[libCodeFull] = ["Lib.Tests.Test1"];
+
+        var analyzer = new ImpactAnalyzer(_factory, coverageStore);
+        await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
+
+        analyzer.Analyze([Change(_libCode)]);
+
+        // Allow any pending async MarkFileStaleAsync to complete
+        await Task.Delay(50);
+
+        Assert.Contains(libCodeFull, coverageStore.MarkedStaleFiles, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Tier3_WhenCoverageReturnsEmptyFqns_FallsBackToTier2()
+    {
+        var coverageStore = new StubCoverageStore();
+        var libCodeFull   = Path.GetFullPath(_libCode);
+
+        // File has coverage data but no tests listed
+        coverageStore.FilesWithCoverage.Add(libCodeFull);
+        coverageStore.TestsCoveringFile[libCodeFull] = [];
+
+        var analyzer = new ImpactAnalyzer(_factory, coverageStore);
+        await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
+
+        var result = analyzer.Analyze([Change(_libCode)]);
+
+        Assert.False(result.IsFullRun);
+        // Empty FQN set → falls back to Tier 2 (null)
+        Assert.Null(result.AffectedTestFqns);
     }
 }

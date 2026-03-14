@@ -102,6 +102,7 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
             solutionPath: _projectFile,
             testProjectPaths: null,
             filter: null,
+            collectCoverage: false,
             onProgress: null,
             CancellationToken.None);
 
@@ -117,6 +118,7 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
             solutionPath: _projectFile,
             testProjectPaths: [_projectFile],
             filter: null,
+            collectCoverage: false,
             onProgress: null,
             CancellationToken.None);
 

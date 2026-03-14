@@ -21,23 +21,29 @@ var filterOpt = new Option<string?>(
     description: "Substring or regex to filter test names on startup.",
     getDefaultValue: () => null);
 
+var coverageOpt = new Option<bool>(
+    name: "--coverage",
+    description: "Enable code coverage collection during test runs.",
+    getDefaultValue: () => false);
+
 var rootCommand = new RootCommand("Piston — continuous test runner for .NET")
 {
     solutionArg,
     debounceOpt,
     filterOpt,
+    coverageOpt,
 };
 
-rootCommand.SetHandler(async (FileInfo? solutionFile, int debounceMs, string? filter) =>
+rootCommand.SetHandler(async (FileInfo? solutionFile, int debounceMs, string? filter, bool coverage) =>
 {
-    await RunAsync(solutionFile, debounceMs, filter);
-}, solutionArg, debounceOpt, filterOpt);
+    await RunAsync(solutionFile, debounceMs, filter, coverage);
+}, solutionArg, debounceOpt, filterOpt, coverageOpt);
 
 return await rootCommand.InvokeAsync(args);
 
 // ── Main entrypoint ────────────────────────────────────────────────────────────
 
-static async Task RunAsync(FileInfo? solutionArg, int cliDebounceMs, string? cliFilter)
+static async Task RunAsync(FileInfo? solutionArg, int cliDebounceMs, string? cliFilter, bool cliCoverage)
 {
     // 1. Find solution path
     string solutionPath;
@@ -63,11 +69,15 @@ static async Task RunAsync(FileInfo? solutionArg, int cliDebounceMs, string? cli
 
     var filter = cliFilter ?? config.TestFilter;
 
+    // Coverage: CLI --coverage flag OR config coverageEnabled = true
+    var coverageEnabled = cliCoverage || (config.CoverageEnabled ?? false);
+
     var options = new PistonOptions
     {
         SolutionPath     = solutionPath,
         DebounceInterval = TimeSpan.FromMilliseconds(debounceMs),
         TestFilter       = filter,
+        CoverageEnabled  = coverageEnabled,
     };
 
     // 4. Validate .NET SDK is available

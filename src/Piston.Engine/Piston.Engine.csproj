@@ -6,5 +6,6 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Build" Version="17.*" ExcludeAssets="runtime" />
     <PackageReference Include="Microsoft.Build.Locator" Version="1.*" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="9.*" />
   </ItemGroup>
 </Project>

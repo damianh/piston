@@ -1,3 +1,4 @@
+using Piston.Engine.Coverage;
 using Piston.Engine.Impact;
 using Piston.Engine.Orchestration;
 using Piston.Engine.Services;
@@ -8,6 +9,7 @@ public sealed class PistonEngine : IEngine
 {
     private readonly PistonState _state;
     private readonly PistonOrchestrator _orchestrator;
+    private readonly ICoverageStore? _coverageStore;
 
     public PistonEngine(PistonOptions options)
     {
@@ -15,13 +17,40 @@ public sealed class PistonEngine : IEngine
         // This must happen before MsBuildSolutionGraph (or any class referencing MSBuild) is JIT-compiled.
         MsBuildLocatorGuard.EnsureRegistered();
 
-        _state = new PistonState { TestFilter = options.TestFilter };
+        _state = new PistonState
+        {
+            TestFilter      = options.TestFilter,
+            CoverageEnabled = options.CoverageEnabled,
+        };
+
         var fileWatcher = new FileWatcherService(options.DebounceInterval);
         var buildService = new BuildService();
         var trxParser = new TrxResultParser();
         var testRunner = new TestRunnerService(trxParser);
-        var impactAnalyzer = new ImpactAnalyzer(solutionPath => new MsBuildSolutionGraph(solutionPath));
-        _orchestrator = new PistonOrchestrator(fileWatcher, buildService, testRunner, impactAnalyzer, _state);
+
+        ICoverageProcessor? coverageProcessor = null;
+
+        if (options.CoverageEnabled)
+        {
+            var coberturaParser = new CoberturaParser();
+            var coverageStore   = new SqliteCoverageStore();
+            _coverageStore      = coverageStore;
+            coverageProcessor   = new CoverageProcessor(coberturaParser);
+        }
+
+        var impactAnalyzer = new ImpactAnalyzer(
+            solutionPath => new MsBuildSolutionGraph(solutionPath),
+            _coverageStore);
+
+        _orchestrator = new PistonOrchestrator(
+            fileWatcher,
+            buildService,
+            testRunner,
+            impactAnalyzer,
+            _state,
+            _coverageStore,
+            coverageProcessor,
+            options.CoverageEnabled);
     }
 
     public PistonState State => _state;
@@ -43,5 +72,9 @@ public sealed class PistonEngine : IEngine
         _state.NotifyChanged();
     }
 
-    public void Dispose() => _orchestrator.Dispose();
+    public void Dispose()
+    {
+        _orchestrator.Dispose();
+        _coverageStore?.Dispose();
+    }
 }

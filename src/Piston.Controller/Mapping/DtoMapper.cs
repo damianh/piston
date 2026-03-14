@@ -82,6 +82,9 @@ internal static class DtoMapper
             SolutionPath:           state.SolutionPath,
             AffectedProjects:       state.AffectedProjects,
             AffectedTestProjects:   state.AffectedTestProjects,
-            LastChangedFiles:       state.LastChangedFiles
+            LastChangedFiles:       state.LastChangedFiles,
+            CoverageEnabled:        state.CoverageEnabled,
+            HasCoverageData:        state.HasCoverageData,
+            CoverageImpactDetail:   state.CoverageImpactDetail
         );
 }
