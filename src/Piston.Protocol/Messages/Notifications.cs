@@ -41,3 +41,9 @@ public sealed record TestProgressNotification(
 public sealed record BuildErrorNotification(
     BuildResultDto Build
 );
+
+/// <summary>Pushed after a test run when per-file coverage data is updated.</summary>
+public sealed record FileCoverageUpdatedNotification(
+    string FilePath,
+    IReadOnlyList<CoverageLineDto> Lines
+);

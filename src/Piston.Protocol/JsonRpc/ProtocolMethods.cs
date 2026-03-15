@@ -20,6 +20,9 @@ public static class ProtocolMethods
     /// <summary>Clear all test results.</summary>
     public const string EngineClearResults = "engine/clearResults";
 
+    /// <summary>Request per-file coverage data for the given source file.</summary>
+    public const string CoverageGetForFile = "coverage/getForFile";
+
     // Notifications (server → client, no response)
 
     /// <summary>Full state snapshot — sent on connect and after every state change.</summary>
@@ -33,4 +36,7 @@ public static class ProtocolMethods
 
     /// <summary>Build error notification.</summary>
     public const string BuildError = "build/error";
+
+    /// <summary>Pushed after a test run when per-file coverage data is updated.</summary>
+    public const string CoverageFileUpdated = "coverage/fileUpdated";
 }

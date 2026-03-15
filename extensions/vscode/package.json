@@ -1,0 +1,110 @@
+{
+  "name": "piston-test-runner",
+  "displayName": "Piston Test Runner",
+  "description": "Continuous test runner for .NET — real-time test feedback, coverage markers, and test explorer integration.",
+  "version": "0.1.0",
+  "publisher": "damianh",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Testing"
+  ],
+  "keywords": [
+    "dotnet",
+    ".net",
+    "test",
+    "coverage",
+    "csharp"
+  ],
+  "activationEvents": [
+    "workspaceContains:**/*.sln",
+    "workspaceContains:**/*.slnx"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "piston.start",
+        "title": "Start",
+        "category": "Piston"
+      },
+      {
+        "command": "piston.stop",
+        "title": "Stop",
+        "category": "Piston"
+      },
+      {
+        "command": "piston.forceRun",
+        "title": "Run All Tests",
+        "category": "Piston"
+      },
+      {
+        "command": "piston.setFilter",
+        "title": "Set Test Filter",
+        "category": "Piston"
+      },
+      {
+        "command": "piston.clearResults",
+        "title": "Clear Results",
+        "category": "Piston"
+      },
+      {
+        "command": "piston.toggleCoverage",
+        "title": "Toggle Coverage Markers",
+        "category": "Piston"
+      },
+      {
+        "command": "piston.toggleOutput",
+        "title": "Toggle Output",
+        "category": "Piston"
+      }
+    ],
+    "configuration": {
+      "title": "Piston",
+      "properties": {
+        "piston.controllerPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Piston controller binary (or 'Piston.Controller' DLL). Leave empty to auto-detect from PATH."
+        },
+        "piston.solutionPath": {
+          "type": "string",
+          "default": "",
+          "description": "Override the auto-detected solution path (.sln or .slnx file)."
+        },
+        "piston.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Extra CLI arguments passed to the Piston controller (e.g. [\"--coverage\", \"--parallelism\", \"4\"])."
+        },
+        "piston.autoStart": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the Piston controller when a .NET solution is opened."
+        },
+        "piston.coverage.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inline coverage gutter markers in the editor."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "vsce package",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.15",
+    "@types/vscode": "^1.110.0",
+    "@vscode/vsce": "^3.7.1",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.9.3"
+  }
+}

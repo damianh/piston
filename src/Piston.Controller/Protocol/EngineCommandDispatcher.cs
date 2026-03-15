@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using Piston.Engine;
+using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 
@@ -50,6 +51,18 @@ internal sealed class EngineCommandDispatcher : ICommandDispatcher
             case ProtocolMethods.EngineClearResults:
                 _engine.ClearResults();
                 return null;
+
+            case ProtocolMethods.CoverageGetForFile:
+            {
+                // The engine's coverage store does not yet expose a per-file query API.
+                // Return an empty result for now; this will be populated in a future phase
+                // when the engine exposes coverage data via IEngine.
+                var cmd = JsonRpcSerializer.DeserializeParams<GetFileCoverageCommand>(@params);
+                var filePath = cmd?.FilePath ?? string.Empty;
+                var result = new FileCoverageDto(filePath, Array.Empty<CoverageLineDto>());
+                return JsonNode.Parse(
+                    System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+            }
 
             default:
                 throw new JsonRpcException(

@@ -1,8 +1,13 @@
 using System.CommandLine;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Piston.Controller.Configuration;
+using Piston.Controller.Mapping;
 using Piston.Controller.Protocol;
 using Piston.Engine;
+using Piston.Engine.Models;
+using Piston.Protocol.JsonRpc;
+using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
 
 // ── CLI definition ─────────────────────────────────────────────────────────────
@@ -37,6 +42,10 @@ var headlessOpt = new Option<bool>(
     name: "--headless",
     description: "Run in headless mode (no TUI). Listens on a named pipe.");
 
+var stdioOpt = new Option<bool>(
+    name: "--stdio",
+    description: "Use stdin/stdout for JSON-RPC transport (for IDE extensions). Requires --headless.");
+
 var pipeNameOpt = new Option<string?>(
     name: "--pipe-name",
     description: "Override the named pipe name (default: auto-generated from solution path).");
@@ -53,25 +62,42 @@ var rootCommand = new RootCommand("Piston — continuous test runner for .NET")
     coverageOpt,
     parallelismOpt,
     headlessOpt,
+    stdioOpt,
     pipeNameOpt,
     connectOpt,
 };
 
-rootCommand.SetHandler(async (
-    FileInfo? solutionFile,
-    int debounceMs,
-    string? filter,
-    bool coverage,
-    int parallelism,
-    bool headless,
-    string? pipeName,
-    string? connect) =>
+rootCommand.SetHandler(async ctx =>
 {
-    // Task 15: validate exclusivity
+    var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
+    var debounceMs   = ctx.ParseResult.GetValueForOption(debounceOpt);
+    var filter       = ctx.ParseResult.GetValueForOption(filterOpt);
+    var coverage     = ctx.ParseResult.GetValueForOption(coverageOpt);
+    var parallelism  = ctx.ParseResult.GetValueForOption(parallelismOpt);
+    var headless     = ctx.ParseResult.GetValueForOption(headlessOpt);
+    var stdio        = ctx.ParseResult.GetValueForOption(stdioOpt);
+    var pipeName     = ctx.ParseResult.GetValueForOption(pipeNameOpt);
+    var connect      = ctx.ParseResult.GetValueForOption(connectOpt);
+
+    // Validate exclusivity
     if (headless && connect is not null)
     {
         Console.Error.WriteLine("error: Cannot use --headless and --connect together.");
-        Environment.Exit(1);
+        ctx.ExitCode = 1;
+        return;
+    }
+
+    if (stdio && !headless)
+    {
+        Console.Error.WriteLine("error: --stdio requires --headless.");
+        ctx.ExitCode = 1;
+        return;
+    }
+
+    if (stdio && connect is not null)
+    {
+        Console.Error.WriteLine("error: Cannot use --stdio and --connect together.");
+        ctx.ExitCode = 1;
         return;
     }
 
@@ -86,6 +112,12 @@ rootCommand.SetHandler(async (
         return;
     }
 
+    if (headless && stdio)
+    {
+        await RunHeadlessStdioAsync(solutionFile, debounceMs, filter, coverage, parallelism);
+        return;
+    }
+
     if (headless)
     {
         await RunHeadlessAsync(solutionFile, debounceMs, filter, coverage, parallelism, pipeName);
@@ -93,8 +125,7 @@ rootCommand.SetHandler(async (
     }
 
     await RunEmbeddedAsync(solutionFile, debounceMs, filter, coverage, parallelism);
-},
-solutionArg, debounceOpt, filterOpt, coverageOpt, parallelismOpt, headlessOpt, pipeNameOpt, connectOpt);
+});
 
 return await rootCommand.InvokeAsync(args);
 
@@ -204,8 +235,134 @@ static async Task RunHeadlessAsync(
     engine.Stop();
 }
 
-// ── Connect mode ───────────────────────────────────────────────────────────────
+// ── Headless-stdio mode ────────────────────────────────────────────────────────
 
+static async Task RunHeadlessStdioAsync(
+    FileInfo? solutionArg,
+    int cliDebounceMs,
+    string? cliFilter,
+    bool cliCoverage,
+    int cliParallelism)
+{
+    string solutionPath;
+    try
+    {
+        solutionPath = ResolveSolutionPath(solutionArg);
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        Environment.Exit(1);
+        return;
+    }
+
+    var solutionDir = Path.GetDirectoryName(solutionPath)!;
+    var config      = LoadConfig(solutionDir);
+    var options     = BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
+
+    if (!DotnetSdkAvailable())
+    {
+        Console.Error.WriteLine("error: 'dotnet' SDK not found on PATH. Install .NET 10 SDK from https://dot.net");
+        Environment.Exit(1);
+        return;
+    }
+
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        cts.Cancel();
+    };
+
+    using var engine = new PistonEngine(options);
+
+    Console.Error.WriteLine($"[piston] Starting engine for: {solutionPath}");
+    await engine.StartAsync(solutionPath);
+
+    Console.Error.WriteLine("[piston] Listening on stdio.");
+
+    // NOTE: Do NOT write PIPE: line — stdout is reserved for the JSON-RPC protocol in stdio mode.
+
+    var stdinStream  = Console.OpenStandardInput();
+    var stdoutStream = Console.OpenStandardOutput();
+    var duplexStream = new StdioDuplexStream(stdinStream, stdoutStream);
+
+    var dispatcher = new EngineCommandDispatcher(engine);
+    var session    = new ClientSession(duplexStream, "stdio-session", dispatcher);
+
+    // Subscribe to engine state changes and forward as notifications to the single session.
+    engine.State.StateChanged += OnEngineStateChanged;
+
+    // Send initial state snapshot before starting the read loop.
+    try
+    {
+        var snapshotNotification = BuildStateSnapshot(engine);
+        await session.SendNotificationAsync(snapshotNotification, cts.Token).ConfigureAwait(false);
+    }
+    catch (Exception ex)
+    {
+        Console.Error.WriteLine($"[piston] Failed to send initial snapshot: {ex.Message}");
+        engine.State.StateChanged -= OnEngineStateChanged;
+        engine.Stop();
+        return;
+    }
+
+    try
+    {
+        await session.RunAsync(cts.Token).ConfigureAwait(false);
+    }
+    catch (OperationCanceledException)
+    {
+        // Normal shutdown
+    }
+    finally
+    {
+        engine.State.StateChanged -= OnEngineStateChanged;
+    }
+
+    Console.Error.WriteLine("[piston] Shutting down.");
+    engine.Stop();
+
+    void OnEngineStateChanged()
+    {
+        var stateSnapshot = engine.State.ToSnapshot();
+
+        SendNotificationFireAndForget(ToNotification(ProtocolMethods.EngineStateSnapshot, stateSnapshot));
+
+        SendNotificationFireAndForget(ToNotification(
+            ProtocolMethods.EnginePhaseChanged,
+            new PhaseChangedNotification(stateSnapshot.Phase, null)));
+
+        if (engine.State.Phase == PistonPhase.Testing)
+        {
+            SendNotificationFireAndForget(ToNotification(
+                ProtocolMethods.TestsProgress,
+                new TestProgressNotification(
+                    stateSnapshot.InProgressSuites,
+                    stateSnapshot.CompletedTests,
+                    stateSnapshot.TotalExpectedTests)));
+        }
+
+        if (engine.State.Phase == PistonPhase.Error && stateSnapshot.LastBuild is not null)
+        {
+            SendNotificationFireAndForget(ToNotification(
+                ProtocolMethods.BuildError,
+                new BuildErrorNotification(stateSnapshot.LastBuild)));
+        }
+    }
+
+    void SendNotificationFireAndForget(JsonRpcNotification notification)
+    {
+        _ = session.SendNotificationAsync(notification, CancellationToken.None)
+            .ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                    Console.Error.WriteLine($"[piston] Failed to send notification: {t.Exception?.GetBaseException().Message}");
+            }, TaskScheduler.Default);
+    }
+}
+
+// ── Connect mode ───────────────────────────────────────────────────────────────
 static async Task RunConnectAsync(string pipeName)
 {
     using var cts = new CancellationTokenSource();
@@ -337,4 +494,17 @@ static bool DotnetSdkAvailable()
     {
         return false;
     }
+}
+
+static JsonRpcNotification BuildStateSnapshot(IEngine engine)
+{
+    var snapshot = engine.State.ToSnapshot();
+    return ToNotification(ProtocolMethods.EngineStateSnapshot, snapshot);
+}
+
+static JsonRpcNotification ToNotification<T>(string method, T payload)
+{
+    var paramsNode = JsonNode.Parse(
+        System.Text.Json.JsonSerializer.Serialize(payload, JsonRpcSerializer.Options));
+    return new JsonRpcNotification(method, paramsNode);
 }
