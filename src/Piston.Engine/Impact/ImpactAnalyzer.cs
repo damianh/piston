@@ -54,7 +54,8 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         // Check for solution/project file changes that require graph rebuild
         var hasSolutionChange = changes.Any(c =>
             c.FilePath.EndsWith(".sln", StringComparison.OrdinalIgnoreCase) ||
-            c.FilePath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase));
+            c.FilePath.EndsWith(".slnx", StringComparison.OrdinalIgnoreCase) ||
+            c.FilePath.EndsWith(".slnf", StringComparison.OrdinalIgnoreCase));
 
         if (hasSolutionChange)
         {

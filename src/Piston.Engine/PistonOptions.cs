@@ -6,7 +6,7 @@ namespace Piston.Engine;
 /// </summary>
 public sealed class PistonOptions
 {
-    /// <summary>Absolute path to the .sln / .slnx file to watch.</summary>
+    /// <summary>Absolute path to the .sln / .slnx / .slnf file to watch.</summary>
     public required string SolutionPath { get; init; }
 
     /// <summary>File-change debounce window before triggering a rebuild.</summary>

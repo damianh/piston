@@ -14,7 +14,7 @@ using Piston.Protocol.Transports;
 
 var solutionArg = new Argument<FileInfo?>(
     name: "solution",
-    description: "Path to the .sln or .slnx file to watch. " +
+    description: "Path to the .sln, .slnx, or .slnf file to watch. " +
                  "Defaults to the first solution found in the current directory.",
     getDefaultValue: () => null);
 
@@ -399,8 +399,8 @@ static string ResolveSolutionPath(FileInfo? solutionArg)
             throw new InvalidOperationException($"Solution file not found: {solutionArg.FullName}");
 
         var ext = solutionArg.Extension.ToLowerInvariant();
-        if (ext is not ".sln" and not ".slnx")
-            throw new InvalidOperationException($"Expected a .sln or .slnx file, got: {solutionArg.Name}");
+        if (ext is not ".sln" and not ".slnx" and not ".slnf")
+            throw new InvalidOperationException($"Expected a .sln, .slnx, or .slnf file, got: {solutionArg.Name}");
 
         return solutionArg.FullName;
     }
@@ -408,12 +408,13 @@ static string ResolveSolutionPath(FileInfo? solutionArg)
     var cwd        = Directory.GetCurrentDirectory();
     var candidates = Directory.GetFiles(cwd, "*.sln")
         .Concat(Directory.GetFiles(cwd, "*.slnx"))
+        .Concat(Directory.GetFiles(cwd, "*.slnf"))
         .ToList();
 
     return candidates.Count switch
     {
         0 => throw new InvalidOperationException(
-            $"No .sln or .slnx file found in '{cwd}'. Pass the solution path explicitly."),
+            $"No .sln, .slnx, or .slnf file found in '{cwd}'. Pass the solution path explicitly."),
         1 => candidates[0],
         _ => throw new InvalidOperationException(
             $"Multiple solution files found in '{cwd}'. Pass the solution path explicitly:\n  " +
