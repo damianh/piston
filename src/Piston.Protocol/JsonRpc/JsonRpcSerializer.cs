@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -18,6 +17,7 @@ public static class JsonRpcSerializer
         NumberHandling              = JsonNumberHandling.AllowReadingFromString,
         Converters                  = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
         WriteIndented               = false,
+        TypeInfoResolver            = PistonJsonContext.Default,
     };
 
     // ── Serialization ─────────────────────────────────────────────────────────
@@ -31,7 +31,8 @@ public static class JsonRpcSerializer
             Method  = request.Method,
             Params  = request.Params,
         };
-        return Encode(envelope);
+        return new ReadOnlyMemory<byte>(
+            JsonSerializer.SerializeToUtf8Bytes(envelope, PistonJsonContext.Default.RequestEnvelope));
     }
 
     public static ReadOnlyMemory<byte> Serialize(JsonRpcResponse response)
@@ -48,7 +49,8 @@ public static class JsonRpcSerializer
                 Data    = response.Error.Data,
             },
         };
-        return Encode(envelope);
+        return new ReadOnlyMemory<byte>(
+            JsonSerializer.SerializeToUtf8Bytes(envelope, PistonJsonContext.Default.ResponseEnvelope));
     }
 
     public static ReadOnlyMemory<byte> Serialize(JsonRpcNotification notification)
@@ -59,7 +61,8 @@ public static class JsonRpcSerializer
             Method  = notification.Method,
             Params  = notification.Params,
         };
-        return Encode(envelope);
+        return new ReadOnlyMemory<byte>(
+            JsonSerializer.SerializeToUtf8Bytes(envelope, PistonJsonContext.Default.NotificationEnvelope));
     }
 
     // ── Deserialization ───────────────────────────────────────────────────────
@@ -96,14 +99,14 @@ public static class JsonRpcSerializer
 
     public static JsonRpcRequest DeserializeRequest(ReadOnlyMemory<byte> data)
     {
-        var envelope = JsonSerializer.Deserialize<RequestEnvelope>(data.Span, Options)
+        var envelope = JsonSerializer.Deserialize(data.Span, PistonJsonContext.Default.RequestEnvelope)
             ?? throw new JsonException("Failed to deserialize JSON-RPC request.");
         return new JsonRpcRequest(envelope.Id!, envelope.Method!, envelope.Params);
     }
 
     public static JsonRpcResponse DeserializeResponse(ReadOnlyMemory<byte> data)
     {
-        var envelope = JsonSerializer.Deserialize<ResponseEnvelope>(data.Span, Options)
+        var envelope = JsonSerializer.Deserialize(data.Span, PistonJsonContext.Default.ResponseEnvelope)
             ?? throw new JsonException("Failed to deserialize JSON-RPC response.");
 
         JsonRpcError? error = null;
@@ -115,7 +118,7 @@ public static class JsonRpcSerializer
 
     public static JsonRpcNotification DeserializeNotification(ReadOnlyMemory<byte> data)
     {
-        var envelope = JsonSerializer.Deserialize<NotificationEnvelope>(data.Span, Options)
+        var envelope = JsonSerializer.Deserialize(data.Span, PistonJsonContext.Default.NotificationEnvelope)
             ?? throw new JsonException("Failed to deserialize JSON-RPC notification.");
         return new JsonRpcNotification(envelope.Method!, envelope.Params);
     }
@@ -130,44 +133,36 @@ public static class JsonRpcSerializer
 
         return paramsNode.Deserialize<T>(Options);
     }
+}
 
-    // ── Private helpers ───────────────────────────────────────────────────────
+// Internal envelope types for serialization (internal so PistonJsonContext can reference them)
 
-    private static ReadOnlyMemory<byte> Encode<T>(T value)
-    {
-        var json = JsonSerializer.SerializeToUtf8Bytes(value, Options);
-        return new ReadOnlyMemory<byte>(json);
-    }
+internal sealed class RequestEnvelope
+{
+    public string?    JsonRpc { get; set; }
+    public string?    Id      { get; set; }
+    public string?    Method  { get; set; }
+    public JsonNode?  Params  { get; set; }
+}
 
-    // Private envelope types for serialization (avoid polluting public API with nullable warnings)
+internal sealed class ResponseEnvelope
+{
+    public string?         JsonRpc { get; set; }
+    public string?         Id      { get; set; }
+    public JsonNode?       Result  { get; set; }
+    public ErrorEnvelope?  Error   { get; set; }
+}
 
-    private sealed class RequestEnvelope
-    {
-        public string? JsonRpc { get; set; }
-        public string? Id     { get; set; }
-        public string? Method { get; set; }
-        public JsonNode? Params { get; set; }
-    }
+internal sealed class NotificationEnvelope
+{
+    public string?   JsonRpc { get; set; }
+    public string?   Method  { get; set; }
+    public JsonNode? Params  { get; set; }
+}
 
-    private sealed class ResponseEnvelope
-    {
-        public string? JsonRpc { get; set; }
-        public string? Id     { get; set; }
-        public JsonNode? Result { get; set; }
-        public ErrorEnvelope? Error { get; set; }
-    }
-
-    private sealed class NotificationEnvelope
-    {
-        public string? JsonRpc { get; set; }
-        public string? Method { get; set; }
-        public JsonNode? Params { get; set; }
-    }
-
-    private sealed class ErrorEnvelope
-    {
-        public int Code { get; set; }
-        public string? Message { get; set; }
-        public JsonNode? Data { get; set; }
-    }
+internal sealed class ErrorEnvelope
+{
+    public int       Code    { get; set; }
+    public string?   Message { get; set; }
+    public JsonNode? Data    { get; set; }
 }

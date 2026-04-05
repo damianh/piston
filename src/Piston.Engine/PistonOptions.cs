@@ -1,6 +1,27 @@
 namespace Piston.Engine;
 
 /// <summary>
+/// Controls which test execution backend is used.
+/// </summary>
+public enum TestExecutionMode
+{
+    /// <summary>
+    /// Use MTP v2 in-process when detected; fall back to process-based execution.
+    /// </summary>
+    Auto,
+
+    /// <summary>
+    /// Always use <c>dotnet test</c> process-based execution. Safe universal fallback.
+    /// </summary>
+    Process,
+
+    /// <summary>
+    /// Always use MTP v2 in-process execution. Fails if the project is incompatible.
+    /// </summary>
+    InProcess,
+}
+
+/// <summary>
 /// Resolved runtime options — merged from CLI args, .piston.json, and defaults.
 /// Passed into services at startup.
 /// </summary>
@@ -35,4 +56,10 @@ public sealed class PistonOptions
     /// Default is 50.
     /// </summary>
     public int ProcessRecycleAfter { get; init; } = 50;
+
+    /// <summary>
+    /// Selects the test execution backend. Default is <see cref="TestExecutionMode.Auto"/>.
+    /// </summary>
+    public TestExecutionMode TestExecutionMode { get; init; } = TestExecutionMode.Auto;
 }
+

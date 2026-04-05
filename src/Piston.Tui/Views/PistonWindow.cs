@@ -18,6 +18,7 @@ public static class PistonWindow
     private static Window? _mainWindow;
     private static ViewState? _viewState;
     private static string? _testFilter;
+    private static ConnectionState _connectionState = ConnectionState.Connected;
 
     public static void Create(
         ConsoleWindowSystem windowSystem,
@@ -26,6 +27,9 @@ public static class PistonWindow
         _windowSystem = windowSystem;
         _client       = client;
         _viewState    = new ViewState();
+
+        // Subscribe to connection state changes so the UI can reflect reconnection status
+        client.ConnectionStateChanged += OnConnectionStateChanged;
 
         // --- Header bar (StickyTop) ---
         var phaseMarkup = Controls.Markup(PhaseMarkup(PistonPhaseDto.Idle))
@@ -137,6 +141,19 @@ public static class PistonWindow
         windowSystem.AddWindow(_mainWindow);
     }
 
+    // ── Connection state handler ───────────────────────────────────────────────
+
+    private static void OnConnectionStateChanged(ConnectionState state)
+    {
+        _connectionState = state;
+
+        // Immediately update the phase indicator in the header bar to reflect
+        // reconnection status — don't wait for the next UpdateLoopAsync tick.
+        var phaseControl = _mainWindow?.FindControl<MarkupControl>("phase");
+        if (phaseControl is not null)
+            phaseControl.Text = ConnectionStateMarkup(state);
+    }
+
     // ── Tree selection ─────────────────────────────────────────────────────────
 
     private static void OnTreeSelectionChanged(TreeNodeEventArgs args, Window window)
@@ -199,6 +216,17 @@ public static class PistonWindow
 
         while (!ct.IsCancellationRequested)
         {
+            // While not connected, show reconnection indicator and pause normal updates.
+            var connState = _connectionState;
+            if (connState != ConnectionState.Connected)
+            {
+                var phaseCtrl = window.FindControl<MarkupControl>("phase");
+                if (phaseCtrl is not null)
+                    phaseCtrl.Text = ConnectionStateMarkup(connState);
+                await Task.Delay(200, ct).ConfigureAwait(false);
+                continue;
+            }
+
             var snap = _client.CurrentSnapshot;
             if (snap is null)
             {
@@ -506,6 +534,13 @@ public static class PistonWindow
         PistonPhaseDto.Testing  => "[cyan]⟳ TESTING[/]",
         PistonPhaseDto.Error    => "[red3]✗ ERROR[/]",
         _                       => "[dim]◌ IDLE[/]",
+    };
+
+    private static string ConnectionStateMarkup(ConnectionState state) => state switch
+    {
+        ConnectionState.Reconnecting => "[gold1]⟳ RECONNECTING[/]",
+        ConnectionState.Disconnected => "[red3]✗ DISCONNECTED[/]",
+        _                            => "[dim]◌ IDLE[/]",
     };
 
     /// <summary>

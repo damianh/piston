@@ -190,4 +190,34 @@ public sealed class NamedPipeTransportTests
 
         Assert.NotEqual(name1, name2);
     }
+
+    // ── ACL-hardened pipe: same user can connect ──────────────────────────────
+
+    /// <summary>
+    /// Verifies that a pipe created with ACL hardening (current-user-only) still accepts
+    /// a connection from the same user process. Full cross-user testing would require
+    /// impersonation, which is out of scope.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AclHardenedPipe_SameUserClient_ConnectsSuccessfully()
+    {
+        if (!OperatingSystem.IsWindows())
+            return; // ACL hardening is Windows-only; non-Windows relies on filesystem permissions
+
+        var pipeName = UniquePipeName();
+        var server   = new NamedPipeServerTransport(pipeName);
+        var client   = new NamedPipeClientTransport(pipeName);
+        var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        var acceptTask   = server.AcceptClientAsync(cts.Token);
+        await client.ConnectAsync(cts.Token);
+        var serverStream = await acceptTask;
+
+        Assert.NotNull(serverStream);
+
+        serverStream.Dispose();
+        await client.DisposeAsync();
+        await server.DisposeAsync();
+    }
 }

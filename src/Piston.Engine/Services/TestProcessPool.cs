@@ -26,6 +26,15 @@ public sealed class TestProcessPool : ITestProcessPool
     }
 
     /// <summary>
+    /// Creates a pool backed by the supplied <see cref="ITestExecutionStrategy"/>.
+    /// </summary>
+    public TestProcessPool(int poolSize, int recycleAfter, ITestExecutionStrategy strategy)
+        : this(poolSize, recycleAfter,
+            (req, onProgress, ct) => strategy.ExecuteAsync(req, onProgress, ct))
+    {
+    }
+
+    /// <summary>
     /// Creates a pool with a custom run delegate (for testing).
     /// </summary>
     internal TestProcessPool(

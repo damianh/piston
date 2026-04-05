@@ -164,7 +164,137 @@ public sealed class RemoteEngineClientTests
         await cts.CancelAsync();
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Server restart → client reconnects ───────────────────────────────────
+
+    [Fact]
+    public async Task ServerRestart_ClientReconnects_SnapshotRestored()
+    {
+        var pipeName = UniquePipeName();
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        // Start first server
+        var (_, router1, _) = CreateServer(pipeName);
+        var router1Cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        _ = Task.Run(() => router1.RunAsync(router1Cts.Token), router1Cts.Token);
+
+        var client = new RemoteEngineClient(pipeName);
+        await client.ConnectAsync(cts.Token);
+
+        // Wait for initial snapshot
+        await WaitForConditionAsync(() => client.CurrentSnapshot is not null, TimeSpan.FromSeconds(5));
+        Assert.Equal(ConnectionState.Connected, client.ConnectionState);
+
+        // Shut down first server
+        await router1Cts.CancelAsync();
+        await router1.DisposeAsync();
+
+        // Wait for client to detect disconnection
+        await WaitForConditionAsync(
+            () => client.ConnectionState != ConnectionState.Connected,
+            TimeSpan.FromSeconds(5));
+
+        // Start second server on the same pipe name
+        var (_, router2, _) = CreateServer(pipeName);
+        var router2Cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        _ = Task.Run(() => router2.RunAsync(router2Cts.Token), router2Cts.Token);
+
+        // Wait for client to reconnect and receive new snapshot
+        await WaitForConditionAsync(
+            () => client.ConnectionState == ConnectionState.Connected,
+            TimeSpan.FromSeconds(15));
+
+        Assert.Equal(ConnectionState.Connected, client.ConnectionState);
+        Assert.NotNull(client.CurrentSnapshot);
+
+        await cts.CancelAsync();
+        await client.DisposeAsync();
+        await router2Cts.CancelAsync();
+        await router2.DisposeAsync();
+    }
+
+    // ── ConnectionState fires Disconnected → Reconnecting → Connected ─────────
+
+    [Fact]
+    public async Task ConnectionStateChanged_FiresOnDisconnectAndReconnect()
+    {
+        var pipeName = UniquePipeName();
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var (_, router1, _) = CreateServer(pipeName);
+        var router1Cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        _ = Task.Run(() => router1.RunAsync(router1Cts.Token), router1Cts.Token);
+
+        var client = new RemoteEngineClient(pipeName);
+
+        var stateSequence = new System.Collections.Concurrent.ConcurrentQueue<ConnectionState>();
+        client.ConnectionStateChanged += s => stateSequence.Enqueue(s);
+
+        await client.ConnectAsync(cts.Token);
+        await WaitForConditionAsync(() => client.CurrentSnapshot is not null, TimeSpan.FromSeconds(5));
+
+        // Shut down first server — should trigger Disconnected then Reconnecting
+        await router1Cts.CancelAsync();
+        await router1.DisposeAsync();
+
+        await WaitForConditionAsync(
+            () => stateSequence.Contains(ConnectionState.Disconnected),
+            TimeSpan.FromSeconds(5));
+
+        await WaitForConditionAsync(
+            () => stateSequence.Contains(ConnectionState.Reconnecting),
+            TimeSpan.FromSeconds(5));
+
+        // Start second server — should trigger Connected
+        var (_, router2, _) = CreateServer(pipeName);
+        var router2Cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        _ = Task.Run(() => router2.RunAsync(router2Cts.Token), router2Cts.Token);
+
+        await WaitForConditionAsync(
+            () => stateSequence.Contains(ConnectionState.Connected),
+            TimeSpan.FromSeconds(15));
+
+        Assert.Contains(ConnectionState.Disconnected,  stateSequence);
+        Assert.Contains(ConnectionState.Reconnecting,  stateSequence);
+        Assert.Contains(ConnectionState.Connected,     stateSequence);
+
+        await cts.CancelAsync();
+        await client.DisposeAsync();
+        await router2Cts.CancelAsync();
+        await router2.DisposeAsync();
+    }
+
+    // ── SendCommand while disconnected throws InvalidOperationException ────────
+
+    [Fact]
+    public async Task SendCommand_WhileDisconnected_ThrowsInvalidOperation()
+    {
+        var pipeName = UniquePipeName();
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        var (_, router, _) = CreateServer(pipeName);
+        var routerCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        _ = Task.Run(() => router.RunAsync(routerCts.Token), routerCts.Token);
+
+        var client = new RemoteEngineClient(pipeName);
+        await client.ConnectAsync(cts.Token);
+
+        await WaitForConditionAsync(() => client.CurrentSnapshot is not null, TimeSpan.FromSeconds(5));
+
+        // Shut down server to force disconnect
+        await routerCts.CancelAsync();
+        await router.DisposeAsync();
+
+        await WaitForConditionAsync(
+            () => client.ConnectionState != ConnectionState.Connected,
+            TimeSpan.FromSeconds(5));
+
+        // Attempting to send a command while not connected should throw
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => client.ForceRunAsync());
+
+        await cts.CancelAsync();
+        await client.DisposeAsync();
+    }
 
     private static async Task WaitForConditionAsync(Func<bool> condition, TimeSpan timeout)
     {

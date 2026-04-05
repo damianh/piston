@@ -45,4 +45,10 @@ internal sealed class PistonConfig
     /// Corresponds to the <c>--headless</c> CLI flag.
     /// </summary>
     public bool? Headless { get; set; }
+
+    /// <summary>
+    /// Test execution mode. Accepted values: "Auto", "Process", "InProcess".
+    /// Stored as a string to avoid a type dependency on <c>Piston.Engine</c>.
+    /// </summary>
+    public string? TestExecutionMode { get; set; }
 }

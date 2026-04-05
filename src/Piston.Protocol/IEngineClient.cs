@@ -14,6 +14,10 @@ public interface IEngineClient : IAsyncDisposable
     // State
     StateSnapshotNotification? CurrentSnapshot { get; }
 
+    // Connection state
+    ConnectionState ConnectionState { get; }
+    event Action<ConnectionState>? ConnectionStateChanged;
+
     // Events
     event Action<StateSnapshotNotification>? StateChanged;
     event Action<PhaseChangedNotification>? PhaseChanged;

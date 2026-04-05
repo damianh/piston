@@ -49,7 +49,7 @@ public static class StatusBarRenderer
         sb.Append(' ');
         sb.Append(s ? "[gold1]3[/]●" : "[dim]3●[/]");
         sb.Append(' ');
-        sb.Append(n ? "[dim bright]4[/]◌" : "[dim]4◌[/]");
+        sb.Append(n ? "[grey]4[/]◌" : "[dim]4◌[/]");
 
         // Section 3: grouping mode
         var groupLabel = (viewState?.Grouping ?? GroupingMode.ProjectNamespaceClass) switch

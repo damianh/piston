@@ -20,6 +20,10 @@ internal sealed class EmbeddedEngineClient : IEngineClient
     public event Action<TestProgressNotification>? TestProgressChanged;
     public event Action<BuildErrorNotification>? BuildError;
 
+    // EmbeddedEngineClient is always connected (no transport layer)
+    public ConnectionState ConnectionState => ConnectionState.Connected;
+    public event Action<ConnectionState>? ConnectionStateChanged { add { } remove { } }
+
     public StateSnapshotNotification? CurrentSnapshot
     {
         get

@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Runtime.Versioning;
 
 namespace Piston.Protocol.Transports;
 
@@ -6,6 +7,7 @@ namespace Piston.Protocol.Transports;
 /// Server-side named pipe transport that accepts a single client connection.
 /// Create a new instance per client; the underlying <see cref="NamedPipeServerStream"/>
 /// supports exactly one connection.
+/// On Windows, the pipe is restricted to the current user via ACL (see <see cref="PipeSecurityHelper"/>).
 /// </summary>
 public sealed class NamedPipeServerTransport : IAsyncDisposable
 {
@@ -22,12 +24,7 @@ public sealed class NamedPipeServerTransport : IAsyncDisposable
     /// </summary>
     public async Task<Stream> AcceptClientAsync(CancellationToken ct)
     {
-        _pipe = new NamedPipeServerStream(
-            _pipeName,
-            PipeDirection.InOut,
-            maxNumberOfServerInstances: NamedPipeServerStream.MaxAllowedServerInstances,
-            transmissionMode: PipeTransmissionMode.Byte,
-            options: PipeOptions.Asynchronous);
+        _pipe = CreateServerStream();
 
         // Pass CancellationToken.None to WaitForConnectionAsync to avoid a Windows named-pipe
         // behaviour where a CT registered on the pipe's async-IO infrastructure can cancel
@@ -37,6 +34,35 @@ public sealed class NamedPipeServerTransport : IAsyncDisposable
             .WaitAsync(ct)
             .ConfigureAwait(false);
         return _pipe;
+    }
+
+    private NamedPipeServerStream CreateServerStream()
+    {
+        if (OperatingSystem.IsWindows())
+            return CreateServerStreamWindows();
+
+        return new NamedPipeServerStream(
+            _pipeName,
+            PipeDirection.InOut,
+            maxNumberOfServerInstances: NamedPipeServerStream.MaxAllowedServerInstances,
+            transmissionMode: PipeTransmissionMode.Byte,
+            options: PipeOptions.Asynchronous);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private NamedPipeServerStream CreateServerStreamWindows()
+    {
+        var security = PipeSecurityHelper.CreateCurrentUserOnly();
+
+        return NamedPipeServerStreamAcl.Create(
+            _pipeName,
+            PipeDirection.InOut,
+            maxNumberOfServerInstances: NamedPipeServerStream.MaxAllowedServerInstances,
+            transmissionMode: PipeTransmissionMode.Byte,
+            options: PipeOptions.Asynchronous,
+            inBufferSize: 0,
+            outBufferSize: 0,
+            pipeSecurity: security);
     }
 
     public ValueTask DisposeAsync()

@@ -378,12 +378,16 @@ static async Task RunConnectAsync(string pipeName)
     {
         await client.ConnectAsync(cts.Token);
     }
-    catch (Exception ex)
+    catch (OperationCanceledException) when (cts.IsCancellationRequested)
     {
-        Console.Error.WriteLine(
-            $"error: Could not connect to headless controller at pipe '{pipeName}'. Is it running?\n  {ex.Message}");
-        Environment.Exit(1);
         return;
+    }
+    catch (Exception)
+    {
+        // Initial connection failed — start the TUI anyway and let the reconnection
+        // logic handle retries. The TUI will show a "Reconnecting..." overlay.
+        // (RemoteEngineClient's reconnection loop starts after ReceiveLoopAsync exits,
+        // but the client was never connected yet — so we start the TUI in Disconnected state.)
     }
 
     Piston.Tui.PistonTui.Run(client);
@@ -466,6 +470,13 @@ static PistonOptions BuildOptions(
 
     var processRecycleAfter = config.ProcessRecycleAfter is > 0 ? config.ProcessRecycleAfter.Value : 50;
 
+    var testExecutionMode = TestExecutionMode.Auto;
+    if (config.TestExecutionMode is not null &&
+        Enum.TryParse<TestExecutionMode>(config.TestExecutionMode, ignoreCase: true, out var parsedMode))
+    {
+        testExecutionMode = parsedMode;
+    }
+
     return new PistonOptions
     {
         SolutionPath        = solutionPath,
@@ -474,6 +485,7 @@ static PistonOptions BuildOptions(
         CoverageEnabled     = coverageEnabled,
         ProcessPoolSize     = processPoolSize,
         ProcessRecycleAfter = processRecycleAfter,
+        TestExecutionMode   = testExecutionMode,
     };
 }
 

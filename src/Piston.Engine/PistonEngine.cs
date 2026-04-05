@@ -28,12 +28,19 @@ public sealed class PistonEngine : IEngine
         var buildService = new BuildService();
         var trxParser = new TrxResultParser();
 
+        ITestExecutionStrategy strategy = options.TestExecutionMode switch
+        {
+            TestExecutionMode.InProcess =>
+                throw new NotSupportedException("InProcess test execution mode is not yet implemented."),
+            _ => new ProcessTestExecutionStrategy(trxParser),
+        };
+
         var effectivePoolSize = options.ProcessPoolSize > 0
             ? options.ProcessPoolSize
             : Math.Max(1, Environment.ProcessorCount / 2);
-        _pool = new TestProcessPool(effectivePoolSize, options.ProcessRecycleAfter, trxParser);
+        _pool = new TestProcessPool(effectivePoolSize, options.ProcessRecycleAfter, strategy);
 
-        var testRunner = new TestRunnerService(trxParser, _pool);
+        var testRunner = new TestRunnerService(strategy, _pool);
 
         ICoverageProcessor? coverageProcessor = null;
 
