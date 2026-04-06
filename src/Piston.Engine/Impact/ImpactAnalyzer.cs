@@ -193,6 +193,15 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         _rebuildScheduled = false;
     }
 
+    public IReadOnlyList<string> GetAllTestProjectPaths() =>
+        _graph?.TestProjectPaths ?? [];
+
+    public bool IsMtpProject(string projectPath) =>
+        _graph?.IsMtpProject(projectPath) ?? false;
+
+    public string? GetMtpOutputPath(string projectPath) =>
+        _graph?.GetMtpOutputPath(projectPath);
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static ImpactAnalysisResult FullRunResult() =>

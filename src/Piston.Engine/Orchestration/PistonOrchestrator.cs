@@ -17,6 +17,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
     private CancellationTokenSource? _cts;
     private string? _solutionPath;
+    private Task? _graphInitTask;
     private readonly SemaphoreSlim _runLock = new(1, 1);
 
     public PistonOrchestrator(
@@ -82,8 +83,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             }
         }
 
-        // Initialize the impact analyzer on a background thread
-        _ = Task.Run(async () =>
+        // Initialize the impact analyzer on a background thread.
+        // Store the task so TriggerRunAsync can await it before using the graph.
+        _graphInitTask = Task.Run(async () =>
         {
             try
             {
@@ -148,9 +150,26 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         {
             var ct = newCts.Token;
 
+            // Wait for the solution graph to finish loading before analyzing impact.
+            // This prevents the race where AnalyzeFullRun() runs with a null graph,
+            // producing empty project lists and routing the solution path to VSTest.
+            if (_graphInitTask is { } initTask)
+            {
+                var log0 = DiagnosticLog.Instance;
+                log0?.Write("Orchestrator", "Waiting for graph initialization...");
+                await initTask.ConfigureAwait(false);
+                log0?.Write("Orchestrator", "Graph initialization complete.");
+                _graphInitTask = null;
+            }
+
             // ── Analyzing ─────────────────────────────────────────────────────
             _state.Phase = PistonPhase.Analyzing;
             _state.NotifyChanged();
+
+            var log = DiagnosticLog.Instance;
+            log?.Write("Orchestrator", batch is not null
+                ? $"TriggerRun: {batch.Changes.Count} file change(s)"
+                : "TriggerRun: full run (no batch)");
 
             ImpactAnalysisResult impactResult;
             try
@@ -172,6 +191,13 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             _state.AffectedTestProjects = impactResult.AffectedTestProjectPaths.Count > 0
                 ? impactResult.AffectedTestProjectPaths
                 : null;
+
+            log?.Write("Orchestrator",
+                $"Impact: fullRun={impactResult.IsFullRun} | " +
+                $"affectedProjects={impactResult.AffectedProjectPaths.Count} | " +
+                $"affectedTestProjects={impactResult.AffectedTestProjectPaths.Count}");
+            foreach (var tp in impactResult.AffectedTestProjectPaths)
+                log?.Write("Orchestrator", $"  TestProject: {Path.GetFileName(tp)}");
 
             if (ct.IsCancellationRequested)
             {
@@ -219,7 +245,19 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             // ── Test ──────────────────────────────────────────────────────────
             _state.Phase = PistonPhase.Testing;
 
-            IReadOnlyList<string>? testTargets = impactResult.IsFullRun ? null : impactResult.AffectedTestProjectPaths;
+            // When the graph is available, always enumerate individual test projects
+            // so the composite strategy can route MTP projects to the MTP runner.
+            // Only fall back to null (single-solution-target) when no graph is loaded.
+            IReadOnlyList<string>? testTargets;
+            if (impactResult.IsFullRun)
+            {
+                var allTestProjects = _impactAnalyzer.GetAllTestProjectPaths();
+                testTargets = allTestProjects.Count > 0 ? allTestProjects : null;
+            }
+            else
+            {
+                testTargets = impactResult.AffectedTestProjectPaths;
+            }
 
             // Build the effective test filter:
             //   - If Tier 3 produced FQNs, build a dotnet-test filter expression
@@ -316,6 +354,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                 newSuites            = result.Suites;
                 coverageReportPaths  = result.CoverageReportPaths;
                 _state.LastTestRunnerError = result.RunnerError;
+
+                var totalTests = newSuites.SelectMany(s => s.Tests).Count();
+                log?.Write("Orchestrator",
+                    $"TestRun complete: {totalTests} test(s) in {newSuites.Count} suite(s)" +
+                    (result.RunnerError is not null ? $" | runnerError={result.RunnerError}" : ""));
             }
             catch (OperationCanceledException)
             {

@@ -16,16 +16,6 @@ public sealed class TestProcessPool : ITestProcessPool
     private bool _disposed;
 
     /// <summary>
-    /// Creates a pool backed by <see cref="TestProcessRunner.RunAsync"/>.
-    /// </summary>
-    public TestProcessPool(int poolSize, int recycleAfter, ITestResultParser parser)
-        : this(poolSize, recycleAfter,
-            (req, onProgress, ct) => TestProcessRunner.RunAsync(
-                req.ProjectPath, req.Filter, req.CollectCoverage, onProgress, parser, ct))
-    {
-    }
-
-    /// <summary>
     /// Creates a pool backed by the supplied <see cref="ITestExecutionStrategy"/>.
     /// </summary>
     public TestProcessPool(int poolSize, int recycleAfter, ITestExecutionStrategy strategy)

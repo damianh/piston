@@ -42,6 +42,10 @@ internal static class TestProcessRunner
             if (!string.IsNullOrWhiteSpace(filter))
                 args += $" --filter \"{filter}\"";
 
+            var log = DiagnosticLog.Instance;
+            log?.Write("VSTestRunner", $"Project: {projectPath}");
+            log?.Write("VSTestRunner", $"Args: dotnet {args}");
+
             var psi = new ProcessStartInfo("dotnet", args)
             {
                 RedirectStandardOutput = true,
@@ -107,7 +111,10 @@ internal static class TestProcessRunner
             process.ErrorDataReceived += (_, e) =>
             {
                 if (e.Data is not null && e.Data.Trim().Length > 0)
+                {
+                    log?.Write("VSTestRunner:stderr", e.Data.Trim());
                     stderrLines.Add(e.Data.Trim());
+                }
             };
 
             process.Start();
@@ -121,14 +128,18 @@ internal static class TestProcessRunner
             catch (OperationCanceledException)
             {
                 try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+                log?.Write("VSTestRunner", "Cancelled — returning empty result");
                 return new ProjectTestResult(projectPath, [], null, [], Crashed: false);
             }
+
+            log?.Write("VSTestRunner", $"ExitCode: {process.ExitCode}");
 
             // Fire one final progress update with everything that arrived
             onProgress?.Invoke(BuildLiveSnapshot(liveResults, liveResultsLock));
 
             // Parse TRX files for authoritative results (durations, error messages, stack traces)
             var trxFiles = Directory.GetFiles(resultsDir, "*.trx", SearchOption.AllDirectories);
+            log?.Write("VSTestRunner", $"TRX files found: {trxFiles.Length}");
 
             var suites = new List<TestSuite>();
             foreach (var trx in trxFiles)
@@ -140,7 +151,14 @@ internal static class TestProcessRunner
             // Surface stderr when there are no results (likely a runner-level failure)
             string? runnerError = null;
             if (suites.Count == 0 && !stderrLines.IsEmpty)
+            {
                 runnerError = string.Join(Environment.NewLine, stderrLines.OrderBy(x => x));
+                log?.Write("VSTestRunner", $"RunnerError: {runnerError}");
+            }
+
+            var totalTests = suites.SelectMany(s => s.Tests).Count();
+            log?.Write("VSTestRunner",
+                $"Result: {totalTests} test(s) in {suites.Count} suite(s)");
 
             // Glob for Cobertura XML files if coverage was collected
             IReadOnlyList<string> coverageReportPaths = [];

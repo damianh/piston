@@ -8,4 +8,7 @@ public interface IImpactAnalyzer
     ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes);
     ImpactAnalysisResult AnalyzeFullRun();
     void InvalidateGraph();
+    IReadOnlyList<string> GetAllTestProjectPaths();
+    bool IsMtpProject(string projectPath);
+    string? GetMtpOutputPath(string projectPath);
 }

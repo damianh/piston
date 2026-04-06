@@ -273,4 +273,6 @@ file sealed class StubSolutionGraph : ISolutionGraph
         new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<string> GetSourceFiles(string projectPath) => [];
+    public bool IsMtpProject(string projectPath) => false;
+    public string? GetMtpOutputPath(string projectPath) => null;
 }

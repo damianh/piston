@@ -8,4 +8,6 @@ internal interface ISolutionGraph
     IReadOnlySet<string> GetTransitiveDependents(string projectPath);
     IReadOnlyList<string> GetSourceFiles(string projectPath);
     bool IsTestProject(string projectPath);
+    bool IsMtpProject(string projectPath);
+    string? GetMtpOutputPath(string projectPath);
 }

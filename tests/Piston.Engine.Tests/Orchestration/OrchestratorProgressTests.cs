@@ -143,6 +143,9 @@ internal sealed class StubImpactAnalyzer : IImpactAnalyzer
         new(_testProjects, _testProjects, RequiresGraphRebuild: false, IsFullRun: false);
 
     public void InvalidateGraph() { }
+    public IReadOnlyList<string> GetAllTestProjectPaths() => _testProjects;
+    public bool IsMtpProject(string projectPath) => false;
+    public string? GetMtpOutputPath(string projectPath) => null;
 }
 
 internal sealed class StubTestRunnerService : ITestRunnerService

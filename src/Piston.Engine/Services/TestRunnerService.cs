@@ -7,16 +7,6 @@ public sealed class TestRunnerService : ITestRunnerService
     private readonly ITestExecutionStrategy _strategy;
     private readonly ITestProcessPool? _pool;
 
-    public TestRunnerService(ITestResultParser parser)
-        : this(new ProcessTestExecutionStrategy(parser))
-    {
-    }
-
-    public TestRunnerService(ITestResultParser parser, ITestProcessPool pool)
-        : this(new ProcessTestExecutionStrategy(parser), pool)
-    {
-    }
-
     public TestRunnerService(ITestExecutionStrategy strategy)
     {
         _strategy = strategy;

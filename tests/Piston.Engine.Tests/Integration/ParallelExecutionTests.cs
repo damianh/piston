@@ -58,8 +58,8 @@ public sealed class ParallelExecutionTests : IAsyncLifetime
     public async Task RunWithPool_AllProjectsResults_AreIncluded()
     {
         var parser = new TrxResultParser();
-        using var pool = new TestProcessPool(2, 50, parser);
-        var sut = new TestRunnerService(parser, pool);
+        using var pool = new TestProcessPool(2, 50, new ProcessTestExecutionStrategy(parser));
+        var sut = new TestRunnerService(new ProcessTestExecutionStrategy(parser), pool);
 
         var projectPaths = new[] { _alphaTestsCsproj, _betaTestsCsproj, _gammaTestsCsproj }.ToList();
 
@@ -85,8 +85,8 @@ public sealed class ParallelExecutionTests : IAsyncLifetime
     {
         var completedProjects = new System.Collections.Concurrent.ConcurrentBag<string>();
         var parser = new TrxResultParser();
-        using var pool = new TestProcessPool(2, 50, parser);
-        var sut = new TestRunnerService(parser, pool);
+        using var pool = new TestProcessPool(2, 50, new ProcessTestExecutionStrategy(parser));
+        var sut = new TestRunnerService(new ProcessTestExecutionStrategy(parser), pool);
 
         var projectPaths = new[] { _alphaTestsCsproj, _betaTestsCsproj, _gammaTestsCsproj }.ToList();
 
@@ -112,7 +112,7 @@ public sealed class ParallelExecutionTests : IAsyncLifetime
         var projectPaths = new[] { _alphaTestsCsproj, _betaTestsCsproj, _gammaTestsCsproj }.ToList();
 
         // Run sequentially (no pool)
-        var sequentialSut = new TestRunnerService(parser);
+        var sequentialSut = new TestRunnerService(new ProcessTestExecutionStrategy(parser));
         var sequentialResult = await sequentialSut.RunTestsAsync(
             solutionPath: _root,
             testProjectPaths: projectPaths,
@@ -122,8 +122,8 @@ public sealed class ParallelExecutionTests : IAsyncLifetime
             CancellationToken.None);
 
         // Run with pool size 1 (single-slot pool but still uses pool path for 3 projects)
-        using var pool = new TestProcessPool(1, 50, parser);
-        var poolSut = new TestRunnerService(parser, pool);
+        using var pool = new TestProcessPool(1, 50, new ProcessTestExecutionStrategy(parser));
+        var poolSut = new TestRunnerService(new ProcessTestExecutionStrategy(parser), pool);
         var poolResult = await poolSut.RunTestsAsync(
             solutionPath: _root,
             testProjectPaths: projectPaths,
@@ -152,8 +152,8 @@ public sealed class ParallelExecutionTests : IAsyncLifetime
         // We simulate this via the pool's fake delegate in unit tests.
         // Here we verify using real projects: one valid, one pointing to a non-existent csproj.
         var parser = new TrxResultParser();
-        using var pool = new TestProcessPool(2, 50, parser);
-        var sut = new TestRunnerService(parser, pool);
+        using var pool = new TestProcessPool(2, 50, new ProcessTestExecutionStrategy(parser));
+        var sut = new TestRunnerService(new ProcessTestExecutionStrategy(parser), pool);
 
         // nonexistent.csproj will cause dotnet test to fail with no TRX output
         var nonExistentProject = Path.Combine(_root, "NonExistent", "NonExistent.csproj");

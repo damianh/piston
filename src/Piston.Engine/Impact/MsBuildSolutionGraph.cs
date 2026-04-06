@@ -1,5 +1,6 @@
 using Microsoft.Build.Evaluation;
 using Microsoft.Build.Graph;
+using Piston.Engine.Services;
 
 namespace Piston.Engine.Impact;
 
@@ -9,6 +10,8 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
     private readonly List<string> _testProjects;
     private readonly Dictionary<string, ProjectGraphNode> _nodeByPath;
     private readonly Dictionary<string, IReadOnlyList<string>> _sourceFilesByProject;
+    private readonly Dictionary<string, bool> _mtpProjects;
+    private readonly Dictionary<string, string> _mtpOutputPaths;
 
     // Sorted list of (projectDirectory, projectPath) for directory-based ownership lookup
     private readonly List<(string Directory, string ProjectPath)> _sortedProjectDirs;
@@ -30,7 +33,13 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         _testProjects = [];
         _nodeByPath = new Dictionary<string, ProjectGraphNode>(StringComparer.OrdinalIgnoreCase);
         _sourceFilesByProject = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
+        _mtpProjects = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        _mtpOutputPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         _sortedProjectDirs = [];
+
+        var log = DiagnosticLog.Instance;
+        log?.Write("SolutionGraph", $"Loading solution: {solutionPath}");
+        log?.Write("SolutionGraph", $"ProjectNodes count: {graph.ProjectNodes.Count}");
 
         foreach (var node in graph.ProjectNodes)
         {
@@ -38,9 +47,28 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
             _allProjects.Add(projectPath);
             _nodeByPath[projectPath] = node;
 
-            // Determine if this is a test project
-            if (IsTestProjectNode(node))
+            var isTest = IsTestProjectNode(node);
+            var isMtp  = IsMtpProjectNode(node);
+
+            // Determine if this is a test project.
+            // MTP v2 projects are implicitly test projects — they may lack
+            // <IsTestProject>true</IsTestProject> or Microsoft.NET.Test.Sdk.
+            if (isTest || isMtp)
                 _testProjects.Add(projectPath);
+
+            // Determine if this is an MTP v2 project
+            if (isMtp)
+            {
+                _mtpProjects[projectPath] = true;
+                var targetPath = node.ProjectInstance.GetPropertyValue("TargetPath");
+                if (!string.IsNullOrEmpty(targetPath))
+                    _mtpOutputPaths[projectPath] = Path.GetFullPath(targetPath);
+            }
+
+            log?.Write("SolutionGraph",
+                $"  Project: {Path.GetFileName(projectPath)} | " +
+                $"isTest={isTest} | isMtp={isMtp}" +
+                (isMtp && _mtpOutputPaths.TryGetValue(projectPath, out var mtpOut) ? $" | mtpOutput={mtpOut}" : ""));
 
             // Cache source files (.cs) for this project (excluding bin/obj)
             var projectDir = Path.GetDirectoryName(projectPath) ?? string.Empty;
@@ -63,6 +91,10 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         // Sort by directory length descending (longest first) so we match most-specific first
         _sortedProjectDirs.Sort((a, b) =>
             b.Directory.Length.CompareTo(a.Directory.Length));
+
+        log?.Write("SolutionGraph",
+            $"Graph loaded: {_allProjects.Count} projects, " +
+            $"{_testProjects.Count} test, {_mtpProjects.Count} MTP");
     }
 
     public string? FindOwningProject(string filePath)
@@ -105,6 +137,18 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         return _testProjects.Contains(normalized, StringComparer.OrdinalIgnoreCase);
     }
 
+    public bool IsMtpProject(string projectPath)
+    {
+        var normalized = Path.GetFullPath(projectPath);
+        return _mtpProjects.ContainsKey(normalized);
+    }
+
+    public string? GetMtpOutputPath(string projectPath)
+    {
+        var normalized = Path.GetFullPath(projectPath);
+        return _mtpOutputPaths.TryGetValue(normalized, out var p) ? p : null;
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static bool IsTestProjectNode(ProjectGraphNode node)
@@ -118,6 +162,33 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         foreach (var item in node.ProjectInstance.GetItems("PackageReference"))
         {
             if (string.Equals(item.EvaluatedInclude, "Microsoft.NET.Test.Sdk", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsMtpProjectNode(ProjectGraphNode node)
+    {
+        // Check explicit MSBuild properties set by MTP-enabled test frameworks
+        var props = new[]
+        {
+            "IsTestingPlatformApplication",
+            "EnableMSTestRunner",
+            "UseMicrosoftTestingPlatformRunner",
+            "EnableNUnitRunner",
+        };
+
+        foreach (var prop in props)
+        {
+            if (string.Equals(node.ProjectInstance.GetPropertyValue(prop), "true", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        // Heuristic: direct reference to Microsoft.Testing.Platform package
+        foreach (var item in node.ProjectInstance.GetItems("PackageReference"))
+        {
+            if (string.Equals(item.EvaluatedInclude, "Microsoft.Testing.Platform", StringComparison.OrdinalIgnoreCase))
                 return true;
         }
 

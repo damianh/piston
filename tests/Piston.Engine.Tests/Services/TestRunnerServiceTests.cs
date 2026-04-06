@@ -58,7 +58,7 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
     [Fact]
     public async Task RunTestsAsync_ReturnsResults_WithPassedAndFailed()
     {
-        var sut = new TestRunnerService(new TrxResultParser());
+        var sut = new TestRunnerService(new ProcessTestExecutionStrategy(new TrxResultParser()));
 
         var result = await sut.RunTestsAsync(_projectFile, filter: null, onProgress: null, CancellationToken.None);
 
@@ -71,7 +71,7 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
     [Fact]
     public async Task RunTestsAsync_WhenCancelled_ReturnsEmpty()
     {
-        var sut = new TestRunnerService(new TrxResultParser());
+        var sut = new TestRunnerService(new ProcessTestExecutionStrategy(new TrxResultParser()));
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
@@ -83,7 +83,7 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
     [Fact]
     public async Task RunTestsAsync_FullyQualifiedNames_IncludeClassName()
     {
-        var sut = new TestRunnerService(new TrxResultParser());
+        var sut = new TestRunnerService(new ProcessTestExecutionStrategy(new TrxResultParser()));
 
         var result = await sut.RunTestsAsync(_projectFile, filter: null, onProgress: null, CancellationToken.None);
 
@@ -96,7 +96,7 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
     public async Task RunTestsAsync_WithNullTestProjectPaths_RunsAllTestsInTarget()
     {
         // null testProjectPaths → runs the target path as-is (backward compat)
-        var sut = new TestRunnerService(new TrxResultParser());
+        var sut = new TestRunnerService(new ProcessTestExecutionStrategy(new TrxResultParser()));
 
         var result = await sut.RunTestsAsync(
             solutionPath: _projectFile,
@@ -112,7 +112,7 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
     [Fact]
     public async Task RunTestsAsync_WithExplicitTestProjectPath_RunsOnlyThatProject()
     {
-        var sut = new TestRunnerService(new TrxResultParser());
+        var sut = new TestRunnerService(new ProcessTestExecutionStrategy(new TrxResultParser()));
 
         var result = await sut.RunTestsAsync(
             solutionPath: _projectFile,

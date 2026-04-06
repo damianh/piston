@@ -11,12 +11,23 @@ public sealed class PistonEngine : IEngine
     private readonly PistonOrchestrator _orchestrator;
     private readonly ICoverageStore? _coverageStore;
     private readonly ITestProcessPool _pool;
+    private readonly DiagnosticLog _diagnosticLog;
 
     public PistonEngine(PistonOptions options)
     {
         // Register MSBuild before any Microsoft.Build.* types are loaded.
         // This must happen before MsBuildSolutionGraph (or any class referencing MSBuild) is JIT-compiled.
         MsBuildLocatorGuard.EnsureRegistered();
+
+        // Initialize diagnostic log early so all components can use it.
+        var solutionDir = Path.GetDirectoryName(options.SolutionPath)
+            ?? throw new ArgumentException("Cannot resolve solution directory.", nameof(options));
+        _diagnosticLog = DiagnosticLog.Initialize(solutionDir);
+        _diagnosticLog.Write("Engine", $"SolutionPath: {options.SolutionPath}");
+        _diagnosticLog.Write("Engine", $"TestExecutionMode: {options.TestExecutionMode}");
+        _diagnosticLog.Write("Engine", $"CoverageEnabled: {options.CoverageEnabled}");
+        _diagnosticLog.Write("Engine", $"ProcessPoolSize: {options.ProcessPoolSize}");
+        _diagnosticLog.Write("Engine", $"TestFilter: {options.TestFilter ?? "(none)"}");
 
         _state = new PistonState
         {
@@ -27,20 +38,6 @@ public sealed class PistonEngine : IEngine
         var fileWatcher = new FileWatcherService(options.DebounceInterval);
         var buildService = new BuildService();
         var trxParser = new TrxResultParser();
-
-        ITestExecutionStrategy strategy = options.TestExecutionMode switch
-        {
-            TestExecutionMode.InProcess =>
-                throw new NotSupportedException("InProcess test execution mode is not yet implemented."),
-            _ => new ProcessTestExecutionStrategy(trxParser),
-        };
-
-        var effectivePoolSize = options.ProcessPoolSize > 0
-            ? options.ProcessPoolSize
-            : Math.Max(1, Environment.ProcessorCount / 2);
-        _pool = new TestProcessPool(effectivePoolSize, options.ProcessRecycleAfter, strategy);
-
-        var testRunner = new TestRunnerService(strategy, _pool);
 
         ICoverageProcessor? coverageProcessor = null;
 
@@ -55,6 +52,25 @@ public sealed class PistonEngine : IEngine
         var impactAnalyzer = new ImpactAnalyzer(
             solutionPath => new MsBuildSolutionGraph(solutionPath),
             _coverageStore);
+
+        var vsTestStrategy = new ProcessTestExecutionStrategy(trxParser);
+        var mtpStrategy    = new MtpTestExecutionStrategy(
+            projectPath => impactAnalyzer.GetMtpOutputPath(projectPath),
+            solutionDir);
+
+        ITestExecutionStrategy strategy = options.TestExecutionMode switch
+        {
+            TestExecutionMode.InProcess =>
+                throw new NotSupportedException("InProcess test execution mode is not yet implemented."),
+            _ => new CompositeTestExecutionStrategy(mtpStrategy, vsTestStrategy),
+        };
+
+        var effectivePoolSize = options.ProcessPoolSize > 0
+            ? options.ProcessPoolSize
+            : Math.Max(1, Environment.ProcessorCount / 2);
+        _pool = new TestProcessPool(effectivePoolSize, options.ProcessRecycleAfter, strategy);
+
+        var testRunner = new TestRunnerService(strategy, _pool);
 
         _orchestrator = new PistonOrchestrator(
             fileWatcher,
@@ -91,5 +107,6 @@ public sealed class PistonEngine : IEngine
         _orchestrator.Dispose();
         _coverageStore?.Dispose();
         _pool.Dispose();
+        _diagnosticLog.Dispose();
     }
 }
