@@ -1,0 +1,24 @@
+## Phase 1: Roslyn + MCP Integration - Completed
+
+### What was done
+- Added `Microsoft.CodeAnalysis.CSharp.Workspaces` and `Microsoft.CodeAnalysis.Workspaces.MSBuild` (4.13.0) to `Directory.Packages.props`
+- Added `Microsoft.Build.Framework` (17.14.28) to `Directory.Packages.props` for transitive dependency management
+- Updated `Piston.Roslyn.Worker.csproj` with correct package references, `DisableMSBuildAssemblyCopyCheck`, and NU1903 suppression for transitive vulnerability
+- Added `InternalsVisibleTo` for `Piston.Roslyn.Worker` in `Piston.Roslyn.csproj`
+- Updated `Piston.slnx` to include both Roslyn projects
+- Created shared DTOs: `RoslynMethods.cs`, `Messages/RoslynRequests.cs`, `Messages/RoslynResponses.cs`
+- Created `RoslynJsonContext.cs` source-gen JSON context (internal, shared via InternalsVisibleTo)
+- Created `IRoslynWorkspace` interface
+- Created `RoslynWorkerProcess` — manages child process lifecycle with JSON-RPC over stdio
+- Created `RoslynWorkspaceProxy` — implements `IRoslynWorkspace` via the worker process
+- Created Worker `Program.cs` — MSBuild.Locator registration + WorkspaceHost entry point
+- Created `WorkspaceHost.cs` — handles JSON-RPC requests (loadWorkspace, shutdown) using MSBuildWorkspace
+
+### Build status
+- Solution builds with 0 warnings, 0 errors
+
+### Notes for next person
+- The `RoslynJsonContext` is `internal` in `Piston.Roslyn` and shared with `Piston.Roslyn.Worker` via `InternalsVisibleTo`
+- `DisableMSBuildAssemblyCopyCheck` is needed because `Microsoft.CodeAnalysis.Workspaces.MSBuild` brings transitive MSBuild packages that conflict with MSBuild.Locator's runtime loading
+- Phase 2 should add remaining methods (getDiagnostics, semanticSearch, getAst, applyRefactoring, fileChanged)
+- Tests are not yet written for the Roslyn integration (would need integration test project)

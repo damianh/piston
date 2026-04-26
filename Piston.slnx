@@ -4,6 +4,8 @@
     <Project Path="src/Piston.Engine/Piston.Engine.csproj" />
     <Project Path="src/Piston.Controller/Piston.Controller.csproj" />
     <Project Path="src/Piston.Tui/Piston.Tui.csproj" />
+    <Project Path="src/Piston.Roslyn/Piston.Roslyn.csproj" />
+    <Project Path="src/Piston.Roslyn.Worker/Piston.Roslyn.Worker.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Piston.Engine.Tests/Piston.Engine.Tests.csproj" />
