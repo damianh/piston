@@ -1,11 +1,15 @@
 using System.CommandLine;
 using System.Text.Json.Nodes;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using ModelContextProtocol.AspNetCore;
 using Piston.Controller.Configuration;
 using Piston.Controller.Mapping;
 using Piston.Controller.Protocol;
 using Piston.Engine;
 using Piston.Engine.Models;
+using Piston.Mcp;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
@@ -54,6 +58,10 @@ var connectOpt = new Option<string?>(
     name: "--connect",
     description: "Connect to a running headless controller via named pipe.");
 
+var mcpPortOpt = new Option<int?>(
+    name: "--mcp-port",
+    description: "Enable MCP server on the specified port (requires --headless).");
+
 var rootCommand = new RootCommand("Piston — continuous test runner for .NET")
 {
     solutionArg,
@@ -65,6 +73,7 @@ var rootCommand = new RootCommand("Piston — continuous test runner for .NET")
     stdioOpt,
     pipeNameOpt,
     connectOpt,
+    mcpPortOpt,
 };
 
 rootCommand.SetHandler(async ctx =>
@@ -78,11 +87,19 @@ rootCommand.SetHandler(async ctx =>
     var stdio        = ctx.ParseResult.GetValueForOption(stdioOpt);
     var pipeName     = ctx.ParseResult.GetValueForOption(pipeNameOpt);
     var connect      = ctx.ParseResult.GetValueForOption(connectOpt);
+    var mcpPort      = ctx.ParseResult.GetValueForOption(mcpPortOpt);
 
     // Validate exclusivity
     if (headless && connect is not null)
     {
         Console.Error.WriteLine("error: Cannot use --headless and --connect together.");
+        ctx.ExitCode = 1;
+        return;
+    }
+
+    if (mcpPort is not null && !headless)
+    {
+        Console.Error.WriteLine("error: --mcp-port requires --headless.");
         ctx.ExitCode = 1;
         return;
     }
@@ -115,6 +132,12 @@ rootCommand.SetHandler(async ctx =>
     if (headless && stdio)
     {
         await RunHeadlessStdioAsync(solutionFile, debounceMs, filter, coverage, parallelism);
+        return;
+    }
+
+    if (headless && mcpPort is not null)
+    {
+        await RunHeadlessMcpAsync(solutionFile, debounceMs, filter, coverage, parallelism, pipeName, mcpPort.Value);
         return;
     }
 
@@ -225,6 +248,87 @@ static async Task RunHeadlessAsync(
     try
     {
         await router.RunAsync(cts.Token);
+    }
+    catch (OperationCanceledException)
+    {
+        // Normal shutdown
+    }
+
+    Console.Error.WriteLine("[piston] Shutting down.");
+    engine.Stop();
+}
+
+// ── Headless-MCP mode ──────────────────────────────────────────────────────────
+
+static async Task RunHeadlessMcpAsync(
+    FileInfo? solutionArg,
+    int cliDebounceMs,
+    string? cliFilter,
+    bool cliCoverage,
+    int cliParallelism,
+    string? cliPipeName,
+    int mcpPort)
+{
+    string solutionPath;
+    try
+    {
+        solutionPath = ResolveSolutionPath(solutionArg);
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        Environment.Exit(1);
+        return;
+    }
+
+    var solutionDir = Path.GetDirectoryName(solutionPath)!;
+    var config      = LoadConfig(solutionDir);
+    var options     = BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
+
+    if (!DotnetSdkAvailable())
+    {
+        Console.Error.WriteLine("error: 'dotnet' SDK not found on PATH. Install .NET 10 SDK from https://dot.net");
+        Environment.Exit(1);
+        return;
+    }
+
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        cts.Cancel();
+    };
+
+    using var engine = new PistonEngine(options);
+
+    Console.Error.WriteLine($"[piston] Starting engine for: {solutionPath}");
+    await engine.StartAsync(solutionPath);
+
+    // Start named pipe listener
+    var pipeName = cliPipeName
+        ?? config.PipeName
+        ?? NamedPipeListener.GeneratePipeName(solutionPath);
+
+    Console.Error.WriteLine($"[piston] Listening on pipe: {pipeName}");
+    Console.WriteLine($"PIPE:{pipeName}");
+
+    var listener = new NamedPipeListener(pipeName);
+    await using var router = new ProtocolRouter(engine, listener);
+    var routerTask = router.RunAsync(cts.Token);
+
+    // Start MCP server
+    var mcpBuilder = WebApplication.CreateBuilder();
+    mcpBuilder.Services.AddSingleton<IEngine>(engine);
+    mcpBuilder.Services.AddPistonMcp();
+    var mcpApp = mcpBuilder.Build();
+    mcpApp.MapMcp();
+
+    Console.Error.WriteLine($"[piston] MCP server listening on port: {mcpPort}");
+    var mcpTask = mcpApp.RunAsync($"http://localhost:{mcpPort}");
+
+    try
+    {
+        await Task.WhenAny(routerTask, mcpTask);
     }
     catch (OperationCanceledException)
     {

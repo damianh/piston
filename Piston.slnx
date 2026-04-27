@@ -4,12 +4,14 @@
     <Project Path="src/Piston.Engine/Piston.Engine.csproj" />
     <Project Path="src/Piston.Controller/Piston.Controller.csproj" />
     <Project Path="src/Piston.Tui/Piston.Tui.csproj" />
+    <Project Path="src/Piston.Mcp/Piston.Mcp.csproj" />
     <Project Path="src/Piston.Roslyn/Piston.Roslyn.csproj" />
     <Project Path="src/Piston.Roslyn.Worker/Piston.Roslyn.Worker.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Piston.Engine.Tests/Piston.Engine.Tests.csproj" />
     <Project Path="tests/Piston.Protocol.Tests/Piston.Protocol.Tests.csproj" />
+    <Project Path="tests/Piston.Mcp.Tests/Piston.Mcp.Tests.csproj" />
     <Project Path="tests/Piston.Roslyn.Tests/Piston.Roslyn.Tests.csproj" />
   </Folder>
 </Solution>

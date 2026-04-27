@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="ModelContextProtocol.AspNetCore" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Piston.Engine\Piston.Engine.csproj" />
+    <ProjectReference Include="..\Piston.Roslyn\Piston.Roslyn.csproj" />
+  </ItemGroup>
+</Project>

@@ -47,6 +47,12 @@ internal sealed class PistonConfig
     public bool? Headless { get; set; }
 
     /// <summary>
+    /// Port for the MCP server. When set, enables MCP alongside the named pipe listener.
+    /// Corresponds to the <c>--mcp-port</c> CLI flag.
+    /// </summary>
+    public int? McpPort { get; set; }
+
+    /// <summary>
     /// Test execution mode. Accepted values: "Auto", "Process", "InProcess".
     /// Stored as a string to avoid a type dependency on <c>Piston.Engine</c>.
     /// </summary>
