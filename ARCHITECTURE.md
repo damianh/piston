@@ -870,7 +870,111 @@ Target latencies for a 100-project solution with 5,000 tests:
 
 ---
 
-## 15. Migration Path from Current Architecture
+## 15. Roslyn Workspace & MCP Server
+
+### Architecture Overview
+
+```
+Piston Controller
+  ├── Protocol Router (named pipe / stdio JSON-RPC) ─── TUI / IDE clients
+  ├── MCP Server (HTTP/SSE on --mcp-port) ─── AI agents
+  │
+  ├── Piston Engine (test runner, file watcher, build)
+  │
+  └── Roslyn Worker (supervised child process)
+        └── MSBuildWorkspace + SemanticModel + Renamer
+```
+
+### New Projects
+
+| Project | Purpose |
+|---------|---------|
+| `Piston.Roslyn` | Shared DTOs, JSON-RPC contracts, and proxy for the Roslyn worker process. No Roslyn dependency — safe to reference from the controller. |
+| `Piston.Roslyn.Worker` | Standalone executable that hosts an `MSBuildWorkspace`. Runs as a supervised child process to isolate Roslyn/MSBuild from the main controller. |
+| `Piston.Mcp` | MCP server registration and tool definitions. Exposes Piston engine + Roslyn workspace as MCP tools for AI agents. |
+
+### Updated Dependency Graph
+
+```
+Piston.Tui ──────────> Piston.Protocol
+Piston.Controller ───> Piston.Engine ───> Piston.Protocol
+                  ├──> Piston.Roslyn
+                  └──> Piston.Mcp ──────> Piston.Engine
+                                     └──> Piston.Roslyn
+Piston.Roslyn.Worker ─> Piston.Roslyn ──> Piston.Protocol
+```
+
+### MCP Tool Catalog
+
+The MCP server exposes 10 tools across two categories:
+
+**Roslyn Tools** (code intelligence via the supervised worker):
+
+| Tool | Description |
+|------|-------------|
+| `LoadWorkspace` | Load a `.sln` or `.csproj` workspace for code analysis. Must be called first. |
+| `GetDiagnostics` | Get compiler diagnostics (errors/warnings) for a project or the entire workspace. |
+| `SemanticSearch` | Find all references to a symbol by name using Roslyn semantic analysis. |
+| `GetAst` | Get a pruned AST for a file showing declarations (classes, methods, properties). |
+| `Rename` | Rename a symbol at a specific location. Supports preview mode. |
+| `NotifyFileChanged` | Notify the workspace that a file changed externally so it updates its in-memory state. |
+
+**Test Tools** (engine operations):
+
+| Tool | Description |
+|------|-------------|
+| `RunTests` | Force a full test run and return results summary. |
+| `GetTestResults` | Get current test results from the last run. |
+| `SetTestFilter` | Set a test filter to narrow which tests are run. |
+| `ClearResults` | Clear all test results and coverage data. |
+
+### Supervised Child Process Model
+
+The Roslyn worker runs as a separate `dotnet` process (`Piston.Roslyn.Worker`) to
+provide crash isolation. MSBuild workspace loading can fail or corrupt state in
+ways that would take down the controller — the child process model prevents this.
+
+Key design decisions:
+- **Lazy initialization**: The worker process is not spawned until a Roslyn tool is
+  first invoked. This avoids startup cost when MCP/Roslyn features are not used.
+- **Crash recovery**: If the worker crashes, the proxy detects the broken pipe and
+  respawns a fresh worker on the next request.
+- **Communication**: JSON-RPC over stdin/stdout pipes to the child process.
+- **Lifecycle**: The worker is terminated when the controller shuts down.
+
+### Workspace Synchronization
+
+The Roslyn workspace stays in sync with file changes through two mechanisms:
+
+1. **Explicit notification**: The `NotifyFileChanged` MCP tool allows AI agents to
+   tell the workspace about files they modified.
+2. **Refactor-then-retest flow**: When an agent uses `Rename` (applied mode), the
+   engine's file watcher detects the changed files, triggers a rebuild, and re-runs
+   affected tests automatically. The flow is:
+   ```
+   Agent calls Rename → files written to disk → FileWatcher detects changes
+     → Engine rebuilds affected projects → Engine re-runs affected tests
+     → Agent calls GetTestResults to verify
+   ```
+
+### Configuration
+
+MCP can be enabled via CLI or config file:
+
+```bash
+# CLI
+piston --headless --mcp-port 3001
+
+# .piston.json
+{ "mcpPort": 3001 }
+```
+
+When `mcpPort` is set in `.piston.json`, headless mode automatically starts the MCP
+server alongside the named pipe listener. CLI `--mcp-port` takes precedence.
+
+---
+
+## 16. Migration Path from Current Architecture
 
 The current codebase has good bones. Migration is incremental:
 

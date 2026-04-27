@@ -223,6 +223,13 @@ static async Task RunHeadlessAsync(
         return;
     }
 
+    // Resolve mcpPort from config if not specified on CLI
+    if (config.McpPort is not null)
+    {
+        await RunHeadlessMcpAsync(solutionArg, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, cliPipeName, config.McpPort.Value);
+        return;
+    }
+
     var pipeName = cliPipeName
         ?? config.PipeName
         ?? NamedPipeListener.GeneratePipeName(solutionPath);

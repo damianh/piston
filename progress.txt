@@ -69,3 +69,46 @@
 - `FileChanged` handler supports documents that appear in multiple projects (linked files)
 - Line/Column in `RenameParams` are 1-based (converted to 0-based internally)
 - Integration tests for rename would require loading a real solution with MSBuildWorkspace
+
+## Phase 4: MCP Server Transport - Completed
+
+### What was done
+- Created `Piston.Mcp` library project with ASP.NET Core FrameworkReference and `ModelContextProtocol.AspNetCore` 1.2.0
+- Created `TestTools` (4 MCP tools): RunTests, GetTestResults, SetTestFilter, ClearResults — all inject `IEngine` via DI
+- Created `RoslynTools` (6 MCP tools): LoadWorkspace, GetDiagnostics, SemanticSearch, GetAst, Rename, NotifyFileChanged — all inject `IRoslynWorkspace` via DI
+- Created `McpServiceRegistration.AddPistonMcp()` extension method wiring DI + MCP server with HTTP transport
+- Created `RoslynWorkspaceFactory` in `Piston.Roslyn` to expose internal `RoslynWorkspaceProxy` via public factory
+- Added `--mcp-port` CLI option to Controller (requires `--headless`)
+- Added `RunHeadlessMcpAsync` mode: runs named pipe listener + ASP.NET Core WebApplication concurrently
+- Added `PistonConfig.McpPort` for `.piston.json` configuration
+- Added FrameworkReference for ASP.NET Core to Controller (removed now-redundant `Microsoft.Extensions.Configuration.*` packages)
+- Created `Piston.Mcp.Tests` with 15 tests covering all tool methods and branches
+
+### Build status
+- Solution builds with 0 warnings, 0 errors (Debug and Release)
+- All 15 MCP tests pass
+
+### Notes for next person
+- MCP tools avoid optional parameters per C# standards — empty string is used as sentinel for "no filter" / "all projects"
+- The `IEngine` singleton is registered directly in `RunHeadlessMcpAsync` before calling `AddPistonMcp()`
+- `IRoslynWorkspace` is registered as a lazy singleton via `RoslynWorkspaceFactory.Create()` in `McpServiceRegistration`
+- Tools read directly from `engine.State` properties (not `ToSnapshot()` which is internal to Controller)
+- The 7 pre-existing TrxParser test failures are unrelated (missing fixture files in bin output)
+
+## Phase 5: Final Polish - Completed
+
+### What was done
+- Added 10 serialization roundtrip tests for Phase 1+2 DTOs (LoadWorkspaceParams, WorkspaceInfo, GetDiagnosticsParams with/without null ProjectName, DiagnosticsResponse with items/empty, SemanticSearchParams, SemanticSearchResponse, GetAstParams, AstResponse with nested children)
+- Added `mcpPort` config file resolution: `RunHeadlessAsync` checks `config.McpPort` and redirects to `RunHeadlessMcpAsync` when set — no CLI flag needed
+- Added new ARCHITECTURE.md section 15 "Roslyn Workspace & MCP Server" covering architecture diagram, new projects, dependency graph, MCP tool catalog (all 10 tools), supervised child process model, workspace sync, and configuration
+
+### Build status
+- Solution builds with 0 warnings, 0 errors
+- All 17 Roslyn serialization tests pass (7 existing + 10 new)
+- All 15 MCP tests pass
+- 7 pre-existing TrxParser failures remain (unrelated fixture issue)
+
+### Notes for next person
+- The config-based MCP activation happens inside `RunHeadlessAsync` — when `.piston.json` has `mcpPort`, headless mode auto-upgrades to headless-MCP mode
+- WorkspaceHost unit tests were skipped — the class is internal to Piston.Roslyn.Worker, and protocol-level testing would require pipe-based integration which is already covered by MCP tool tests
+- All Roslyn DTO types now have serialization coverage
