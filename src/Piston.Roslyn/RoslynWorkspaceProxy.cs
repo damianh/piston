@@ -29,6 +29,45 @@ internal sealed class RoslynWorkspaceProxy : IRoslynWorkspace
         return info;
     }
 
+    public async Task<DiagnosticsResponse> GetDiagnosticsAsync(string? projectName, CancellationToken ct)
+    {
+        var @params = JsonSerializer.SerializeToNode(
+            new GetDiagnosticsParams(projectName),
+            RoslynJsonContext.Default.GetDiagnosticsParams);
+
+        var result = await _worker.SendRequestAsync(RoslynMethods.GetDiagnostics, @params, ct)
+            .ConfigureAwait(false);
+
+        return result.Deserialize(RoslynJsonContext.Default.DiagnosticsResponse)
+            ?? throw new InvalidOperationException("Worker returned null diagnostics response.");
+    }
+
+    public async Task<SemanticSearchResponse> SemanticSearchAsync(string symbolName, CancellationToken ct)
+    {
+        var @params = JsonSerializer.SerializeToNode(
+            new SemanticSearchParams(symbolName),
+            RoslynJsonContext.Default.SemanticSearchParams);
+
+        var result = await _worker.SendRequestAsync(RoslynMethods.SemanticSearch, @params, ct)
+            .ConfigureAwait(false);
+
+        return result.Deserialize(RoslynJsonContext.Default.SemanticSearchResponse)
+            ?? throw new InvalidOperationException("Worker returned null semantic search response.");
+    }
+
+    public async Task<AstResponse> GetAstAsync(string filePath, int maxDepth, CancellationToken ct)
+    {
+        var @params = JsonSerializer.SerializeToNode(
+            new GetAstParams(filePath, maxDepth),
+            RoslynJsonContext.Default.GetAstParams);
+
+        var result = await _worker.SendRequestAsync(RoslynMethods.GetAst, @params, ct)
+            .ConfigureAwait(false);
+
+        return result.Deserialize(RoslynJsonContext.Default.AstResponse)
+            ?? throw new InvalidOperationException("Worker returned null AST response.");
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_worker.IsRunning)
