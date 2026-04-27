@@ -42,3 +42,12 @@ public sealed record AstNode(
 public sealed record AstResponse(
     string FilePath,
     AstNode Root);
+
+public sealed record FileChange(
+    string FilePath,
+    string OldText,
+    string NewText);
+
+public sealed record RenameResponse(
+    IReadOnlyList<FileChange> Changes,
+    bool Applied);

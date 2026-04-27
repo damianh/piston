@@ -13,4 +13,8 @@ public interface IRoslynWorkspace : IAsyncDisposable
     Task<SemanticSearchResponse> SemanticSearchAsync(string symbolName, CancellationToken ct);
 
     Task<AstResponse> GetAstAsync(string filePath, int maxDepth, CancellationToken ct);
+
+    Task<RenameResponse> RenameAsync(string filePath, int line, int column, string newName, bool preview, CancellationToken ct);
+
+    Task NotifyFileChangedAsync(string filePath, CancellationToken ct);
 }

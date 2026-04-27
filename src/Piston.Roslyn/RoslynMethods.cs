@@ -7,6 +7,7 @@ public static class RoslynMethods
     public const string SemanticSearch = "roslyn/semanticSearch";
     public const string GetAst = "roslyn/getAst";
     public const string ApplyRefactoring = "roslyn/applyRefactoring";
+    public const string Rename = "roslyn/rename";
     public const string FileChanged = "roslyn/fileChanged";
     public const string Shutdown = "roslyn/shutdown";
 }

@@ -68,6 +68,29 @@ internal sealed class RoslynWorkspaceProxy : IRoslynWorkspace
             ?? throw new InvalidOperationException("Worker returned null AST response.");
     }
 
+    public async Task<RenameResponse> RenameAsync(string filePath, int line, int column, string newName, bool preview, CancellationToken ct)
+    {
+        var @params = JsonSerializer.SerializeToNode(
+            new RenameParams(filePath, line, column, newName, preview),
+            RoslynJsonContext.Default.RenameParams);
+
+        var result = await _worker.SendRequestAsync(RoslynMethods.Rename, @params, ct)
+            .ConfigureAwait(false);
+
+        return result.Deserialize(RoslynJsonContext.Default.RenameResponse)
+            ?? throw new InvalidOperationException("Worker returned null rename response.");
+    }
+
+    public async Task NotifyFileChangedAsync(string filePath, CancellationToken ct)
+    {
+        var @params = JsonSerializer.SerializeToNode(
+            new FileChangedParams(filePath),
+            RoslynJsonContext.Default.FileChangedParams);
+
+        await _worker.SendRequestAsync(RoslynMethods.FileChanged, @params, ct)
+            .ConfigureAwait(false);
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_worker.IsRunning)

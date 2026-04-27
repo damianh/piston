@@ -4,6 +4,8 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.FindSymbols;
 using Microsoft.CodeAnalysis.MSBuild;
+using Microsoft.CodeAnalysis.Rename;
+using Microsoft.CodeAnalysis.Text;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Transports;
 using Piston.Roslyn;
@@ -64,6 +66,8 @@ internal sealed class WorkspaceHost
                     RoslynMethods.GetDiagnostics => await HandleGetDiagnostics(request.Params, ct).ConfigureAwait(false),
                     RoslynMethods.SemanticSearch => await HandleSemanticSearch(request.Params, ct).ConfigureAwait(false),
                     RoslynMethods.GetAst => await HandleGetAst(request.Params, ct).ConfigureAwait(false),
+                    RoslynMethods.Rename => await HandleRename(request.Params, ct).ConfigureAwait(false),
+                    RoslynMethods.FileChanged => await HandleFileChanged(request.Params, ct).ConfigureAwait(false),
                     RoslynMethods.Shutdown => HandleShutdown(),
                     _ => throw new NotSupportedException($"Unknown method: {request.Method}"),
                 };
@@ -261,6 +265,100 @@ internal sealed class WorkspaceHost
 
     private static JsonNode? HandleShutdown()
     {
+        return JsonSerializer.SerializeToNode(true, RoslynJsonContext.Default.Boolean);
+    }
+
+    private async Task<JsonNode?> HandleRename(JsonNode? @params, CancellationToken ct)
+    {
+        EnsureSolutionLoaded();
+
+        var renameParams = JsonSerializer.Deserialize(
+            @params, RoslynJsonContext.Default.RenameParams)
+            ?? throw new ArgumentException("Missing rename parameters.");
+
+        var document = _solution!.Projects
+            .SelectMany(p => p.Documents)
+            .FirstOrDefault(d => string.Equals(d.FilePath, renameParams.FilePath, StringComparison.OrdinalIgnoreCase))
+            ?? throw new ArgumentException($"Document not found: {renameParams.FilePath}");
+
+        var sourceText = await document.GetTextAsync(ct).ConfigureAwait(false);
+        var position = sourceText.Lines[renameParams.Line - 1].Start + (renameParams.Column - 1);
+
+        var symbol = await SymbolFinder.FindSymbolAtPositionAsync(document, position, ct)
+            .ConfigureAwait(false)
+            ?? throw new InvalidOperationException(
+                $"No symbol found at {renameParams.FilePath}:{renameParams.Line}:{renameParams.Column}");
+
+        var newSolution = await Renamer.RenameSymbolAsync(
+            _solution, symbol, new SymbolRenameOptions(), renameParams.NewName, ct)
+            .ConfigureAwait(false);
+
+        var changes = new List<FileChange>();
+        foreach (var projectChanges in newSolution.GetChanges(_solution).GetProjectChanges())
+        {
+            foreach (var changedDocId in projectChanges.GetChangedDocuments())
+            {
+                var oldDoc = _solution.GetDocument(changedDocId);
+                var newDoc = newSolution.GetDocument(changedDocId);
+                if (oldDoc is null || newDoc is null)
+                {
+                    continue;
+                }
+
+                var oldText = await oldDoc.GetTextAsync(ct).ConfigureAwait(false);
+                var newText = await newDoc.GetTextAsync(ct).ConfigureAwait(false);
+
+                changes.Add(new FileChange(
+                    oldDoc.FilePath ?? string.Empty,
+                    oldText.ToString(),
+                    newText.ToString()));
+            }
+        }
+
+        var applied = !renameParams.Preview;
+        if (applied)
+        {
+            foreach (var change in changes)
+            {
+                await File.WriteAllTextAsync(change.FilePath, change.NewText, ct)
+                    .ConfigureAwait(false);
+            }
+
+            _solution = newSolution;
+        }
+
+        var response = new RenameResponse(changes, applied);
+        return JsonSerializer.SerializeToNode(response, RoslynJsonContext.Default.RenameResponse);
+    }
+
+    private async Task<JsonNode?> HandleFileChanged(JsonNode? @params, CancellationToken ct)
+    {
+        EnsureSolutionLoaded();
+
+        var fileChangedParams = JsonSerializer.Deserialize(
+            @params, RoslynJsonContext.Default.FileChangedParams)
+            ?? throw new ArgumentException("Missing file changed parameters.");
+
+        var filePath = fileChangedParams.FilePath;
+        var documentIds = _solution!.Projects
+            .SelectMany(p => p.Documents)
+            .Where(d => string.Equals(d.FilePath, filePath, StringComparison.OrdinalIgnoreCase))
+            .Select(d => d.Id)
+            .ToList();
+
+        if (documentIds.Count == 0)
+        {
+            throw new ArgumentException($"Document not found: {filePath}");
+        }
+
+        var fileContent = await File.ReadAllTextAsync(filePath, ct).ConfigureAwait(false);
+        var newText = SourceText.From(fileContent);
+
+        foreach (var documentId in documentIds)
+        {
+            _solution = _solution.WithDocumentText(documentId, newText);
+        }
+
         return JsonSerializer.SerializeToNode(true, RoslynJsonContext.Default.Boolean);
     }
 

@@ -22,3 +22,50 @@
 - `DisableMSBuildAssemblyCopyCheck` is needed because `Microsoft.CodeAnalysis.Workspaces.MSBuild` brings transitive MSBuild packages that conflict with MSBuild.Locator's runtime loading
 - Phase 2 should add remaining methods (getDiagnostics, semanticSearch, getAst, applyRefactoring, fileChanged)
 - Tests are not yet written for the Roslyn integration (would need integration test project)
+
+## Phase 2: Roslyn Diagnostics, Semantic Search, AST Inspection - Completed
+
+### What was done
+- **Bug fix**: Converted `WorkspaceHost` from static class to sealed instance class — the `MSBuildWorkspace` and `Solution` are now stored as fields, fixing a bug where workspace state was lost between calls (local variable passed by value)
+- Added `GetDiagnostics` handler: compiles projects, filters to Error/Warning severity, returns `DiagnosticsResponse`
+- Added `SemanticSearch` handler: uses `compilation.GetSymbolsWithName()` + `SymbolFinder.FindReferencesAsync()` to find all references to a symbol
+- Added `GetAst` handler: walks syntax tree building `AstNode` DTOs for declaration nodes only, respecting `MaxDepth`
+- Added request DTOs: `GetDiagnosticsParams`, `SemanticSearchParams`, `GetAstParams`
+- Added response DTOs: `DiagnosticResult`, `DiagnosticsResponse`, `SymbolReference`, `SemanticSearchResponse`, `AstNode`, `AstResponse`
+- Updated `RoslynJsonContext` with all new types for source-gen serialization
+- Added `GetDiagnosticsAsync`, `SemanticSearchAsync`, `GetAstAsync` to `IRoslynWorkspace`
+- Implemented proxy methods in `RoslynWorkspaceProxy` following existing serialize-send-deserialize pattern
+- Used method overloads (no optional parameters) per C# standards
+
+### Build status
+- Solution builds with 0 warnings, 0 errors
+
+### Notes for next person
+- `ProjectInfo` is ambiguous between `Microsoft.CodeAnalysis.ProjectInfo` and `Piston.Roslyn.Messages.ProjectInfo` in the Worker — resolved with `Messages.ProjectInfo` qualifier
+- Phase 3 could add: `applyRefactoring` and `fileChanged` methods
+- Integration tests would require a test .csproj/.sln to load into MSBuildWorkspace
+- The `GetAst` handler only includes declaration nodes (classes, methods, properties, etc.) — not statements or expressions
+
+## Phase 3: Roslyn Rename Refactoring & File Change Sync - Completed
+
+### What was done
+- Added `roslyn/rename` method constant to `RoslynMethods`
+- Added `RenameParams`, `FileChangedParams` request DTOs
+- Added `FileChange`, `RenameResponse` response DTOs
+- Updated `RoslynJsonContext` with all new types for source-gen serialization
+- Added `HandleRename` to `WorkspaceHost`: finds symbol at position via `SymbolFinder.FindSymbolAtPositionAsync`, renames via `Renamer.RenameSymbolAsync`, computes diffs, optionally writes to disk
+- Added `HandleFileChanged` to `WorkspaceHost`: reads file from disk, updates solution with `WithDocumentText`
+- Added `RenameAsync` and `NotifyFileChangedAsync` to `IRoslynWorkspace` interface
+- Implemented proxy methods in `RoslynWorkspaceProxy`
+- Created `Piston.Roslyn.Tests` project with JSON serialization roundtrip tests (7 tests, all passing)
+- Added `InternalsVisibleTo` for test project
+
+### Build status
+- Solution builds with 0 warnings, 0 errors
+- All 7 new tests pass
+
+### Notes for next person
+- Rename supports `Preview` mode (returns changes without applying) and apply mode (writes to disk + updates in-memory solution)
+- `FileChanged` handler supports documents that appear in multiple projects (linked files)
+- Line/Column in `RenameParams` are 1-based (converted to 0-based internally)
+- Integration tests for rename would require loading a real solution with MSBuildWorkspace

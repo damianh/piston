@@ -27,4 +27,9 @@ namespace Piston.Roslyn;
 [JsonSerializable(typeof(AstNode))]
 [JsonSerializable(typeof(AstResponse))]
 [JsonSerializable(typeof(List<AstNode>))]
+[JsonSerializable(typeof(RenameParams))]
+[JsonSerializable(typeof(FileChangedParams))]
+[JsonSerializable(typeof(FileChange))]
+[JsonSerializable(typeof(RenameResponse))]
+[JsonSerializable(typeof(List<FileChange>))]
 internal sealed partial class RoslynJsonContext : JsonSerializerContext;
