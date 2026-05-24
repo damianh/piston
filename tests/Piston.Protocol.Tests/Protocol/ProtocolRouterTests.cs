@@ -1,5 +1,5 @@
 using System.Text.Json.Nodes;
-using Piston.Controller.Protocol;
+using Piston.Cli.Protocol;
 using Piston.Engine;
 using Piston.Engine.Models;
 using Piston.Protocol.JsonRpc;
@@ -49,7 +49,7 @@ public sealed class ProtocolRouterTests
         var pipeName = UniquePipeName();
         var engine   = new StubEngine();
         var listener = new NamedPipeListener(pipeName);
-        var router   = new Piston.Controller.Protocol.ProtocolRouter(engine, listener);
+        var router   = new ProtocolRouter(engine, listener);
         var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         var routerTask = Task.Run(() => router.RunAsync(cts.Token), cts.Token);
@@ -79,7 +79,7 @@ public sealed class ProtocolRouterTests
         var pipeName = UniquePipeName();
         var engine   = new StubEngine();
         var listener = new NamedPipeListener(pipeName);
-        var router   = new Piston.Controller.Protocol.ProtocolRouter(engine, listener);
+        var router   = new ProtocolRouter(engine, listener);
         var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         _ = Task.Run(() => router.RunAsync(cts.Token), cts.Token);
@@ -115,7 +115,7 @@ public sealed class ProtocolRouterTests
         var pipeName = UniquePipeName();
         var engine   = new StubEngine();
         var listener = new NamedPipeListener(pipeName);
-        var router   = new Piston.Controller.Protocol.ProtocolRouter(engine, listener);
+        var router   = new ProtocolRouter(engine, listener);
         var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         _ = Task.Run(() => router.RunAsync(cts.Token), cts.Token);
@@ -148,7 +148,7 @@ public sealed class ProtocolRouterTests
         var pipeName = UniquePipeName();
         var engine   = new StubEngine();
         var listener = new NamedPipeListener(pipeName);
-        var router   = new Piston.Controller.Protocol.ProtocolRouter(engine, listener);
+        var router   = new ProtocolRouter(engine, listener);
         var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         _ = Task.Run(() => router.RunAsync(cts.Token), cts.Token);
@@ -191,7 +191,7 @@ public sealed class ProtocolRouterTests
         var pipeName = UniquePipeName();
         var engine   = new StubEngine();
         var listener = new NamedPipeListener(pipeName);
-        var router   = new Piston.Controller.Protocol.ProtocolRouter(engine, listener);
+        var router   = new ProtocolRouter(engine, listener);
         var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         _ = Task.Run(() => router.RunAsync(cts.Token), cts.Token);
@@ -237,7 +237,7 @@ public sealed class ProtocolRouterTests
         var pipeName = UniquePipeName();
         var engine   = new StubEngine();
         var listener = new NamedPipeListener(pipeName);
-        var router   = new Piston.Controller.Protocol.ProtocolRouter(engine, listener);
+        var router   = new ProtocolRouter(engine, listener);
         var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         _ = Task.Run(() => router.RunAsync(cts.Token), cts.Token);

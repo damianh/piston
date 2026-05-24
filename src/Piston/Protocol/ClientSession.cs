@@ -1,26 +1,17 @@
 using System.Text.Json.Nodes;
 using Piston.Protocol.JsonRpc;
 
-namespace Piston.Controller.Protocol;
+namespace Piston.Cli.Protocol;
 
 /// <summary>
 /// Represents a single connected client on the server side.
 /// Runs a read loop that dispatches incoming JSON-RPC requests and writes responses back.
 /// </summary>
-internal sealed class ClientSession
+internal sealed class ClientSession(Stream stream, string sessionId, ICommandDispatcher dispatcher)
 {
-    private readonly Stream _stream;
-    private readonly ICommandDispatcher _dispatcher;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
-    public string SessionId { get; }
-
-    public ClientSession(Stream stream, string sessionId, ICommandDispatcher dispatcher)
-    {
-        _stream     = stream;
-        SessionId   = sessionId;
-        _dispatcher = dispatcher;
-    }
+    public string SessionId { get; } = sessionId;
 
     /// <summary>
     /// Runs the receive/dispatch loop. Returns when the stream closes or an error occurs.
@@ -34,7 +25,7 @@ internal sealed class ClientSession
                 ReadOnlyMemory<byte>? raw;
                 try
                 {
-                    raw = await MessageFramer.ReadMessageAsync(_stream, ct).ConfigureAwait(false);
+                    raw = await MessageFramer.ReadMessageAsync(stream, ct).ConfigureAwait(false);
                 }
                 catch (OperationCanceledException)
                 {
@@ -47,14 +38,16 @@ internal sealed class ClientSession
                 }
 
                 if (raw is null)
+                {
                     break; // EOF — client disconnected
+                }
 
                 await HandleMessageAsync(raw.Value, ct).ConfigureAwait(false);
             }
         }
         finally
         {
-            _stream.Dispose();
+            await stream.DisposeAsync();
         }
     }
 
@@ -67,7 +60,7 @@ internal sealed class ClientSession
         await _writeLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await MessageFramer.WriteMessageAsync(_stream, bytes, ct).ConfigureAwait(false);
+            await MessageFramer.WriteMessageAsync(stream, bytes, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -101,7 +94,7 @@ internal sealed class ClientSession
         JsonNode? result;
         try
         {
-            result = await _dispatcher.HandleCommandAsync(request.Method, request.Params, ct)
+            result = await dispatcher.HandleCommandAsync(request.Method, request.Params, ct)
                 .ConfigureAwait(false);
         }
         catch (JsonRpcException rpcEx)
@@ -124,7 +117,7 @@ internal sealed class ClientSession
         await _writeLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await MessageFramer.WriteMessageAsync(_stream, responseBytes, ct).ConfigureAwait(false);
+            await MessageFramer.WriteMessageAsync(stream, responseBytes, ct).ConfigureAwait(false);
         }
         finally
         {
@@ -141,7 +134,7 @@ internal sealed class ClientSession
         await _writeLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await MessageFramer.WriteMessageAsync(_stream, bytes, ct).ConfigureAwait(false);
+            await MessageFramer.WriteMessageAsync(stream, bytes, ct).ConfigureAwait(false);
         }
         finally
         {

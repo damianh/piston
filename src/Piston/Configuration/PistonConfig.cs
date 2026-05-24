@@ -1,4 +1,4 @@
-namespace Piston.Controller.Configuration;
+namespace Piston.Cli.Configuration;
 
 /// <summary>
 /// Shape of the optional <c>.piston.json</c> config file.
@@ -41,10 +41,10 @@ internal sealed class PistonConfig
     public string? PipeName { get; set; }
 
     /// <summary>
-    /// When true, defaults to headless mode (no TUI).
-    /// Corresponds to the <c>--headless</c> CLI flag.
+    /// When true, use stdin/stdout for JSON-RPC transport instead of a named pipe.
+    /// Corresponds to the <c>--stdio</c> CLI flag on the <c>daemon</c> subcommand.
     /// </summary>
-    public bool? Headless { get; set; }
+    public bool? Stdio { get; set; }
 
     /// <summary>
     /// Port for the MCP server. When set, enables MCP alongside the named pipe listener.

@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
-using Piston.Controller;
-using Piston.Controller.Protocol;
+using Piston.Cli;
+using Piston.Cli.Protocol;
 using Piston.Engine;
 using Piston.Engine.Models;
 using Piston.Protocol.JsonRpc;
@@ -15,12 +15,12 @@ public sealed class RemoteEngineClientTests
     private static string UniquePipeName() =>
         $"piston-remote-{Guid.NewGuid():N}";
 
-    private static (NamedPipeListener listener, Piston.Controller.Protocol.ProtocolRouter router, StubEngine engine)
+    private static (NamedPipeListener listener, ProtocolRouter router, StubEngine engine)
         CreateServer(string pipeName)
     {
         var engine   = new StubEngine();
         var listener = new NamedPipeListener(pipeName);
-        var router   = new Piston.Controller.Protocol.ProtocolRouter(engine, listener);
+        var router   = new ProtocolRouter(engine, listener);
         return (listener, router, engine);
     }
 

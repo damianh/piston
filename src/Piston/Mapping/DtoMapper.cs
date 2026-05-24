@@ -3,7 +3,7 @@ using Piston.Engine.Models;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.Messages;
 
-namespace Piston.Controller.Mapping;
+namespace Piston.Cli.Mapping;
 
 internal static class DtoMapper
 {

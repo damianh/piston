@@ -17,4 +17,15 @@ public static class McpServiceRegistration
 
         return services;
     }
+
+    public static IServiceCollection AddPistonMcp(this IServiceCollection services, IRoslynWorkspace workspace)
+    {
+        services.AddSingleton(workspace);
+
+        services.AddMcpServer()
+            .WithHttpTransport()
+            .WithToolsFromAssembly(typeof(McpServiceRegistration).Assembly);
+
+        return services;
+    }
 }

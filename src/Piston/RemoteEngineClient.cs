@@ -5,16 +5,15 @@ using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
 
-namespace Piston.Controller;
+namespace Piston.Cli;
 
 /// <summary>
 /// <see cref="IEngineClient"/> implementation that communicates with a headless controller
 /// over a named pipe via JSON-RPC 2.0.
 /// Automatically reconnects with exponential backoff when the connection is lost.
 /// </summary>
-internal sealed class RemoteEngineClient : IEngineClient
+internal sealed class RemoteEngineClient(string pipeName) : IEngineClient
 {
-    private readonly string _pipeName;
     private NamedPipeClientTransport? _transport;
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonRpcResponse>> _pending = new();
     private int _requestCounter;
@@ -52,15 +51,10 @@ internal sealed class RemoteEngineClient : IEngineClient
         }
     }
 
-    public RemoteEngineClient(string pipeName)
-    {
-        _pipeName = pipeName;
-    }
-
     /// <summary>Connects to the headless controller and starts the background receive loop.</summary>
     public async Task ConnectAsync(CancellationToken ct)
     {
-        _transport   = new NamedPipeClientTransport(_pipeName);
+        _transport   = new NamedPipeClientTransport(pipeName);
         await _transport.ConnectAsync(ct).ConfigureAwait(false);
 
         SetConnectionState(ConnectionState.Connected);
@@ -83,6 +77,9 @@ internal sealed class RemoteEngineClient : IEngineClient
 
     public void Stop() =>
         _ = SendCommandAsync(ProtocolMethods.EngineStop, null);
+
+    public Task StopAsync(CancellationToken ct) =>
+        SendCommandAsync(ProtocolMethods.EngineStop, null);
 
     public Task SetFilterAsync(string? filter) =>
         SendCommandAsync(ProtocolMethods.EngineSetFilter,
@@ -233,7 +230,7 @@ internal sealed class RemoteEngineClient : IEngineClient
                 using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 connectCts.CancelAfter(TimeSpan.FromSeconds(5));
 
-                _transport = new NamedPipeClientTransport(_pipeName);
+                _transport = new NamedPipeClientTransport(pipeName);
                 await _transport.ConnectAsync(connectCts.Token).ConfigureAwait(false);
 
                 SetConnectionState(ConnectionState.Connected);

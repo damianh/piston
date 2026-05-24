@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "Piston": {
+      "commandName": "Project",
+      "commandLineArgs": "daemon",
+      "workingDirectory": "$(SolutionDir)"
+    }
+  }
+}

@@ -1,32 +1,24 @@
 using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
-using Piston.Controller.Mapping;
 using Piston.Engine;
 using Piston.Engine.Models;
+using Piston.Cli.Mapping;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
 
-namespace Piston.Controller.Protocol;
+namespace Piston.Cli.Protocol;
 
 /// <summary>
 /// Accepts named pipe client connections, manages <see cref="ClientSession"/> instances,
 /// and broadcasts engine state notifications to all connected clients.
 /// </summary>
-internal sealed class ProtocolRouter : IAsyncDisposable
+internal sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener) : IAsyncDisposable
 {
-    private readonly IEngine _engine;
-    private readonly NamedPipeListener _listener;
     private readonly ConcurrentDictionary<string, ClientSession> _sessions = new();
     private int _sessionCounter;
 
     public int ClientCount => _sessions.Count;
-
-    public ProtocolRouter(IEngine engine, NamedPipeListener listener)
-    {
-        _engine   = engine;
-        _listener = listener;
-    }
 
     /// <summary>
     /// Starts the accept loop and subscribes to engine state changes.
@@ -34,13 +26,13 @@ internal sealed class ProtocolRouter : IAsyncDisposable
     /// </summary>
     public async Task RunAsync(CancellationToken ct)
     {
-        _engine.State.StateChanged += OnEngineStateChanged;
+        engine.State.StateChanged += OnEngineStateChanged;
         try
         {
-            await foreach (var stream in _listener.AcceptClientsAsync(ct).ConfigureAwait(false))
+            await foreach (var stream in listener.AcceptClientsAsync(ct).ConfigureAwait(false))
             {
                 var sessionId  = $"session-{Interlocked.Increment(ref _sessionCounter)}";
-                var dispatcher = new EngineCommandDispatcher(_engine);
+                var dispatcher = new EngineCommandDispatcher(engine);
                 var session    = new ClientSession(stream, sessionId, dispatcher);
 
                 _sessions[sessionId] = session;
@@ -73,13 +65,13 @@ internal sealed class ProtocolRouter : IAsyncDisposable
         }
         finally
         {
-            _engine.State.StateChanged -= OnEngineStateChanged;
+            engine.State.StateChanged -= OnEngineStateChanged;
         }
     }
 
     private void OnEngineStateChanged()
     {
-        var stateSnapshot = _engine.State.ToSnapshot();
+        var stateSnapshot = engine.State.ToSnapshot();
 
         BroadcastNotification(ToNotification(ProtocolMethods.EngineStateSnapshot, stateSnapshot));
 
@@ -87,7 +79,7 @@ internal sealed class ProtocolRouter : IAsyncDisposable
             ProtocolMethods.EnginePhaseChanged,
             new PhaseChangedNotification(stateSnapshot.Phase, null)));
 
-        if (_engine.State.Phase == PistonPhase.Testing)
+        if (engine.State.Phase == PistonPhase.Testing)
         {
             BroadcastNotification(ToNotification(
                 ProtocolMethods.TestsProgress,
@@ -97,7 +89,7 @@ internal sealed class ProtocolRouter : IAsyncDisposable
                     stateSnapshot.TotalExpectedTests)));
         }
 
-        if (_engine.State.Phase == PistonPhase.Error && stateSnapshot.LastBuild is not null)
+        if (engine.State.Phase == PistonPhase.Error && stateSnapshot.LastBuild is not null)
         {
             BroadcastNotification(ToNotification(
                 ProtocolMethods.BuildError,
@@ -120,7 +112,7 @@ internal sealed class ProtocolRouter : IAsyncDisposable
 
     private JsonRpcNotification BuildStateSnapshot()
     {
-        var snapshot = _engine.State.ToSnapshot();
+        var snapshot = engine.State.ToSnapshot();
         return ToNotification(ProtocolMethods.EngineStateSnapshot, snapshot);
     }
 
@@ -133,7 +125,7 @@ internal sealed class ProtocolRouter : IAsyncDisposable
 
     public ValueTask DisposeAsync()
     {
-        _engine.State.StateChanged -= OnEngineStateChanged;
-        return _listener.DisposeAsync();
+        engine.State.StateChanged -= OnEngineStateChanged;
+        return listener.DisposeAsync();
     }
 }

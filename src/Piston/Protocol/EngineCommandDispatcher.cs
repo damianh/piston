@@ -4,21 +4,14 @@ using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 
-namespace Piston.Controller.Protocol;
+namespace Piston.Cli.Protocol;
 
 /// <summary>
 /// Bridges JSON-RPC command dispatch to <see cref="IEngine"/> method calls.
 /// </summary>
-internal sealed class EngineCommandDispatcher : ICommandDispatcher
+internal sealed class EngineCommandDispatcher(IEngine engine) : ICommandDispatcher
 {
     private static readonly char[] ForbiddenFilterChars = ['"', '&', '|', ';', '`', '$'];
-
-    private readonly IEngine _engine;
-
-    public EngineCommandDispatcher(IEngine engine)
-    {
-        _engine = engine;
-    }
 
     public async Task<JsonNode?> HandleCommandAsync(string method, JsonNode? @params, CancellationToken ct)
     {
@@ -32,11 +25,11 @@ internal sealed class EngineCommandDispatcher : ICommandDispatcher
                     "engine/start not available in headless mode — solution is configured at launch.");
 
             case ProtocolMethods.EngineForceRun:
-                await _engine.ForceRunAsync().ConfigureAwait(false);
+                await engine.ForceRunAsync().ConfigureAwait(false);
                 return null;
 
             case ProtocolMethods.EngineStop:
-                _engine.Stop();
+                engine.Stop();
                 return null;
 
             case ProtocolMethods.EngineSetFilter:
@@ -44,12 +37,12 @@ internal sealed class EngineCommandDispatcher : ICommandDispatcher
                 var cmd = JsonRpcSerializer.DeserializeParams<SetFilterCommand>(@params);
                 var filter = cmd?.Filter;
                 ValidateFilter(filter);
-                _engine.SetFilter(filter);
+                engine.SetFilter(filter);
                 return null;
             }
 
             case ProtocolMethods.EngineClearResults:
-                _engine.ClearResults();
+                engine.ClearResults();
                 return null;
 
             case ProtocolMethods.CoverageGetForFile:

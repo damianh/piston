@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
 
-namespace Piston.Controller.Protocol;
+namespace Piston.Cli.Protocol;
 
 /// <summary>
 /// Abstracts dispatching of JSON-RPC commands to the engine.
