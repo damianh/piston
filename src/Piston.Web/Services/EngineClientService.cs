@@ -131,7 +131,9 @@ public sealed class EngineClientService : IAsyncDisposable
         }
     }
 
-    public async Task SendCommandAsync(string method, object? @params = null)
+    public Task SendCommandAsync(string method) => SendCommandAsync(method, (object?)null);
+
+    public async Task SendCommandAsync(string method, object? @params)
     {
         if (_webSocket?.State != WebSocketState.Open)
             return;

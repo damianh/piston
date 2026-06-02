@@ -323,9 +323,6 @@ static async Task RunDaemonAsync(
     // Fallback to index.html for Blazor SPA client-side routing
     webApp.MapFallbackToFile("index.html");
 
-    // Register cancellation to stop the web server when Ctrl+C is pressed
-    cts.Token.Register(() => webApp.StopAsync().GetAwaiter().GetResult());
-
     Console.Error.WriteLine($"[piston] Web server (WebSocket) listening on port: {webPort}");
 
     if (mcpPort is not null)
@@ -357,6 +354,9 @@ static async Task RunDaemonAsync(
         }
         catch (OperationCanceledException) { }
     }
+
+    await webApp.StopAsync();
+    await webApp.DisposeAsync();
 
     Console.Error.WriteLine("[piston] Shutting down.");
     engine.Stop();
