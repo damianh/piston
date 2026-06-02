@@ -1,0 +1,45 @@
+/* Piston Web UI — minimal custom styles (Tailwind handles most styling) */
+
+html, body {
+    height: 100%;
+    overflow: hidden;
+}
+
+/* Scrollbar styling for dark theme */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: #111827;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #374151;
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: #4b5563;
+}
+
+/* Blazor error boundary */
+.blazor-error-boundary {
+    background: #7f1d1d;
+    padding: 0.75rem 1rem;
+    color: white;
+    font-size: 0.875rem;
+}
+
+.blazor-error-boundary::after {
+    content: "An error has occurred."
+}
+
+/* Test status colors */
+.status-passed  { color: #4ade80; }
+.status-failed  { color: #f87171; }
+.status-running { color: #67e8f9; }
+.status-skipped { color: #fbbf24; }
+.status-notrun  { color: #6b7280; }
+.status-stale   { opacity: 0.5; }

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Piston</title>
+    <base href="/" />
+    <link rel="preload" id="webassembly" />
+    <link rel="stylesheet" href="css/app.css" />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <link href="Piston.Web.styles.css" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+        }
+    </script>
+    <script type="importmap"></script>
+</head>
+
+<body class="bg-gray-950 text-gray-100 font-mono text-sm h-screen overflow-hidden">
+    <div id="app">
+        <div class="flex items-center justify-center h-screen text-gray-400">
+            <div class="text-center">
+                <div class="text-2xl mb-2">⬡ Piston</div>
+                <div class="text-sm">Loading...</div>
+            </div>
+        </div>
+    </div>
+
+    <div id="blazor-error-ui" class="hidden fixed bottom-0 left-0 right-0 bg-red-900 text-white p-3 text-sm">
+        An unhandled error has occurred.
+        <a href="." class="underline ml-2">Reload</a>
+        <span class="dismiss cursor-pointer ml-2">✕</span>
+    </div>
+    <script src="_framework/blazor.webassembly#[.{fingerprint}].js"></script>
+</body>
+
+</html>

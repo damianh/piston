@@ -3,7 +3,7 @@
     <Project Path="src/Piston.Protocol/Piston.Protocol.csproj" />
     <Project Path="src/Piston.Engine/Piston.Engine.csproj" />
     <Project Path="src/Piston/Piston.csproj" />
-    <Project Path="src/Piston.Tui/Piston.Tui.csproj" />
+    <Project Path="src/Piston.Web/Piston.Web.csproj" />
     <Project Path="src/Piston.Mcp/Piston.Mcp.csproj" />
     <Project Path="src/Piston.Roslyn/Piston.Roslyn.csproj" />
     <Project Path="src/Piston.Roslyn.Worker/Piston.Roslyn.Worker.csproj" />

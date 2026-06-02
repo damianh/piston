@@ -1,0 +1,80 @@
+@using Piston.Protocol.Dtos
+
+<div class="flex items-center gap-2 px-4 py-1.5 bg-gray-900 border-b border-gray-800 text-xs select-none">
+    <!-- Force run -->
+    <button class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+            title="Force run (R)" @onclick="OnForceRun">
+        ▶ Run
+    </button>
+
+    <!-- Clear results -->
+    <button class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+            title="Clear results (C)" @onclick="OnClearResults">
+        ✕ Clear
+    </button>
+
+    <!-- Expand/collapse -->
+    <button class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+            title="Toggle expand/collapse (E)" @onclick="OnToggleExpand">
+        @(IsExpanded ? "⊟ Collapse" : "⊞ Expand")
+    </button>
+
+    <!-- Filter input -->
+    <div class="flex items-center gap-1 ml-2">
+        <span class="text-gray-600">filter:</span>
+        <input type="text"
+               class="bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-gray-200 text-xs w-48 focus:outline-none focus:border-blue-500"
+               placeholder="regex or substring..."
+               value="@Filter"
+               @oninput="HandleFilterInput"
+               @onkeydown="HandleFilterKeyDown" />
+        @if (!string.IsNullOrEmpty(Filter))
+        {
+            <button class="text-gray-600 hover:text-gray-400" @onclick="ClearFilter">✕</button>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public bool IsExpanded { get; set; } = true;
+    [Parameter] public string? Filter { get; set; }
+    [Parameter] public EventCallback OnForceRun { get; set; }
+    [Parameter] public EventCallback OnClearResults { get; set; }
+    [Parameter] public EventCallback OnToggleExpand { get; set; }
+    [Parameter] public EventCallback<string?> OnFilterChanged { get; set; }
+
+    private System.Timers.Timer? _debounceTimer;
+
+    private void HandleFilterInput(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString();
+        _debounceTimer?.Dispose();
+        _debounceTimer = new System.Timers.Timer(300);
+        _debounceTimer.Elapsed += async (_, _) =>
+        {
+            _debounceTimer?.Dispose();
+            _debounceTimer = null;
+            await OnFilterChanged.InvokeAsync(string.IsNullOrEmpty(value) ? null : value);
+        };
+        _debounceTimer.AutoReset = false;
+        _debounceTimer.Start();
+    }
+
+    private void HandleFilterKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+            ClearFilter();
+    }
+
+    private void ClearFilter()
+    {
+        _debounceTimer?.Dispose();
+        _debounceTimer = null;
+        OnFilterChanged.InvokeAsync(null);
+    }
+
+    public void Dispose()
+    {
+        _debounceTimer?.Dispose();
+    }
+}

@@ -1,0 +1,234 @@
+﻿@page "/"
+@inject EngineClientService Client
+@inject NavigationManager Nav
+@implements IDisposable
+
+<ConnectionOverlay IsConnected="@Client.IsConnected" IsConnecting="@Client.IsConnecting" />
+
+<div class="flex flex-col h-screen" @onkeydown="HandleKeyDown" tabindex="0" @ref="_rootElement">
+    <!-- Header bar -->
+    <HeaderBar Snapshot="@_snapshot" />
+
+    <!-- Toolbar -->
+    <Toolbar IsExpanded="@_viewState.TreeExpanded"
+             Filter="@_filter"
+             OnForceRun="ForceRun"
+             OnClearResults="ClearResults"
+             OnToggleExpand="ToggleExpand"
+             OnFilterChanged="SetFilter" />
+
+    <!-- Main content area -->
+    <div class="flex flex-1 overflow-hidden">
+        <!-- Test tree (left panel) -->
+        <div class="w-1/2 border-r border-gray-800 overflow-hidden flex flex-col">
+            <TestTree Nodes="@_treeNodes"
+                      SelectedFqn="@_viewState.SelectedTestFqn"
+                      PinnedFqns="@_viewState.PinnedTestFqns"
+                      OnSelectTest="SelectTest"
+                      OnTogglePin="TogglePin" />
+        </div>
+
+        <!-- Detail panel (right panel) -->
+        <div class="w-1/2 overflow-hidden flex flex-col">
+            @if (_snapshot?.Phase == PistonPhaseDto.Error && _snapshot.LastBuild is not null)
+            {
+                <BuildErrors Build="@_snapshot.LastBuild" />
+            }
+            else
+            {
+                <TestDetail Test="@_selectedTest" />
+            }
+        </div>
+    </div>
+
+    <!-- Status bar -->
+    <StatusBar Grouping="@_viewState.Grouping"
+               ShowFailed="@_viewState.ShowFailed"
+               ShowPassed="@_viewState.ShowPassed"
+               ShowSkipped="@_viewState.ShowSkipped"
+               ShowNotRun="@_viewState.ShowNotRun"
+               Filter="@_filter"
+               FailureCount="@_failureCount"
+               OnCycleGrouping="CycleGrouping"
+               OnToggleFailed="() => ToggleStatus(s => s.ShowFailed = !s.ShowFailed)"
+               OnTogglePassed="() => ToggleStatus(s => s.ShowPassed = !s.ShowPassed)"
+               OnToggleSkipped="() => ToggleStatus(s => s.ShowSkipped = !s.ShowSkipped)"
+               OnToggleNotRun="() => ToggleStatus(s => s.ShowNotRun = !s.ShowNotRun)"
+               OnPrevFailure="NavigatePrevFailure"
+               OnNextFailure="NavigateNextFailure" />
+</div>
+
+@code {
+    private readonly ViewState _viewState = new();
+    private StateSnapshotNotification? _snapshot;
+    private List<TestNode> _treeNodes = [];
+    private TestResultDto? _selectedTest;
+    private string? _filter;
+    private int _failureCount;
+    private ElementReference _rootElement;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Client.StateChanged += OnStateChanged;
+        Client.ConnectionStateChanged += OnConnectionStateChanged;
+
+        var wsUrl = BuildWsUrl();
+        await Client.StartAsync(wsUrl);
+    }
+
+    private string BuildWsUrl()
+    {
+        // Derive WebSocket URL from the page's base URI so it works with any --web-port value
+        var baseUri = new Uri(Nav.BaseUri);
+        var scheme = baseUri.Scheme == "https" ? "wss" : "ws";
+        return $"{scheme}://{baseUri.Host}:{baseUri.Port}/ws";
+    }
+
+    private void OnStateChanged(StateSnapshotNotification snapshot)
+    {
+        _snapshot = snapshot;
+        RebuildTree();
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnConnectionStateChanged()
+    {
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void RebuildTree()
+    {
+        if (_snapshot is null)
+        {
+            _treeNodes = [];
+            _failureCount = 0;
+            return;
+        }
+
+        _treeNodes = TestTreeBuilder.Build(
+            _snapshot.Suites,
+            _filter,
+            _viewState,
+            _snapshot.LastFileChangeTime);
+
+        _failureCount = _snapshot.Suites
+            .SelectMany(s => s.Tests)
+            .Count(t => t.Status == TestStatusDto.Failed);
+
+        // Update selected test if it changed
+        if (_viewState.SelectedTestFqn is not null)
+        {
+            _selectedTest = _snapshot.Suites
+                .SelectMany(s => s.Tests)
+                .FirstOrDefault(t => t.FullyQualifiedName == _viewState.SelectedTestFqn);
+        }
+    }
+
+    private void SelectTest(TestResultDto test)
+    {
+        _viewState.SelectedTestFqn = test.FullyQualifiedName;
+        _selectedTest = test;
+        StateHasChanged();
+    }
+
+    private void TogglePin(string fqn)
+    {
+        if (!_viewState.PinnedTestFqns.Remove(fqn))
+            _viewState.PinnedTestFqns.Add(fqn);
+        RebuildTree();
+        StateHasChanged();
+    }
+
+    private async Task ForceRun() => await Client.ForceRunAsync();
+    private async Task ClearResults() => await Client.ClearResultsAsync();
+
+    private void ToggleExpand()
+    {
+        _viewState.TreeExpanded = !_viewState.TreeExpanded;
+        SetExpandedRecursive(_treeNodes, _viewState.TreeExpanded);
+        StateHasChanged();
+    }
+
+    private static void SetExpandedRecursive(List<TestNode> nodes, bool expanded)
+    {
+        foreach (var node in nodes)
+        {
+            node.IsExpanded = expanded;
+            SetExpandedRecursive(node.Children, expanded);
+        }
+    }
+
+    private async Task SetFilter(string? filter)
+    {
+        _filter = filter;
+        RebuildTree();
+        await Client.SetFilterAsync(filter);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void CycleGrouping()
+    {
+        _viewState.Grouping = _viewState.Grouping switch
+        {
+            GroupingMode.ProjectNamespaceClass => GroupingMode.ByStatus,
+            GroupingMode.ByStatus              => GroupingMode.Flat,
+            _                                  => GroupingMode.ProjectNamespaceClass,
+        };
+        RebuildTree();
+        StateHasChanged();
+    }
+
+    private void ToggleStatus(Action<ViewState> toggle)
+    {
+        toggle(_viewState);
+        RebuildTree();
+        StateHasChanged();
+    }
+
+    private void NavigatePrevFailure()
+    {
+        if (_failureCount == 0) return;
+        var failures = GetFailedTests();
+        if (failures.Count == 0) return;
+        _viewState.CurrentFailureIndex = (_viewState.CurrentFailureIndex - 1 + failures.Count) % failures.Count;
+        SelectTest(failures[_viewState.CurrentFailureIndex]);
+    }
+
+    private void NavigateNextFailure()
+    {
+        if (_failureCount == 0) return;
+        var failures = GetFailedTests();
+        if (failures.Count == 0) return;
+        _viewState.CurrentFailureIndex = (_viewState.CurrentFailureIndex + 1) % failures.Count;
+        SelectTest(failures[_viewState.CurrentFailureIndex]);
+    }
+
+    private List<TestResultDto> GetFailedTests() =>
+        _snapshot?.Suites
+            .SelectMany(s => s.Tests)
+            .Where(t => t.Status == TestStatusDto.Failed)
+            .ToList() ?? [];
+
+    private async Task HandleKeyDown(KeyboardEventArgs e)
+    {
+        switch (e.Key.ToUpperInvariant())
+        {
+            case "R": await ForceRun(); break;
+            case "C": await ClearResults(); break;
+            case "G": CycleGrouping(); break;
+            case "E": ToggleExpand(); break;
+            case "1": ToggleStatus(s => s.ShowFailed  = !s.ShowFailed);  break;
+            case "2": ToggleStatus(s => s.ShowPassed  = !s.ShowPassed);  break;
+            case "3": ToggleStatus(s => s.ShowSkipped = !s.ShowSkipped); break;
+            case "4": ToggleStatus(s => s.ShowNotRun  = !s.ShowNotRun);  break;
+            case "[": NavigatePrevFailure(); break;
+            case "]": NavigateNextFailure(); break;
+        }
+    }
+
+    public void Dispose()
+    {
+        Client.StateChanged -= OnStateChanged;
+        Client.ConnectionStateChanged -= OnConnectionStateChanged;
+    }
+}

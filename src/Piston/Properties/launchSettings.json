@@ -3,7 +3,10 @@
     "Piston": {
       "commandName": "Project",
       "commandLineArgs": "daemon",
-      "workingDirectory": "$(SolutionDir)"
+      "workingDirectory": "$(SolutionDir)",
+      "launchBrowser": true,
+      "launchUrl": "http://localhost:5199",
+      "applicationUrl": "http://localhost:5199"
     }
   }
 }

@@ -1,0 +1,33 @@
+@using Piston.Web.Models
+@using Piston.Protocol.Dtos
+
+<div class="flex flex-col h-full overflow-hidden">
+    @if (Nodes.Count == 0)
+    {
+        <div class="flex items-center justify-center h-full text-gray-600 text-xs">
+            No tests
+        </div>
+    }
+    else
+    {
+        <div class="overflow-y-auto flex-1">
+            @foreach (var node in Nodes)
+            {
+                <TestTreeNode Node="node"
+                              Depth="0"
+                              SelectedFqn="@SelectedFqn"
+                              PinnedFqns="@PinnedFqns"
+                              OnSelectTest="@OnSelectTest"
+                              OnTogglePin="@OnTogglePin" />
+            }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public List<TestNode> Nodes { get; set; } = [];
+    [Parameter] public string? SelectedFqn { get; set; }
+    [Parameter] public HashSet<string> PinnedFqns { get; set; } = [];
+    [Parameter] public EventCallback<TestResultDto> OnSelectTest { get; set; }
+    [Parameter] public EventCallback<string> OnTogglePin { get; set; }
+}

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net.WebSockets;
 using System.Text.Json.Nodes;
 using Piston.Engine;
 using Piston.Engine.Models;
@@ -10,18 +11,19 @@ using Piston.Protocol.Transports;
 namespace Piston.Cli.Protocol;
 
 /// <summary>
-/// Accepts named pipe client connections, manages <see cref="ClientSession"/> instances,
+/// Accepts named pipe and WebSocket client connections, manages session instances,
 /// and broadcasts engine state notifications to all connected clients.
 /// </summary>
 internal sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener) : IAsyncDisposable
 {
-    private readonly ConcurrentDictionary<string, ClientSession> _sessions = new();
+    private readonly ConcurrentDictionary<string, ClientSession> _pipeSessions = new();
+    private readonly ConcurrentDictionary<string, WebSocketClientSession> _wsSessions = new();
     private int _sessionCounter;
 
-    public int ClientCount => _sessions.Count;
+    public int ClientCount => _pipeSessions.Count + _wsSessions.Count;
 
     /// <summary>
-    /// Starts the accept loop and subscribes to engine state changes.
+    /// Starts the named pipe accept loop and subscribes to engine state changes.
     /// Blocks until <paramref name="ct"/> is cancelled.
     /// </summary>
     public async Task RunAsync(CancellationToken ct)
@@ -31,11 +33,11 @@ internal sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
         {
             await foreach (var stream in listener.AcceptClientsAsync(ct).ConfigureAwait(false))
             {
-                var sessionId  = $"session-{Interlocked.Increment(ref _sessionCounter)}";
+                var sessionId  = $"pipe-{Interlocked.Increment(ref _sessionCounter)}";
                 var dispatcher = new EngineCommandDispatcher(engine);
                 var session    = new ClientSession(stream, sessionId, dispatcher);
 
-                _sessions[sessionId] = session;
+                _pipeSessions[sessionId] = session;
 
                 // Send initial snapshot before starting the read loop
                 try
@@ -45,7 +47,7 @@ internal sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
                 }
                 catch
                 {
-                    _sessions.TryRemove(sessionId, out _);
+                    _pipeSessions.TryRemove(sessionId, out _);
                     continue;
                 }
 
@@ -58,7 +60,7 @@ internal sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
                     }
                     finally
                     {
-                        _sessions.TryRemove(sessionId, out _);
+                        _pipeSessions.TryRemove(sessionId, out _);
                     }
                 }, ct);
             }
@@ -66,6 +68,39 @@ internal sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
         finally
         {
             engine.State.StateChanged -= OnEngineStateChanged;
+        }
+    }
+
+    /// <summary>
+    /// Accepts a WebSocket connection, sends the initial state snapshot, and runs the session.
+    /// Returns when the WebSocket closes or <paramref name="ct"/> is cancelled.
+    /// </summary>
+    public async Task AddWebSocketSessionAsync(WebSocket webSocket, CancellationToken ct)
+    {
+        var sessionId  = $"ws-{Interlocked.Increment(ref _sessionCounter)}";
+        var dispatcher = new EngineCommandDispatcher(engine);
+        var session    = new WebSocketClientSession(webSocket, sessionId, dispatcher);
+
+        _wsSessions[sessionId] = session;
+
+        try
+        {
+            var snapshotNotification = BuildStateSnapshot();
+            await session.SendNotificationAsync(snapshotNotification, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            _wsSessions.TryRemove(sessionId, out _);
+            return;
+        }
+
+        try
+        {
+            await session.RunAsync(ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _wsSessions.TryRemove(sessionId, out _);
         }
     }
 
@@ -99,13 +134,23 @@ internal sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
 
     private void BroadcastNotification(JsonRpcNotification notification)
     {
-        foreach (var (id, session) in _sessions)
+        foreach (var (id, session) in _pipeSessions)
         {
             _ = session.SendNotificationAsync(notification, CancellationToken.None)
                 .ContinueWith(t =>
                 {
                     if (t.IsFaulted)
-                        _sessions.TryRemove(id, out _);
+                        _pipeSessions.TryRemove(id, out _);
+                }, TaskScheduler.Default);
+        }
+
+        foreach (var (id, session) in _wsSessions)
+        {
+            _ = session.SendNotificationAsync(notification, CancellationToken.None)
+                .ContinueWith(t =>
+                {
+                    if (t.IsFaulted)
+                        _wsSessions.TryRemove(id, out _);
                 }, TaskScheduler.Default);
         }
     }

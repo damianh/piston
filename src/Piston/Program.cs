@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Piston.Cli;
 using Piston.Cli.Configuration;
@@ -56,19 +57,26 @@ var mcpPortOpt = new Option<int?>(
     name: "--mcp-port",
     description: "Enable MCP server on the specified port.");
 
+var webPortOpt = new Option<int>(
+    name: "--web-port",
+    description: "Port for the web UI and WebSocket server.",
+    getDefaultValue: () => 5199);
+
 // ── Root command (default: TUI with auto-start) ────────────────────────────────
 
 var rootCommand = new RootCommand("Piston — continuous test runner for .NET")
 {
     solutionArg,
     pipeNameOpt,
+    webPortOpt,
 };
 
 rootCommand.SetHandler(async ctx =>
 {
     var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
     var pipeName     = ctx.ParseResult.GetValueForOption(pipeNameOpt);
-    await RunTuiAsync(solutionFile, pipeName);
+    var webPort      = ctx.ParseResult.GetValueForOption(webPortOpt);
+    await RunWebAsync(solutionFile, pipeName, webPort);
 });
 
 // ── daemon subcommand ──────────────────────────────────────────────────────────
@@ -83,6 +91,7 @@ var daemonCmd = new Command("daemon", "Start the Piston daemon in the foreground
     stdioOpt,
     pipeNameOpt,
     mcpPortOpt,
+    webPortOpt,
 };
 
 daemonCmd.SetHandler(async ctx =>
@@ -95,6 +104,7 @@ daemonCmd.SetHandler(async ctx =>
     var stdio        = ctx.ParseResult.GetValueForOption(stdioOpt);
     var pipeName     = ctx.ParseResult.GetValueForOption(pipeNameOpt);
     var mcpPort      = ctx.ParseResult.GetValueForOption(mcpPortOpt);
+    var webPort      = ctx.ParseResult.GetValueForOption(webPortOpt);
 
     // Check config for stdio/mcpPort defaults (best-effort; errors handled inside the run methods)
     if (!stdio)
@@ -114,7 +124,7 @@ daemonCmd.SetHandler(async ctx =>
     }
     else
     {
-        await RunDaemonAsync(solutionFile, debounceMs, filter, coverage, parallelism, pipeName, mcpPort);
+        await RunDaemonAsync(solutionFile, debounceMs, filter, coverage, parallelism, pipeName, mcpPort, webPort);
     }
 });
 
@@ -158,9 +168,9 @@ rootCommand.AddCommand(statusCmd);
 
 return await rootCommand.InvokeAsync(args);
 
-// ── TUI mode (default) — auto-starts daemon if needed ─────────────────────────
+// ── Web mode (default) — auto-starts daemon if needed, opens browser ──────────
 
-static async Task RunTuiAsync(FileInfo? solutionArg, string? cliPipeName)
+static async Task RunWebAsync(FileInfo? solutionArg, string? cliPipeName, int webPort)
 {
     string solutionPath;
     try
@@ -185,25 +195,24 @@ static async Task RunTuiAsync(FileInfo? solutionArg, string? cliPipeName)
         cts.Cancel();
     };
 
-    // Try to connect to existing daemon; auto-start if not running
+    // Ensure daemon is running (auto-start if not)
     await DaemonLauncher.EnsureRunningAsync(solutionPath, pipeName, cts.Token);
 
-    await using var client = new RemoteEngineClient(pipeName);
+    var webUrl = $"http://localhost:{webPort}";
+    Console.Error.WriteLine($"[piston] Opening browser: {webUrl}");
 
+    // Brief delay to let the daemon's web server start up
+    await Task.Delay(500, cts.Token).ConfigureAwait(false);
+
+    BrowserLauncher.Open(webUrl);
+
+    // Keep the process alive until Ctrl+C
+    Console.Error.WriteLine("[piston] Press Ctrl+C to exit.");
     try
     {
-        await client.ConnectAsync(cts.Token);
+        await Task.Delay(Timeout.Infinite, cts.Token).ConfigureAwait(false);
     }
-    catch (OperationCanceledException) when (cts.IsCancellationRequested)
-    {
-        return;
-    }
-    catch (Exception)
-    {
-        // Connection failed — TUI will show Reconnecting overlay
-    }
-
-    Piston.Tui.PistonTui.Run(client);
+    catch (OperationCanceledException) { }
 }
 
 // ── Daemon mode (foreground) ───────────────────────────────────────────────────
@@ -215,7 +224,8 @@ static async Task RunDaemonAsync(
     bool cliCoverage,
     int cliParallelism,
     string? cliPipeName,
-    int? cliMcpPort)
+    int? cliMcpPort,
+    int webPort)
 {
     string solutionPath;
     try
@@ -278,8 +288,49 @@ static async Task RunDaemonAsync(
     await using var router = new ProtocolRouter(engine, listener);
     var routerTask = router.RunAsync(cts.Token);
 
+    // Always start the web server for WebSocket + static file serving
+    var webBuilder = WebApplication.CreateBuilder(new WebApplicationOptions
+    {
+        ApplicationName = "Piston",
+        // Set content root to the directory containing the host binary so that
+        // UseStaticFiles() can find the wwwroot/ folder with Blazor WASM assets.
+        ContentRootPath = AppContext.BaseDirectory,
+    });
+
+    var webApp = webBuilder.Build();
+    webApp.Urls.Add($"http://localhost:{webPort}");
+    webApp.UseWebSockets();
+
+    // Serve Blazor WASM framework files (handles content negotiation for .br/.gz compressed assets)
+    // and static files. UseBlazorFrameworkFiles must come before UseStaticFiles.
+    webApp.UseBlazorFrameworkFiles();
+    webApp.UseDefaultFiles();
+    webApp.UseStaticFiles();
+    webApp.UseRouting();
+
+    webApp.Map("/ws", async context =>
+    {
+        if (!context.WebSockets.IsWebSocketRequest)
+        {
+            context.Response.StatusCode = StatusCodes.Status400BadRequest;
+            return;
+        }
+
+        var webSocket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
+        await router.AddWebSocketSessionAsync(webSocket, cts.Token).ConfigureAwait(false);
+    });
+
+    // Fallback to index.html for Blazor SPA client-side routing
+    webApp.MapFallbackToFile("index.html");
+
+    // Register cancellation to stop the web server when Ctrl+C is pressed
+    cts.Token.Register(() => webApp.StopAsync().GetAwaiter().GetResult());
+
+    Console.Error.WriteLine($"[piston] Web server (WebSocket) listening on port: {webPort}");
+
     if (mcpPort is not null)
     {
+        // MCP always runs on its own dedicated app to avoid middleware conflicts
         var mcpBuilder = WebApplication.CreateBuilder();
         mcpBuilder.Services.AddSingleton<IEngine>(engine);
         mcpBuilder.Services.AddPistonMcp(workspace);
@@ -291,15 +342,18 @@ static async Task RunDaemonAsync(
 
         try
         {
-            await Task.WhenAny(routerTask, mcpTask);
+            await Task.WhenAny(routerTask, webApp.RunAsync(), mcpTask);
         }
         catch (OperationCanceledException) { }
+
+        await mcpApp.StopAsync();
+        await mcpApp.DisposeAsync();
     }
     else
     {
         try
         {
-            await routerTask;
+            await Task.WhenAny(routerTask, webApp.RunAsync());
         }
         catch (OperationCanceledException) { }
     }

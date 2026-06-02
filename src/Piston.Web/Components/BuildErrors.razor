@@ -1,0 +1,28 @@
+@using Piston.Protocol.Dtos
+
+@if (Build is not null && Build.Errors.Count > 0)
+{
+    <div class="flex flex-col h-full overflow-y-auto p-4 gap-3 text-xs">
+        <div class="text-red-400 font-semibold">Build Failed — @Build.Errors.Count error@(Build.Errors.Count == 1 ? "" : "s")</div>
+        @foreach (var error in Build.Errors)
+        {
+            <div class="bg-gray-900 border border-red-900 rounded p-3">
+                <pre class="text-red-300 whitespace-pre-wrap break-all">@error</pre>
+            </div>
+        }
+        @if (Build.Warnings.Count > 0)
+        {
+            <div class="text-yellow-400 font-semibold mt-2">@Build.Warnings.Count warning@(Build.Warnings.Count == 1 ? "" : "s")</div>
+            @foreach (var warning in Build.Warnings)
+            {
+                <div class="bg-gray-900 border border-yellow-900 rounded p-3">
+                    <pre class="text-yellow-300 whitespace-pre-wrap break-all">@warning</pre>
+                </div>
+            }
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public BuildResultDto? Build { get; set; }
+}

@@ -1,0 +1,19 @@
+@if (IsConnecting || !IsConnected)
+{
+    <div class="fixed inset-0 bg-gray-950 bg-opacity-80 flex items-center justify-center z-50">
+        <div class="bg-gray-900 border border-gray-700 rounded-lg p-6 text-center max-w-sm">
+            <div class="text-2xl mb-3">@(IsConnecting ? "⟳" : "✗")</div>
+            <div class="text-gray-300 font-semibold mb-2">
+                @(IsConnecting ? "Connecting to Piston daemon..." : "Disconnected")
+            </div>
+            <div class="text-gray-600 text-xs">
+                @(IsConnecting ? "Waiting for daemon on ws://localhost:5199/ws" : "Reconnecting automatically...")
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public bool IsConnected { get; set; }
+    [Parameter] public bool IsConnecting { get; set; }
+}

@@ -12,7 +12,7 @@ public static class McpServiceRegistration
         services.AddSingleton<IRoslynWorkspace>(_ => RoslynWorkspaceFactory.Create());
 
         services.AddMcpServer()
-            .WithHttpTransport()
+            .WithHttpTransport(options => options.Stateless = true)
             .WithToolsFromAssembly(typeof(McpServiceRegistration).Assembly);
 
         return services;
@@ -23,7 +23,7 @@ public static class McpServiceRegistration
         services.AddSingleton(workspace);
 
         services.AddMcpServer()
-            .WithHttpTransport()
+            .WithHttpTransport(options => options.Stateless = true)
             .WithToolsFromAssembly(typeof(McpServiceRegistration).Assembly);
 
         return services;

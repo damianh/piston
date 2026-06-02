@@ -1,0 +1,153 @@
+@using Piston.Web.Models
+@using Piston.Protocol.Dtos
+
+@{
+    var indent = Depth * 16;
+    var isSelected = Node.Kind == TestNodeKind.Test && Node.Test?.FullyQualifiedName == SelectedFqn;
+    var isPinned = Node.Kind == TestNodeKind.Test && Node.Test is not null && PinnedFqns.Contains(Node.Test.FullyQualifiedName);
+}
+
+<div>
+    <!-- Node row -->
+    <div class="flex items-center gap-1 px-2 py-0.5 cursor-pointer hover:bg-gray-800 @(isSelected ? "bg-gray-700" : "") @(Node.IsStale ? "opacity-50" : "")"
+         style="padding-left: @(indent + 8)px"
+         @onclick="HandleClick">
+
+        <!-- Expand/collapse toggle for non-leaf nodes -->
+        @if (Node.Children.Count > 0)
+        {
+            <span class="text-gray-600 w-3 text-center text-xs select-none">@(Node.IsExpanded ? "▾" : "▸")</span>
+        }
+        else
+        {
+            <span class="w-3"></span>
+        }
+
+        <!-- Status icon -->
+        <span class="@StatusColor(Node) w-4 text-center">@StatusIcon(Node)</span>
+
+        <!-- Label -->
+        <span class="flex-1 truncate text-xs @(Node.Kind == TestNodeKind.Test ? "text-gray-200" : "text-gray-300 font-medium")">
+            @if (isPinned)
+            {
+                <span class="text-yellow-400 mr-1">★</span>
+            }
+            @Node.Label
+        </span>
+
+        <!-- Duration for test nodes -->
+        @if (Node.Kind == TestNodeKind.Test && Node.Test?.DurationMs > 0 && Node.Test.Status != TestStatusDto.Running)
+        {
+            <span class="text-gray-600 text-xs ml-1">@FormatDuration(Node.Test.DurationMs)</span>
+        }
+
+        <!-- Pin button (visible on hover for test nodes) -->
+        @if (Node.Kind == TestNodeKind.Test && Node.Test is not null)
+        {
+            <button class="text-gray-700 hover:text-yellow-400 ml-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="@(isPinned ? "Unpin" : "Pin")"
+                    @onclick:stopPropagation="true"
+                    @onclick="() => OnTogglePin.InvokeAsync(Node.Test.FullyQualifiedName)">
+                @(isPinned ? "★" : "☆")
+            </button>
+        }
+    </div>
+
+    <!-- Children -->
+    @if (Node.IsExpanded && Node.Children.Count > 0)
+    {
+        @foreach (var child in Node.Children)
+        {
+            <TestTreeNode Node="child"
+                          Depth="@(Depth + 1)"
+                          SelectedFqn="@SelectedFqn"
+                          PinnedFqns="@PinnedFqns"
+                          OnSelectTest="@OnSelectTest"
+                          OnTogglePin="@OnTogglePin" />
+        }
+    }
+</div>
+
+@code {
+    [Parameter] public required TestNode Node { get; set; }
+    [Parameter] public int Depth { get; set; }
+    [Parameter] public string? SelectedFqn { get; set; }
+    [Parameter] public HashSet<string> PinnedFqns { get; set; } = [];
+    [Parameter] public EventCallback<TestResultDto> OnSelectTest { get; set; }
+    [Parameter] public EventCallback<string> OnTogglePin { get; set; }
+
+    private void HandleClick()
+    {
+        if (Node.Kind == TestNodeKind.Test && Node.Test is not null)
+        {
+            OnSelectTest.InvokeAsync(Node.Test);
+        }
+        else
+        {
+            Node.IsExpanded = !Node.IsExpanded;
+        }
+    }
+
+    private static string StatusIcon(TestNode node)
+    {
+        if (node.Kind != TestNodeKind.Test)
+        {
+            // Aggregate status for group/suite nodes
+            var allTests = FlattenTests(node);
+            if (!allTests.Any()) return "◌";
+            if (allTests.Any(t => t.Status == TestStatusDto.Failed))  return "✗";
+            if (allTests.Any(t => t.Status == TestStatusDto.Running)) return "⟳";
+            if (allTests.Any(t => t.Status == TestStatusDto.Skipped)) return "●";
+            if (allTests.All(t => t.Status == TestStatusDto.Passed))  return "✓";
+            return "◌";
+        }
+
+        return node.Test?.Status switch
+        {
+            TestStatusDto.Passed  => "✓",
+            TestStatusDto.Failed  => "✗",
+            TestStatusDto.Skipped => "●",
+            TestStatusDto.Running => "⟳",
+            _                     => "◌",
+        };
+    }
+
+    private static string StatusColor(TestNode node)
+    {
+        if (node.Kind != TestNodeKind.Test)
+        {
+            var allTests = FlattenTests(node);
+            if (!allTests.Any()) return "text-gray-600";
+            if (allTests.Any(t => t.Status == TestStatusDto.Failed))  return "text-red-400";
+            if (allTests.Any(t => t.Status == TestStatusDto.Running)) return "text-cyan-400";
+            if (allTests.Any(t => t.Status == TestStatusDto.Skipped)) return "text-yellow-400";
+            if (allTests.All(t => t.Status == TestStatusDto.Passed))  return "text-green-400";
+            return "text-gray-600";
+        }
+
+        return node.Test?.Status switch
+        {
+            TestStatusDto.Passed  => "text-green-400",
+            TestStatusDto.Failed  => "text-red-400",
+            TestStatusDto.Skipped => "text-yellow-400",
+            TestStatusDto.Running => "text-cyan-400",
+            _                     => "text-gray-600",
+        };
+    }
+
+    private static IEnumerable<TestResultDto> FlattenTests(TestNode node)
+    {
+        if (node.Kind == TestNodeKind.Test && node.Test is not null)
+        {
+            yield return node.Test;
+            yield break;
+        }
+
+        foreach (var child in node.Children)
+        foreach (var test in FlattenTests(child))
+            yield return test;
+    }
+
+    private static string FormatDuration(double ms) =>
+        ms < 1000 ? $"{(int)ms}ms" : $"{ms / 1000.0:F1}s";
+}
