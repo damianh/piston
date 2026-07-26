@@ -7,6 +7,7 @@ using Piston.Cli;
 using Piston.Cli.Configuration;
 using Piston.Cli.Mapping;
 using Piston.Cli.Protocol;
+using Piston.Cli.Services;
 using Piston.Engine;
 using Piston.Engine.Models;
 using Piston.Mcp;
@@ -260,7 +261,9 @@ static async Task RunDaemonAsync(
         cts.Cancel();
     };
 
-    using var engine = new PistonEngine(options);
+    // Use a proxy sink so the router (created after engine) can receive activity events.
+    var activityProxy = new ActivityEventSinkProxy();
+    using var engine = new PistonEngine(options, activityProxy);
 
     Console.Error.WriteLine($"[piston] Starting engine for: {solutionPath}");
     await engine.StartAsync(solutionPath);
@@ -286,6 +289,17 @@ static async Task RunDaemonAsync(
 
     var listener = new NamedPipeListener(pipeName);
     await using var router = new ProtocolRouter(engine, listener);
+
+    // Connect the activity proxy to the router so engine events are broadcast to clients
+    activityProxy.SetSink(router);
+
+    // Wire diagnostic watcher and MCP call tracker into the router
+    using var diagnosticWatcher = new DiagnosticWatcherService(workspace, router, solutionPath);
+    var mcpCallTracker = new McpCallTracker(router, solutionPath);
+    router.SetDiagnosticWatcher(diagnosticWatcher);
+    router.SetMcpCallTracker(mcpCallTracker);
+    diagnosticWatcher.Start();
+
     var routerTask = router.RunAsync(cts.Token);
 
     // Always start the web server for WebSocket + static file serving
@@ -330,7 +344,7 @@ static async Task RunDaemonAsync(
         // MCP always runs on its own dedicated app to avoid middleware conflicts
         var mcpBuilder = WebApplication.CreateBuilder();
         mcpBuilder.Services.AddSingleton<IEngine>(engine);
-        mcpBuilder.Services.AddPistonMcp(workspace);
+        mcpBuilder.Services.AddPistonMcp(workspace, mcpCallTracker);
         var mcpApp = mcpBuilder.Build();
         mcpApp.MapMcp();
 

@@ -39,4 +39,15 @@ public static class ProtocolMethods
 
     /// <summary>Pushed after a test run when per-file coverage data is updated.</summary>
     public const string CoverageFileUpdated = "coverage/fileUpdated";
+
+    /// <summary>Unified activity timeline event — discriminated by the Type field in the payload.</summary>
+    public const string ActivityEvent = "activity/event";
+
+    // Request/Response (client → server, with response payload)
+
+    /// <summary>Fetch the current full diagnostics snapshot.</summary>
+    public const string DiagnosticsGetAll = "diagnostics/getAll";
+
+    /// <summary>Fetch the MCP tool call log (ring buffer).</summary>
+    public const string McpGetCallLog = "mcp/getCallLog";
 }

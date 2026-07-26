@@ -1,3 +1,4 @@
+using Piston.Engine;
 using Piston.Engine.Models;
 using Piston.Mcp.Tools;
 using Xunit;
@@ -6,6 +7,8 @@ namespace Piston.Mcp.Tests;
 
 public sealed class TestToolsTests
 {
+    private static readonly IMcpCallRecorder NullRecorder = NullMcpCallRecorder.Instance;
+
     [Fact]
     public async Task RunTestsReturnsResultSummary()
     {
@@ -22,7 +25,8 @@ public sealed class TestToolsTests
             ], DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(300)),
         ];
 
-        var result = await TestTools.RunTests(engine, CancellationToken.None);
+        var tools = new TestTools(engine, NullRecorder);
+        var result = await tools.RunTests(CancellationToken.None);
 
         Assert.True(engine.ForceRunCalled);
         Assert.Contains("Phase: Idle", result);
@@ -47,7 +51,8 @@ public sealed class TestToolsTests
             ], DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(150)),
         ];
 
-        var result = TestTools.GetTestResults(engine);
+        var tools = new TestTools(engine, NullRecorder);
+        var result = tools.GetTestResults();
 
         Assert.Contains("Phase: Idle", result);
         Assert.Contains("Passed: 1", result);
@@ -67,7 +72,8 @@ public sealed class TestToolsTests
         var engine = new StubEngine();
         engine.State.Phase = PistonPhase.Idle;
 
-        var result = TestTools.GetTestResults(engine);
+        var tools = new TestTools(engine, NullRecorder);
+        var result = tools.GetTestResults();
 
         Assert.Contains("Phase: Idle", result);
         Assert.Contains("Tests: 0/0", result);
@@ -78,7 +84,8 @@ public sealed class TestToolsTests
     {
         var engine = new StubEngine();
 
-        var result = TestTools.SetTestFilter(engine, "MyTest");
+        var tools = new TestTools(engine, NullRecorder);
+        var result = tools.SetTestFilter("MyTest");
 
         Assert.Equal("MyTest", engine.LastFilter);
         Assert.Contains("MyTest", result);
@@ -89,7 +96,8 @@ public sealed class TestToolsTests
     {
         var engine = new StubEngine();
 
-        var result = TestTools.SetTestFilter(engine, "");
+        var tools = new TestTools(engine, NullRecorder);
+        var result = tools.SetTestFilter("");
 
         Assert.Null(engine.LastFilter);
         Assert.Contains("(none)", result);
@@ -100,7 +108,8 @@ public sealed class TestToolsTests
     {
         var engine = new StubEngine();
 
-        var result = TestTools.ClearResults(engine);
+        var tools = new TestTools(engine, NullRecorder);
+        var result = tools.ClearResults();
 
         Assert.True(engine.ClearResultsCalled);
         Assert.Contains("Results cleared", result);

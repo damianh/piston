@@ -8,4 +8,8 @@
     <PackageReference Include="Microsoft.Build.Locator" />
     <PackageReference Include="Microsoft.Data.Sqlite" />
   </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Piston.Protocol\Piston.Protocol.csproj" />
+  </ItemGroup>
 </Project>

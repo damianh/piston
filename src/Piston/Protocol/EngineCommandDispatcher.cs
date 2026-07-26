@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Piston.Cli.Services;
 using Piston.Engine;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
@@ -9,9 +10,21 @@ namespace Piston.Cli.Protocol;
 /// <summary>
 /// Bridges JSON-RPC command dispatch to <see cref="IEngine"/> method calls.
 /// </summary>
-internal sealed class EngineCommandDispatcher(IEngine engine) : ICommandDispatcher
+internal sealed class EngineCommandDispatcher : ICommandDispatcher
 {
     private static readonly char[] ForbiddenFilterChars = ['"', '&', '|', ';', '`', '$'];
+
+    private readonly IEngine _engine;
+    private DiagnosticWatcherService? _diagnosticWatcher;
+    private McpCallTracker? _mcpCallTracker;
+
+    public EngineCommandDispatcher(IEngine engine) => _engine = engine;
+
+    public void SetDiagnosticWatcher(DiagnosticWatcherService watcher) =>
+        _diagnosticWatcher = watcher;
+
+    public void SetMcpCallTracker(McpCallTracker tracker) =>
+        _mcpCallTracker = tracker;
 
     public async Task<JsonNode?> HandleCommandAsync(string method, JsonNode? @params, CancellationToken ct)
     {
@@ -25,11 +38,11 @@ internal sealed class EngineCommandDispatcher(IEngine engine) : ICommandDispatch
                     "engine/start not available in headless mode — solution is configured at launch.");
 
             case ProtocolMethods.EngineForceRun:
-                await engine.ForceRunAsync().ConfigureAwait(false);
+                await _engine.ForceRunAsync().ConfigureAwait(false);
                 return null;
 
             case ProtocolMethods.EngineStop:
-                engine.Stop();
+                _engine.Stop();
                 return null;
 
             case ProtocolMethods.EngineSetFilter:
@@ -37,24 +50,37 @@ internal sealed class EngineCommandDispatcher(IEngine engine) : ICommandDispatch
                 var cmd = JsonRpcSerializer.DeserializeParams<SetFilterCommand>(@params);
                 var filter = cmd?.Filter;
                 ValidateFilter(filter);
-                engine.SetFilter(filter);
+                _engine.SetFilter(filter);
                 return null;
             }
 
             case ProtocolMethods.EngineClearResults:
-                engine.ClearResults();
+                _engine.ClearResults();
                 return null;
 
             case ProtocolMethods.CoverageGetForFile:
             {
-                // The engine's coverage store does not yet expose a per-file query API.
-                // Return an empty result for now; this will be populated in a future phase
-                // when the engine exposes coverage data via IEngine.
                 var cmd = JsonRpcSerializer.DeserializeParams<GetFileCoverageCommand>(@params);
                 var filePath = cmd?.FilePath ?? string.Empty;
                 var result = new FileCoverageDto(filePath, Array.Empty<CoverageLineDto>());
                 return JsonNode.Parse(
                     System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+            }
+
+            case ProtocolMethods.DiagnosticsGetAll:
+            {
+                var diagnostics = _diagnosticWatcher?.CurrentDiagnostics ?? [];
+                var response = new DiagnosticsResponse(diagnostics);
+                return JsonNode.Parse(
+                    System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
+            }
+
+            case ProtocolMethods.McpGetCallLog:
+            {
+                var calls = _mcpCallTracker?.GetCallLog() ?? [];
+                var response = new McpCallLogResponse(calls);
+                return JsonNode.Parse(
+                    System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
             }
 
             default:

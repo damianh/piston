@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Text;
 using ModelContextProtocol.Server;
 using Piston.Engine;
@@ -7,32 +8,51 @@ using Piston.Engine.Models;
 namespace Piston.Mcp.Tools;
 
 [McpServerToolType]
-public static class TestTools
+public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
 {
     [McpServerTool, Description("Force a full test run of the loaded solution. Returns test results summary.")]
-    public static async Task<string> RunTests(IEngine engine, CancellationToken ct)
+    public async Task<string> RunTests(CancellationToken ct)
     {
-        await engine.ForceRunAsync().ConfigureAwait(false);
-
-        var timeout = TimeSpan.FromMinutes(10);
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        cts.CancelAfter(timeout);
-
-        while (engine.State.Phase != PistonPhase.Idle && engine.State.Phase != PistonPhase.Error)
+        var sw = Stopwatch.StartNew();
+        string result = string.Empty;
+        var succeeded = true;
+        try
         {
-            await Task.Delay(500, cts.Token).ConfigureAwait(false);
+            await engine.ForceRunAsync().ConfigureAwait(false);
+
+            var timeout = TimeSpan.FromMinutes(10);
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(timeout);
+
+            while (engine.State.Phase != PistonPhase.Idle && engine.State.Phase != PistonPhase.Error)
+            {
+                await Task.Delay(500, cts.Token).ConfigureAwait(false);
+            }
+
+            var state = engine.State;
+            result = $"Phase: {state.Phase}, " +
+                     $"Passed: {state.TotalPassed}, Failed: {state.TotalFailed}, Skipped: {state.TotalSkipped}, " +
+                     $"Tests: {state.CompletedTests}/{state.TotalExpectedTests}, " +
+                     $"Suites: {state.TestSuites.Count}";
+        }
+        catch
+        {
+            succeeded = false;
+            throw;
+        }
+        finally
+        {
+            sw.Stop();
+            recorder.Record(nameof(RunTests), null, succeeded ? result! : null, sw.Elapsed.TotalMilliseconds, succeeded);
         }
 
-        var state = engine.State;
-        return $"Phase: {state.Phase}, " +
-               $"Passed: {state.TotalPassed}, Failed: {state.TotalFailed}, Skipped: {state.TotalSkipped}, " +
-               $"Tests: {state.CompletedTests}/{state.TotalExpectedTests}, " +
-               $"Suites: {state.TestSuites.Count}";
+        return result;
     }
 
     [McpServerTool, Description("Get current test results from the last test run.")]
-    public static string GetTestResults(IEngine engine)
+    public string GetTestResults()
     {
+        var sw = Stopwatch.StartNew();
         var state = engine.State;
         var sb = new StringBuilder();
         sb.AppendLine($"Phase: {state.Phase}");
@@ -46,32 +66,39 @@ public static class TestTools
             {
                 sb.Append($"  [{test.Status}] {test.DisplayName}");
                 if (test.Duration.TotalMilliseconds > 0)
-                {
                     sb.Append($" ({test.Duration.TotalMilliseconds:F0}ms)");
-                }
                 if (test.ErrorMessage is not null)
-                {
                     sb.Append($" - {test.ErrorMessage}");
-                }
                 sb.AppendLine();
             }
         }
 
-        return sb.ToString();
+        var result = sb.ToString();
+        sw.Stop();
+        recorder.Record(nameof(GetTestResults), null, $"{state.TotalPassed} passed, {state.TotalFailed} failed", sw.Elapsed.TotalMilliseconds, true);
+        return result;
     }
 
     [McpServerTool, Description("Set a test filter to narrow which tests are run. Pass empty string to clear.")]
-    public static string SetTestFilter(IEngine engine, string filter)
+    public string SetTestFilter(string filter)
     {
+        var sw = Stopwatch.StartNew();
         var effectiveFilter = string.IsNullOrEmpty(filter) ? null : filter;
         engine.SetFilter(effectiveFilter);
-        return $"Filter set to: {effectiveFilter ?? "(none)"}";
+        var result = $"Filter set to: {effectiveFilter ?? "(none)"}";
+        sw.Stop();
+        recorder.Record(nameof(SetTestFilter), filter, result, sw.Elapsed.TotalMilliseconds, true);
+        return result;
     }
 
     [McpServerTool, Description("Clear all test results and coverage data.")]
-    public static string ClearResults(IEngine engine)
+    public string ClearResults()
     {
+        var sw = Stopwatch.StartNew();
         engine.ClearResults();
-        return "Results cleared.";
+        const string Result = "Results cleared.";
+        sw.Stop();
+        recorder.Record(nameof(ClearResults), null, Result, sw.Elapsed.TotalMilliseconds, true);
+        return Result;
     }
 }

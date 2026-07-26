@@ -1,6 +1,7 @@
 using Piston.Engine.Coverage;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
+using Piston.Protocol.Messages;
 
 namespace Piston.Engine.Orchestration;
 
@@ -14,6 +15,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     private readonly ICoverageStore? _coverageStore;
     private readonly ICoverageProcessor? _coverageProcessor;
     private readonly bool _coverageEnabled;
+    private readonly IActivityEventSink _activitySink;
 
     private CancellationTokenSource? _cts;
     private string? _solutionPath;
@@ -26,14 +28,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         ITestRunnerService testRunner,
         IImpactAnalyzer impactAnalyzer,
         PistonState state)
+        : this(fileWatcher, buildService, testRunner, impactAnalyzer, state,
+               null, null, false, NullActivityEventSink.Instance)
     {
-        _fileWatcher    = fileWatcher;
-        _buildService   = buildService;
-        _testRunner     = testRunner;
-        _impactAnalyzer = impactAnalyzer;
-        _state          = state;
-
-        _fileWatcher.FileChanged += OnFileChanged;
     }
 
     internal PistonOrchestrator(
@@ -45,15 +42,31 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         ICoverageStore? coverageStore,
         ICoverageProcessor? coverageProcessor,
         bool coverageEnabled)
+        : this(fileWatcher, buildService, testRunner, impactAnalyzer, state,
+               coverageStore, coverageProcessor, coverageEnabled, NullActivityEventSink.Instance)
     {
-        _fileWatcher      = fileWatcher;
-        _buildService     = buildService;
-        _testRunner       = testRunner;
-        _impactAnalyzer   = impactAnalyzer;
-        _state            = state;
-        _coverageStore    = coverageStore;
+    }
+
+    internal PistonOrchestrator(
+        IFileWatcherService fileWatcher,
+        IBuildService buildService,
+        ITestRunnerService testRunner,
+        IImpactAnalyzer impactAnalyzer,
+        PistonState state,
+        ICoverageStore? coverageStore,
+        ICoverageProcessor? coverageProcessor,
+        bool coverageEnabled,
+        IActivityEventSink activitySink)
+    {
+        _fileWatcher       = fileWatcher;
+        _buildService      = buildService;
+        _testRunner        = testRunner;
+        _impactAnalyzer    = impactAnalyzer;
+        _state             = state;
+        _coverageStore     = coverageStore;
         _coverageProcessor = coverageProcessor;
-        _coverageEnabled  = coverageEnabled;
+        _coverageEnabled   = coverageEnabled;
+        _activitySink      = activitySink;
 
         _fileWatcher.FileChanged += OnFileChanged;
     }
@@ -124,6 +137,8 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         if (_solutionPath is null) return;
         _state.LastFileChangeTime = batch.Timestamp;
         _state.LastChangedFiles = batch.Changes.Select(e => e.FilePath).ToList();
+        _activitySink.Emit(ActivityEventFactory.FileChangesDetected(
+            _solutionPath, _state.LastChangedFiles));
         _ = TriggerRunAsync(_solutionPath, batch);
     }
 
@@ -226,6 +241,12 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
             _state.LastBuild = buildResult;
             _state.LastBuildDuration = buildResult.Duration;
+
+            _activitySink.Emit(ActivityEventFactory.BuildCompleted(
+                solutionPath,
+                buildResult.Status == BuildStatus.Succeeded,
+                buildResult.Duration.TotalMilliseconds,
+                buildResult.Errors));
 
             if (ct.IsCancellationRequested)
             {
@@ -410,6 +431,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             _state.LastRunTime = DateTimeOffset.UtcNow;
             _state.LastTestDuration = DateTimeOffset.UtcNow - testStart;
 
+            // Emit test run completion activity event
+            EmitTestRunCompleted(solutionPath, newSuites, _state.LastTestDuration.Value);
+
             // Compute how many tests are verified since the last file change
             if (_state.LastFileChangeTime.HasValue)
             {
@@ -442,6 +466,22 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private void EmitTestRunCompleted(string solutionPath, IReadOnlyList<TestSuite> suites, TimeSpan duration)
+    {
+        var allTests = suites.SelectMany(s => s.Tests).ToList();
+        var passed   = allTests.Count(t => t.Status == TestStatus.Passed);
+        var failed   = allTests.Count(t => t.Status == TestStatus.Failed);
+        var skipped  = allTests.Count(t => t.Status == TestStatus.Skipped);
+
+        var failures = allTests
+            .Where(t => t.Status == TestStatus.Failed)
+            .Select(t => new TestFailureData(t.FullyQualifiedName, t.ErrorMessage))
+            .ToList();
+
+        _activitySink.Emit(ActivityEventFactory.TestRunCompleted(
+            solutionPath, passed, failed, skipped, duration.TotalMilliseconds, failures));
+    }
 
     /// <summary>
     /// Builds the effective dotnet-test filter expression, combining Tier 3 FQN filter

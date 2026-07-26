@@ -1,0 +1,47 @@
+@inject EngineClientService Client
+@implements IDisposable
+
+<div class="flex flex-col h-full overflow-hidden">
+    <div class="px-3 py-2 border-b border-gray-800 text-xs text-gray-500 flex justify-between items-center">
+        <span>Activity Log (@_events.Count events)</span>
+        <button class="text-gray-600 hover:text-gray-400 transition-colors" @onclick="ClearLog" title="Clear">✕</button>
+    </div>
+    <div class="flex-1 overflow-y-auto flex flex-col-reverse px-2 py-1 gap-0.5">
+        @for (var i = _events.Count - 1; i >= 0; i--)
+        {
+            var evt = _events[i];
+            <ActivityEventRow Event="@evt" />
+        }
+        @if (_events.Count == 0)
+        {
+            <div class="text-gray-600 italic text-xs px-2 py-4">No activity yet.</div>
+        }
+    </div>
+</div>
+
+@code {
+    private List<ActivityEvent> _events = [];
+
+    protected override void OnInitialized()
+    {
+        _events = Client.ActivityLog.ToList();
+        Client.ActivityEventReceived += OnActivityEvent;
+    }
+
+    private void OnActivityEvent(ActivityEvent evt)
+    {
+        _events.Add(evt);
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void ClearLog()
+    {
+        _events.Clear();
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        Client.ActivityEventReceived -= OnActivityEvent;
+    }
+}

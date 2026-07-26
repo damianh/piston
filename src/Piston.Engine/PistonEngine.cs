@@ -2,6 +2,7 @@ using Piston.Engine.Coverage;
 using Piston.Engine.Impact;
 using Piston.Engine.Orchestration;
 using Piston.Engine.Services;
+using Piston.Protocol.Messages;
 
 namespace Piston.Engine;
 
@@ -12,9 +13,17 @@ public sealed class PistonEngine : IEngine
     private readonly ICoverageStore? _coverageStore;
     private readonly ITestProcessPool _pool;
     private readonly DiagnosticLog _diagnosticLog;
+    private readonly IActivityEventSink _activitySink;
 
     public PistonEngine(PistonOptions options)
+        : this(options, NullActivityEventSink.Instance)
     {
+    }
+
+    public PistonEngine(PistonOptions options, IActivityEventSink activitySink)
+    {
+        _activitySink = activitySink;
+
         // Register MSBuild before any Microsoft.Build.* types are loaded.
         // This must happen before MsBuildSolutionGraph (or any class referencing MSBuild) is JIT-compiled.
         MsBuildLocatorGuard.EnsureRegistered();
@@ -80,12 +89,18 @@ public sealed class PistonEngine : IEngine
             _state,
             _coverageStore,
             coverageProcessor,
-            options.CoverageEnabled);
+            options.CoverageEnabled,
+            activitySink);
     }
 
     public PistonState State => _state;
 
-    public Task StartAsync(string solutionPath) => _orchestrator.StartAsync(solutionPath);
+    public async Task StartAsync(string solutionPath)
+    {
+        await _orchestrator.StartAsync(solutionPath).ConfigureAwait(false);
+        _activitySink.Emit(ActivityEventFactory.SolutionLoaded(solutionPath, 0));
+    }
+
     public Task ForceRunAsync() => _orchestrator.ForceRunAsync();
     public void Stop() => _orchestrator.Stop();
 

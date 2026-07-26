@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text.Json.Nodes;
+using Piston.Cli.Services;
 using Piston.Engine;
 using Piston.Engine.Models;
 using Piston.Cli.Mapping;
@@ -13,14 +14,34 @@ namespace Piston.Cli.Protocol;
 /// <summary>
 /// Accepts named pipe and WebSocket client connections, manages session instances,
 /// and broadcasts engine state notifications to all connected clients.
+/// Implements <see cref="IActivityEventSink"/> to fan in activity events from all subsystems.
 /// </summary>
-internal sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener) : IAsyncDisposable
+internal sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
+    : IActivityEventSink, IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, ClientSession> _pipeSessions = new();
     private readonly ConcurrentDictionary<string, WebSocketClientSession> _wsSessions = new();
     private int _sessionCounter;
+    private DiagnosticWatcherService? _diagnosticWatcher;
+    private McpCallTracker? _mcpCallTracker;
 
     public int ClientCount => _pipeSessions.Count + _wsSessions.Count;
+
+    public void SetDiagnosticWatcher(DiagnosticWatcherService watcher) =>
+        _diagnosticWatcher = watcher;
+
+    public void SetMcpCallTracker(McpCallTracker tracker) =>
+        _mcpCallTracker = tracker;
+
+    private EngineCommandDispatcher CreateDispatcher()
+    {
+        var dispatcher = new EngineCommandDispatcher(engine);
+        if (_diagnosticWatcher is not null)
+            dispatcher.SetDiagnosticWatcher(_diagnosticWatcher);
+        if (_mcpCallTracker is not null)
+            dispatcher.SetMcpCallTracker(_mcpCallTracker);
+        return dispatcher;
+    }
 
     /// <summary>
     /// Starts the named pipe accept loop and subscribes to engine state changes.
@@ -34,7 +55,7 @@ internal sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
             await foreach (var stream in listener.AcceptClientsAsync(ct).ConfigureAwait(false))
             {
                 var sessionId  = $"pipe-{Interlocked.Increment(ref _sessionCounter)}";
-                var dispatcher = new EngineCommandDispatcher(engine);
+                var dispatcher = CreateDispatcher();
                 var session    = new ClientSession(stream, sessionId, dispatcher);
 
                 _pipeSessions[sessionId] = session;
@@ -78,7 +99,7 @@ internal sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
     public async Task AddWebSocketSessionAsync(WebSocket webSocket, CancellationToken ct)
     {
         var sessionId  = $"ws-{Interlocked.Increment(ref _sessionCounter)}";
-        var dispatcher = new EngineCommandDispatcher(engine);
+        var dispatcher = CreateDispatcher();
         var session    = new WebSocketClientSession(webSocket, sessionId, dispatcher);
 
         _wsSessions[sessionId] = session;
@@ -153,6 +174,12 @@ internal sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
                         _wsSessions.TryRemove(id, out _);
                 }, TaskScheduler.Default);
         }
+    }
+
+    /// <inheritdoc />
+    public void Emit(ActivityEvent activity)
+    {
+        BroadcastNotification(ToNotification(ProtocolMethods.ActivityEvent, activity));
     }
 
     private JsonRpcNotification BuildStateSnapshot()

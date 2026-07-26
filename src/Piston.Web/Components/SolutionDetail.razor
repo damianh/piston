@@ -1,0 +1,45 @@
+@inject EngineClientService Client
+@implements IDisposable
+
+<div class="flex flex-col flex-1 overflow-hidden">
+    <TabBar ActiveTab="@_activeTab" OnTabSelected="SetTab" />
+
+    <div class="flex-1 overflow-hidden">
+        @if (_activeTab == DashboardTab.Activity)
+        {
+            <ActivityTab />
+        }
+        else if (_activeTab == DashboardTab.Tests)
+        {
+            <TestsTab KeyboardEvent="@KeyboardEvent" />
+        }
+        else if (_activeTab == DashboardTab.Diagnostics)
+        {
+            <DiagnosticsTab />
+        }
+        else if (_activeTab == DashboardTab.Mcp)
+        {
+            <McpTab />
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter] public KeyboardEventArgs? KeyboardEvent { get; set; }
+
+    private DashboardTab _activeTab = DashboardTab.Activity;
+
+    protected override void OnInitialized()
+    {
+        Client.ActivityEventReceived += OnActivityEvent;
+    }
+
+    private void SetTab(DashboardTab tab) => _activeTab = tab;
+
+    private void OnActivityEvent(ActivityEvent _) { /* keeps badge counts fresh if needed */ }
+
+    public void Dispose()
+    {
+        Client.ActivityEventReceived -= OnActivityEvent;
+    }
+}

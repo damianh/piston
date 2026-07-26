@@ -1,0 +1,104 @@
+@inject EngineClientService Client
+@implements IDisposable
+
+<div class="flex flex-col h-full overflow-hidden">
+    <div class="px-3 py-2 border-b border-gray-800 text-xs text-gray-500 flex justify-between items-center">
+        <span>MCP Calls (@_calls.Count)</span>
+        <button class="text-gray-600 hover:text-gray-400 transition-colors" @onclick="Refresh" title="Refresh">↻</button>
+    </div>
+
+    @if (_loading)
+    {
+        <div class="p-4 text-xs text-gray-600 italic">Loading…</div>
+    }
+    else if (_calls.Count == 0)
+    {
+        <div class="p-4 text-xs text-gray-600 italic">No MCP calls yet.</div>
+    }
+    else
+    {
+        <div class="flex-1 overflow-y-auto text-xs">
+            @foreach (var call in Enumerable.Reverse(_calls))
+            {
+                var isExpanded = _expanded.Contains(call);
+                <div class="border-b border-gray-900 hover:bg-gray-900 cursor-pointer"
+                     @onclick="() => ToggleExpand(call)">
+                    <div class="flex items-center gap-3 px-3 py-1.5">
+                        <span class="@(call.Succeeded ? "text-green-400" : "text-red-400")">
+                            @(call.Succeeded ? "✓" : "✗")
+                        </span>
+                        <span class="text-gray-300 font-semibold flex-1">@call.ToolName</span>
+                        <span class="text-gray-600 tabular-nums">@call.DurationMs.ToString("F0")ms</span>
+                        <span class="text-gray-600">@(isExpanded ? "▲" : "▼")</span>
+                    </div>
+                    @if (isExpanded)
+                    {
+                        <div class="px-6 pb-2 text-gray-400 font-mono whitespace-pre-wrap">
+                            @if (!string.IsNullOrEmpty(call.ParamsSummary))
+                            {
+                                <div><span class="text-gray-600">params: </span>@call.ParamsSummary</div>
+                            }
+                            @if (!string.IsNullOrEmpty(call.ResultSummary))
+                            {
+                                <div><span class="text-gray-600">result: </span>@call.ResultSummary</div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private List<McpToolCallData> _calls = [];
+    private readonly HashSet<McpToolCallData> _expanded = [];
+    private bool _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        Client.ActivityEventReceived += OnActivityEvent;
+        await LoadCallLogAsync();
+    }
+
+    private async Task LoadCallLogAsync()
+    {
+        _loading = true;
+        StateHasChanged();
+
+        var response = await Client.GetMcpCallLogAsync().ConfigureAwait(false);
+        _calls = response?.Calls?.ToList() ?? [];
+
+        _loading = false;
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void OnActivityEvent(ActivityEvent evt)
+    {
+        if (evt.Type != ActivityEventTypes.McpToolCall)
+            return;
+
+        var data = evt.Data is null ? null :
+            System.Text.Json.JsonSerializer.Deserialize<McpToolCallData>(
+                evt.Data.ToJsonString(),
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        if (data is null) return;
+
+        _calls.Add(data);
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void ToggleExpand(McpToolCallData call)
+    {
+        if (!_expanded.Remove(call))
+            _expanded.Add(call);
+    }
+
+    private async Task Refresh() => await LoadCallLogAsync();
+
+    public void Dispose()
+    {
+        Client.ActivityEventReceived -= OnActivityEvent;
+    }
+}

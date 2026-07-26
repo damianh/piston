@@ -1,0 +1,112 @@
+@inject EngineClientService Client
+@inject NavigationManager Nav
+@implements IDisposable
+
+<ConnectionOverlay IsConnected="@Client.IsConnected" IsConnecting="@Client.IsConnecting" />
+
+<div class="flex h-screen bg-gray-950 text-gray-100 font-mono text-sm overflow-hidden"
+     @onkeydown="HandleKeyDown" tabindex="0" @ref="_rootElement">
+
+    <!-- Left nav: solution list -->
+    <div class="w-56 border-r border-gray-800 flex flex-col bg-gray-950 shrink-0">
+        <div class="px-3 py-2 border-b border-gray-800 text-xs text-gray-500 uppercase tracking-wider">
+            Solutions
+        </div>
+        <div class="flex-1 overflow-y-auto">
+            @if (_snapshot is not null)
+            {
+                <div class="px-3 py-2 cursor-pointer hover:bg-gray-900 @(true ? "bg-gray-900 border-l-2 border-blue-500" : "")"
+                     @onclick="SelectSolution">
+                    <div class="flex items-center gap-2">
+                        <span class="w-2 h-2 rounded-full shrink-0 @StatusDotClass"></span>
+                        <span class="truncate text-xs" title="@_solutionName">@_solutionName</span>
+                    </div>
+                    <div class="ml-4 mt-1 text-xs text-gray-500 flex gap-3">
+                        @if (_failureCount > 0)
+                        {
+                            <span class="text-red-400">@_failureCount ✗</span>
+                        }
+                        @if (_passCount > 0)
+                        {
+                            <span class="text-green-400">@_passCount ✓</span>
+                        }
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="px-3 py-3 text-xs text-gray-600 italic">No solution loaded</div>
+            }
+        </div>
+    </div>
+
+    <!-- Right detail area -->
+    <div class="flex flex-1 flex-col overflow-hidden">
+        <SolutionDetail KeyboardEvent="@_lastKeyDown" />
+    </div>
+</div>
+
+@code {
+    private StateSnapshotNotification? _snapshot;
+    private string _solutionName = "…";
+    private int _failureCount;
+    private int _passCount;
+    private ElementReference _rootElement;
+    private KeyboardEventArgs? _lastKeyDown;
+
+    private string StatusDotClass => _snapshot?.Phase switch
+    {
+        PistonPhaseDto.Error   => "bg-red-500",
+        PistonPhaseDto.Testing => "bg-yellow-400 animate-pulse",
+        PistonPhaseDto.Building => "bg-blue-400 animate-pulse",
+        _ when _failureCount > 0 => "bg-red-500",
+        _ when _passCount > 0    => "bg-green-500",
+        _                        => "bg-gray-600",
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        Client.StateChanged          += OnStateChanged;
+        Client.ConnectionStateChanged += OnConnectionStateChanged;
+
+        var wsUrl = BuildWsUrl();
+        await Client.StartAsync(wsUrl);
+    }
+
+    private string BuildWsUrl()
+    {
+        var baseUri = new Uri(Nav.BaseUri);
+        var scheme  = baseUri.Scheme == "https" ? "wss" : "ws";
+        return $"{scheme}://{baseUri.Host}:{baseUri.Port}/ws";
+    }
+
+    private void OnStateChanged(StateSnapshotNotification snapshot)
+    {
+        _snapshot = snapshot;
+
+        _solutionName = string.IsNullOrEmpty(snapshot.SolutionPath)
+            ? "Solution"
+            : Path.GetFileNameWithoutExtension(snapshot.SolutionPath);
+
+        _failureCount = snapshot.Suites.SelectMany(s => s.Tests).Count(t => t.Status == TestStatusDto.Failed);
+        _passCount    = snapshot.Suites.SelectMany(s => s.Tests).Count(t => t.Status == TestStatusDto.Passed);
+
+        InvokeAsync(StateHasChanged);
+    }
+
+    private void OnConnectionStateChanged() => InvokeAsync(StateHasChanged);
+
+    private void SelectSolution() { /* single-solution: no-op */ }
+
+    private void HandleKeyDown(KeyboardEventArgs e)
+    {
+        _lastKeyDown = e;
+        StateHasChanged();
+    }
+
+    public void Dispose()
+    {
+        Client.StateChanged           -= OnStateChanged;
+        Client.ConnectionStateChanged -= OnConnectionStateChanged;
+    }
+}
