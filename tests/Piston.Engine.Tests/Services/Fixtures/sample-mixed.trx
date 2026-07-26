@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<TestRun id="c1e80a55-6d17-4c9c-9f7a-000000000001" name="MyProject.Tests@BUILDBOX 2024-01-01 10:00:00" xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+  <Times creation="2024-01-01T10:00:00.100+00:00" queuing="2024-01-01T10:00:00.150+00:00" start="2024-01-01T10:00:00.200+00:00" finish="2024-01-01T10:00:01.000+00:00" />
+  <TestDefinitions>
+    <UnitTest id="11111111-1111-1111-1111-111111111111" name="AddNumbers_ReturnsCorrectSum">
+      <TestMethod codeBase="MyProject.Tests.dll" className="MyProject.Tests.MathTests" name="AddNumbers_ReturnsCorrectSum" />
+    </UnitTest>
+    <UnitTest id="22222222-2222-2222-2222-222222222222" name="Subtract_ThrowsOnNegative">
+      <TestMethod codeBase="MyProject.Tests.dll" className="MyProject.Tests.MathTests" name="Subtract_ThrowsOnNegative" />
+    </UnitTest>
+    <UnitTest id="33333333-3333-3333-3333-333333333333" name="Multiply_SkippedOnCi">
+      <TestMethod codeBase="MyProject.Tests.dll" className="MyProject.Tests.MathTests" name="Multiply_SkippedOnCi" />
+    </UnitTest>
+  </TestDefinitions>
+  <Results>
+    <UnitTestResult executionId="aaaaaaaa-1111-1111-1111-111111111111" testId="11111111-1111-1111-1111-111111111111" testName="AddNumbers_ReturnsCorrectSum" outcome="Passed" duration="00:00:00.0230000" startTime="2024-01-01T10:00:00.200+00:00" endTime="2024-01-01T10:00:00.223+00:00">
+      <Output>
+        <StdOut>Adding 2 + 3</StdOut>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="aaaaaaaa-2222-2222-2222-222222222222" testId="22222222-2222-2222-2222-222222222222" testName="Subtract_ThrowsOnNegative" outcome="Failed" duration="00:00:00.0150000" startTime="2024-01-01T10:00:00.230+00:00" endTime="2024-01-01T10:00:00.245+00:00">
+      <Output>
+        <ErrorInfo>
+          <Message>Assert.Equal() Failure: Values differ&#xD;&#xA;Expected: 5&#xD;&#xA;Actual:   -1</Message>
+          <StackTrace>   at MyProject.Tests.MathTests.Subtract_ThrowsOnNegative() in C:\src\MyProject\MathTests.cs:line 42</StackTrace>
+        </ErrorInfo>
+      </Output>
+    </UnitTestResult>
+    <UnitTestResult executionId="aaaaaaaa-3333-3333-3333-333333333333" testId="33333333-3333-3333-3333-333333333333" testName="Multiply_SkippedOnCi" outcome="NotExecuted" duration="00:00:00.0000000" startTime="2024-01-01T10:00:00.250+00:00" endTime="2024-01-01T10:00:00.250+00:00" />
+  </Results>
+</TestRun>

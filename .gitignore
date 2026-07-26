@@ -22,6 +22,7 @@ nuget.config
 # Test results
 **/TestResults/
 *.trx
+!tests/**/Fixtures/*.trx
 *.coveragexml
 *.coverage
 

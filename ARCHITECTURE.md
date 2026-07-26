@@ -3,7 +3,7 @@
 ## Overview
 
 Piston is a continuous .NET test runner — an alternative to NCrunch — built around a
-**headless controller service** that multiple clients (TUI, IDE extensions, web UI) connect
+**headless controller service** that multiple clients (web UI, IDE extensions, AI agents via MCP) connect
 to via a lightweight protocol.
 
 Key constraints:
@@ -23,7 +23,7 @@ Key constraints:
 |                        CLIENT LAYER                               |
 |                                                                   |
 |  +----------+   +-----------+   +-----------+   +-------------+  |
-|  | TUI      |   | VSCode    |   | Web UI    |   | Future IDE  |  |
+|  | CLI      |   | VSCode    |   | Web UI    |   | Future IDE  |  |
 |  | Client   |   | Extension |   | (browser) |   | Extensions  |  |
 |  +----+-----+   +-----+-----+   +-----+-----+  +------+------+  |
 |       |               |               |                |          |
@@ -74,63 +74,54 @@ delegated to clients that connect over the protocol.
 Piston.slnx
   src/
     Piston.Engine/              # Core engine — headless, no UI deps
-      FileWatching/
-        FileWatcherService.cs
-      Impact/
-        ImpactAnalyzer.cs       # Tiered impact detection
-        ProjectGraph.cs         # MSBuild ProjectGraph wrapper
-        CoverageMap.cs          # Coverage-based test-to-code mapping
-      Build/
-        BuildOrchestrator.cs    # Selective dotnet build
-      Testing/
-        TestOrchestrator.cs     # Parallel test execution via MTP v2
-        TestHostPool.cs         # Process pool for test hosts
-        CoverageCollector.cs    # Collects coverage from MTP
-        ResultAggregator.cs     # Merges results across suites
-      State/
-        StateStore.cs           # SQLite persistence layer
-        EngineState.cs          # In-memory state + change notifications
-      Engine.cs                 # Top-level orchestrator / state machine
+      Services/                 # File watching, build, test running, TRX/MTP parsing
+      Impact/                   # Tiered impact detection (ProjectGraph, coverage map)
+      Coverage/                 # Coverage collection + SQLite persistence
+      Orchestration/            # Top-level pipeline / state machine
+      Models/                   # Engine domain types
 
     Piston.Protocol/            # Shared contracts — no logic
-      Messages/
-        Notifications.cs        # Engine → Client (state, results, coverage)
-        Commands.cs             # Client → Engine (run, filter, configure)
-        Types.cs                # Shared DTOs (TestResult, CoverageData, etc.)
-      IProtocolTransport.cs     # Abstraction over pipe/websocket/stdio
+      Messages/                 # Notifications, commands, activity events
+      Dtos/                     # Shared DTOs (TestResult, CoverageData, etc.)
+      JsonRpc/                  # JSON-RPC 2.0 framing + source-gen serialization
+      Transports/               # Named pipe, WebSocket, stdio transports
 
-    Piston.Controller/          # Executable host for the engine
-      Program.cs                # Entry point — starts engine + protocol router
-      ProtocolRouter.cs         # Manages client connections
-      Transports/
-        NamedPipeTransport.cs
-        WebSocketTransport.cs
-        StdioTransport.cs       # For IDE extensions that launch controller
+    Piston/                     # CLI executable host (namespace Piston.Cli)
+      Program.cs                # Entry point — root/daemon/stop/status commands
+      Protocol/                 # ProtocolRouter, client sessions, dispatchers
+      Services/                 # DaemonLauncher, DiagnosticWatcher, McpCallTracker
+      Configuration/            # .piston.json loading
 
-    Piston.Tui/                 # TUI client (thin)
-      Program.cs                # Connects to controller, renders state
-      Views/                    # SharpConsoleUI views (existing, refactored)
+    Piston.Web/                 # Blazor WASM web dashboard (WebSocket client)
 
-    Piston.VsCode/              # Future: VSCode extension bridge
-      (TypeScript extension + .NET language client)
+    Piston.Mcp/                 # MCP server registration + tool definitions
+    Piston.Roslyn/              # Roslyn worker proxy + JSON-RPC contracts
+    Piston.Roslyn.Worker/       # Supervised child process hosting MSBuildWorkspace
+
+  extensions/
+    vscode/                     # VSCode extension (JSON-RPC over stdio)
 
   tests/
     Piston.Engine.Tests/
     Piston.Protocol.Tests/
+    Piston.Mcp.Tests/
+    Piston.Roslyn.Tests/
 ```
 
 ### Dependency Graph
 
 ```
-Piston.Tui ──────> Piston.Protocol
-Piston.Controller ─> Piston.Engine ──> Piston.Protocol
-Piston.VsCode ────> Piston.Protocol (via JSON-RPC, not assembly ref)
+Piston (CLI host) ──> Piston.Engine ──> Piston.Protocol
+                 ├──> Piston.Mcp ─────> Piston.Engine, Piston.Roslyn
+                 └──> Piston.Roslyn
+Piston.Web ──────────> Piston.Protocol (via WebSocket JSON-RPC)
+Piston.Roslyn.Worker ─> Piston.Roslyn
+extensions/vscode ────> Piston.Protocol (via JSON-RPC, not assembly ref)
 ```
 
-`Piston.Engine` has ZERO dependency on `Piston.Protocol` — it exposes a clean
-in-process API. The `Piston.Controller` bridges between the engine API and the
-protocol. This means the engine is testable in isolation and could be embedded
-directly (e.g., a future VS extension could host the engine in-process).
+The `Piston` CLI host bridges between the engine API and the protocol. The
+engine is testable in isolation and could be embedded directly (e.g., a future
+VS extension could host the engine in-process).
 
 ---
 
@@ -146,7 +137,7 @@ directly (e.g., a future VS extension could host the engine in-process).
 | SignalR | WebSocket + fallback, .NET native | Too web-focused, overhead for local IPC |
 
 **Decision: JSON-RPC 2.0** — lightweight, transport-agnostic, debuggable. Works over:
-- **Named pipes** (TUI, local IDE extensions) — lowest latency
+- **Named pipes** (CLI, local IDE extensions) — lowest latency
 - **WebSocket** (web UI, remote clients)
 - **stdio** (IDE extensions that spawn the controller as a child process)
 
@@ -777,36 +768,38 @@ assets), but this is acceptable because:
 
 ---
 
-## 11. Client Architecture (TUI)
+## 11. Client Architecture (Web UI)
 
-The TUI becomes a thin client. It:
-1. Starts the controller (or connects to an already-running one)
+The primary client is a Blazor WebAssembly dashboard served by the daemon itself
+and connected over WebSocket. It:
+1. Connects to the daemon's `/ws` endpoint (with automatic reconnection/backoff)
 2. Subscribes to state notifications
-3. Renders the UI from state snapshots and streaming test results
-4. Sends commands (force run, filter, pin, etc.) via JSON-RPC
+3. Renders live views from state snapshots and streaming test results
+   (tests, diagnostics, activity feed, MCP call history)
+4. Sends commands (force run, filter, clear) via JSON-RPC
 
 ```
-TUI Process                         Controller Process
+Browser (Blazor WASM)               Daemon Process
 +-----------+                       +------------------+
 |           |  -- engine/start -->  |                  |
 |  Render   |  <-- stateSnapshot -- |  Engine running  |
 |  Loop     |  <-- tests/result --  |  File watching   |
 |           |  <-- tests/result --  |  Building...     |
-|  Key      |  <-- phaseChanged --  |  Testing...      |
-|  Handler  |  -- engine/forceRun ->|                  |
+|  UI       |  <-- phaseChanged --  |  Testing...      |
+|  Events   |  -- engine/forceRun ->|                  |
 |           |  <-- stateSnapshot -- |  Results ready   |
 +-----------+                       +------------------+
 ```
 
 ### Startup Modes
 
-1. **`piston`** (no args): Starts controller + TUI in same process (embedded mode)
-2. **`piston --headless`**: Starts controller only (daemon mode)
-3. **`piston --connect`**: TUI only, connects to running controller
-4. **`piston --connect pipe://piston-abc123`**: Connect to specific pipe
+1. **`piston`** (no args): Auto-starts the daemon if needed, opens the web dashboard
+2. **`piston daemon`**: Runs the daemon in the foreground (pipe + web + optional MCP)
+3. **`piston daemon --stdio`**: stdio JSON-RPC transport for IDE extensions
+4. **`piston stop` / `piston status`**: Manage a running daemon over the named pipe
 
-Embedded mode is the default for simple usage. Headless mode is for IDE
-extensions and multi-client scenarios.
+> Historical note: the original client was a TUI; it was replaced by the
+> Blazor WASM web UI.
 
 ---
 
@@ -815,7 +808,7 @@ extensions and multi-client scenarios.
 NCrunch doesn't support VSCode — this is Piston's differentiator.
 
 The extension would:
-1. Spawn `piston --headless` as a child process (stdio transport)
+1. Spawn `piston daemon --stdio` as a child process (stdio transport)
 2. Communicate via JSON-RPC over stdio
 3. Show inline coverage markers (gutter decorations)
 4. Show test status in the test explorer
@@ -876,7 +869,7 @@ Target latencies for a 100-project solution with 5,000 tests:
 
 ```
 Piston Controller
-  ├── Protocol Router (named pipe / stdio JSON-RPC) ─── TUI / IDE clients
+  ├── Protocol Router (named pipe / stdio / WebSocket JSON-RPC) ─── CLI / IDE / web clients
   ├── MCP Server (HTTP/SSE on --mcp-port) ─── AI agents
   │
   ├── Piston Engine (test runner, file watcher, build)
@@ -896,8 +889,7 @@ Piston Controller
 ### Updated Dependency Graph
 
 ```
-Piston.Tui ──────────> Piston.Protocol
-Piston.Controller ───> Piston.Engine ───> Piston.Protocol
+Piston (CLI host) ───> Piston.Engine ───> Piston.Protocol
                   ├──> Piston.Roslyn
                   └──> Piston.Mcp ──────> Piston.Engine
                                      └──> Piston.Roslyn
@@ -963,20 +955,21 @@ MCP can be enabled via CLI or config file:
 
 ```bash
 # CLI
-piston --headless --mcp-port 3001
+piston daemon --mcp-port 3001
 
 # .piston.json
 { "mcpPort": 3001 }
 ```
 
-When `mcpPort` is set in `.piston.json`, headless mode automatically starts the MCP
+When `mcpPort` is set in `.piston.json`, the daemon automatically starts the MCP
 server alongside the named pipe listener. CLI `--mcp-port` takes precedence.
 
 ---
 
-## 16. Migration Path from Current Architecture
+## 16. Migration Path from Current Architecture (historical)
 
-The current codebase has good bones. Migration is incremental:
+All phases below are complete. The TUI client referenced in Phases 1 and 5 was
+later replaced by the Blazor WASM web UI (section 11).
 
 **Phase 1**: Extract engine from TUI
 - Move orchestration logic from `Piston.Core` → `Piston.Engine`

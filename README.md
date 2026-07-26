@@ -1,8 +1,8 @@
 # Piston
 
-A .NET 10 TUI continuous test runner. Think NCrunch, but in your terminal.
+An AI-native continuous test runner and code intelligence server for .NET. Think NCrunch and ReSharper, rebuilt as a headless daemon that serves humans (web dashboard, IDE extensions) and AI agents (MCP) alike.
 
-Piston watches a .NET solution for file changes, rebuilds automatically, runs tests, and displays live results in a keyboard-driven terminal UI.
+Piston watches a .NET solution for file changes, determines what was impacted, rebuilds, runs the affected tests in parallel, and streams live results to every connected client. A supervised Roslyn workspace exposes diagnostics, semantic search, AST inspection, and refactorings over the same daemon.
 
 ## Requirements
 
@@ -11,48 +11,70 @@ Piston watches a .NET solution for file changes, rebuilds automatically, runs te
 
 ## Usage
 
-```
-piston [<solution>] [--debounce <ms>] [--filter <pattern>]
+```sh
+# Start (or attach to) the daemon and open the web dashboard
+piston [<solution>] [--pipe-name <name>] [--web-port <port>]
+
+# Run the daemon in the foreground
+piston daemon [<solution>] [options]
+
+# Manage a running daemon
+piston stop [<solution>]
+piston status [<solution>]
 ```
 
-**Arguments:**
+`<solution>` is a path to a `.sln`, `.slnx`, or `.slnf` file; if omitted, Piston auto-discovers the first solution in the current directory.
 
-| Argument | Description |
+**`piston daemon` options:**
+
+| Option | Description |
 |---|---|
-| `<solution>` | Path to `.sln` or `.slnx` file. Auto-discovers if omitted. |
-| `--debounce <ms>` | File-change debounce interval (default: 300ms). |
-| `--filter <pattern>` | Regex or substring to filter test names on startup. |
+| `--debounce <ms>` | File-change debounce interval in milliseconds. |
+| `--filter <pattern>` | Substring or regex to filter test names on startup. |
+| `--coverage` | Enable code coverage collection during test runs. |
+| `--parallelism <n>` | Max concurrent test processes. `0` = auto. |
+| `--stdio` | Use stdin/stdout for JSON-RPC transport (for IDE extensions). |
+| `--pipe-name <name>` | Override the named pipe name (default: derived from solution path). |
+| `--mcp-port <port>` | Enable the MCP server on the specified port. |
+| `--web-port <port>` | Port for the web UI and WebSocket server (default: 5199). |
 
 **Examples:**
 
 ```sh
-# Auto-discover solution in current directory
+# Auto-discover solution, start daemon, open dashboard in browser
 piston
 
 # Explicit solution path
 piston ./src/MyApp.slnx
 
-# Start with a filter pre-applied
-piston --filter "CustomerTests"
+# Foreground daemon with coverage and MCP enabled
+piston daemon --coverage --mcp-port 5200
 ```
 
-## Keyboard shortcuts
+## Web dashboard
 
-| Key | Action |
+The daemon serves a Blazor WebAssembly dashboard (default `http://localhost:5199`) connected over WebSocket. It shows live test results, build errors, Roslyn diagnostics, engine activity, and MCP tool-call history.
+
+## MCP server (AI agents)
+
+With `--mcp-port` (or `mcpPort` in `.piston.json`), the daemon exposes an MCP endpoint that gives agents an always-warm view of the solution — no cold `dotnet build`/`dotnet test` cycles.
+
+| Tool | Description |
 |---|---|
-| `R` | Force re-run (rebuild + test) |
-| `F` | Open filter prompt |
-| `C` | Clear test results |
-| `G` | Cycle grouping mode (Project/NS/Class → By Status → Flat) |
-| `E` | Expand / collapse all tree nodes |
-| `P` | Pin / unpin selected test (pinned tests stay at top) |
-| `1` | Toggle visibility of Passed tests |
-| `2` | Toggle visibility of Failed tests |
-| `3` | Toggle visibility of Skipped tests |
-| `4` | Toggle visibility of Not Run tests |
-| `]` | Jump to next failing test |
-| `[` | Jump to previous failing test |
-| `Q` / `Ctrl+C` | Quit |
+| `RunTests` | Trigger a build + test run. |
+| `GetTestResults` | Read current test results. |
+| `SetTestFilter` | Apply a test name filter. |
+| `ClearResults` | Clear accumulated results. |
+| `LoadWorkspace` | Load the Roslyn workspace. |
+| `GetDiagnostics` | Compiler errors/warnings per project. |
+| `SemanticSearch` | Find all references to a symbol. |
+| `GetAst` | Inspect declaration-level syntax trees. |
+| `Rename` | Rename a symbol solution-wide (preview or apply). |
+| `NotifyFileChanged` | Sync an edited file into the workspace. |
+
+## VSCode extension
+
+The `extensions/vscode` folder contains an extension that connects to the daemon over stdio JSON-RPC, providing a test explorer and coverage gutter markers.
 
 ## Configuration file
 
@@ -61,33 +83,25 @@ Piston reads an optional `.piston.json` in the solution directory. CLI flags tak
 ```json
 {
   "debounceMs": 500,
-  "testFilter": "MyNamespace"
+  "testFilter": "MyNamespace",
+  "coverageEnabled": true,
+  "parallelism": 4,
+  "mcpPort": 5200
 }
 ```
 
 | Field | Type | Description |
 |---|---|---|
+| `solution` | `string` | Path to the solution file (relative to the config file). |
 | `debounceMs` | `int` | File-change debounce interval in milliseconds. |
 | `testFilter` | `string` | Default test filter (regex or substring). |
-
-## TUI layout
-
-```
-┌──────────────────────────────────────────────────────┐
-│ ● WATCHING   MyApp.slnx          Last run: 14:32:01  │
-├───────────────────┬──────────────────────────────────┤
-│ MyApp.Tests       │ MyApp.Tests.CustomerService       │
-│   CustomerService │                                   │
-│     ✓ CanCreate   │ Status:   PASSED                  │
-│     ✗ CanDelete   │ Duration: 42ms                    │
-│   OrderService    │                                   │
-│     ✓ CanPlace    │                                   │
-├───────────────────┴──────────────────────────────────┤
-│ ✓ 2  ✗ 1  ○ 0   14:32:01  [F] filter  [R] run  [Q]  │
-└──────────────────────────────────────────────────────┘
-```
-
-When the build fails, the detail panel shows the compiler error messages.
+| `coverageEnabled` | `bool` | Enable code coverage collection. |
+| `parallelism` | `int` | Max concurrent test processes. `0` = auto. |
+| `processRecycleAfter` | `int` | Runs after which a pool slot logs a recycling warning (default 50). |
+| `pipeName` | `string` | Override the named pipe name. |
+| `stdio` | `bool` | Use stdin/stdout JSON-RPC transport. |
+| `mcpPort` | `int` | Enable the MCP server on this port. |
+| `testExecutionMode` | `string` | `"Auto"`, `"Process"`, or `"InProcess"`. |
 
 ## Building from source
 
@@ -103,3 +117,5 @@ Run tests:
 ```sh
 dotnet test Piston.slnx
 ```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full system design.
