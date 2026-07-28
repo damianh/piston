@@ -24,6 +24,9 @@ public static class Program
 
         _settings = DesktopSettings.Load();
 
+        using var updates = new UpdateService(Console.Error.WriteLine);
+        updates.Start();
+
         var solutionPath = ResolveSolution(args);
 
         _window = new PhotinoWindow()
@@ -54,6 +57,7 @@ public static class Program
         if (OperatingSystem.IsWindows())
             _tray?.Dispose();
         StopDaemon();
+        updates.ApplyPendingOnExit();
     }
 
     // ── Solution resolution ─────────────────────────────────────────────────────
