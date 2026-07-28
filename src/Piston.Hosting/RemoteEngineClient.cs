@@ -5,14 +5,14 @@ using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
 
-namespace Piston.Cli;
+namespace Piston.Hosting;
 
 /// <summary>
 /// <see cref="IEngineClient"/> implementation that communicates with a headless controller
 /// over a named pipe via JSON-RPC 2.0.
 /// Automatically reconnects with exponential backoff when the connection is lost.
 /// </summary>
-internal sealed class RemoteEngineClient(string pipeName) : IEngineClient
+public sealed class RemoteEngineClient(string pipeName) : IEngineClient
 {
     private NamedPipeClientTransport? _transport;
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonRpcResponse>> _pending = new();

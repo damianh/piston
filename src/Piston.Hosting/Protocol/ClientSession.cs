@@ -1,13 +1,13 @@
 using System.Text.Json.Nodes;
 using Piston.Protocol.JsonRpc;
 
-namespace Piston.Cli.Protocol;
+namespace Piston.Hosting.Protocol;
 
 /// <summary>
 /// Represents a single connected client on the server side.
 /// Runs a read loop that dispatches incoming JSON-RPC requests and writes responses back.
 /// </summary>
-internal sealed class ClientSession(Stream stream, string sessionId, ICommandDispatcher dispatcher)
+public sealed class ClientSession(Stream stream, string sessionId, ICommandDispatcher dispatcher)
 {
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 

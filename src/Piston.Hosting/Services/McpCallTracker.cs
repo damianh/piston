@@ -1,13 +1,13 @@
 using Piston.Engine;
 using Piston.Protocol.Messages;
 
-namespace Piston.Cli.Services;
+namespace Piston.Hosting.Services;
 
 /// <summary>
 /// Tracks MCP tool calls in a fixed-size ring buffer (last 200 entries).
 /// Emits <see cref="ActivityEvent"/> notifications via <see cref="IActivityEventSink"/>.
 /// </summary>
-internal sealed class McpCallTracker(IActivityEventSink sink, string? solutionPath) : IMcpCallRecorder
+public sealed class McpCallTracker(IActivityEventSink sink, string? solutionPath) : IMcpCallRecorder
 {
     private const int RingBufferCapacity = 200;
 

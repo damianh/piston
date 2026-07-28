@@ -3,11 +3,11 @@ using Piston.Engine.Models;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.Messages;
 
-namespace Piston.Cli.Mapping;
+namespace Piston.Hosting.Mapping;
 
-internal static class DtoMapper
+public static class DtoMapper
 {
-    internal static TestStatusDto ToDto(this TestStatus status) => status switch
+    public static TestStatusDto ToDto(this TestStatus status) => status switch
     {
         TestStatus.NotRun   => TestStatusDto.NotRun,
         TestStatus.Running  => TestStatusDto.Running,
@@ -17,7 +17,7 @@ internal static class DtoMapper
         _                   => TestStatusDto.NotRun,
     };
 
-    internal static BuildStatusDto ToDto(this BuildStatus status) => status switch
+    public static BuildStatusDto ToDto(this BuildStatus status) => status switch
     {
         BuildStatus.None       => BuildStatusDto.None,
         BuildStatus.Building   => BuildStatusDto.Building,
@@ -26,7 +26,7 @@ internal static class DtoMapper
         _                      => BuildStatusDto.None,
     };
 
-    internal static PistonPhaseDto ToDto(this PistonPhase phase) => phase switch
+    public static PistonPhaseDto ToDto(this PistonPhase phase) => phase switch
     {
         PistonPhase.Idle      => PistonPhaseDto.Idle,
         PistonPhase.Watching  => PistonPhaseDto.Watching,
@@ -37,7 +37,7 @@ internal static class DtoMapper
         _                     => PistonPhaseDto.Idle,
     };
 
-    internal static ProjectRunStatusDto ToDto(this ProjectRunStatus status) => status switch
+    public static ProjectRunStatusDto ToDto(this ProjectRunStatus status) => status switch
     {
         ProjectRunStatus.Pending   => ProjectRunStatusDto.Pending,
         ProjectRunStatus.Running   => ProjectRunStatusDto.Running,
@@ -47,7 +47,7 @@ internal static class DtoMapper
         _                          => ProjectRunStatusDto.Pending,
     };
 
-    internal static TestResultDto ToDto(this TestResult result) =>
+    public static TestResultDto ToDto(this TestResult result) =>
         new(
             result.FullyQualifiedName,
             result.DisplayName,
@@ -59,7 +59,7 @@ internal static class DtoMapper
             result.Source
         );
 
-    internal static TestSuiteDto ToDto(this TestSuite suite) =>
+    public static TestSuiteDto ToDto(this TestSuite suite) =>
         new(
             suite.Name,
             suite.Tests.Select(t => t.ToDto()).ToList(),
@@ -67,7 +67,7 @@ internal static class DtoMapper
             suite.TotalDuration.TotalMilliseconds
         );
 
-    internal static BuildResultDto ToDto(this BuildResult result) =>
+    public static BuildResultDto ToDto(this BuildResult result) =>
         new(
             result.Status.ToDto(),
             result.Errors,
@@ -75,7 +75,7 @@ internal static class DtoMapper
             result.Duration.TotalMilliseconds
         );
 
-    internal static StateSnapshotNotification ToSnapshot(this PistonState state) =>
+    public static StateSnapshotNotification ToSnapshot(this PistonState state) =>
         new(
             Phase:                  state.Phase.ToDto(),
             Suites:                 state.TestSuites.Select(s => s.ToDto()).ToList(),

@@ -2,6 +2,7 @@
   <Folder Name="/src/">
     <Project Path="src/Piston.Protocol/Piston.Protocol.csproj" />
     <Project Path="src/Piston.Engine/Piston.Engine.csproj" />
+    <Project Path="src/Piston.Hosting/Piston.Hosting.csproj" />
     <Project Path="src/Piston/Piston.csproj" />
     <Project Path="src/Piston.Web/Piston.Web.csproj" />
     <Project Path="src/Piston.Mcp/Piston.Mcp.csproj" />

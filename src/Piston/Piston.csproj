@@ -7,13 +7,11 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
-    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Piston.Engine\Piston.Engine.csproj" />
-    <ProjectReference Include="..\Piston.Mcp\Piston.Mcp.csproj" />
+    <ProjectReference Include="..\Piston.Hosting\Piston.Hosting.csproj" />
     <ProjectReference Include="..\Piston.Protocol\Piston.Protocol.csproj" />
-    <ProjectReference Include="..\Piston.Roslyn\Piston.Roslyn.csproj" />
     <!-- Piston.Web is published and its static files are copied to wwwroot -->
     <ProjectReference Include="..\Piston.Web\Piston.Web.csproj"
                       ReferenceOutputAssembly="false"

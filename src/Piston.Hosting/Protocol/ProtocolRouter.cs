@@ -1,22 +1,22 @@
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text.Json.Nodes;
-using Piston.Cli.Services;
+using Piston.Hosting.Services;
 using Piston.Engine;
 using Piston.Engine.Models;
-using Piston.Cli.Mapping;
+using Piston.Hosting.Mapping;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
 
-namespace Piston.Cli.Protocol;
+namespace Piston.Hosting.Protocol;
 
 /// <summary>
 /// Accepts named pipe and WebSocket client connections, manages session instances,
 /// and broadcasts engine state notifications to all connected clients.
 /// Implements <see cref="IActivityEventSink"/> to fan in activity events from all subsystems.
 /// </summary>
-internal sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
+public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
     : IActivityEventSink, IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, ClientSession> _pipeSessions = new();

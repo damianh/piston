@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
-using Piston.Cli;
-using Piston.Cli.Protocol;
+using Piston.Hosting;
+using Piston.Hosting.Protocol;
 using Piston.Engine;
 using Piston.Engine.Models;
 using Piston.Protocol.JsonRpc;
