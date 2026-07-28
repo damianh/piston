@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Velopack;
 using Velopack.Sources;
 
@@ -21,7 +22,19 @@ public sealed class UpdateService : IDisposable
     public UpdateService(Action<string>? log = null)
     {
         _log = log ?? (_ => { });
-        _manager = new UpdateManager(new GithubSource(RepoUrl, accessToken: null, prerelease: false));
+        _manager = new UpdateManager(
+            new GithubSource(RepoUrl, accessToken: null, prerelease: false),
+            new UpdateOptions { ExplicitChannel = RidChannel() });
+    }
+
+    /// <summary>Channel name matching the RID used by the release workflow's vpk pack step.</summary>
+    private static string RidChannel()
+    {
+        var os = OperatingSystem.IsWindows() ? "win"
+            : OperatingSystem.IsMacOS() ? "osx"
+            : "linux";
+        var arch = RuntimeInformation.OSArchitecture == Architecture.Arm64 ? "arm64" : "x64";
+        return $"{os}-{arch}";
     }
 
     /// <summary>True when an update has been downloaded and will apply on exit.</summary>
