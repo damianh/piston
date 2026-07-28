@@ -1,0 +1,38 @@
+<Project>
+  <!--
+    Publishes the Piston.Web Blazor WASM project and copies its static assets into
+    the importing project's output wwwroot/ so the DaemonHost web server can serve them.
+    Import from any host executable that embeds the daemon (CLI, Desktop).
+
+    Uses the MSBuild task (not `Exec dotnet publish`) so that when multiple hosts
+    build in parallel in one solution build, the engine dedupes/serializes the
+    Piston.Web publish instead of racing on its obj/ directory.
+  -->
+  <PropertyGroup>
+    <_WebProjectPath>$(MSBuildThisFileDirectory)Piston.Web\Piston.Web.csproj</_WebProjectPath>
+    <_WebPublishDir>$(MSBuildThisFileDirectory)Piston.Web\bin\BlazorPublish\</_WebPublishDir>
+  </PropertyGroup>
+
+  <Target Name="PublishBlazorWebUI" BeforeTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
+    <MSBuild Projects="$(_WebProjectPath)"
+             Targets="Publish"
+             Properties="Configuration=$(Configuration);PublishDir=$(_WebPublishDir);PublishTrimmed=false"
+             RemoveProperties="RuntimeIdentifier;SelfContained;PublishSingleFile;PublishReadyToRun;TargetFramework;Platform;OutputPath" />
+    <ItemGroup>
+      <_BlazorFiles Include="$(_WebPublishDir)wwwroot\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_BlazorFiles)"
+          DestinationFiles="@(_BlazorFiles->'$(OutputPath)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Also copy the Blazor assets on publish so self-contained publishes include the UI. -->
+  <Target Name="PublishBlazorWebUIOnPublish" AfterTargets="Publish">
+    <ItemGroup>
+      <_BlazorPublishFiles Include="$(_WebPublishDir)wwwroot\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_BlazorPublishFiles)"
+          DestinationFiles="@(_BlazorPublishFiles->'$(PublishDir)wwwroot\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+</Project>

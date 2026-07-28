@@ -24,19 +24,5 @@
   </ItemGroup>
 
   <!-- Publish Piston.Web and copy its wwwroot output to our wwwroot -->
-  <Target Name="PublishBlazorWebUI" BeforeTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
-    <PropertyGroup>
-      <_WebProjectPath>$(MSBuildThisFileDirectory)..\Piston.Web\Piston.Web.csproj</_WebProjectPath>
-      <_WebPublishDir>$(MSBuildThisFileDirectory)..\Piston.Web\bin\BlazorPublish</_WebPublishDir>
-      <_WwwRootDir>$(OutputPath)wwwroot\</_WwwRootDir>
-    </PropertyGroup>
-    <Exec Command="dotnet publish &quot;$(_WebProjectPath)&quot; -c $(Configuration) --output &quot;$(_WebPublishDir)&quot; --nologo --verbosity quiet -p:PublishTrimmed=false"
-          ConsoleToMSBuild="true" />
-    <ItemGroup>
-      <_BlazorFiles Include="$(_WebPublishDir)\wwwroot\**\*" />
-    </ItemGroup>
-    <Copy SourceFiles="@(_BlazorFiles)"
-          DestinationFiles="@(_BlazorFiles->'$(_WwwRootDir)%(RecursiveDir)%(Filename)%(Extension)')"
-          SkipUnchangedFiles="true" />
-  </Target>
+  <Import Project="..\BlazorWebUI.targets" />
 </Project>
