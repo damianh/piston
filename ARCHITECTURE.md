@@ -86,11 +86,22 @@ Piston.slnx
       JsonRpc/                  # JSON-RPC 2.0 framing + source-gen serialization
       Transports/               # Named pipe, WebSocket, stdio transports
 
+    Piston.Hosting/             # Reusable daemon composition (DaemonHost)
+      DaemonHost.cs             # Engine + router + web server + MCP wiring
+      Protocol/                 # ProtocolRouter, client sessions, dispatchers
+      Services/                 # DiagnosticWatcher, McpCallTracker
+      Configuration/            # .piston.json loading
+
     Piston/                     # CLI executable host (namespace Piston.Cli)
       Program.cs                # Entry point — root/daemon/stop/status commands
-      Protocol/                 # ProtocolRouter, client sessions, dispatchers
-      Services/                 # DaemonLauncher, DiagnosticWatcher, McpCallTracker
-      Configuration/            # .piston.json loading
+      DaemonLauncher.cs         # Spawns/attaches background daemon
+      BrowserLauncher.cs        # Opens the dashboard in the default browser
+
+    Piston.Desktop/             # Cross-platform desktop app (Photino shell)
+      Program.cs                # Window + in-process DaemonHost + solution picker
+      WindowsTrayIcon.cs        # Tray icon + close-to-tray (Windows)
+      AutostartManager.cs       # Start-on-login registration per OS
+      UpdateService.cs          # Velopack auto-update from GitHub Releases
 
     Piston.Web/                 # Blazor WASM web dashboard (WebSocket client)
 
@@ -111,17 +122,19 @@ Piston.slnx
 ### Dependency Graph
 
 ```
-Piston (CLI host) ──> Piston.Engine ──> Piston.Protocol
-                 ├──> Piston.Mcp ─────> Piston.Engine, Piston.Roslyn
-                 └──> Piston.Roslyn
+Piston (CLI host) ────┐
+Piston.Desktop ───────┴─> Piston.Hosting ──> Piston.Engine ──> Piston.Protocol
+                                        ├──> Piston.Mcp ─────> Piston.Engine, Piston.Roslyn
+                                        └──> Piston.Roslyn
 Piston.Web ──────────> Piston.Protocol (via WebSocket JSON-RPC)
 Piston.Roslyn.Worker ─> Piston.Roslyn
 extensions/vscode ────> Piston.Protocol (via JSON-RPC, not assembly ref)
 ```
 
-The `Piston` CLI host bridges between the engine API and the protocol. The
-engine is testable in isolation and could be embedded directly (e.g., a future
-VS extension could host the engine in-process).
+`Piston.Hosting` owns the daemon composition (`DaemonHost`): engine, protocol
+router, web server, and optional MCP server. The CLI runs it as a background
+process; the desktop app hosts it in-process. The engine remains testable in
+isolation and embeddable by future hosts (e.g., a VS extension).
 
 ---
 

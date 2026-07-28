@@ -9,6 +9,36 @@ Piston watches a .NET solution for file changes, determines what was impacted, r
 - .NET 10 SDK
 - A .NET solution with xUnit, NUnit, or MSTest tests
 
+## Desktop app (trial)
+
+Piston ships as a cross-platform desktop app: a native window hosting the
+dashboard, with the engine running in-process. Download the installer for your
+platform from [GitHub Releases](https://github.com/damianh/piston/releases):
+
+| Platform | Package |
+|---|---|
+| Windows x64 / arm64 | `Piston-win-x64-Setup.exe` / `Piston-win-arm64-Setup.exe` |
+| macOS x64 / arm64 (Apple Silicon) | `Piston-osx-x64.pkg` / `Piston-osx-arm64.pkg` |
+| Linux x64 / arm64 | `Piston-linux-x64.AppImage` / `Piston-linux-arm64.AppImage` |
+
+On first launch, pick a solution (or pass one as the first argument); Piston
+remembers it for next time. Closing the window on Windows minimizes to the
+tray; the tray menu has *Open Dashboard*, *Start on login*, and *Quit*.
+Trial builds auto-update in the background from GitHub Releases and apply the
+update on exit.
+
+**Trial limitations:**
+
+- Builds are unsigned: expect a SmartScreen warning on Windows ("More info" >
+  "Run anyway") and a Gatekeeper prompt on macOS (right-click > Open, or
+  `xattr -d com.apple.quarantine <app>`).
+- Linux needs WebKitGTK: `sudo apt install libwebkit2gtk-4.1-0` (or your
+  distro's equivalent).
+- Tray icon and close-to-tray are Windows-only for now; on macOS/Linux,
+  closing the window quits the app.
+- The .NET 10 SDK must still be installed: the engine shells out to `dotnet`
+  to build and run your tests.
+
 ## Usage
 
 ```sh
@@ -109,7 +139,12 @@ Piston reads an optional `.piston.json` in the solution directory. CLI flags tak
 git clone <repo>
 cd piston
 dotnet build Piston.slnx
+
+# CLI
 dotnet run --project src/Piston -- [args]
+
+# Desktop app
+dotnet run --project src/Piston.Desktop -- [solution]
 ```
 
 Run tests:
