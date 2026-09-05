@@ -1,15 +1,15 @@
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
-using Piston.Cli.Configuration;
+using Piston.Hosting.Configuration;
 using Piston.Engine;
-using Piston.Cli.Mapping;
+using Piston.Hosting.Mapping;
 using Piston.Protocol.JsonRpc;
 
-namespace Piston.Cli;
+namespace Piston.Hosting;
 
-internal static class CliHelpers
+public static class HostHelpers
 {
-    internal static string ResolveSolutionPath(FileInfo? solutionArg)
+    public static string ResolveSolutionPath(FileInfo? solutionArg)
     {
         if (solutionArg is not null)
         {
@@ -40,7 +40,7 @@ internal static class CliHelpers
         };
     }
 
-    internal static PistonConfig LoadConfig(string solutionDir)
+    public static PistonConfig LoadConfig(string solutionDir)
     {
         var configPath = Path.Combine(solutionDir, ".piston.json");
         if (!File.Exists(configPath))
@@ -62,7 +62,7 @@ internal static class CliHelpers
         }
     }
 
-    internal static PistonOptions BuildOptions(
+    public static PistonOptions BuildOptions(
         string solutionPath,
         int cliDebounceMs,
         string? cliFilter,
@@ -102,7 +102,7 @@ internal static class CliHelpers
         };
     }
 
-    internal static bool DotnetSdkAvailable()
+    public static bool DotnetSdkAvailable()
     {
         try
         {
@@ -122,13 +122,13 @@ internal static class CliHelpers
         }
     }
 
-    internal static JsonRpcNotification BuildStateSnapshot(IEngine engine)
+    public static JsonRpcNotification BuildStateSnapshot(IEngine engine)
     {
         var snapshot = engine.State.ToSnapshot();
         return ToNotification(ProtocolMethods.EngineStateSnapshot, snapshot);
     }
 
-    internal static JsonRpcNotification ToNotification<T>(string method, T payload)
+    public static JsonRpcNotification ToNotification<T>(string method, T payload)
     {
         var paramsNode = JsonNode.Parse(
             System.Text.Json.JsonSerializer.Serialize(payload, JsonRpcSerializer.Options));

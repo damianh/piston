@@ -1,16 +1,16 @@
 using System.Text.Json.Nodes;
-using Piston.Cli.Services;
+using Piston.Hosting.Services;
 using Piston.Engine;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 
-namespace Piston.Cli.Protocol;
+namespace Piston.Hosting.Protocol;
 
 /// <summary>
 /// Bridges JSON-RPC command dispatch to <see cref="IEngine"/> method calls.
 /// </summary>
-internal sealed class EngineCommandDispatcher : ICommandDispatcher
+public sealed class EngineCommandDispatcher : ICommandDispatcher
 {
     private static readonly char[] ForbiddenFilterChars = ['"', '&', '|', ';', '`', '$'];
 

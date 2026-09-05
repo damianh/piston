@@ -3,14 +3,14 @@ using Piston.Protocol.Messages;
 using Piston.Roslyn;
 using Piston.Roslyn.Messages;
 
-namespace Piston.Cli.Services;
+namespace Piston.Hosting.Services;
 
 /// <summary>
 /// Periodically polls <see cref="IRoslynWorkspace"/> for diagnostics, diffs against the
 /// previous snapshot, and emits <see cref="ActivityEventTypes.DiagnosticsChanged"/> events.
 /// Also maintains <see cref="CurrentDiagnostics"/> for on-demand tab fetch.
 /// </summary>
-internal sealed class DiagnosticWatcherService : IDisposable
+public sealed class DiagnosticWatcherService : IDisposable
 {
     private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(5);
 

@@ -1,12 +1,12 @@
 using System.Text.Json.Nodes;
 
-namespace Piston.Cli.Protocol;
+namespace Piston.Hosting.Protocol;
 
 /// <summary>
 /// Abstracts dispatching of JSON-RPC commands to the engine.
 /// Used by <see cref="ClientSession"/> to decouple session I/O from engine concerns.
 /// </summary>
-internal interface ICommandDispatcher
+public interface ICommandDispatcher
 {
     /// <summary>
     /// Dispatches a command by <paramref name="method"/> name with optional typed <paramref name="params"/>.

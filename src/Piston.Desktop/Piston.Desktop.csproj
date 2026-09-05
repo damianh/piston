@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>PistonDesktop</AssemblyName>
+    <ApplicationIcon Condition="Exists('Assets\piston.ico')">Assets\piston.ico</ApplicationIcon>
+  </PropertyGroup>
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Photino.NET" />
+    <PackageReference Include="Velopack" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Piston.Engine\Piston.Engine.csproj" />
+    <ProjectReference Include="..\Piston.Hosting\Piston.Hosting.csproj" />
+    <!-- Piston.Web is published and its static files are copied to wwwroot -->
+    <ProjectReference Include="..\Piston.Web\Piston.Web.csproj"
+                      ReferenceOutputAssembly="false"
+                      SkipGetTargetFrameworkProperties="true" />
+  </ItemGroup>
+
+  <!-- Publish Piston.Web and copy its wwwroot output to our wwwroot -->
+  <Import Project="..\BlazorWebUI.targets" />
+</Project>

@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to package (e.g. 0.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet build Piston.slnx -c Release
+      - run: dotnet test Piston.slnx -c Release --no-build
+
+  package:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            os: windows-latest
+          - rid: win-arm64
+            os: windows-latest
+          - rid: osx-x64
+            os: macos-latest
+          - rid: osx-arm64
+            os: macos-latest
+          - rid: linux-x64
+            os: ubuntu-latest
+          - rid: linux-arm64
+            os: ubuntu-24.04-arm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Determine version
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> "$GITHUB_ENV"
+          else
+            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Publish
+        shell: bash
+        run: |
+          dotnet publish src/Piston.Desktop/Piston.Desktop.csproj \
+            -c Release -r ${{ matrix.rid }} --self-contained \
+            -p:Version=$VERSION \
+            -o publish/${{ matrix.rid }}
+
+      - name: Install vpk
+        run: dotnet tool install -g vpk
+
+      - name: Pack (Velopack)
+        shell: bash
+        run: |
+          vpk pack \
+            --packId Piston \
+            --packVersion "$VERSION" \
+            --packDir publish/${{ matrix.rid }} \
+            --mainExe "$([[ '${{ matrix.rid }}' == win-* ]] && echo PistonDesktop.exe || echo PistonDesktop)" \
+            --packTitle "Piston" \
+            --packAuthors "Damian Hickey" \
+            --channel ${{ matrix.rid }} \
+            --outputDir releases/${{ matrix.rid }}
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'push'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          vpk upload github \
+            --repoUrl https://github.com/${{ github.repository }} \
+            --token "$GH_TOKEN" \
+            --channel ${{ matrix.rid }} \
+            --outputDir releases/${{ matrix.rid }} \
+            --tag "$GITHUB_REF_NAME" \
+            --merge
+
+      - name: Upload workflow artifact
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: piston-${{ matrix.rid }}
+          path: releases/${{ matrix.rid }}

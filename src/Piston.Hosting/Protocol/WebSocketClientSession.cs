@@ -2,13 +2,13 @@ using System.Net.WebSockets;
 using System.Text.Json.Nodes;
 using Piston.Protocol.JsonRpc;
 
-namespace Piston.Cli.Protocol;
+namespace Piston.Hosting.Protocol;
 
 /// <summary>
 /// Represents a single WebSocket client connection on the server side.
 /// Each WebSocket message is treated as one complete JSON-RPC message (no NDJSON framing).
 /// </summary>
-internal sealed class WebSocketClientSession(WebSocket webSocket, string sessionId, ICommandDispatcher dispatcher)
+public sealed class WebSocketClientSession(WebSocket webSocket, string sessionId, ICommandDispatcher dispatcher)
 {
     private const int MaxMessageSize = 4 * 1024 * 1024;
 

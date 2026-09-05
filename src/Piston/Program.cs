@@ -1,20 +1,13 @@
 using System.CommandLine;
-using System.Text.Json.Nodes;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.DependencyInjection;
 using Piston.Cli;
-using Piston.Cli.Configuration;
-using Piston.Cli.Mapping;
-using Piston.Cli.Protocol;
-using Piston.Cli.Services;
 using Piston.Engine;
 using Piston.Engine.Models;
-using Piston.Mcp;
+using Piston.Hosting;
+using Piston.Hosting.Mapping;
+using Piston.Hosting.Protocol;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
-using Piston.Roslyn;
 
 // ── Shared arguments & options ─────────────────────────────────────────────────
 
@@ -112,8 +105,8 @@ daemonCmd.SetHandler(async ctx =>
     {
         try
         {
-            var solutionPath = CliHelpers.ResolveSolutionPath(solutionFile);
-            var config = CliHelpers.LoadConfig(Path.GetDirectoryName(solutionPath)!);
+            var solutionPath = HostHelpers.ResolveSolutionPath(solutionFile);
+            var config = HostHelpers.LoadConfig(Path.GetDirectoryName(solutionPath)!);
             stdio = config.Stdio ?? false;
         }
         catch { /* fall through; errors reported inside run methods */ }
@@ -176,7 +169,7 @@ static async Task RunWebAsync(FileInfo? solutionArg, string? cliPipeName, int we
     string solutionPath;
     try
     {
-        solutionPath = CliHelpers.ResolveSolutionPath(solutionArg);
+        solutionPath = HostHelpers.ResolveSolutionPath(solutionArg);
     }
     catch (InvalidOperationException ex)
     {
@@ -186,7 +179,7 @@ static async Task RunWebAsync(FileInfo? solutionArg, string? cliPipeName, int we
     }
 
     var solutionDir = Path.GetDirectoryName(solutionPath)!;
-    var config      = CliHelpers.LoadConfig(solutionDir);
+    var config      = HostHelpers.LoadConfig(solutionDir);
     var pipeName    = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
 
     using var cts = new CancellationTokenSource();
@@ -231,7 +224,7 @@ static async Task RunDaemonAsync(
     string solutionPath;
     try
     {
-        solutionPath = CliHelpers.ResolveSolutionPath(solutionArg);
+        solutionPath = HostHelpers.ResolveSolutionPath(solutionArg);
     }
     catch (InvalidOperationException ex)
     {
@@ -241,10 +234,10 @@ static async Task RunDaemonAsync(
     }
 
     var solutionDir = Path.GetDirectoryName(solutionPath)!;
-    var config      = CliHelpers.LoadConfig(solutionDir);
-    var options     = CliHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
+    var config      = HostHelpers.LoadConfig(solutionDir);
+    var options     = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
 
-    if (!CliHelpers.DotnetSdkAvailable())
+    if (!HostHelpers.DotnetSdkAvailable())
     {
         Console.Error.WriteLine("error: 'dotnet' SDK not found on PATH. Install .NET 10 SDK from https://dot.net");
         Environment.Exit(1);
@@ -261,119 +254,21 @@ static async Task RunDaemonAsync(
         cts.Cancel();
     };
 
-    // Use a proxy sink so the router (created after engine) can receive activity events.
-    var activityProxy = new ActivityEventSinkProxy();
-    using var engine = new PistonEngine(options, activityProxy);
-
-    Console.Error.WriteLine($"[piston] Starting engine for: {solutionPath}");
-    await engine.StartAsync(solutionPath);
-
-    // Start Roslyn workspace in the background (child process, OOM-isolated)
-    await using var workspace = RoslynWorkspaceFactory.Create();
-    _ = Task.Run(async () =>
+    await using var host = new DaemonHost(new DaemonHostOptions
     {
-        try
-        {
-            var info = await workspace.LoadAsync(solutionPath, cts.Token).ConfigureAwait(false);
-            Console.Error.WriteLine($"[piston] Roslyn workspace loaded: {info.Projects.Count} project(s)");
-        }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
-        {
-            Console.Error.WriteLine($"[piston] Roslyn workspace failed to load: {ex.Message}");
-        }
+        SolutionPath  = solutionPath,
+        EngineOptions = options,
+        PipeName      = pipeName,
+        WebPort       = webPort,
+        McpPort       = mcpPort,
     });
 
-    Console.Error.WriteLine($"[piston] Listening on pipe: {pipeName}");
+    await host.StartAsync(cts.Token);
+
+    // Clients (e.g. DaemonLauncher) read this line from stdout to discover the pipe.
     Console.WriteLine($"PIPE:{pipeName}");
 
-    var listener = new NamedPipeListener(pipeName);
-    await using var router = new ProtocolRouter(engine, listener);
-
-    // Connect the activity proxy to the router so engine events are broadcast to clients
-    activityProxy.SetSink(router);
-
-    // Wire diagnostic watcher and MCP call tracker into the router
-    using var diagnosticWatcher = new DiagnosticWatcherService(workspace, router, solutionPath);
-    var mcpCallTracker = new McpCallTracker(router, solutionPath);
-    router.SetDiagnosticWatcher(diagnosticWatcher);
-    router.SetMcpCallTracker(mcpCallTracker);
-    diagnosticWatcher.Start();
-
-    var routerTask = router.RunAsync(cts.Token);
-
-    // Always start the web server for WebSocket + static file serving
-    var webBuilder = WebApplication.CreateBuilder(new WebApplicationOptions
-    {
-        ApplicationName = "Piston",
-        // Set content root to the directory containing the host binary so that
-        // UseStaticFiles() can find the wwwroot/ folder with Blazor WASM assets.
-        ContentRootPath = AppContext.BaseDirectory,
-    });
-
-    var webApp = webBuilder.Build();
-    webApp.Urls.Add($"http://localhost:{webPort}");
-    webApp.UseWebSockets();
-
-    // Serve Blazor WASM framework files (handles content negotiation for .br/.gz compressed assets)
-    // and static files. UseBlazorFrameworkFiles must come before UseStaticFiles.
-    webApp.UseBlazorFrameworkFiles();
-    webApp.UseDefaultFiles();
-    webApp.UseStaticFiles();
-    webApp.UseRouting();
-
-    webApp.Map("/ws", async context =>
-    {
-        if (!context.WebSockets.IsWebSocketRequest)
-        {
-            context.Response.StatusCode = StatusCodes.Status400BadRequest;
-            return;
-        }
-
-        var webSocket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
-        await router.AddWebSocketSessionAsync(webSocket, cts.Token).ConfigureAwait(false);
-    });
-
-    // Fallback to index.html for Blazor SPA client-side routing
-    webApp.MapFallbackToFile("index.html");
-
-    Console.Error.WriteLine($"[piston] Web server (WebSocket) listening on port: {webPort}");
-
-    if (mcpPort is not null)
-    {
-        // MCP always runs on its own dedicated app to avoid middleware conflicts
-        var mcpBuilder = WebApplication.CreateBuilder();
-        mcpBuilder.Services.AddSingleton<IEngine>(engine);
-        mcpBuilder.Services.AddPistonMcp(workspace, mcpCallTracker);
-        var mcpApp = mcpBuilder.Build();
-        mcpApp.MapMcp();
-
-        Console.Error.WriteLine($"[piston] MCP server listening on port: {mcpPort}");
-        var mcpTask = mcpApp.RunAsync($"http://localhost:{mcpPort}");
-
-        try
-        {
-            await Task.WhenAny(routerTask, webApp.RunAsync(), mcpTask);
-        }
-        catch (OperationCanceledException) { }
-
-        await mcpApp.StopAsync();
-        await mcpApp.DisposeAsync();
-    }
-    else
-    {
-        try
-        {
-            await Task.WhenAny(routerTask, webApp.RunAsync());
-        }
-        catch (OperationCanceledException) { }
-    }
-
-    await webApp.StopAsync();
-    await webApp.DisposeAsync();
-
-    Console.Error.WriteLine("[piston] Shutting down.");
-    engine.Stop();
+    await host.WaitForShutdownAsync(cts.Token);
 }
 
 // ── Daemon stdio mode ──────────────────────────────────────────────────────────
@@ -388,7 +283,7 @@ static async Task RunDaemonStdioAsync(
     string solutionPath;
     try
     {
-        solutionPath = CliHelpers.ResolveSolutionPath(solutionArg);
+        solutionPath = HostHelpers.ResolveSolutionPath(solutionArg);
     }
     catch (InvalidOperationException ex)
     {
@@ -398,10 +293,10 @@ static async Task RunDaemonStdioAsync(
     }
 
     var solutionDir = Path.GetDirectoryName(solutionPath)!;
-    var config      = CliHelpers.LoadConfig(solutionDir);
-    var options     = CliHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
+    var config      = HostHelpers.LoadConfig(solutionDir);
+    var options     = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
 
-    if (!CliHelpers.DotnetSdkAvailable())
+    if (!HostHelpers.DotnetSdkAvailable())
     {
         Console.Error.WriteLine("error: 'dotnet' SDK not found on PATH. Install .NET 10 SDK from https://dot.net");
         Environment.Exit(1);
@@ -433,7 +328,7 @@ static async Task RunDaemonStdioAsync(
 
     try
     {
-        var snapshotNotification = CliHelpers.BuildStateSnapshot(engine);
+        var snapshotNotification = HostHelpers.BuildStateSnapshot(engine);
         await session.SendNotificationAsync(snapshotNotification, cts.Token).ConfigureAwait(false);
     }
     catch (Exception ex)
@@ -461,14 +356,14 @@ static async Task RunDaemonStdioAsync(
     {
         var stateSnapshot = engine.State.ToSnapshot();
 
-        SendFireAndForget(CliHelpers.ToNotification(ProtocolMethods.EngineStateSnapshot, stateSnapshot));
-        SendFireAndForget(CliHelpers.ToNotification(
+        SendFireAndForget(HostHelpers.ToNotification(ProtocolMethods.EngineStateSnapshot, stateSnapshot));
+        SendFireAndForget(HostHelpers.ToNotification(
             ProtocolMethods.EnginePhaseChanged,
             new PhaseChangedNotification(stateSnapshot.Phase, null)));
 
         if (engine.State.Phase == PistonPhase.Testing)
         {
-            SendFireAndForget(CliHelpers.ToNotification(
+            SendFireAndForget(HostHelpers.ToNotification(
                 ProtocolMethods.TestsProgress,
                 new TestProgressNotification(
                     stateSnapshot.InProgressSuites,
@@ -478,7 +373,7 @@ static async Task RunDaemonStdioAsync(
 
         if (engine.State.Phase == PistonPhase.Error && stateSnapshot.LastBuild is not null)
         {
-            SendFireAndForget(CliHelpers.ToNotification(
+            SendFireAndForget(HostHelpers.ToNotification(
                 ProtocolMethods.BuildError,
                 new BuildErrorNotification(stateSnapshot.LastBuild)));
         }
@@ -502,7 +397,7 @@ static async Task<int> RunStopAsync(FileInfo? solutionArg, string? cliPipeName)
     string solutionPath;
     try
     {
-        solutionPath = CliHelpers.ResolveSolutionPath(solutionArg);
+        solutionPath = HostHelpers.ResolveSolutionPath(solutionArg);
     }
     catch (InvalidOperationException ex)
     {
@@ -511,7 +406,7 @@ static async Task<int> RunStopAsync(FileInfo? solutionArg, string? cliPipeName)
     }
 
     var solutionDir = Path.GetDirectoryName(solutionPath)!;
-    var config      = CliHelpers.LoadConfig(solutionDir);
+    var config      = HostHelpers.LoadConfig(solutionDir);
     var pipeName    = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
 
     await using var client = new RemoteEngineClient(pipeName);
@@ -544,7 +439,7 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
     string solutionPath;
     try
     {
-        solutionPath = CliHelpers.ResolveSolutionPath(solutionArg);
+        solutionPath = HostHelpers.ResolveSolutionPath(solutionArg);
     }
     catch (InvalidOperationException ex)
     {
@@ -553,7 +448,7 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
     }
 
     var solutionDir = Path.GetDirectoryName(solutionPath)!;
-    var config      = CliHelpers.LoadConfig(solutionDir);
+    var config      = HostHelpers.LoadConfig(solutionDir);
     var pipeName    = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
 
     await using var client = new RemoteEngineClient(pipeName);
