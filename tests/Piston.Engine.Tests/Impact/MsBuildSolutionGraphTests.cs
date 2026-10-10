@@ -178,22 +178,6 @@ public sealed class MsBuildSolutionGraphTests : IAsyncLifetime
         Assert.Empty(dependents);
     }
 
-    private static async Task RunDotnetAsync(string args, string workDir)
-    {
-        using var p = new System.Diagnostics.Process
-        {
-            StartInfo = new System.Diagnostics.ProcessStartInfo("dotnet", args)
-            {
-                WorkingDirectory = workDir,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            }
-        };
-        p.Start();
-        p.BeginOutputReadLine();
-        p.BeginErrorReadLine();
-        await p.WaitForExitAsync();
-    }
+    private static Task<int> RunDotnetAsync(string args, string workDir) =>
+        TestProcess.RunDotnetAsync(args, workDir);
 }

@@ -14,6 +14,7 @@ public sealed class PistonEngine : IEngine
     private readonly ITestProcessPool _pool;
     private readonly DiagnosticLog _diagnosticLog;
     private readonly IActivityEventSink _activitySink;
+    private readonly string _solutionDirectory;
 
     public PistonEngine(PistonOptions options)
         : this(options, NullActivityEventSink.Instance)
@@ -31,6 +32,7 @@ public sealed class PistonEngine : IEngine
         // Initialize diagnostic log early so all components can use it.
         var solutionDir = Path.GetDirectoryName(options.SolutionPath)
             ?? throw new ArgumentException("Cannot resolve solution directory.", nameof(options));
+        _solutionDirectory = solutionDir;
         _diagnosticLog = DiagnosticLog.Initialize(solutionDir);
         _diagnosticLog.Write("Engine", $"SolutionPath: {options.SolutionPath}");
         _diagnosticLog.Write("Engine", $"TestExecutionMode: {options.TestExecutionMode}");
@@ -112,8 +114,11 @@ public sealed class PistonEngine : IEngine
 
     public void ClearResults()
     {
+        SqliteCoverageStore.Clear(_solutionDirectory);
         _state.TestSuites = [];
         _state.LastRunTime = null;
+        _state.HasCoverageData = false;
+        _state.CoverageImpactDetail = null;
         _state.NotifyChanged();
     }
 

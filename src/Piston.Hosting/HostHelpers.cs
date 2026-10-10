@@ -9,27 +9,44 @@ namespace Piston.Hosting;
 
 public static class HostHelpers
 {
-    public static string ResolveSolutionPath(FileInfo? solutionArg)
+    public static string ResolveSolutionPath(FileInfo? solutionArg, string? workingDirectory = null) =>
+        ResolveSolution(solutionArg, workingDirectory).SolutionPath;
+
+    public static (string SolutionPath, PistonConfig Config) ResolveSolution(
+        FileInfo? solutionArg, string? workingDirectory = null)
     {
         if (solutionArg is not null)
         {
-            if (!solutionArg.Exists)
-                throw new InvalidOperationException($"Solution file not found: {solutionArg.FullName}");
-
-            var ext = solutionArg.Extension.ToLowerInvariant();
-            if (ext is not ".sln" and not ".slnx" and not ".slnf")
-                throw new InvalidOperationException($"Expected a .sln, .slnx, or .slnf file, got: {solutionArg.Name}");
-
-            return solutionArg.FullName;
+            var path = ValidateSolutionPath(solutionArg.FullName);
+            return (path, LoadConfig(Path.GetDirectoryName(path)!));
         }
 
-        var cwd        = Directory.GetCurrentDirectory();
+        var cwd = Path.GetFullPath(workingDirectory ?? Directory.GetCurrentDirectory());
+        var config = LoadConfig(cwd);
+        if (config.Solution is not null)
+        {
+            var configPath = Path.Combine(cwd, ".piston.json");
+            if (string.IsNullOrWhiteSpace(config.Solution))
+                throw new InvalidOperationException($"The 'solution' field in '{configPath}' must not be empty.");
+
+            try
+            {
+                var path = Path.GetFullPath(config.Solution, cwd);
+                return (ValidateSolutionPath(path), config);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or InvalidOperationException)
+            {
+                throw new InvalidOperationException(
+                    $"Invalid 'solution' in '{configPath}': {ex.Message}", ex);
+            }
+        }
+
         var candidates = Directory.GetFiles(cwd, "*.sln")
             .Concat(Directory.GetFiles(cwd, "*.slnx"))
             .Concat(Directory.GetFiles(cwd, "*.slnf"))
             .ToList();
 
-        return candidates.Count switch
+        var discoveredPath = candidates.Count switch
         {
             0 => throw new InvalidOperationException(
                 $"No .sln, .slnx, or .slnf file found in '{cwd}'. Pass the solution path explicitly."),
@@ -38,6 +55,19 @@ public static class HostHelpers
                 $"Multiple solution files found in '{cwd}'. Pass the solution path explicitly:\n  " +
                 string.Join("\n  ", candidates.Select(Path.GetFileName))),
         };
+        return (discoveredPath, config);
+    }
+
+    private static string ValidateSolutionPath(string path)
+    {
+        if (!File.Exists(path))
+            throw new InvalidOperationException($"Solution file not found: {path}");
+
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        if (ext is not ".sln" and not ".slnx" and not ".slnf")
+            throw new InvalidOperationException($"Expected a .sln, .slnx, or .slnf file, got: {Path.GetFileName(path)}");
+
+        return path;
     }
 
     public static PistonConfig LoadConfig(string solutionDir)
@@ -48,17 +78,19 @@ public static class HostHelpers
 
         try
         {
+            using var stream = File.OpenRead(configPath);
             var configuration = new ConfigurationBuilder()
-                .AddJsonFile(configPath, optional: true, reloadOnChange: false)
+                .AddJsonStream(stream)
                 .Build();
 
             var config = new PistonConfig();
             configuration.Bind(config);
             return config;
         }
-        catch
+        catch (Exception ex) when (ex is IOException or FormatException or InvalidOperationException
+                                  or System.Text.Json.JsonException or UnauthorizedAccessException)
         {
-            return new PistonConfig();
+            throw new InvalidOperationException($"Could not load configuration '{configPath}': {ex.Message}", ex);
         }
     }
 

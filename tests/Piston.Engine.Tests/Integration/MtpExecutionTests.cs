@@ -189,28 +189,7 @@ public sealed class MtpExecutionTests : IAsyncLifetime
 
     private static async Task<bool> TryRunDotnetAsync(string args, string workDir)
     {
-        try
-        {
-            using var p = new Process
-            {
-                StartInfo = new ProcessStartInfo("dotnet", args)
-                {
-                    WorkingDirectory       = workDir,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError  = true,
-                    UseShellExecute        = false,
-                    CreateNoWindow         = true,
-                }
-            };
-            p.Start();
-            p.BeginOutputReadLine();
-            p.BeginErrorReadLine();
-            await p.WaitForExitAsync();
-            return p.ExitCode == 0;
-        }
-        catch
-        {
-            return false;
-        }
+        var result = await TestProcess.RunDotnetResultAsync(args, workDir);
+        return result.ExitCode == 0;
     }
 }

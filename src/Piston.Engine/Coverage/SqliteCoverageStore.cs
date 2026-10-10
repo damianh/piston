@@ -84,6 +84,26 @@ internal sealed class SqliteCoverageStore : ICoverageStore
 
     public long CreateRunId() => Interlocked.Increment(ref _runCounter);
 
+    public static void Clear(string solutionDirectory)
+    {
+        var dbPath = Path.Combine(solutionDirectory, ".piston", "piston.db");
+        if (!File.Exists(dbPath))
+            return;
+
+        using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Mode = SqliteOpenMode.ReadWrite,
+        }.ToString());
+        connection.Open();
+        using var transaction = connection.BeginTransaction();
+        using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "DELETE FROM coverage_map; DELETE FROM coverage_summary;";
+        command.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
     public async Task StoreCoverageAsync(
         long runId,
         IReadOnlyDictionary<string, IReadOnlyList<TestLineCoverage>> testCoverageMap)

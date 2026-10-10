@@ -216,6 +216,12 @@ Processing replaces old associations for files present in new coverage data.
 Rows reflect the coarse attribution described above; hit counts are association
 values, not independently measured per-test execution counts.
 
+Clearing results deletes both coverage tables' rows transactionally using a
+separate connection, including when collection is currently disabled. No database
+is created just to clear results. The storage boundary is the solution directory:
+solutions in the same directory share this database and its reset scope; other
+solution directories are unaffected.
+
 The engine keeps test results, timings, and build state in memory. Coverage run
 IDs are seeded from the database, but they do not constitute test-run history.
 There is no implemented durable test-result/failure history, run-metadata table,
@@ -223,6 +229,15 @@ preferences table, or graph cache. Coverage persistence alone is not full
 controller-state recovery. `.piston.json` is the actual optional configuration
 file; `.piston/config.json` and a user-global configuration hierarchy are not
 implemented. The engine also writes a diagnostic log under `.piston`.
+
+CLI solution resolution uses an explicit argument first, then `solution` from
+the current directory's `.piston.json` (relative to that config), then unique
+solution discovery in the current directory. The selecting config is retained
+when it points to a solution elsewhere. With an explicit argument, config is
+loaded from the explicit solution's directory instead. Invalid config or a
+missing/invalid configured solution is reported rather than silently falling
+back. Config is read as a JSON stream so hidden `.piston.json` files are not
+excluded by a physical file provider.
 
 ## MCP behavior and limitations
 
@@ -238,10 +253,27 @@ documentation change does not implement that fix. `get_test_results` reads
 current accumulated state without initiating a run.
 
 `set_test_filter` changes the active filter but does not itself run tests.
-`clear_results` currently clears in-memory suites and the last-run timestamp,
-not the persisted coverage database, despite its tool description. Structured
+`clear_results` clears in-memory suites, the last-run timestamp, coverage state,
+and persisted coverage in the current solution directory. It does not cancel an
+active pipeline; a subsequent completion can publish fresh results. Structured
 agent contracts, freshness semantics, and reliable run completion are future
 backend work, not guarantees of the existing text-based tools.
+
+Engine-test setup process helpers drain both stdout and stderr and enforce a
+90-second deadline. Timeout failures attempt process-tree termination with a
+bounded cleanup wait, and report command, PID, working directory, and the last
+100 output lines. They also reject unsuccessful setup commands instead of
+discarding their exit codes (the optional MTP availability probe retains its
+nonzero-exit handling, but no longer swallows timeouts).
+
+A concurrent engine-suite reproduction found setup restores and an engine build
+waiting in `Process.WaitForExitAsync`'s output-EOF drain after the child had exited,
+not in MSBuild solution evaluation. Both setup commands and engine builds set
+`MSBUILDDISABLENODEREUSE=1` in the child environment to prevent persistent MSBuild
+nodes retaining those redirected pipes. This trades cross-build MSBuild node
+reuse for reliable process completion; it does not shut down shared build servers
+or disable concurrency within a build. The timeout remains a guard for other
+setup stalls, including restore/network or filesystem locking.
 
 ## Proposed direction (not implemented)
 

@@ -1,6 +1,8 @@
 using Piston.Engine;
 using Piston.Engine.Models;
 using Piston.Mcp.Tools;
+using System.ComponentModel;
+using System.Reflection;
 using Xunit;
 
 namespace Piston.Mcp.Tests;
@@ -137,5 +139,8 @@ public sealed class TestToolsTests
 
         Assert.True(engine.ClearResultsCalled);
         Assert.Contains("Results cleared", result);
+        var description = typeof(TestTools).GetMethod(nameof(TestTools.ClearResults))!
+            .GetCustomAttribute<DescriptionAttribute>()!.Description;
+        Assert.Contains("persisted coverage in the current solution directory", description);
     }
 }

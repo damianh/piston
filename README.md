@@ -58,7 +58,7 @@ piston stop [<solution>]
 piston status [<solution>]
 ```
 
-`<solution>` is a path to a `.sln`, `.slnx`, or `.slnf` file. If omitted, exactly one solution must exist in the current directory; multiple candidates require an explicit path.
+`<solution>` is a path to a `.sln`, `.slnx`, or `.slnf` file. An explicit argument wins; otherwise Piston uses the `solution` field in the current directory's `.piston.json`, resolved relative to that file. Without a configured path, exactly one solution must exist in the current directory; multiple candidates require an explicit or configured path. A missing or invalid configured solution is an error, not a discovery fallback.
 
 **`piston daemon` options:**
 
@@ -99,7 +99,7 @@ With `--mcp-port` (or `mcpPort` in `.piston.json`), the daemon exposes an HTTP M
 | `run_tests` | Request a full build + test run and a textual summary. |
 | `get_test_results` | Read current test results. |
 | `set_test_filter` | Apply a test name filter. |
-| `clear_results` | Clear in-memory test suites and last-run timestamp, not persisted coverage. |
+| `clear_results` | Clear current test suites, last-run timestamp, coverage state, and persisted coverage in the current solution directory. A running test run may publish new results afterwards. |
 
 These are the retained Phase 0 tools. The companion surface-reduction change removes `LoadWorkspace`, `GetDiagnostics`, `SemanticSearch`, `GetAst`, `Rename`, and `NotifyFileChanged`; Piston will not own Roslyn workspace synchronization.
 
@@ -129,7 +129,11 @@ change made by this documentation PR.
 
 ## Configuration file
 
-Piston reads an optional `.piston.json` in the solution directory at startup.
+With an explicit solution argument, Piston reads the optional `.piston.json` in
+that solution's directory. Without an argument, it reads `.piston.json` in the
+current directory before resolving the solution and retains that config even
+when `solution` points into another directory. Invalid config files are reported
+as errors rather than silently ignored.
 Supplied CLI values override corresponding config values, with two caveats:
 `--coverage` enables coverage but cannot disable a config-enabled value, and
 non-positive debounce/parallelism values fall back to config/defaults. There is
@@ -147,7 +151,7 @@ no implemented `.piston/config.json` or user-global config hierarchy.
 
 | Field | Type | Description |
 |---|---|---|
-| `solution` | `string` | Present in the config model but not used by CLI solution resolution; pass the path as an argument. |
+| `solution` | `string` | Default solution path, relative to the config file (or absolute). An explicit CLI solution argument overrides it. |
 | `debounceMs` | `int` | File-change debounce interval in milliseconds. |
 | `testFilter` | `string` | Default filter passed to the selected test runner. |
 | `coverageEnabled` | `bool` | Request VSTest coverage collection. |
@@ -174,6 +178,12 @@ Run tests:
 ```sh
 dotnet test Piston.slnx
 ```
+
+Engine-test setup `dotnet restore`/`build` helpers have a 90-second timeout,
+drain both output streams, and fail with command, PID, directory, and recent
+output diagnostics. On timeout they terminate the child process tree. Setup
+commands and engine builds disable MSBuild node reuse in their child environment
+to prevent persistent nodes retaining redirected output pipes after `dotnet` exits.
 
 ## Proposed direction
 
