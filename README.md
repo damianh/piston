@@ -182,9 +182,15 @@ dotnet test Piston.slnx
 
 Engine-test setup `dotnet restore`/`build` helpers have a 90-second timeout,
 drain both output streams, and fail with command, PID, directory, and recent
-output diagnostics. On timeout they terminate the child process tree. Setup
+output diagnostics. On timeout they terminate the
+command's whole Unix session or Windows job, including descendants that
+outlive their parent. Setup
 commands and engine builds disable MSBuild node reuse in their child environment
 to prevent persistent nodes retaining redirected output pipes after `dotnet` exits.
+
+### AI agent tooling (roslynk)
+
+The repo pins [roslynk](https://www.nuget.org/packages/roslynk) as a local .NET tool and registers it in `.mcp.json`, so Copilot CLI / agent sessions get semantic C# intelligence (diagnostics, find references, rename, code fixes) over `Piston.slnx`. Run `dotnet tool restore` once after cloning.
 
 ## Proposed direction
 
