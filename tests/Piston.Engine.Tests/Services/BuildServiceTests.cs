@@ -10,6 +10,44 @@ public sealed class BuildServiceOutputParsingTests
     // against a minimal in-memory project written to a temp directory.
 
     [Fact]
+    public async Task BuildAsync_ParallelMsBuildNodes_DisablesNodeReuseAndCompletes()
+    {
+        var root = Directory.CreateTempSubdirectory("piston-build-node-reuse-test-").FullName;
+        try
+        {
+            foreach (var name in new[] { "First", "Second" })
+            {
+                await File.WriteAllTextAsync(Path.Combine(root, $"{name}.proj"), """
+                    <Project>
+                      <Target Name="Build">
+                        <Error Condition="'$(MSBUILDDISABLENODEREUSE)' != '1'" Text="Node reuse guard is missing." />
+                      </Target>
+                    </Project>
+                    """);
+            }
+            var project = Path.Combine(root, "All.proj");
+            await File.WriteAllTextAsync(project, """
+                <Project>
+                  <Target Name="Restore" />
+                  <Target Name="Build">
+                    <MSBuild Projects="First.proj;Second.proj" BuildInParallel="true" />
+                  </Target>
+                </Project>
+                """);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+            var result = await new BuildService().BuildAsync(project, cts.Token);
+
+            Assert.Equal(BuildStatus.Succeeded, result.Status);
+            Assert.Empty(result.Errors);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task BuildAsync_SuccessfulProject_ReturnsBuildStatusSucceeded()
     {
         var dir = Directory.CreateTempSubdirectory("piston-build-test-");
@@ -250,23 +288,6 @@ public sealed class BuildServiceOutputParsingTests
         }
     }
 
-    private static async Task<int> RunDotnetAsync(string args, string workDir)
-    {
-        using var p = new System.Diagnostics.Process
-        {
-            StartInfo = new System.Diagnostics.ProcessStartInfo("dotnet", args)
-            {
-                WorkingDirectory = workDir,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            }
-        };
-        p.Start();
-        p.BeginOutputReadLine();
-        p.BeginErrorReadLine();
-        await p.WaitForExitAsync();
-        return p.ExitCode;
-    }
+    private static Task<int> RunDotnetAsync(string args, string workDir) =>
+        TestProcess.RunDotnetAsync(args, workDir);
 }

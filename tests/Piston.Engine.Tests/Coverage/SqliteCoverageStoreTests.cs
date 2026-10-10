@@ -40,6 +40,54 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
     // ── Tests ──────────────────────────────────────────────────────────────────
 
     [Fact]
+    public async Task Clear_RemovesFreshAndStaleRowsAndSummary_PersistsAndAllowsNewCoverage()
+    {
+        const string freshFile = "/repo/src/Fresh.cs";
+        const string staleFile = "/repo/src/Stale.cs";
+        var run = _sut.CreateRunId();
+        await _sut.StoreCoverageAsync(run, MakeMap("Tests.Fresh", freshFile, 1));
+        await _sut.StoreCoverageAsync(run, MakeMap("Tests.Stale", staleFile, 2));
+        await _sut.MarkFileStaleAsync(staleFile);
+
+        SqliteCoverageStore.Clear(_dbDir);
+        SqliteCoverageStore.Clear(_dbDir);
+
+        Assert.False(_sut.HasCoverageData(freshFile));
+        Assert.Empty(_sut.GetTestsCoveringFile(freshFile));
+        Assert.Empty(_sut.GetTestsCoveringLines(staleFile, 1, 10));
+        using (var connection = new SqliteConnection($"Data Source={Path.Combine(_dbDir, ".piston", "piston.db")}"))
+        {
+            await connection.OpenAsync();
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT (SELECT COUNT(*) FROM coverage_map) + (SELECT COUNT(*) FROM coverage_summary);";
+            Assert.Equal(0L, await command.ExecuteScalarAsync());
+        }
+
+        _sut.Dispose();
+        _sut = new SqliteCoverageStore();
+        await _sut.InitializeAsync(_dbDir);
+        Assert.False(_sut.HasCoverageData(freshFile));
+        await _sut.StoreCoverageAsync(_sut.CreateRunId(), MakeMap("Tests.New", freshFile, 5));
+        Assert.Equal(["Tests.New"], _sut.GetTestsCoveringFile(freshFile));
+    }
+
+    [Fact]
+    public async Task Clear_DoesNotAffectAnotherSolutionDirectory()
+    {
+        var otherDir = Path.Combine(_tempDir, "OtherSolution");
+        using var other = new SqliteCoverageStore();
+        await other.InitializeAsync(otherDir);
+        const string file = "/repo/src/Shared.cs";
+        await other.StoreCoverageAsync(other.CreateRunId(), MakeMap("Tests.Other", file, 1));
+        await _sut.StoreCoverageAsync(_sut.CreateRunId(), MakeMap("Tests.Current", file, 1));
+
+        SqliteCoverageStore.Clear(_dbDir);
+
+        Assert.False(_sut.HasCoverageData(file));
+        Assert.Equal(["Tests.Other"], other.GetTestsCoveringFile(file));
+    }
+
+    [Fact]
     public void InitializeAsync_CreatesDatabaseFile()
     {
         var dbPath = Path.Combine(_dbDir, ".piston", "piston.db");

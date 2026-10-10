@@ -85,7 +85,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         return result;
     }
 
-    [McpServerTool, Description("Clear all test results and coverage data.")]
+    [McpServerTool, Description("Clear current test results and persisted coverage in the current solution directory. A running test run may publish new results afterwards.")]
     public string ClearResults()
     {
         var sw = Stopwatch.StartNew();

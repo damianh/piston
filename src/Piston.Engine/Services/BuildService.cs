@@ -104,6 +104,9 @@ public sealed class BuildService : IBuildService
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        // Reused MSBuild nodes can retain the redirected pipes after dotnet exits,
+        // leaving WaitForExitAsync waiting indefinitely for output EOF.
+        psi.Environment["MSBUILDDISABLENODEREUSE"] = "1";
 
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
 

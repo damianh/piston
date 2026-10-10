@@ -3,6 +3,7 @@ using Piston.Cli;
 using Piston.Engine;
 using Piston.Engine.Models;
 using Piston.Hosting;
+using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
 using Piston.Hosting.Protocol;
 using Piston.Protocol.JsonRpc;
@@ -14,7 +15,7 @@ using Piston.Protocol.Transports;
 var solutionArg = new Argument<FileInfo?>(
     name: "solution",
     description: "Path to the .sln, .slnx, or .slnf file. " +
-                 "Defaults to the first solution found in the current directory.",
+                 "Defaults to .piston.json's solution, then a unique solution in the current directory.",
     getDefaultValue: () => null);
 
 var pipeNameOpt = new Option<string?>(
@@ -46,6 +47,15 @@ var parallelismOpt = new Option<int>(
 var stdioOpt = new Option<bool>(
     name: "--stdio",
     description: "Use stdin/stdout for Piston JSON-RPC transport (not MCP).");
+
+var noStdioOpt = new Option<bool>(
+    name: "--no-stdio",
+    description: "Use named-pipe transport, overriding the .piston.json stdio setting.");
+
+var configDirectoryOpt = new Option<string?>("--config-directory")
+{
+    IsHidden = true,
+};
 
 var mcpPortOpt = new Option<int?>(
     name: "--mcp-port",
@@ -83,9 +93,11 @@ var daemonCmd = new Command("daemon", "Start the Piston daemon in the foreground
     coverageOpt,
     parallelismOpt,
     stdioOpt,
+    noStdioOpt,
     pipeNameOpt,
     mcpPortOpt,
     webPortOpt,
+    configDirectoryOpt,
 };
 
 daemonCmd.SetHandler(async ctx =>
@@ -96,29 +108,47 @@ daemonCmd.SetHandler(async ctx =>
     var coverage     = ctx.ParseResult.GetValueForOption(coverageOpt);
     var parallelism  = ctx.ParseResult.GetValueForOption(parallelismOpt);
     var stdio        = ctx.ParseResult.GetValueForOption(stdioOpt);
+    var noStdio      = ctx.ParseResult.GetValueForOption(noStdioOpt);
     var pipeName     = ctx.ParseResult.GetValueForOption(pipeNameOpt);
     var mcpPort      = ctx.ParseResult.GetValueForOption(mcpPortOpt);
     var webPort      = ctx.ParseResult.GetValueForOption(webPortOpt);
+    var configDirectory = ctx.ParseResult.GetValueForOption(configDirectoryOpt);
 
-    // Check config for stdio/mcpPort defaults (best-effort; errors handled inside the run methods)
-    if (!stdio)
+    if (stdio && noStdio)
+    {
+        Console.Error.WriteLine("error: --stdio and --no-stdio cannot be used together.");
+        ctx.ExitCode = 1;
+        return;
+    }
+
+    // Resolve config before choosing the daemon transport.
+    if (!stdio && !noStdio)
     {
         try
         {
-            var solutionPath = HostHelpers.ResolveSolutionPath(solutionFile);
-            var config = HostHelpers.LoadConfig(Path.GetDirectoryName(solutionPath)!);
+            var (_, config) = HostHelpers.ResolveSolution(solutionFile, configurationDirectory: configDirectory);
             stdio = config.Stdio ?? false;
         }
-        catch { /* fall through; errors reported inside run methods */ }
+        catch (InvalidOperationException ex)
+        {
+            Console.Error.WriteLine($"error: {ex.Message}");
+            ctx.ExitCode = 1;
+            return;
+        }
+    }
+    else if (noStdio)
+    {
+        stdio = false;
     }
 
     if (stdio)
     {
-        await RunDaemonStdioAsync(solutionFile, debounceMs, filter, coverage, parallelism);
+        await RunDaemonStdioAsync(solutionFile, debounceMs, filter, coverage, parallelism, configDirectory);
     }
     else
     {
-        await RunDaemonAsync(solutionFile, debounceMs, filter, coverage, parallelism, pipeName, mcpPort, webPort);
+        await RunDaemonAsync(solutionFile, debounceMs, filter, coverage, parallelism, pipeName, mcpPort, webPort,
+            configDirectory);
     }
 });
 
@@ -167,9 +197,10 @@ return await rootCommand.InvokeAsync(args);
 static async Task RunWebAsync(FileInfo? solutionArg, string? cliPipeName, int webPort)
 {
     string solutionPath;
+    PistonConfig config;
     try
     {
-        solutionPath = HostHelpers.ResolveSolutionPath(solutionArg);
+        (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg);
     }
     catch (InvalidOperationException ex)
     {
@@ -178,8 +209,6 @@ static async Task RunWebAsync(FileInfo? solutionArg, string? cliPipeName, int we
         return;
     }
 
-    var solutionDir = Path.GetDirectoryName(solutionPath)!;
-    var config      = HostHelpers.LoadConfig(solutionDir);
     var pipeName    = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
 
     using var cts = new CancellationTokenSource();
@@ -190,7 +219,10 @@ static async Task RunWebAsync(FileInfo? solutionArg, string? cliPipeName, int we
     };
 
     // Ensure daemon is running (auto-start if not)
-    await DaemonLauncher.EnsureRunningAsync(solutionPath, pipeName, webPort, cts.Token);
+    var configurationDirectory = solutionArg is null
+        ? Directory.GetCurrentDirectory()
+        : Path.GetDirectoryName(solutionPath)!;
+    await DaemonLauncher.EnsureRunningAsync(solutionPath, pipeName, webPort, configurationDirectory, cts.Token);
 
     var webUrl = $"http://localhost:{webPort}";
     Console.Error.WriteLine($"[piston] Opening browser: {webUrl}");
@@ -219,12 +251,14 @@ static async Task RunDaemonAsync(
     int cliParallelism,
     string? cliPipeName,
     int? cliMcpPort,
-    int webPort)
+    int webPort,
+    string? configDirectory)
 {
     string solutionPath;
+    PistonConfig config;
     try
     {
-        solutionPath = HostHelpers.ResolveSolutionPath(solutionArg);
+        (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
     }
     catch (InvalidOperationException ex)
     {
@@ -233,8 +267,6 @@ static async Task RunDaemonAsync(
         return;
     }
 
-    var solutionDir = Path.GetDirectoryName(solutionPath)!;
-    var config      = HostHelpers.LoadConfig(solutionDir);
     var options     = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
 
     if (!HostHelpers.DotnetSdkAvailable())
@@ -278,12 +310,14 @@ static async Task RunDaemonStdioAsync(
     int cliDebounceMs,
     string? cliFilter,
     bool cliCoverage,
-    int cliParallelism)
+    int cliParallelism,
+    string? configDirectory)
 {
     string solutionPath;
+    PistonConfig config;
     try
     {
-        solutionPath = HostHelpers.ResolveSolutionPath(solutionArg);
+        (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
     }
     catch (InvalidOperationException ex)
     {
@@ -292,8 +326,6 @@ static async Task RunDaemonStdioAsync(
         return;
     }
 
-    var solutionDir = Path.GetDirectoryName(solutionPath)!;
-    var config      = HostHelpers.LoadConfig(solutionDir);
     var options     = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
 
     if (!HostHelpers.DotnetSdkAvailable())
@@ -395,9 +427,10 @@ static async Task RunDaemonStdioAsync(
 static async Task<int> RunStopAsync(FileInfo? solutionArg, string? cliPipeName)
 {
     string solutionPath;
+    PistonConfig config;
     try
     {
-        solutionPath = HostHelpers.ResolveSolutionPath(solutionArg);
+        (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg);
     }
     catch (InvalidOperationException ex)
     {
@@ -405,8 +438,6 @@ static async Task<int> RunStopAsync(FileInfo? solutionArg, string? cliPipeName)
         return 1;
     }
 
-    var solutionDir = Path.GetDirectoryName(solutionPath)!;
-    var config      = HostHelpers.LoadConfig(solutionDir);
     var pipeName    = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
 
     await using var client = new RemoteEngineClient(pipeName);
@@ -437,9 +468,10 @@ static async Task<int> RunStopAsync(FileInfo? solutionArg, string? cliPipeName)
 static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName)
 {
     string solutionPath;
+    PistonConfig config;
     try
     {
-        solutionPath = HostHelpers.ResolveSolutionPath(solutionArg);
+        (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg);
     }
     catch (InvalidOperationException ex)
     {
@@ -447,8 +479,6 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
         return 1;
     }
 
-    var solutionDir = Path.GetDirectoryName(solutionPath)!;
-    var config      = HostHelpers.LoadConfig(solutionDir);
     var pipeName    = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
 
     await using var client = new RemoteEngineClient(pipeName);
