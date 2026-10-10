@@ -109,8 +109,10 @@ public sealed class ProtocolRouterTests
 
     // ── Unknown method → -32601 error response ────────────────────────────────
 
-    [Fact]
-    public async Task ClientSendsUnknownMethod_ReceivesMethodNotFoundError()
+    [Theory]
+    [InlineData("unknown/method")]
+    [InlineData("diagnostics/getAll")]
+    public async Task ClientSendsUnknownMethod_ReceivesMethodNotFoundError(string method)
     {
         var pipeName = UniquePipeName();
         var engine   = new StubEngine();
@@ -126,7 +128,7 @@ public sealed class ProtocolRouterTests
         // Drain snapshot
         await client.ReceiveAsync(cts.Token);
 
-        var request = new JsonRpcRequest("req-x", "unknown/method");
+        var request = new JsonRpcRequest("req-x", method);
         await client.SendAsync(JsonRpcSerializer.Serialize(request), cts.Token);
 
         var responseBytes = await client.ReceiveAsync(cts.Token);

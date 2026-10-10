@@ -17,7 +17,6 @@ public static class ActivityEventTypes
     public const string FileChangesDetected   = "file.changes";
     public const string BuildCompleted        = "build.completed";
     public const string TestRunCompleted      = "tests.completed";
-    public const string DiagnosticsChanged    = "diagnostics.changed";
     public const string McpToolCall           = "mcp.toolCall";
     public const string Reconnect             = "reconnect";
 }
@@ -52,21 +51,6 @@ public sealed record TestRunCompletedData(
     int Skipped,
     double DurationMs,
     IReadOnlyList<TestFailureData> Failures
-);
-
-public sealed record DiagnosticEntryData(
-    string Severity,
-    string Id,
-    string Message,
-    string? FilePath,
-    int? Line,
-    int? Column,
-    string? ProjectName
-);
-
-public sealed record DiagnosticsChangedData(
-    IReadOnlyList<DiagnosticEntryData> Added,
-    IReadOnlyList<DiagnosticEntryData> Removed
 );
 
 public sealed record McpToolCallData(

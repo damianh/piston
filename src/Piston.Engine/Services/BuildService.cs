@@ -26,30 +26,69 @@ public sealed class BuildService : IBuildService
         if (projectPaths is null || projectPaths.Count == 0)
             return await RunBuildAsync($"build \"{solutionPath}\"", ct).ConfigureAwait(false);
 
-        // Build each project individually and aggregate results
-        var allErrors = new List<string>();
-        var allWarnings = new List<string>();
-        var totalDuration = TimeSpan.Zero;
-        var overallStatus = BuildStatus.Succeeded;
+        var targets = projectPaths
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
+        // Preferred: build all solution-member targets in one invocation via a temporary
+        // solution filter. MSBuild builds the filtered projects in parallel and also builds
+        // their ProjectReferences, so referenced libraries are refreshed in test outputs.
+        var solution = SolutionFilterBuilder.ReadSolution(solutionPath);
+        if (solution is null)
+            return await BuildProjectsIndividuallyAsync(targets, ct).ConfigureAwait(false);
+
+        var members = targets.Where(solution.Value.Projects.Contains).ToList();
+        var outside = targets.Where(p => !solution.Value.Projects.Contains(p)).ToList();
+
+        var results = new List<BuildResult>();
+        if (members.Count > 0)
+        {
+            var filterPath = SolutionFilterBuilder.WriteTemporaryFilter(solution.Value.SolutionPath, members);
+            try
+            {
+                results.Add(await RunBuildAsync($"build \"{filterPath}\"", ct).ConfigureAwait(false));
+            }
+            finally
+            {
+                try { Directory.Delete(Path.GetDirectoryName(filterPath)!, recursive: true); } catch { /* best effort */ }
+            }
+        }
+
+        // Projects outside the solution (e.g. reached only via ProjectReference) cannot be
+        // listed in a solution filter, so build them directly.
+        if (outside.Count > 0 && !ct.IsCancellationRequested)
+            results.Add(await BuildProjectsIndividuallyAsync(outside, ct).ConfigureAwait(false));
+
+        return Aggregate(results, ct.IsCancellationRequested);
+    }
+
+    private static async Task<BuildResult> BuildProjectsIndividuallyAsync(
+        IReadOnlyList<string> projectPaths,
+        CancellationToken ct)
+    {
+        var results = new List<BuildResult>();
         foreach (var projectPath in projectPaths)
         {
             if (ct.IsCancellationRequested)
-                return new BuildResult(BuildStatus.Failed, allErrors, allWarnings, totalDuration);
+                break;
 
-            var result = await RunBuildAsync(
+            results.Add(await RunBuildAsync(
                 $"build \"{projectPath}\" --no-restore",
-                ct).ConfigureAwait(false);
-
-            allErrors.AddRange(result.Errors);
-            allWarnings.AddRange(result.Warnings);
-            totalDuration += result.Duration;
-
-            if (result.Status == BuildStatus.Failed)
-                overallStatus = BuildStatus.Failed;
+                ct).ConfigureAwait(false));
         }
 
-        return new BuildResult(overallStatus, allErrors, allWarnings, totalDuration);
+        return Aggregate(results, ct.IsCancellationRequested);
+    }
+
+    private static BuildResult Aggregate(IReadOnlyList<BuildResult> results, bool cancelled)
+    {
+        var failed = cancelled || results.Any(r => r.Status == BuildStatus.Failed);
+        return new BuildResult(
+            failed ? BuildStatus.Failed : BuildStatus.Succeeded,
+            results.SelectMany(r => r.Errors).ToList(),
+            results.SelectMany(r => r.Warnings).ToList(),
+            results.Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration));
     }
 
     private static async Task<BuildResult> RunBuildAsync(string args, CancellationToken ct)

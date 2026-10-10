@@ -45,9 +45,6 @@ public static class ProtocolMethods
 
     // Request/Response (client → server, with response payload)
 
-    /// <summary>Fetch the current full diagnostics snapshot.</summary>
-    public const string DiagnosticsGetAll = "diagnostics/getAll";
-
     /// <summary>Fetch the MCP tool call log (ring buffer).</summary>
     public const string McpGetCallLog = "mcp/getCallLog";
 }

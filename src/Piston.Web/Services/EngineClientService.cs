@@ -255,14 +255,6 @@ public sealed class EngineClientService : IAsyncDisposable
         return await tcs.Task.ConfigureAwait(false);
     }
 
-    public async Task<DiagnosticsResponse?> GetDiagnosticsAsync()
-    {
-        var result = await SendRequestAsync(ProtocolMethods.DiagnosticsGetAll).ConfigureAwait(false);
-        if (result is null)
-            return null;
-        return result.Deserialize<DiagnosticsResponse>(JsonRpcSerializer.Options);
-    }
-
     public async Task<McpCallLogResponse?> GetMcpCallLogAsync()
     {
         var result = await SendRequestAsync(ProtocolMethods.McpGetCallLog).ConfigureAwait(false);
