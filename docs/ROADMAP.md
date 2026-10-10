@@ -115,14 +115,19 @@ documenting them as supported installation paths.
 
 **Status:** items 1–5 landed in #7 (build correctness), #4 (removal and tool
 packaging), #5 (documentation) and #6 (measurement harness and methodology).
-No package has been published. The harness has passed its self-tests and
-unit-fixture smoke runs only; container-backed runs, repeated campaigns and
-real-agent sessions still need explicit approval, so no G0 evidence exists yet.
+No package has been published. Approved local unit/PostgreSQL campaigns and
+container cleanup/telemetry validation are now recorded in the
+[G0 evidence report](../measurements/results/g0-local.md). Real-agent sessions
+and a provenance-valid current-Piston comparison were not performed.
 
 **Gate G0:** decide whether these costs are meaningful enough to justify a service.
-Creating a benchmark harness is not equivalent to collecting evidence or passing
-the gate. Repository selection, real-agent execution, and experiment permissions
-must be agreed before running the measurement workload.
+The [local evidence](../measurements/results/g0-local.md) recommends **proceed
+with narrowed scope**: investigate fresh full-scope results and bounded execution
+before expanding the service architecture. Regression median latency rose from
+2.734 to 6.214 seconds for the unit fixture and 6.869 to 13.814 seconds for
+PostgreSQL at concurrency 1 versus 4. These are scripted, shared-host baseline
+costs, not measured Piston improvement or agent waiting/effort. Container telemetry
+gaps and synthetic workload scope limit the conclusion; G1 remains unproven.
 
 ## Phase 1: hub, workers, identity, and memory
 

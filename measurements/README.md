@@ -1,7 +1,7 @@
 # Measurement harness (Phase 0)
 
-This is **baseline instrumentation, not evidence that Piston is faster**. G0 is
-pending. It launches ordinary `dotnet test` in isolated fixture copies, verifies
+This is **baseline instrumentation, not evidence that Piston is faster**. It
+launches ordinary `dotnet test` in isolated fixture copies, verifies
 the full test identity/status set, and records source provenance, monotonic
 edit-to-result timing, sampled owned-process resources and raw evidence. It does
 not implement engine features or launch agents. All scope is under this directory.
@@ -71,19 +71,34 @@ that permission: select an approved PostgreSQL version/platform, record its
 immutable registry digest, and set:
 
 ```sh
+export DOCKER_HOST=unix://<approved-local-api-socket>
 export MEASUREMENT_POSTGRES_IMAGE=postgres@sha256:<approved-64-hex-digest>
 python3 measurements/harness.py --workload integration --scenario regression \
   --approve-containers --output measurements/artifacts/postgres-regression
 ```
 
-The runner rejects mutable tags and absent consent. Testcontainers owns cleanup;
+The runner rejects mutable tags, remote API sockets and absent consent.
+The Unix socket must also be compatible with Docker.DotNet (shorter than its
+108-byte endpoint limit; avoid a leading-dot filename). A rootless Podman API
+socket is supported; set `TESTCONTAINERS_DOCKER_SOCKET_OVERRIDE` to the
+host-visible socket path when needed for Ryuk's bind mount.
+Testcontainers owns cleanup;
 retain Ryuk rather than disabling its reaper. On interrupted/failed container
 execution the operator must inspect **only** resources labeled
 `piston.measurement.trial=<trial-id>`, preserve evidence and remove those explicit
-IDs. Container stats and confirmed cleanup are not currently collected by the
-runner; container campaigns cannot establish the resource/no-contention goal
-until these observations are added. Compilation without execution is not an
-integration smoke result.
+IDs. Trial IDs include a random UUID to prevent ownership collisions across
+campaigns. The runner observes only exact trial-labeled containers through the
+local Docker-compatible API: image ID, CPU/memory limits, cumulative CPU and
+memory usage, with baseline/preparation/edited phases. It polls every 250 ms
+plus API latency (each request has a three-second timeout). Missing samples and
+telemetry errors are explicit, not zero usage.
+
+After execution it confirms no trial-labeled containers remain. Any leftovers
+are inspected again for the exact label before their explicit IDs are removed;
+required fallback cleanup is recorded as an infrastructure incident. Failed
+cleanup invalidates the trial. Container memory usage is not process RSS;
+samples can miss startup/teardown peaks, and observation adds overhead.
+Compilation without execution is not an integration smoke result.
 
 ## Artifacts and limitations
 
@@ -99,14 +114,17 @@ root. Runtime logs may contain local paths.
 CPU is the maximum sum of sampled live owned-process CPU, a **lower bound**, not
 complete process-tree accounting. RSS is a sampled peak; short-lived children
 may be missed. `/proc` inspection is confined to launched subprocess descendants.
-Host memory is contextual on a shared host. High CPU does not itself establish a
-contention failure. Stage-level build/test timings, container statistics and agent
-metrics are null with reasons when unobservable.
+Host load, pressure and memory, and observable ancestor cgroup limits, are
+recorded as context on a shared host. High CPU does not itself establish a
+contention failure. Stage-level build/test timings and agent metrics are null
+with reasons when unobservable; unit trials have no container statistics.
 
 Only dotnet is executable as a condition initially. Existing MCP latest-state
 aggregates are not a valid generation-bound full-scope oracle. A future current-
 Piston adapter must first prove fresh per-test results on the exact edited source
 and preserve all test identities; otherwise its condition stays blocked. No
-latency percentage, confidence interval, G0 pass or cognitive benefit can be
-computed from these baseline-only smoke runs. See [methodology.md](methodology.md)
+backend latency improvement, paired confidence interval or cognitive benefit can
+be computed from baseline-only runs. The approved local G0 campaign and its
+scope-limited recommendation are recorded in [results/g0-local.md](results/g0-local.md).
+See [methodology.md](methodology.md)
 and [agent-experiments.md](agent-experiments.md) for the comparison protocol.

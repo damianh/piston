@@ -153,6 +153,77 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(1, summary["groups"][0]["invalid"])
         self.assertEqual(12, summary["groups"][0]["median_ms"])
 
+    def test_container_api_requires_local_socket_and_exact_label(self):
+        for host in ("", "tcp://localhost:2375", "unix://remote/socket"):
+            with patch.dict("os.environ", {"DOCKER_HOST": host}):
+                with self.assertRaises(ValueError):
+                    harness.ContainerAPI()
+        with patch.dict("os.environ", {"DOCKER_HOST": "unix:///local/socket"}):
+            api = harness.ContainerAPI()
+        with patch.object(api, "request", return_value=[
+                {"Id": "unrelated", "Labels": {"piston.measurement.trial": "other"}}]):
+            with self.assertRaises(harness.ContainerAPIError):
+                api.containers("trial")
+
+    def test_container_samples_and_cleanup_are_label_scoped(self):
+        with patch.dict("os.environ", {"DOCKER_HOST": "unix:///local/socket"}):
+            observer = harness.ContainerObserver("trial")
+        row = {"Id": "owned", "State": "running",
+               "Labels": {"piston.measurement.trial": "trial"}}
+        details = {"Config": {"Labels": row["Labels"]}, "Image": "sha256:image",
+                   "HostConfig": {"Memory": 512 * 1024**2, "NanoCpus": 1_000_000_000}}
+
+        def request(method, path):
+            if path.endswith("/stats?stream=false"):
+                observer.stop.set()
+                return {"cpu_stats": {"cpu_usage": {"total_usage": 123}},
+                        "memory_stats": {"usage": 456, "limit": 512 * 1024**2}}
+            return details
+
+        observer.phase = "edited"
+        with patch.object(observer.api, "containers", return_value=[row]), \
+                patch.object(observer.api, "request", side_effect=request):
+            observer.observe()
+        self.assertEqual(123, observer.samples[0]["cpu_total_ns"])
+        self.assertEqual("edited", observer.samples[0]["phase"])
+        observer.thread.start()
+        with patch.object(observer.api, "containers", side_effect=[[row], []]), \
+                patch.object(observer.api, "request", return_value=details) as calls:
+            result = observer.finish()
+        self.assertTrue(result["confirmed"])
+        self.assertEqual(["owned"], result["removed_by_harness"])
+        self.assertIn(unittest.mock.call("DELETE", "/containers/owned?force=true&v=true"),
+                      calls.call_args_list)
+
+    def test_container_cleanup_refuses_mismatched_labels_and_survivors(self):
+        for mismatch in (True, False):
+            with patch.dict("os.environ", {"DOCKER_HOST": "unix:///local/socket"}):
+                observer = harness.ContainerObserver("trial")
+            observer.stop.set()
+            observer.thread.start()
+            row = {"Id": "owned", "Labels": {"piston.measurement.trial": "trial"}}
+            details = {"Config": {"Labels": {
+                "piston.measurement.trial": "other" if mismatch else "trial"}}}
+            with patch.object(observer.api, "containers", return_value=[row]), \
+                    patch.object(observer.api, "request", return_value=details) as calls:
+                with self.assertRaises(harness.ContainerAPIError):
+                    observer.finish()
+                if mismatch:
+                    self.assertFalse(any(call.args[0] == "DELETE"
+                                         for call in calls.call_args_list))
+
+    def test_container_telemetry_errors_are_retained(self):
+        with patch.dict("os.environ", {"DOCKER_HOST": "unix:///local/socket"}):
+            observer = harness.ContainerObserver("trial")
+
+        def fail(trial_id):
+            observer.stop.set()
+            raise OSError("socket unavailable")
+
+        with patch.object(observer.api, "containers", side_effect=fail):
+            observer.observe()
+        self.assertEqual("socket unavailable", observer.errors[0]["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

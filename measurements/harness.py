@@ -4,6 +4,7 @@
 import argparse
 import concurrent.futures
 import hashlib
+import http.client
 import json
 import math
 import os
@@ -13,10 +14,13 @@ import random
 import re
 import shutil
 import signal
+import socket
 import statistics
 import subprocess
 import threading
 import time
+import uuid
+from urllib.parse import urlencode, urlparse
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
@@ -37,6 +41,31 @@ def source_hash(root):
 
 def write_json(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
+
+
+def host_context():
+    membership = Path("/proc/self/cgroup").read_text()
+    unified = next((line[3:] for line in membership.splitlines()
+                    if line.startswith("0::")), None)
+    limits = {}
+    if unified:
+        root = Path("/sys/fs/cgroup")
+        current = root / unified.lstrip("/")
+        while current.is_relative_to(root):
+            files = {name: (current / name).read_text().strip()
+                     for name in ("cpu.max", "memory.max", "memory.high")
+                     if (current / name).exists()}
+            if files:
+                limits[str(current.relative_to(root))] = files
+            if current == root:
+                break
+            current = current.parent
+    return {"load_average": list(os.getloadavg()),
+            "host_memory": Path("/proc/meminfo").read_text(),
+            "host_pressure_context": {
+                kind: Path(f"/proc/pressure/{kind}").read_text()
+                for kind in ("cpu", "memory", "io")},
+            "runner_cgroup_membership": membership, "cgroup_ancestor_limits": limits}
 
 
 def validate_manifest(data):
@@ -233,8 +262,119 @@ def test_command(solution, results):
             "--results-directory", str(results), "--nologo", "--verbosity", "quiet"]
 
 
+class ContainerAPIError(RuntimeError):
+    pass
+
+
+class ContainerAPI:
+    """Bounded Docker-compatible API access through the approved local Unix socket."""
+
+    def __init__(self):
+        host = urlparse(os.environ.get("DOCKER_HOST", ""))
+        if host.scheme != "unix" or not host.path or host.netloc:
+            raise ValueError("Container telemetry requires a local unix:// DOCKER_HOST")
+        self.path = host.path
+
+    def request(self, method, path):
+        connection = http.client.HTTPConnection("localhost", timeout=3)
+        transport = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        transport.settimeout(3)
+        try:
+            transport.connect(self.path)
+            connection.sock = transport
+            connection.request(method, "/v1.41" + path)
+            response = connection.getresponse()
+            body = response.read()
+            if response.status == 404:
+                return None
+            if not 200 <= response.status < 300:
+                raise ContainerAPIError(f"{method} {path}: HTTP {response.status}")
+            return json.loads(body) if body else {}
+        finally:
+            connection.close()
+            transport.close()
+
+    def containers(self, trial_id):
+        query = urlencode({"all": "true", "filters": json.dumps(
+            {"label": [f"piston.measurement.trial={trial_id}"]})})
+        result = self.request("GET", "/containers/json?" + query)
+        if not isinstance(result, list):
+            raise ContainerAPIError("Container listing did not return a list")
+        if any(row.get("Labels", {}).get("piston.measurement.trial") != trial_id
+               for row in result):
+            raise ContainerAPIError("Container API returned an unrelated container")
+        return result
+
+
+class ContainerObserver:
+    def __init__(self, trial_id):
+        self.api = ContainerAPI()
+        self.trial_id = trial_id
+        self.stop = threading.Event()
+        self.thread = threading.Thread(target=self.observe, daemon=True)
+        self.samples = []
+        self.containers = {}
+        self.errors = []
+        self.phase = "setup"
+
+    def observe(self):
+        while not self.stop.is_set():
+            try:
+                for row in self.api.containers(self.trial_id):
+                    identifier = row["Id"]
+                    if identifier not in self.containers:
+                        details = self.api.request("GET", f"/containers/{identifier}/json")
+                        if details is None:
+                            continue
+                        if details.get("Config", {}).get("Labels", {}).get(
+                                "piston.measurement.trial") != self.trial_id:
+                            raise ContainerAPIError("Inspection label did not match trial")
+                        config = details["HostConfig"]
+                        self.containers[identifier] = {
+                            "image": details["Image"], "memory_limit_bytes": config["Memory"],
+                            "nano_cpus": config["NanoCpus"]}
+                    if row["State"] != "running":
+                        continue
+                    stats = self.api.request(
+                        "GET", f"/containers/{identifier}/stats?stream=false")
+                    if stats is None:
+                        continue
+                    self.samples.append({
+                        "container_id": identifier, "phase": self.phase,
+                        "monotonic_ns": time.monotonic_ns(),
+                        "cpu_total_ns": stats["cpu_stats"]["cpu_usage"]["total_usage"],
+                        "memory_usage_bytes": stats["memory_stats"]["usage"],
+                        "memory_limit_bytes": stats["memory_stats"]["limit"]})
+            except (OSError, ValueError, KeyError, http.client.HTTPException,
+                    ContainerAPIError) as error:
+                self.errors.append({"phase": self.phase, "error": str(error)})
+            self.stop.wait(0.25)
+
+    def finish(self):
+        self.stop.set()
+        self.thread.join()
+        remaining = self.api.containers(self.trial_id)
+        removed = []
+        for row in remaining:
+            identifier = row["Id"]
+            details = self.api.request("GET", f"/containers/{identifier}/json")
+            if details is None:
+                continue
+            if details.get("Config", {}).get("Labels", {}).get(
+                    "piston.measurement.trial") != self.trial_id:
+                raise ContainerAPIError("Refusing cleanup: inspection label mismatch")
+            self.api.request("DELETE", f"/containers/{identifier}?force=true&v=true")
+            removed.append(identifier)
+        after = self.api.containers(self.trial_id)
+        if after:
+            raise ContainerAPIError("Trial-labeled containers remain after cleanup")
+        return {"confirmed": True, "remaining": [], "removed_by_harness": removed,
+                "observed_container_ids": sorted(self.containers),
+                "scope": f"piston.measurement.trial={self.trial_id}"}
+
+
 def run_trial(args, workload, scenario, output, batch_id, index, barrier):
-    trial_id = f"{batch_id}-{index}"
+    trial_id = f"{output.name}-{batch_id}-{index}-{uuid.uuid4().hex}"
     artifacts = output / trial_id
     artifacts.mkdir()
     workspace = artifacts / "workspace"
@@ -261,9 +401,13 @@ def run_trial(args, workload, scenario, output, batch_id, index, barrier):
               "agent_metric_reason": "Scripted commands are not agent sessions",
               "incidents": [], "stage_durations_ms": None, "container_stats": None,
               "stage_duration_reason": "Command-level timing only; no build/test stage instrumentation",
-              "container_stats_reason": "Not collected by baseline runner",
+              "container_stats_reason": "Unit workload has no containers",
               "artifact_directory": str(artifacts)}
+    observer = None
     try:
+        if args.workload == "integration":
+            observer = ContainerObserver(trial_id)
+            observer.thread.start()
         base_hash = source_hash(workspace)
         if "seed_before" in scenario:
             initial = source.read_text()
@@ -279,6 +423,8 @@ def run_trial(args, workload, scenario, output, batch_id, index, barrier):
             raise ValueError("Restore failed; see restore.log")
         baseline_dir = artifacts / "baseline"
         baseline_dir.mkdir()
+        if observer:
+            observer.phase = "baseline"
         baseline_run = command(test_command(solution, baseline_dir), workspace, artifacts,
                                "baseline", args.timeout, env)
         record["baseline_setup"] = baseline_run
@@ -300,6 +446,8 @@ def run_trial(args, workload, scenario, output, batch_id, index, barrier):
             source.write_text(edited)
             preparation = artifacts / "repair-preparation"
             preparation.mkdir()
+            if observer:
+                observer.phase = "repair-preparation"
             regression = command(test_command(solution, preparation), workspace, artifacts,
                                  "repair-preparation", args.timeout, env)
             record["timed_out"] = regression["timed_out"]
@@ -324,6 +472,8 @@ def run_trial(args, workload, scenario, output, batch_id, index, barrier):
         results_dir = artifacts / "edited"
         results_dir.mkdir()
         event("command-started")
+        if observer:
+            observer.phase = "edited"
         measured = command(test_command(solution, results_dir), workspace, artifacts,
                            "edited", args.timeout, env)
         available = time.monotonic_ns()
@@ -361,6 +511,34 @@ def run_trial(args, workload, scenario, output, batch_id, index, barrier):
             event("timeout", error=str(error))
         event("incident", error=str(error))
     finally:
+        if observer:
+            observer.stop.set()
+            observer.thread.join()
+            record["container_stats"] = {
+                "containers": observer.containers, "samples": observer.samples,
+                "errors": observer.errors, "poll_interval_ms": 250,
+                "request_timeout_seconds": 3}
+            record["container_stats_reason"] = (
+                "Telemetry errors or no edited-command samples"
+                if observer.errors or not any(s["phase"] == "edited"
+                                              for s in observer.samples) else None)
+            try:
+                cleanup = observer.finish()
+                record["container_cleanup"] = cleanup
+                if cleanup["removed_by_harness"]:
+                    record["incidents"].append({
+                        "kind": "container-cleanup-required", "attribution": "infrastructure",
+                        "evidence": cleanup["removed_by_harness"]})
+                event("container-cleanup", **cleanup)
+            except (OSError, ValueError, KeyError, http.client.HTTPException,
+                    ContainerAPIError) as error:
+                record["correct"] = False
+                record["edit_to_correct_result_ms"] = None
+                record["error"] = f"Container cleanup failed: {error}"
+                record["container_cleanup"] = {"confirmed": False, "error": str(error)}
+                record["incidents"].append({"kind": "container-cleanup-failure",
+                                            "attribution": "infrastructure",
+                                            "evidence": str(error)})
         event("cleanup", status="workspace retained; subprocesses completed or terminated")
         write_json(artifacts / "trial.json", record)
         (artifacts / "events.jsonl").write_text(
@@ -417,6 +595,10 @@ def main():
         if not re.fullmatch(r"postgres@sha256:[0-9a-f]{64}",
                             os.environ.get("MEASUREMENT_POSTGRES_IMAGE", "")):
             parser.error("Set MEASUREMENT_POSTGRES_IMAGE to an approved immutable digest")
+        try:
+            ContainerAPI()
+        except ValueError as error:
+            parser.error(str(error))
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     manifest = {"schema_version": 1, "experiment_id": output.name, "source": "scripted",
@@ -430,11 +612,7 @@ def main():
                 "sdk": subprocess.check_output(["dotnet", "--version"],
                                                cwd=ROOT / "fixtures", text=True).strip(),
                 "os": platform.platform(), "cpu_count": os.cpu_count(),
-                "host_memory": Path("/proc/meminfo").read_text(),
-                "host_pressure_context": {
-                    kind: Path(f"/proc/pressure/{kind}").read_text()
-                    for kind in ("cpu", "memory", "io")},
-                "runner_cgroup_membership": Path("/proc/self/cgroup").read_text(),
+                **host_context(),
                 "image": os.environ.get("MEASUREMENT_POSTGRES_IMAGE"),
                 "telemetry_cadence_ms": 50,
                 "permissions": {"campaign": args.approve_campaign,

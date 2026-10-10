@@ -5,8 +5,10 @@
 Test whether an agent-facing backend benefits ordinary .NET edits compared with
 plain `dotnet test`, before building per-user hubs, per-worktree workers,
 history/baselines, shared scheduling or genuine per-test change coverage.
-Correctness always overrides performance. G0 stays pending until comparable
-measurements exist; later proposed G1 goals are 30% lower edit-to-correct-result
+Correctness always overrides performance. G0 needs repeated baseline cost
+measurements to decide whether a service investigation is justified; it does not
+require or imply a backend improvement. See [the local G0 evidence](results/g0-local.md).
+Later proposed G1 goals are 30% lower edit-to-correct-result
 latency, 50% fewer pre-existing-failure turns where present and zero **observed**
 contention failures. Goals are not measured outcomes; zero observed incidents
 cannot prove impossibility and zero baseline turns have no relative reduction.
@@ -34,8 +36,8 @@ Include localized regression/repair, shared dependency change and compile-error
 diagnostics. Concurrent batches use independent workspaces and an edit barrier;
 use concurrency 2 first, 4 only after capacity approval. Counterbalance condition
 order with a recorded random seed, match cache state, and keep batches as units
-of analysis. The current runner executes baseline smoke/pilot infrastructure
-only, not a randomized two-condition campaign.
+of analysis. The current runner executes single-condition baseline campaigns, not a
+randomized two-condition comparison.
 
 Pair on workload, scenario, repetition and concurrency. Compute paired absolute
 and relative differences, median/p95 per condition, and batch-resampled
@@ -67,8 +69,9 @@ must add explicit fields rather than silently filling unsupported values:
 | Summary | Attempted/valid/invalid/timeouts and reasons, batch counts, median/p95, paired changes and uncertainty only when comparable evidence exists, resource observations, incidents, correctness failures, G0 and rationale |
 
 Unsupported agent metrics are **null**, not zero. Test-tool duration is not
-blocked agent time. Unsupported build/test stage durations and container stats
-are null with limitations. Compile-error diagnostics are a separate correctness
+blocked agent time. Unsupported build/test stage durations are null with limitations. Container
+statistics are collected for approved local integration trials; unit trials have
+none, and missing observations/errors remain explicit. Compile-error diagnostics are a separate correctness
 oracle; never invent per-test passing counts for compilation failures.
 
 Classify incidents only with evidence: port/resource collision, process/container
