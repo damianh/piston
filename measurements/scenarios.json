@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "workloads": {
+    "unit": {
+      "solution": "unit/Orders.slnx",
+      "source": "unit/Pricing/PriceRules.cs",
+      "minimum_tests": 409,
+      "scenarios": {
+        "baseline": {"before": "DiscountThreshold = 100m", "after": "DiscountThreshold = 100.00m", "failed_suffixes": []},
+        "regression": {"before": "DiscountThreshold = 100m", "after": "DiscountThreshold = 100.01m", "failed_suffixes": ["PriceTests.DiscountBoundary", "OrderTests.OrderDiscountBoundary"]},
+        "rounding": {"before": "Rounding = MidpointRounding.ToEven", "after": "Rounding = MidpointRounding.AwayFromZero", "failed_suffixes": ["PriceTests.RoundingBoundary", "OrderTests.SharedRoundingBoundary"]},
+        "known-failure": {"before": "KnownFailure = false", "after": "KnownFailure = true", "failed_suffixes": ["PriceTests.ExistingFailure"]},
+        "regression-with-existing-failure": {"seed_before": "KnownFailure = false", "seed_after": "KnownFailure = true", "baseline_failed_suffixes": ["PriceTests.ExistingFailure"], "before": "DiscountThreshold = 100m", "after": "DiscountThreshold = 100.01m", "failed_suffixes": ["PriceTests.DiscountBoundary", "OrderTests.OrderDiscountBoundary"]},
+        "repair": {"before": "DiscountThreshold = 100m", "after": "DiscountThreshold = 100.01m", "repair": true, "failed_suffixes": []},
+        "compile-error": {"before": "Round(subtotal >=", "after": "MissingSymbol(subtotal >=", "diagnostic": "CS0103", "failed_suffixes": []}
+      }
+    },
+    "integration": {
+      "solution": "integration/Persistence.slnx",
+      "source": "integration/Persistence.Tests/OrderStore.cs",
+      "minimum_tests": 5,
+      "scenarios": {
+        "baseline": {"before": "KnownFailure = false", "after": "KnownFailure = false /* edit */", "failed_suffixes": []},
+        "regression": {"before": "on conflict (id) do nothing", "after": "", "failed_suffixes": ["PersistenceTests.IdempotentWrites"]},
+        "known-failure": {"before": "KnownFailure = false", "after": "KnownFailure = true", "failed_suffixes": ["PersistenceTests.ExistingFailure"]},
+        "regression-with-existing-failure": {"seed_before": "KnownFailure = false", "seed_after": "KnownFailure = true", "baseline_failed_suffixes": ["PersistenceTests.ExistingFailure"], "before": "on conflict (id) do nothing", "after": "", "failed_suffixes": ["PersistenceTests.IdempotentWrites"]},
+        "repair": {"before": "on conflict (id) do nothing", "after": "", "repair": true, "failed_suffixes": []}
+      }
+    }
+  }
+}

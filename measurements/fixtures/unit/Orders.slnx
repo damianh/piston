@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="Pricing/Pricing.csproj" />
+  <Project Path="Orders/Orders.csproj" />
+  <Project Path="Pricing.Tests/Pricing.Tests.csproj" />
+  <Project Path="Orders.Tests/Orders.Tests.csproj" />
+</Solution>
