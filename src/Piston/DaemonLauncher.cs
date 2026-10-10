@@ -87,6 +87,7 @@ internal static class DaemonLauncher
 
         psi.ArgumentList.Add("daemon");
         psi.ArgumentList.Add(solutionPath);
+        psi.ArgumentList.Add("--no-stdio");
         psi.ArgumentList.Add("--pipe-name");
         psi.ArgumentList.Add(pipeName);
         psi.ArgumentList.Add("--web-port");

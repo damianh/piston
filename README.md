@@ -69,6 +69,7 @@ piston status [<solution>]
 | `--coverage` | Request coverage collection on the VSTest path; requires a compatible collector in the test project. |
 | `--parallelism <n>` | Max concurrent test processes. `0` = auto. |
 | `--stdio` | Use stdin/stdout for engine JSON-RPC transport, not MCP. |
+| `--no-stdio` | Force named-pipe transport, overriding `.piston.json`'s `stdio` setting. |
 | `--pipe-name <name>` | Override the named pipe name (default: derived from solution path). |
 | `--mcp-port <port>` | Enable the MCP server on the specified port. |
 | `--web-port <port>` | Port for the web UI and WebSocket server (default: 5199). |

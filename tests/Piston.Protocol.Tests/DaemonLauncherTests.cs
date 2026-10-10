@@ -21,6 +21,7 @@ public sealed class DaemonLauncherTests
 
             var (selectedPath, _) = HostHelpers.ResolveSolution(null, root);
             var start = DaemonLauncher.CreateStartInfo("Piston", selectedPath, "test-pipe", 5321, root);
+            Assert.Contains("--no-stdio", start.ArgumentList);
             var configIndex = start.ArgumentList.IndexOf("--config-directory");
             Assert.True(configIndex >= 0);
             var (_, daemonConfig) = HostHelpers.ResolveSolution(new FileInfo(start.ArgumentList[1]),
@@ -48,7 +49,7 @@ public sealed class DaemonLauncherTests
         var expected = new List<string>();
         if (usesDotnet)
             expected.Add(typeof(DaemonLauncher).Assembly.Location);
-        expected.AddRange(["daemon", "/solution with spaces/test.slnx", "--pipe-name", "test-pipe", "--web-port", "5321"]);
+        expected.AddRange(["daemon", "/solution with spaces/test.slnx", "--no-stdio", "--pipe-name", "test-pipe", "--web-port", "5321"]);
 
         Assert.Equal(executable, start.FileName);
         Assert.Equal(expected, start.ArgumentList);

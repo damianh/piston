@@ -48,6 +48,10 @@ var stdioOpt = new Option<bool>(
     name: "--stdio",
     description: "Use stdin/stdout for Piston JSON-RPC transport (not MCP).");
 
+var noStdioOpt = new Option<bool>(
+    name: "--no-stdio",
+    description: "Use named-pipe transport, overriding the .piston.json stdio setting.");
+
 var configDirectoryOpt = new Option<string?>("--config-directory")
 {
     IsHidden = true,
@@ -89,6 +93,7 @@ var daemonCmd = new Command("daemon", "Start the Piston daemon in the foreground
     coverageOpt,
     parallelismOpt,
     stdioOpt,
+    noStdioOpt,
     pipeNameOpt,
     mcpPortOpt,
     webPortOpt,
@@ -103,13 +108,21 @@ daemonCmd.SetHandler(async ctx =>
     var coverage     = ctx.ParseResult.GetValueForOption(coverageOpt);
     var parallelism  = ctx.ParseResult.GetValueForOption(parallelismOpt);
     var stdio        = ctx.ParseResult.GetValueForOption(stdioOpt);
+    var noStdio      = ctx.ParseResult.GetValueForOption(noStdioOpt);
     var pipeName     = ctx.ParseResult.GetValueForOption(pipeNameOpt);
     var mcpPort      = ctx.ParseResult.GetValueForOption(mcpPortOpt);
     var webPort      = ctx.ParseResult.GetValueForOption(webPortOpt);
     var configDirectory = ctx.ParseResult.GetValueForOption(configDirectoryOpt);
 
+    if (stdio && noStdio)
+    {
+        Console.Error.WriteLine("error: --stdio and --no-stdio cannot be used together.");
+        ctx.ExitCode = 1;
+        return;
+    }
+
     // Resolve config before choosing the daemon transport.
-    if (!stdio)
+    if (!stdio && !noStdio)
     {
         try
         {
@@ -122,6 +135,10 @@ daemonCmd.SetHandler(async ctx =>
             ctx.ExitCode = 1;
             return;
         }
+    }
+    else if (noStdio)
+    {
+        stdio = false;
     }
 
     if (stdio)
