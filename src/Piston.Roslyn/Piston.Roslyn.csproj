@@ -1,9 +1,0 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <ItemGroup>
-    <InternalsVisibleTo Include="Piston.Roslyn.Worker" />
-    <InternalsVisibleTo Include="Piston.Roslyn.Tests" />
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\Piston.Protocol\Piston.Protocol.csproj" />
-  </ItemGroup>
-</Project>

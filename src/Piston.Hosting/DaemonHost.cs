@@ -6,12 +6,11 @@ using Piston.Hosting.Protocol;
 using Piston.Hosting.Services;
 using Piston.Mcp;
 using Piston.Protocol.Transports;
-using Piston.Roslyn;
 
 namespace Piston.Hosting;
 
 /// <summary>
-/// Hosts the full Piston daemon composition in-process: engine, Roslyn workspace,
+/// Hosts the full Piston daemon composition in-process: engine,
 /// protocol router (named pipe + WebSocket), web dashboard server, and optional MCP server.
 /// Shared by the CLI (<c>piston daemon</c>) and the desktop shell.
 /// </summary>
@@ -21,9 +20,7 @@ public sealed class DaemonHost : IAsyncDisposable
     private readonly Action<string> _log;
 
     private PistonEngine? _engine;
-    private IRoslynWorkspace? _workspace;
     private ProtocolRouter? _router;
-    private DiagnosticWatcherService? _diagnosticWatcher;
     private WebApplication? _webApp;
     private WebApplication? _mcpApp;
     private bool _disposed;
@@ -41,7 +38,7 @@ public sealed class DaemonHost : IAsyncDisposable
     public string WebUrl => $"http://localhost:{_options.WebPort}";
 
     /// <summary>
-    /// Starts the engine, Roslyn workspace, protocol router, web server, and MCP server,
+    /// Starts the engine, protocol router, web server, and MCP server,
     /// then runs until <paramref name="ct"/> is cancelled.
     /// </summary>
     public async Task RunAsync(CancellationToken ct)
@@ -63,23 +60,6 @@ public sealed class DaemonHost : IAsyncDisposable
         _log($"[piston] Starting engine for: {_options.SolutionPath}");
         await _engine.StartAsync(_options.SolutionPath).ConfigureAwait(false);
 
-        // Start Roslyn workspace in the background (child process, OOM-isolated)
-        _workspace = RoslynWorkspaceFactory.Create();
-        var workspace = _workspace;
-        _ = Task.Run(async () =>
-        {
-            try
-            {
-                var info = await workspace.LoadAsync(_options.SolutionPath, ct).ConfigureAwait(false);
-                _log($"[piston] Roslyn workspace loaded: {info.Projects.Count} project(s)");
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception ex)
-            {
-                _log($"[piston] Roslyn workspace failed to load: {ex.Message}");
-            }
-        }, ct);
-
         _log($"[piston] Listening on pipe: {_options.PipeName}");
 
         var listener = new NamedPipeListener(_options.PipeName);
@@ -88,12 +68,9 @@ public sealed class DaemonHost : IAsyncDisposable
         // Connect the activity proxy to the router so engine events are broadcast to clients
         activityProxy.SetSink(_router);
 
-        // Wire diagnostic watcher and MCP call tracker into the router
-        _diagnosticWatcher = new DiagnosticWatcherService(_workspace, _router, _options.SolutionPath);
+        // Wire MCP call tracker into the router
         var mcpCallTracker = new McpCallTracker(_router, _options.SolutionPath);
-        _router.SetDiagnosticWatcher(_diagnosticWatcher);
         _router.SetMcpCallTracker(mcpCallTracker);
-        _diagnosticWatcher.Start();
 
         RouterTask = _router.RunAsync(ct);
 
@@ -141,7 +118,7 @@ public sealed class DaemonHost : IAsyncDisposable
             // MCP always runs on its own dedicated app to avoid middleware conflicts
             var mcpBuilder = WebApplication.CreateBuilder();
             mcpBuilder.Services.AddSingleton<IEngine>(_engine);
-            mcpBuilder.Services.AddPistonMcp(_workspace, mcpCallTracker);
+            mcpBuilder.Services.AddPistonMcp(mcpCallTracker);
             _mcpApp = mcpBuilder.Build();
             _mcpApp.MapMcp();
             _mcpApp.Urls.Add($"http://localhost:{_options.McpPort}");
@@ -184,19 +161,10 @@ public sealed class DaemonHost : IAsyncDisposable
 
         _log("[piston] Shutting down.");
 
-        _diagnosticWatcher?.Dispose();
-        _diagnosticWatcher = null;
-
         if (_router is not null)
         {
             await _router.DisposeAsync().ConfigureAwait(false);
             _router = null;
-        }
-
-        if (_workspace is not null)
-        {
-            await _workspace.DisposeAsync().ConfigureAwait(false);
-            _workspace = null;
         }
 
         if (_engine is not null)

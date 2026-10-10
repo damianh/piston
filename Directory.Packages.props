@@ -5,10 +5,7 @@
   <ItemGroup>
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
     <PackageVersion Include="Microsoft.Build" Version="17.14.28" />
-    <PackageVersion Include="Microsoft.Build.Framework" Version="17.14.28" />
     <PackageVersion Include="Microsoft.Build.Locator" Version="1.11.2" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.CSharp.Workspaces" Version="4.13.0" />
-    <PackageVersion Include="Microsoft.CodeAnalysis.Workspaces.MSBuild" Version="4.13.0" />
     <PackageVersion Include="Microsoft.Data.Sqlite" Version="9.0.18" />
     <!-- Explicit pin: Microsoft.Data.Sqlite floors SQLitePCLRaw at vulnerable 2.1.10 (GHSA-2m69-gcr7-jv3q) -->
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.12" />

@@ -112,3 +112,12 @@
 - The config-based MCP activation happens inside `RunHeadlessAsync` — when `.piston.json` has `mcpPort`, headless mode auto-upgrades to headless-MCP mode
 - WorkspaceHost unit tests were skipped — the class is internal to Piston.Roslyn.Worker, and protocol-level testing would require pipe-based integration which is already covered by MCP tool tests
 - All Roslyn DTO types now have serialization coverage
+
+## Refocus: continuous test runner only - Completed
+
+### What was done
+- Removed Roslyn code-intelligence features (superseded by dedicated tools): `Piston.Roslyn`,
+  `Piston.Roslyn.Worker`, `Piston.Roslyn.Tests`, MCP `RoslynTools`, `DiagnosticWatcherService`,
+  `diagnostics/getAll` + `diagnostics.changed` protocol surface, and the web Diagnostics tab.
+- Dropped `Microsoft.CodeAnalysis.*` and `Microsoft.Build.Framework` package versions.
+- Roslyn notes in earlier sections above are historical.

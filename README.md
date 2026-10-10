@@ -1,8 +1,8 @@
 # Piston
 
-An AI-native continuous test runner and code intelligence server for .NET. Think NCrunch and ReSharper, rebuilt as a headless daemon that serves humans (web dashboard, IDE extensions) and AI agents (MCP) alike.
+An AI-native continuous test runner for .NET. Think NCrunch, rebuilt as a headless daemon that serves humans (web dashboard, IDE extensions) and AI agents (MCP) alike.
 
-Piston watches a .NET solution for file changes, determines what was impacted, rebuilds, runs the affected tests in parallel, and streams live results to every connected client. A supervised Roslyn workspace exposes diagnostics, semantic search, AST inspection, and refactorings over the same daemon.
+Piston watches a .NET solution for file changes, determines what was impacted, rebuilds, runs the affected tests in parallel, and streams live results to every connected client.
 
 ## Requirements
 
@@ -83,7 +83,7 @@ piston daemon --coverage --mcp-port 5200
 
 ## Web dashboard
 
-The daemon serves a Blazor WebAssembly dashboard (default `http://localhost:5199`) connected over WebSocket. It shows live test results, build errors, Roslyn diagnostics, engine activity, and MCP tool-call history.
+The daemon serves a Blazor WebAssembly dashboard (default `http://localhost:5199`) connected over WebSocket. It shows live test results, build errors, engine activity, and MCP tool-call history.
 
 ## MCP server (AI agents)
 
@@ -95,12 +95,6 @@ With `--mcp-port` (or `mcpPort` in `.piston.json`), the daemon exposes an MCP en
 | `GetTestResults` | Read current test results. |
 | `SetTestFilter` | Apply a test name filter. |
 | `ClearResults` | Clear accumulated results. |
-| `LoadWorkspace` | Load the Roslyn workspace. |
-| `GetDiagnostics` | Compiler errors/warnings per project. |
-| `SemanticSearch` | Find all references to a symbol. |
-| `GetAst` | Inspect declaration-level syntax trees. |
-| `Rename` | Rename a symbol solution-wide (preview or apply). |
-| `NotifyFileChanged` | Sync an edited file into the workspace. |
 
 ## VSCode extension
 

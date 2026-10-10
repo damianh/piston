@@ -50,8 +50,6 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(BuildCompletedData))]
 [JsonSerializable(typeof(TestRunCompletedData))]
 [JsonSerializable(typeof(TestFailureData))]
-[JsonSerializable(typeof(DiagnosticsChangedData))]
-[JsonSerializable(typeof(DiagnosticEntryData))]
 [JsonSerializable(typeof(McpToolCallData))]
 [JsonSerializable(typeof(StartCommand))]
 [JsonSerializable(typeof(ForceRunCommand))]
@@ -59,7 +57,6 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(SetFilterCommand))]
 [JsonSerializable(typeof(ClearResultsCommand))]
 [JsonSerializable(typeof(GetFileCoverageCommand))]
-[JsonSerializable(typeof(DiagnosticsResponse))]
 [JsonSerializable(typeof(McpCallLogResponse))]
 
 // ── Named param records (used by RemoteEngineClient) ─────────────────────
@@ -74,7 +71,6 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(List<CoverageLineDto>))]
 [JsonSerializable(typeof(Dictionary<string, ProjectRunStatusDto>))]
 [JsonSerializable(typeof(List<TestFailureData>))]
-[JsonSerializable(typeof(List<DiagnosticEntryData>))]
 
 internal sealed partial class PistonJsonContext : JsonSerializerContext
 {

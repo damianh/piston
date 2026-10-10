@@ -89,7 +89,7 @@ Piston.slnx
     Piston.Hosting/             # Reusable daemon composition (DaemonHost)
       DaemonHost.cs             # Engine + router + web server + MCP wiring
       Protocol/                 # ProtocolRouter, client sessions, dispatchers
-      Services/                 # DiagnosticWatcher, McpCallTracker
+      Services/                 # McpCallTracker
       Configuration/            # .piston.json loading
 
     Piston/                     # CLI executable host (namespace Piston.Cli)
@@ -105,9 +105,7 @@ Piston.slnx
 
     Piston.Web/                 # Blazor WASM web dashboard (WebSocket client)
 
-    Piston.Mcp/                 # MCP server registration + tool definitions
-    Piston.Roslyn/              # Roslyn worker proxy + JSON-RPC contracts
-    Piston.Roslyn.Worker/       # Supervised child process hosting MSBuildWorkspace
+    Piston.Mcp/                 # MCP server registration + test tool definitions
 
   extensions/
     vscode/                     # VSCode extension (JSON-RPC over stdio)
@@ -116,7 +114,6 @@ Piston.slnx
     Piston.Engine.Tests/
     Piston.Protocol.Tests/
     Piston.Mcp.Tests/
-    Piston.Roslyn.Tests/
 ```
 
 ### Dependency Graph
@@ -124,10 +121,8 @@ Piston.slnx
 ```
 Piston (CLI host) ────┐
 Piston.Desktop ───────┴─> Piston.Hosting ──> Piston.Engine ──> Piston.Protocol
-                                        ├──> Piston.Mcp ─────> Piston.Engine, Piston.Roslyn
-                                        └──> Piston.Roslyn
+                                        └──> Piston.Mcp ─────> Piston.Engine
 Piston.Web ──────────> Piston.Protocol (via WebSocket JSON-RPC)
-Piston.Roslyn.Worker ─> Piston.Roslyn
 extensions/vscode ────> Piston.Protocol (via JSON-RPC, not assembly ref)
 ```
 
@@ -788,7 +783,7 @@ and connected over WebSocket. It:
 1. Connects to the daemon's `/ws` endpoint (with automatic reconnection/backoff)
 2. Subscribes to state notifications
 3. Renders live views from state snapshots and streaming test results
-   (tests, diagnostics, activity feed, MCP call history)
+   (tests, activity feed, MCP call history)
 4. Sends commands (force run, filter, clear) via JSON-RPC
 
 ```
@@ -876,55 +871,21 @@ Target latencies for a 100-project solution with 5,000 tests:
 
 ---
 
-## 15. Roslyn Workspace & MCP Server
+## 15. MCP Server
 
-### Architecture Overview
+Piston is focused on continuous testing; it does not provide code intelligence
+(diagnostics, symbol search, refactoring). The MCP server exposes the always-warm
+test engine to AI agents so they can verify changes without cold
+`dotnet build`/`dotnet test` cycles.
 
 ```
 Piston Controller
   ├── Protocol Router (named pipe / stdio / WebSocket JSON-RPC) ─── CLI / IDE / web clients
-  ├── MCP Server (HTTP/SSE on --mcp-port) ─── AI agents
-  │
-  ├── Piston Engine (test runner, file watcher, build)
-  │
-  └── Roslyn Worker (supervised child process)
-        └── MSBuildWorkspace + SemanticModel + Renamer
-```
-
-### New Projects
-
-| Project | Purpose |
-|---------|---------|
-| `Piston.Roslyn` | Shared DTOs, JSON-RPC contracts, and proxy for the Roslyn worker process. No Roslyn dependency — safe to reference from the controller. |
-| `Piston.Roslyn.Worker` | Standalone executable that hosts an `MSBuildWorkspace`. Runs as a supervised child process to isolate Roslyn/MSBuild from the main controller. |
-| `Piston.Mcp` | MCP server registration and tool definitions. Exposes Piston engine + Roslyn workspace as MCP tools for AI agents. |
-
-### Updated Dependency Graph
-
-```
-Piston (CLI host) ───> Piston.Engine ───> Piston.Protocol
-                  ├──> Piston.Roslyn
-                  └──> Piston.Mcp ──────> Piston.Engine
-                                     └──> Piston.Roslyn
-Piston.Roslyn.Worker ─> Piston.Roslyn ──> Piston.Protocol
+  ├── MCP Server (HTTP on --mcp-port) ─── AI agents
+  └── Piston Engine (test runner, file watcher, build)
 ```
 
 ### MCP Tool Catalog
-
-The MCP server exposes 10 tools across two categories:
-
-**Roslyn Tools** (code intelligence via the supervised worker):
-
-| Tool | Description |
-|------|-------------|
-| `LoadWorkspace` | Load a `.sln` or `.csproj` workspace for code analysis. Must be called first. |
-| `GetDiagnostics` | Get compiler diagnostics (errors/warnings) for a project or the entire workspace. |
-| `SemanticSearch` | Find all references to a symbol by name using Roslyn semantic analysis. |
-| `GetAst` | Get a pruned AST for a file showing declarations (classes, methods, properties). |
-| `Rename` | Rename a symbol at a specific location. Supports preview mode. |
-| `NotifyFileChanged` | Notify the workspace that a file changed externally so it updates its in-memory state. |
-
-**Test Tools** (engine operations):
 
 | Tool | Description |
 |------|-------------|
@@ -933,34 +894,11 @@ The MCP server exposes 10 tools across two categories:
 | `SetTestFilter` | Set a test filter to narrow which tests are run. |
 | `ClearResults` | Clear all test results and coverage data. |
 
-### Supervised Child Process Model
+### Edit-then-retest flow
 
-The Roslyn worker runs as a separate `dotnet` process (`Piston.Roslyn.Worker`) to
-provide crash isolation. MSBuild workspace loading can fail or corrupt state in
-ways that would take down the controller — the child process model prevents this.
-
-Key design decisions:
-- **Lazy initialization**: The worker process is not spawned until a Roslyn tool is
-  first invoked. This avoids startup cost when MCP/Roslyn features are not used.
-- **Crash recovery**: If the worker crashes, the proxy detects the broken pipe and
-  respawns a fresh worker on the next request.
-- **Communication**: JSON-RPC over stdin/stdout pipes to the child process.
-- **Lifecycle**: The worker is terminated when the controller shuts down.
-
-### Workspace Synchronization
-
-The Roslyn workspace stays in sync with file changes through two mechanisms:
-
-1. **Explicit notification**: The `NotifyFileChanged` MCP tool allows AI agents to
-   tell the workspace about files they modified.
-2. **Refactor-then-retest flow**: When an agent uses `Rename` (applied mode), the
-   engine's file watcher detects the changed files, triggers a rebuild, and re-runs
-   affected tests automatically. The flow is:
-   ```
-   Agent calls Rename → files written to disk → FileWatcher detects changes
-     → Engine rebuilds affected projects → Engine re-runs affected tests
-     → Agent calls GetTestResults to verify
-   ```
+Agents edit files on disk; the engine's file watcher detects the changes, rebuilds
+affected projects, and re-runs affected tests. The agent then calls
+`GetTestResults` to verify.
 
 ### Configuration
 
