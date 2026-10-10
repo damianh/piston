@@ -112,15 +112,7 @@ public sealed class PistonEngine : IEngine
         _state.NotifyChanged();
     }
 
-    public void ClearResults()
-    {
-        SqliteCoverageStore.Clear(_solutionDirectory);
-        _state.TestSuites = [];
-        _state.LastRunTime = null;
-        _state.HasCoverageData = false;
-        _state.CoverageImpactDetail = null;
-        _state.NotifyChanged();
-    }
+    public void ClearResults() => _orchestrator.ClearResults(_solutionDirectory);
 
     public void Dispose()
     {

@@ -14,11 +14,14 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Piston.Engine\Piston.Engine.csproj" />
+    <ProjectReference Include="..\Piston.TestProcessHost\Piston.TestProcessHost.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="Services\Fixtures\**\*.trx" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Coverage\Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\Piston.TestProcessHost\bin\$(Configuration)\$(TargetFramework)\Piston.TestProcessHost.runtimeconfig.json"
+          Link="Piston.TestProcessHost.runtimeconfig.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

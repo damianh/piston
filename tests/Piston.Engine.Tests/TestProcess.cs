@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 
 namespace Piston.Engine.Tests;
 
@@ -32,11 +33,25 @@ internal static class TestProcess
 
     public static async Task<TestProcessResult> RunAsync(ProcessStartInfo startInfo, TimeSpan timeout)
     {
-        startInfo.RedirectStandardOutput = true;
-        startInfo.RedirectStandardError = true;
-        startInfo.UseShellExecute = false;
-        startInfo.CreateNoWindow = true;
-        using var process = new Process { StartInfo = startInfo };
+        // The host establishes containment before spawning the command, avoiding
+        // the race between assigning a job/group and an immediately exiting parent.
+        var hostInfo = new ProcessStartInfo("dotnet")
+        {
+            WorkingDirectory = startInfo.WorkingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        hostInfo.ArgumentList.Add(typeof(TestProcessHost.Program).Assembly.Location);
+        hostInfo.ArgumentList.Add(startInfo.FileName);
+        hostInfo.ArgumentList.Add(startInfo.Arguments);
+        foreach (var argument in startInfo.ArgumentList)
+            hostInfo.ArgumentList.Add(argument);
+        hostInfo.Environment.Clear();
+        foreach (var entry in startInfo.Environment)
+            hostInfo.Environment.Add(entry);
+        using var process = new Process { StartInfo = hostInfo };
         var stdout = new ConcurrentQueue<string>();
         var stderr = new ConcurrentQueue<string>();
         process.OutputDataReceived += (_, e) => Capture(stdout, "stdout", e.Data);
@@ -56,7 +71,21 @@ internal static class TestProcess
             var cleanup = "Process tree terminated.";
             try
             {
-                process.Kill(entireProcessTree: true);
+                if (OperatingSystem.IsWindows())
+                {
+                    // Closing the host's kill-on-close job also kills descendants
+                    // if their immediate parent has already exited.
+                    if (!process.HasExited)
+                        process.Kill(entireProcessTree: true);
+                }
+                else if (kill(-process.Id, 9) != 0)
+                {
+                    var error = Marshal.GetLastPInvokeError();
+                    if (error != 3) // ESRCH: the entire group has already exited.
+                        throw new Win32Exception(error);
+                    if (!process.HasExited)
+                        process.Kill(entireProcessTree: true);
+                }
                 await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
             }
             catch (Exception ex) when (ex is InvalidOperationException or Win32Exception or TimeoutException)
@@ -84,4 +113,7 @@ internal static class TestProcess
                 output.TryDequeue(out _);
         }
     }
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int kill(int pid, int signal);
 }

@@ -21,6 +21,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     private string? _solutionPath;
     private Task? _graphInitTask;
     private readonly SemaphoreSlim _runLock = new(1, 1);
+    private readonly SemaphoreSlim _coverageLock = new(1, 1);
 
     public PistonOrchestrator(
         IFileWatcherService fileWatcher,
@@ -121,6 +122,44 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     {
         if (_solutionPath is null) return;
         await TriggerRunAsync(_solutionPath, null);
+    }
+
+    internal void ClearResults(string solutionDirectory)
+    {
+        _coverageLock.Wait();
+        try
+        {
+            SqliteCoverageStore.Clear(solutionDirectory);
+            _state.TestSuites = [];
+            _state.LastRunTime = null;
+            _state.HasCoverageData = false;
+            _state.CoverageImpactDetail = null;
+        }
+        finally
+        {
+            _coverageLock.Release();
+        }
+        _state.NotifyChanged();
+    }
+
+    internal async Task ProcessCoverageAsync(
+        long runId, IReadOnlyList<string> reportPaths, IReadOnlyList<string> testFqns)
+    {
+        var processor = _coverageProcessor
+            ?? throw new InvalidOperationException("Coverage processing is not enabled.");
+        var store = _coverageStore
+            ?? throw new InvalidOperationException("Coverage storage is not enabled.");
+        await _coverageLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            await processor.ProcessCoverageAsync(runId, reportPaths, testFqns, store)
+                .ConfigureAwait(false);
+            _state.HasCoverageData = true;
+        }
+        finally
+        {
+            _coverageLock.Release();
+        }
     }
 
     public void Stop()
@@ -418,9 +457,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
                 try
                 {
-                    await _coverageProcessor.ProcessCoverageAsync(runId, coverageReportPaths, testFqns, _coverageStore)
-                        .ConfigureAwait(false);
-                    _state.HasCoverageData = true;
+                    await ProcessCoverageAsync(runId, coverageReportPaths, testFqns).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -645,5 +682,6 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         _cts?.Cancel();
         _cts?.Dispose();
         _runLock.Dispose();
+        _coverageLock.Dispose();
     }
 }

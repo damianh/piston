@@ -221,6 +221,9 @@ separate connection, including when collection is currently disabled. No databas
 is created just to clear results. The storage boundary is the solution directory:
 solutions in the same directory share this database and its reset scope; other
 solution directories are unaffected.
+Within an engine, coverage processing and its availability-state publication
+are serialized with clearing, so a cleared commit cannot later publish a stale
+coverage indicator.
 
 The engine keeps test results, timings, and build state in memory. Coverage run
 IDs are seeded from the database, but they do not constitute test-run history.
@@ -233,7 +236,8 @@ implemented. The engine also writes a diagnostic log under `.piston`.
 CLI solution resolution uses an explicit argument first, then `solution` from
 the current directory's `.piston.json` (relative to that config), then unique
 solution discovery in the current directory. The selecting config is retained
-when it points to a solution elsewhere. With an explicit argument, config is
+when it points to a solution elsewhere; web auto-start forwards that config
+directory to its daemon through an internal CLI option. With an explicit argument, config is
 loaded from the explicit solution's directory instead. Invalid config or a
 missing/invalid configured solution is reported rather than silently falling
 back. Config is read as a JSON stream so hidden `.piston.json` files are not
@@ -260,9 +264,12 @@ agent contracts, freshness semantics, and reliable run completion are future
 backend work, not guarantees of the existing text-based tools.
 
 Engine-test setup process helpers drain both stdout and stderr and enforce a
-90-second deadline. Timeout failures attempt process-tree termination with a
-bounded cleanup wait, and report command, PID, working directory, and the last
-100 output lines. They also reject unsuccessful setup commands instead of
+90-second deadline. A small test-only process host establishes a Unix session or
+Windows kill-on-close job before starting the command. Timeout cleanup terminates
+the session/job even if the command has exited but a descendant still owns an
+output pipe. A bounded cleanup wait reports command, host PID, working directory,
+and the latest 50 lines from each stream (not a globally ordered transcript).
+The helpers also reject unsuccessful setup commands instead of
 discarding their exit codes (the optional MTP availability probe retains its
 nonzero-exit handling, but no longer swallows timeouts).
 

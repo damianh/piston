@@ -132,7 +132,8 @@ change made by this documentation PR.
 With an explicit solution argument, Piston reads the optional `.piston.json` in
 that solution's directory. Without an argument, it reads `.piston.json` in the
 current directory before resolving the solution and retains that config even
-when `solution` points into another directory. Invalid config files are reported
+when `solution` points into another directory, including when the web command
+auto-starts a daemon. Invalid config files are reported
 as errors rather than silently ignored.
 Supplied CLI values override corresponding config values, with two caveats:
 `--coverage` enables coverage but cannot disable a config-enabled value, and

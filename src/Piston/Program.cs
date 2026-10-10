@@ -48,6 +48,11 @@ var stdioOpt = new Option<bool>(
     name: "--stdio",
     description: "Use stdin/stdout for Piston JSON-RPC transport (not MCP).");
 
+var configDirectoryOpt = new Option<string?>("--config-directory")
+{
+    IsHidden = true,
+};
+
 var mcpPortOpt = new Option<int?>(
     name: "--mcp-port",
     description: "Enable MCP server on the specified port.");
@@ -87,6 +92,7 @@ var daemonCmd = new Command("daemon", "Start the Piston daemon in the foreground
     pipeNameOpt,
     mcpPortOpt,
     webPortOpt,
+    configDirectoryOpt,
 };
 
 daemonCmd.SetHandler(async ctx =>
@@ -100,13 +106,14 @@ daemonCmd.SetHandler(async ctx =>
     var pipeName     = ctx.ParseResult.GetValueForOption(pipeNameOpt);
     var mcpPort      = ctx.ParseResult.GetValueForOption(mcpPortOpt);
     var webPort      = ctx.ParseResult.GetValueForOption(webPortOpt);
+    var configDirectory = ctx.ParseResult.GetValueForOption(configDirectoryOpt);
 
     // Resolve config before choosing the daemon transport.
     if (!stdio)
     {
         try
         {
-            var (_, config) = HostHelpers.ResolveSolution(solutionFile);
+            var (_, config) = HostHelpers.ResolveSolution(solutionFile, configurationDirectory: configDirectory);
             stdio = config.Stdio ?? false;
         }
         catch (InvalidOperationException ex)
@@ -119,11 +126,12 @@ daemonCmd.SetHandler(async ctx =>
 
     if (stdio)
     {
-        await RunDaemonStdioAsync(solutionFile, debounceMs, filter, coverage, parallelism);
+        await RunDaemonStdioAsync(solutionFile, debounceMs, filter, coverage, parallelism, configDirectory);
     }
     else
     {
-        await RunDaemonAsync(solutionFile, debounceMs, filter, coverage, parallelism, pipeName, mcpPort, webPort);
+        await RunDaemonAsync(solutionFile, debounceMs, filter, coverage, parallelism, pipeName, mcpPort, webPort,
+            configDirectory);
     }
 });
 
@@ -194,7 +202,10 @@ static async Task RunWebAsync(FileInfo? solutionArg, string? cliPipeName, int we
     };
 
     // Ensure daemon is running (auto-start if not)
-    await DaemonLauncher.EnsureRunningAsync(solutionPath, pipeName, webPort, cts.Token);
+    var configurationDirectory = solutionArg is null
+        ? Directory.GetCurrentDirectory()
+        : Path.GetDirectoryName(solutionPath)!;
+    await DaemonLauncher.EnsureRunningAsync(solutionPath, pipeName, webPort, configurationDirectory, cts.Token);
 
     var webUrl = $"http://localhost:{webPort}";
     Console.Error.WriteLine($"[piston] Opening browser: {webUrl}");
@@ -223,13 +234,14 @@ static async Task RunDaemonAsync(
     int cliParallelism,
     string? cliPipeName,
     int? cliMcpPort,
-    int webPort)
+    int webPort,
+    string? configDirectory)
 {
     string solutionPath;
     PistonConfig config;
     try
     {
-        (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg);
+        (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
     }
     catch (InvalidOperationException ex)
     {
@@ -281,13 +293,14 @@ static async Task RunDaemonStdioAsync(
     int cliDebounceMs,
     string? cliFilter,
     bool cliCoverage,
-    int cliParallelism)
+    int cliParallelism,
+    string? configDirectory)
 {
     string solutionPath;
     PistonConfig config;
     try
     {
-        (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg);
+        (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
     }
     catch (InvalidOperationException ex)
     {

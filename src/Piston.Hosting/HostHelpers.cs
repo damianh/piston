@@ -13,12 +13,12 @@ public static class HostHelpers
         ResolveSolution(solutionArg, workingDirectory).SolutionPath;
 
     public static (string SolutionPath, PistonConfig Config) ResolveSolution(
-        FileInfo? solutionArg, string? workingDirectory = null)
+        FileInfo? solutionArg, string? workingDirectory = null, string? configurationDirectory = null)
     {
         if (solutionArg is not null)
         {
             var path = ValidateSolutionPath(solutionArg.FullName);
-            return (path, LoadConfig(Path.GetDirectoryName(path)!));
+            return (path, LoadConfig(configurationDirectory ?? Path.GetDirectoryName(path)!));
         }
 
         var cwd = Path.GetFullPath(workingDirectory ?? Directory.GetCurrentDirectory());

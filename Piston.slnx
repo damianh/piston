@@ -12,5 +12,6 @@
     <Project Path="tests/Piston.Engine.Tests/Piston.Engine.Tests.csproj" />
     <Project Path="tests/Piston.Protocol.Tests/Piston.Protocol.Tests.csproj" />
     <Project Path="tests/Piston.Mcp.Tests/Piston.Mcp.Tests.csproj" />
+    <Project Path="tests/Piston.TestProcessHost/Piston.TestProcessHost.csproj" />
   </Folder>
 </Solution>

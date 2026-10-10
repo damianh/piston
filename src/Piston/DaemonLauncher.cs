@@ -15,19 +15,21 @@ internal static class DaemonLauncher
 
     /// <summary>
     /// Checks whether a daemon is already listening on <paramref name="pipeName"/>.
-    /// If not, spawns <c>piston daemon [solutionPath] --pipe-name [pipeName]</c> as a background process,
+    /// If not, spawns <c>piston daemon [solutionPath] --pipe-name [pipeName]</c> as a background process
+    /// with the selecting configuration directory,
     /// then waits until the pipe is available or the timeout expires.
     /// </summary>
     internal static async Task EnsureRunningAsync(
         string solutionPath,
         string pipeName,
         int webPort,
+        string configurationDirectory,
         CancellationToken ct)
     {
         if (await IsPipeAvailableAsync(pipeName, ct))
             return;
 
-        SpawnDaemon(solutionPath, pipeName, webPort);
+        SpawnDaemon(solutionPath, pipeName, webPort, configurationDirectory);
 
         await WaitForPipeAsync(pipeName, ct);
     }
@@ -48,13 +50,13 @@ internal static class DaemonLauncher
         }
     }
 
-    private static void SpawnDaemon(string solutionPath, string pipeName, int webPort)
+    private static void SpawnDaemon(string solutionPath, string pipeName, int webPort, string configurationDirectory)
     {
         var pistonExe = Environment.ProcessPath
             ?? Process.GetCurrentProcess().MainModule?.FileName
             ?? throw new InvalidOperationException("Cannot determine piston executable path.");
 
-        var psi = CreateStartInfo(pistonExe, solutionPath, pipeName, webPort);
+        var psi = CreateStartInfo(pistonExe, solutionPath, pipeName, webPort, configurationDirectory);
         var process = Process.Start(psi);
         if (process is null)
             throw new InvalidOperationException("Failed to spawn piston daemon process.");
@@ -66,7 +68,8 @@ internal static class DaemonLauncher
     }
 
     internal static ProcessStartInfo CreateStartInfo(
-        string executablePath, string solutionPath, string pipeName, int webPort)
+        string executablePath, string solutionPath, string pipeName, int webPort,
+        string? configurationDirectory = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -88,6 +91,11 @@ internal static class DaemonLauncher
         psi.ArgumentList.Add(pipeName);
         psi.ArgumentList.Add("--web-port");
         psi.ArgumentList.Add(webPort.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (configurationDirectory is not null)
+        {
+            psi.ArgumentList.Add("--config-directory");
+            psi.ArgumentList.Add(configurationDirectory);
+        }
         return psi;
     }
 

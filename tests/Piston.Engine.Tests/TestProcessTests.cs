@@ -49,6 +49,31 @@ public sealed class TestProcessTests
     }
 
     [Fact]
+    public async Task RunAsyncCleansUpPipeHoldingChildAfterParentExits()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            // The Windows job closes as soon as the command exits, so there is
+            // no EOF timeout: its remaining descendants are terminated immediately.
+            var result = await TestProcess.RunAsync(
+                Shell("start /b ping -n 30 127.0.0.1 & echo parent-exiting", ""),
+                TimeSpan.FromSeconds(10));
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("parent-exiting", result.Output);
+            return;
+        }
+
+        var error = await Assert.ThrowsAsync<TimeoutException>(() =>
+            TestProcess.RunAsync(Shell("", "sleep 30 & echo child:$!; echo parent-exiting; exit 0"),
+                TimeSpan.FromSeconds(2)));
+
+        Assert.Contains("Exit state: exited with code 0", error.Message);
+        Assert.Contains("Process tree terminated.", error.Message);
+        var childLine = error.Message.Split('\n').Single(line => line.StartsWith("[stdout] child:"));
+        AssertProcessExited(int.Parse(childLine["[stdout] child:".Length..]));
+    }
+
+    [Fact]
     public async Task RunDotnetAsyncParallelMsBuildNodesCompleteWithoutRetainingOutputPipes()
     {
         var root = Directory.CreateTempSubdirectory("piston-node-reuse-test-").FullName;
