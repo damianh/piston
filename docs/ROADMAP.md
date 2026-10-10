@@ -113,6 +113,12 @@ documenting them as supported installation paths.
    failures, contention, and resource use. Distinguish synthetic concurrency
    tests from real multi-agent sessions.
 
+**Status:** items 1–5 landed in #7 (build correctness), #4 (removal and tool
+packaging), #5 (documentation) and #6 (measurement harness and methodology).
+No package has been published. The harness has passed its self-tests and
+unit-fixture smoke runs only; container-backed runs, repeated campaigns and
+real-agent sessions still need explicit approval, so no G0 evidence exists yet.
+
 **Gate G0:** decide whether these costs are meaningful enough to justify a service.
 Creating a benchmark harness is not equivalent to collecting evidence or passing
 the gate. Repository selection, real-agent execution, and experiment permissions
@@ -236,7 +242,4 @@ optional future work, not dependencies of the core product.
 - Upgrade/file-lock behavior and complete descendant process cleanup.
 - Cost of baseline and coverage backfill; honest stale/partial evidence.
 
-Phase 0 is delivered through separate pull requests for build correctness,
-component removal plus packaging, and documentation. Measurement planning is a
-separate approval-gated workstream. Later phases are not authorized merely by
-landing the roadmap.
+Later phases are not authorized merely by landing the roadmap.
