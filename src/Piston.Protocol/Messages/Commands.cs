@@ -16,8 +16,5 @@ public sealed record StartCommandParams(string SolutionPath);
 /// <summary>Params payload for the set-filter JSON-RPC command.</summary>
 public sealed record SetFilterCommandParams(string? Filter);
 
-/// <summary>Response for <c>diagnostics/getAll</c>.</summary>
-public sealed record DiagnosticsResponse(IReadOnlyList<DiagnosticEntryData> Diagnostics);
-
 /// <summary>Response for <c>mcp/getCallLog</c>.</summary>
 public sealed record McpCallLogResponse(IReadOnlyList<McpToolCallData> Calls);

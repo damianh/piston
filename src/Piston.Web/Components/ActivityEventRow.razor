@@ -35,7 +35,6 @@
         ActivityEventTypes.FileChangesDetected => "📝",
         ActivityEventTypes.BuildCompleted      => "🔨",
         ActivityEventTypes.TestRunCompleted    => "🧪",
-        ActivityEventTypes.DiagnosticsChanged  => "⚠",
         ActivityEventTypes.McpToolCall         => "⚡",
         _                                      => "•",
     };
@@ -44,7 +43,6 @@
     {
         ActivityEventTypes.BuildCompleted when Event.Data?["succeeded"]?.GetValue<bool>() == false => "text-red-400",
         ActivityEventTypes.TestRunCompleted when Event.Data?["failed"]?.GetValue<int>() > 0         => "text-red-400",
-        ActivityEventTypes.DiagnosticsChanged                                                       => "text-yellow-400",
         ActivityEventTypes.BuildCompleted                                                            => "text-green-400",
         ActivityEventTypes.TestRunCompleted                                                          => "text-green-400",
         _                                                                                            => "text-blue-400",
@@ -56,7 +54,6 @@
         ActivityEventTypes.FileChangesDetected => FormatFileChanges(),
         ActivityEventTypes.BuildCompleted      => FormatBuild(),
         ActivityEventTypes.TestRunCompleted    => FormatTestRun(),
-        ActivityEventTypes.DiagnosticsChanged  => FormatDiagnostics(),
         ActivityEventTypes.McpToolCall         => FormatMcpCall(),
         _                                      => Event.Type,
     };
@@ -70,8 +67,6 @@
         ActivityEventTypes.TestRunCompleted when Event.Data?["failures"] is JsonArray fails && fails.Count > 0
             => string.Join("\n\n", fails.Select(f =>
                 $"{f?["fullyQualifiedName"]?.GetValue<string>()}\n  {f?["message"]?.GetValue<string>()}")),
-        ActivityEventTypes.DiagnosticsChanged
-            => FormatDiagnosticDetail(),
         ActivityEventTypes.McpToolCall
             => FormatMcpDetail(),
         _ => string.Empty,
@@ -114,31 +109,12 @@
         return $"Tests: {passed} passed, {failed} failed, {skipped} skipped — {ms:F0}ms";
     }
 
-    private string FormatDiagnostics()
-    {
-        var added   = (Event.Data?["added"]   as JsonArray)?.Count ?? 0;
-        var removed = (Event.Data?["removed"] as JsonArray)?.Count ?? 0;
-        return $"Diagnostics changed — +{added} / -{removed}";
-    }
-
     private string FormatMcpCall()
     {
         var tool = Event.Data?["toolName"]?.GetValue<string>() ?? "?";
         var ms   = Event.Data?["durationMs"]?.GetValue<double>() ?? 0;
         var ok   = Event.Data?["succeeded"]?.GetValue<bool>() ?? false;
         return $"MCP: {tool} — {ms:F0}ms {(ok ? "✓" : "✗")}";
-    }
-
-    private string FormatDiagnosticDetail()
-    {
-        var added   = Event.Data?["added"]   as JsonArray;
-        var removed = Event.Data?["removed"] as JsonArray;
-        var lines = new List<string>();
-        if (added is not null)
-            foreach (var d in added) lines.Add($"+ [{d?["severity"]}] {d?["id"]}: {d?["message"]}");
-        if (removed is not null)
-            foreach (var d in removed) lines.Add($"- [{d?["severity"]}] {d?["id"]}: {d?["message"]}");
-        return string.Join("\n", lines);
     }
 
     private string FormatMcpDetail()

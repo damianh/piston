@@ -23,10 +23,6 @@ public static class ActivityEventFactory
         Build(ActivityEventTypes.TestRunCompleted, solutionPath,
             new TestRunCompletedData(passed, failed, skipped, durationMs, failures));
 
-    public static ActivityEvent DiagnosticsChanged(string? solutionPath, IReadOnlyList<DiagnosticEntryData> added, IReadOnlyList<DiagnosticEntryData> removed) =>
-        Build(ActivityEventTypes.DiagnosticsChanged, solutionPath,
-            new DiagnosticsChangedData(added, removed));
-
     public static ActivityEvent McpToolCall(string? solutionPath, string toolName, string? paramsSummary, string? resultSummary, double durationMs, bool succeeded) =>
         Build(ActivityEventTypes.McpToolCall, solutionPath,
             new McpToolCallData(toolName, paramsSummary, resultSummary, durationMs, succeeded));

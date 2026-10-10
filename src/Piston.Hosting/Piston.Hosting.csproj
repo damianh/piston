@@ -9,6 +9,5 @@
     <ProjectReference Include="..\Piston.Engine\Piston.Engine.csproj" />
     <ProjectReference Include="..\Piston.Mcp\Piston.Mcp.csproj" />
     <ProjectReference Include="..\Piston.Protocol\Piston.Protocol.csproj" />
-    <ProjectReference Include="..\Piston.Roslyn\Piston.Roslyn.csproj" />
   </ItemGroup>
 </Project>
