@@ -13,11 +13,13 @@ draws are not claimed to be bit-for-bit identical to Python's.
 
 Validation on Linux with .NET SDK 10.0.401:
 
-- 39 xUnit test cases passed, covering every unit scenario with mocked concurrent
+- 59 xUnit test cases passed, covering every unit scenario with mocked concurrent
   execution, scope/freshness/status guards, isolated sources, permission guards,
   existing-output refusal, timeout/cancellation, summary/paired reduction,
   Unix-socket HTTP response handling, phase-change sample rejection and exact-label
-  cleanup including a racing DELETE 404.
+  cleanup including a racing DELETE 404. Review regressions also cover trailing
+  output separators, private atomic experiment directories, and request-start
+  telemetry error phases with explicit transition markers.
 - One real unit smoke per scenario passed its oracle: six full-scope 409-case
   results and one CS0103 compile-diagnostic result. These include repair and a
   regression that preserves the distinct existing failure.

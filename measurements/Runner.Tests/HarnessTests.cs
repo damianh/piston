@@ -158,14 +158,57 @@ public sealed class HarnessTests
         Assert.True(options.ApproveCampaign);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("/")]
+    [InlineData("///")]
+    public void OutputSeparatorsAreNormalizedAndExperimentIdentityIsNonempty(string suffix)
+    {
+        using var temp = new TemporaryDirectory();
+        var output = System.IO.Path.Combine(temp.Path, "experiment");
+        var options = Options.Parse(["--output", output + suffix]);
+        Assert.Equal(output, options.Output);
+        Assert.Equal("experiment", System.IO.Path.GetFileName(options.Output));
+    }
+
     [Fact]
-    public async Task ExistingOutputIsNeverOverwritten()
+    public void OutputDirectoryIsCreatedPrivatelyAndAtomically()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        using var temp = new TemporaryDirectory();
+        var output = System.IO.Path.Combine(temp.Path, "parent", "experiment");
+        Program.CreateOutputDirectory(output);
+        var mode = File.GetUnixFileMode(output);
+        Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, mode);
+        Assert.Throws<IOException>(() => Program.CreateOutputDirectory(output));
+        Assert.Equal(mode, File.GetUnixFileMode(output));
+        Assert.Empty(Directory.EnumerateFileSystemEntries(output));
+    }
+
+    [Theory]
+    [InlineData("", false)]
+    [InlineData("/", false)]
+    [InlineData("", true)]
+    [InlineData("/", true)]
+    public async Task ExistingOutputIsNeverOverwritten(string suffix, bool empty)
     {
         using var temp = new TemporaryDirectory();
         var marker = System.IO.Path.Combine(temp.Path, "marker");
-        File.WriteAllText(marker, "retain");
-        Assert.Equal(2, await Program.Main(["--output", temp.Path]));
-        Assert.Equal("retain", File.ReadAllText(marker));
+        if (!empty) File.WriteAllText(marker, "retain");
+        Assert.Equal(2, await Program.Main(["--output", temp.Path + suffix]));
+        if (empty) Assert.Empty(Directory.EnumerateFileSystemEntries(temp.Path));
+        else Assert.Equal("retain", File.ReadAllText(marker));
+    }
+
+    [Theory]
+    [InlineData("/")]
+    [InlineData("///")]
+    public async Task RootOutputIsPreservedAndRefused(string output)
+    {
+        var options = Options.Parse(["--output", output]);
+        Assert.Equal("/", options.Output);
+        Assert.Throws<IOException>(() => Program.CreateOutputDirectory(options.Output));
+        Assert.Equal(2, await Program.Main(["--output", output]));
     }
 
     [Fact]

@@ -31,11 +31,7 @@ public static class Program
             var options = Options.Parse(args);
             var manifest = FixtureManifest.Load(Path.Combine(root, "scenarios.json"));
             var workload = options.Validate(manifest);
-            // Atomic directory creation refuses existing artifacts, including empty directories.
-            Directory.CreateDirectory(Path.GetDirectoryName(options.Output)!);
-            if (NativeMethods.MakeDirectory(options.Output, Convert.ToUInt32("755", 8)) != 0)
-                throw new IOException("Cannot create a new output directory: " + options.Output,
-                    new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError()));
+            CreateOutputDirectory(options.Output);
             var context = Evidence.HostContext();
             context["schema_version"] = 1;
             context["experiment_id"] = Path.GetFileName(options.Output);
@@ -87,6 +83,16 @@ public static class Program
             return 2;
         }
         finally { Console.CancelKeyPress -= handler; }
+    }
+
+    public static void CreateOutputDirectory(string output)
+    {
+        // Atomic private directory creation refuses existing artifacts, including empty directories.
+        var parent = Path.GetDirectoryName(output);
+        if (parent is not null) Directory.CreateDirectory(parent);
+        if (NativeMethods.MakeDirectory(output, Convert.ToUInt32("700", 8)) != 0)
+            throw new IOException("Cannot create a new output directory: " + output,
+                new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError()));
     }
 
     public static string FindRoot()

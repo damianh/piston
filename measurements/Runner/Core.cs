@@ -325,7 +325,7 @@ public sealed record Options(string Workload, string Scenario, string Output, in
         if (!values.TryGetValue("--output", out var output) || string.IsNullOrWhiteSpace(output))
             throw new ArgumentException("--output is required");
         return new(values.GetValueOrDefault("--workload", "unit"),
-            values.GetValueOrDefault("--scenario", "baseline"), Path.GetFullPath(output),
+            values.GetValueOrDefault("--scenario", "baseline"), Path.TrimEndingDirectorySeparator(Path.GetFullPath(output)),
             int.Parse(values.GetValueOrDefault("--concurrency", "1"), CultureInfo.InvariantCulture),
             int.Parse(values.GetValueOrDefault("--repetitions", "1"), CultureInfo.InvariantCulture),
             double.Parse(values.GetValueOrDefault("--timeout", "180"), CultureInfo.InvariantCulture),

@@ -75,6 +75,85 @@ public sealed class ContainerTests
         }
     }
 
+    [Theory]
+    [InlineData("listing", 0)]
+    [InlineData("listing", 1)]
+    [InlineData("listing", 2)]
+    [InlineData("inspection", 0)]
+    [InlineData("inspection", 1)]
+    [InlineData("inspection", 2)]
+    [InlineData("stats", 0)]
+    [InlineData("stats", 1)]
+    [InlineData("stats", 2)]
+    public async Task FailuresRetainRequestPhaseAndMarkGenerationCrossings(string request, int transitions)
+    {
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var failure = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var api = new FakeApi();
+        if (request == "listing")
+        {
+            api.ListingOverride = async () =>
+            {
+                started.SetResult();
+                await failure.Task;
+                return [Row()];
+            };
+        }
+        else
+        {
+            api.AsyncRequestOverride = (_, path) =>
+            {
+                var isStats = path.EndsWith("/stats?stream=false", StringComparison.Ordinal);
+                if (isStats != (request == "stats")) return Task.FromResult<JsonNode?>(Details());
+                started.SetResult();
+                return failure.Task;
+            };
+        }
+        using var observer = new ContainerObserver(api, "trial") { Phase = "baseline" };
+        var observation = observer.ObserveOnce();
+        await started.Task;
+        if (transitions > 0) observer.Phase = "edited";
+        if (transitions > 1) observer.Phase = "baseline";
+        failure.SetException(new HttpRequestException("socket unavailable"));
+        await observation;
+
+        var error = Assert.Single(observer.Stats.Errors);
+        Assert.Equal("baseline", error.Phase);
+        Assert.Equal("socket unavailable", error.Error);
+        Assert.Equal(transitions > 0, error.CrossedPhaseTransition);
+        Assert.Empty(observer.Stats.Samples);
+        if (request == "listing") Assert.Empty(api.Calls);
+    }
+
+    [Theory]
+    [InlineData("inspection")]
+    [InlineData("stats")]
+    public async Task FailurePhaseIsCapturedForEachRequest(string request)
+    {
+        var api = new FakeApi();
+        using var observer = new ContainerObserver(api, "trial") { Phase = "baseline" };
+        api.ListingOverride = () =>
+        {
+            if (request == "inspection") observer.Phase = "edited";
+            return Task.FromResult(new[] { Row() });
+        };
+        api.RequestOverride = (_, path) =>
+        {
+            if (request == "stats" && !path.EndsWith("/stats?stream=false", StringComparison.Ordinal))
+            {
+                observer.Phase = "edited";
+                return Details();
+            }
+            throw new HttpRequestException("socket unavailable");
+        };
+        await observer.ObserveOnce();
+
+        var error = Assert.Single(observer.Stats.Errors);
+        Assert.Equal("edited", error.Phase);
+        Assert.False(error.CrossedPhaseTransition);
+        Assert.Equal("socket unavailable", error.Error);
+    }
+
     [Fact]
     public async Task CleanupDoesNotClaimRacing404()
     {
@@ -171,13 +250,16 @@ public sealed class ContainerTests
     private sealed class FakeApi : IContainerApi
     {
         public Queue<JsonObject[]>? Listings { get; set; }
+        public Func<Task<JsonObject[]>>? ListingOverride { get; set; }
         public Func<string, string, JsonNode?>? RequestOverride { get; set; }
+        public Func<string, string, Task<JsonNode?>>? AsyncRequestOverride { get; set; }
         public List<(string Method, string Path)> Calls { get; } = [];
-        public Task<JsonObject[]> Containers(string trialId) => Task.FromResult(
-            Listings is { Count: > 0 } ? Listings.Dequeue() : [Row()]);
+        public Task<JsonObject[]> Containers(string trialId) => ListingOverride is not null ? ListingOverride() :
+            Task.FromResult(Listings is { Count: > 0 } ? Listings.Dequeue() : [Row()]);
         public Task<JsonNode?> Request(string method, string path)
         {
             Calls.Add((method, path));
+            if (AsyncRequestOverride is not null) return AsyncRequestOverride(method, path);
             return Task.FromResult(RequestOverride is not null ? RequestOverride(method, path) :
                 path.EndsWith("/stats?stream=false", StringComparison.Ordinal) ? Stats() :
                 method == "DELETE" ? new JsonObject() : Details());

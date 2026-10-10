@@ -82,7 +82,7 @@ public sealed class ContainerApi : IContainerApi, IDisposable
 public sealed record ContainerSample(string ContainerId, string Phase, long MonotonicNs,
     long CpuTotalNs, long MemoryUsageBytes, long MemoryLimitBytes);
 public sealed record ContainerDetails(string Image, long MemoryLimitBytes, long NanoCpus);
-public sealed record TelemetryError(string Phase, string Error);
+public sealed record TelemetryError(string Phase, string Error, bool CrossedPhaseTransition = false);
 public sealed record ContainerStats(Dictionary<string, ContainerDetails> Containers,
     List<ContainerSample> Samples, List<TelemetryError> Errors,
     int PollIntervalMs = 250, int RequestTimeoutSeconds = 3);
@@ -107,6 +107,7 @@ public sealed class ContainerObserver(IContainerApi api, string trialId) : IDisp
 
     public async Task ObserveOnce()
     {
+        var requestPhase = CapturePhase();
         try
         {
             foreach (var row in await api.Containers(trialId))
@@ -116,6 +117,7 @@ public sealed class ContainerObserver(IContainerApi api, string trialId) : IDisp
                 var id = String(row, "Id");
                 if (!Stats.Containers.ContainsKey(id))
                 {
+                    requestPhase = CapturePhase();
                     var details = await api.Request("GET", $"/containers/{id}/json");
                     if (details is null) continue;
                     if (ContainerApi.Label(details["Config"]?["Labels"]) != trialId)
@@ -125,25 +127,30 @@ public sealed class ContainerObserver(IContainerApi api, string trialId) : IDisp
                         Number(config, "NanoCpus"));
                 }
                 if (String(row, "State") != "running") continue;
-                string sampledPhase;
-                long sampledGeneration;
-                lock (phaseLock) { sampledPhase = phase; sampledGeneration = generation; }
+                requestPhase = CapturePhase();
                 var stats = await api.Request("GET", $"/containers/{id}/stats?stream=false");
                 lock (phaseLock)
                 {
-                    if (stats is null || sampledGeneration != generation) continue;
+                    if (stats is null || requestPhase.Generation != generation) continue;
                     var cpu = stats["cpu_stats"]?["cpu_usage"] ??
                         throw new InvalidDataException("Missing cpu_stats");
                     var memory = stats["memory_stats"] ?? throw new InvalidDataException("Missing memory_stats");
-                    Stats.Samples.Add(new(id, sampledPhase, Evidence.NowNs,
+                    Stats.Samples.Add(new(id, requestPhase.Phase, Evidence.NowNs,
                         Number(cpu, "total_usage"), Number(memory, "usage"), Number(memory, "limit")));
                 }
             }
         }
         catch (Exception error) when (IsTelemetryError(error))
         {
-            Stats.Errors.Add(new(Phase, error.Message));
+            lock (phaseLock)
+                Stats.Errors.Add(new(requestPhase.Phase, error.Message,
+                    requestPhase.Generation != generation));
         }
+    }
+
+    private (string Phase, long Generation) CapturePhase()
+    {
+        lock (phaseLock) return (phase, generation);
     }
 
     private async Task Observe()

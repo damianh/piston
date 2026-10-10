@@ -35,6 +35,9 @@ fixture restore/test commands. Its .NET runtime and polling still add overhead;
 the manifest records the runner runtime, assembly hash and prebuilt policy.
 
 Use a new output directory for every run; existing directories are rejected.
+Trailing separators are normalized. New experiment roots are created atomically
+with mode `0700` to protect raw artifacts on a shared host; existing historical
+experiment permissions are not changed automatically.
 Additional unit smoke scenarios: `rounding`, `known-failure`,
 `regression-with-existing-failure`, `compile-error`.
 The unit fixture has 409 real assertions/cases across two test and two production
@@ -107,7 +110,9 @@ memory usage, with baseline/preparation/edited phases. It polls every 250 ms
 plus API latency (each request has a three-second timeout). Missing samples and
 telemetry errors are explicit, not zero usage.
 Samples spanning a phase transition are discarded rather than attributed to
-the later command. A cleanup DELETE returning 404 is not counted as a harness
+the later command. Telemetry errors retain the request-start phase and include
+`crossed_phase_transition` when the phase generation changed during the request,
+including transitions back to the same phase. A cleanup DELETE returning 404 is not counted as a harness
 removal; the final exact-label query must still confirm an empty result.
 
 After execution it confirms no trial-labeled containers remain. Any leftovers
