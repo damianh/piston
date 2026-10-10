@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "roslynk": {
+      "type": "local",
+      "command": "dotnet",
+      "args": ["tool", "run", "roslynk", "stdio"],
+      "tools": ["*"]
+    }
+  }
+}
