@@ -146,16 +146,35 @@ processing path, not every capability offered by test frameworks or collectors.
 
 ## Builds and execution
 
-Builds use standard `dotnet build`. Full runs target the original solution.
-Project-targeted builds are sequential at Piston's orchestration level;
-MSBuild's internal scheduling is distinct from Piston launching independent
-builds concurrently. No parallel-build latency claim is established here.
+Builds use standard `dotnet build`. Full runs target the original solution and
+allow restore. Before the Phase 0 correction, selective builds target affected
+non-test projects sequentially with `--no-restore`, which can leave stale
+libraries in test output directories.
 
-**Pending Phase 0 correction:** selective runs must rebuild the affected test
-projects and their dependencies before running tests with `--no-build`. Building
-only changed production projects can leave stale test outputs. The concrete
-target-selection and restore behavior will be documented from the companion
-implementation rather than inferred from the impact-analysis output.
+**Pending Phase 0 correction:** the build target set becomes the union of affected
+non-test projects and affected test projects. A test-only edit targets that test
+project, rather than accidentally building the whole solution.
+
+For solution-member targets, the companion issues one
+`dotnet build <temporary-filter>.slnf`, with restore enabled. The filter is written
+outside the watched tree and removed afterwards. MSBuild handles parallel
+scheduling and ProjectReferences; Piston does not launch independent concurrent
+build commands. This refreshes referenced libraries in the affected test outputs
+before `--no-build` test execution, while retaining the real solution's
+`SolutionDir` and `SolutionPath`.
+
+The filter uses the user's `.sln` or `.slnx` as its base. For a user `.slnf`, it
+resolves the underlying solution and respects membership in the user's filter.
+Non-member targets reached through ProjectReferences, or an unreadable/unsupported
+solution path, fall back to sequential per-project
+`dotnet build <project> --no-restore`. This fallback is not a restore guarantee.
+
+A selective run with no affected test projects builds only and skips tests.
+Startup/manual runs and full-run fallbacks use the original solution, then all
+test projects available from the graph. Selective result merging is changed to
+test FQN rather than timestamp-dependent TRX suite names, avoiding stale
+duplicates from that merge path. Neither selective building nor this merge fix
+establishes fine-grained coverage correctness or a measured latency budget.
 
 Both execution backends launch new `dotnet test` processes:
 

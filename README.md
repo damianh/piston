@@ -116,6 +116,17 @@ Project ownership and transitive dependencies determine affected test projects. 
 
 Coverage associations persist in `.piston/piston.db`; test-result history and the project graph do not. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The current MTP runner does not request or return coverage reports. Fine-grained attribution and selection correctness are future experiments.
 
+### Pending selective-build correction
+
+The build-correctness companion builds the union of affected production and
+test projects with one temporary solution-filter build, allowing restore and
+MSBuild dependency scheduling before no-build test execution. It preserves
+`.sln`/`.slnx` solution context and `.slnf` membership. Unsupported/unreadable
+solution paths or non-member targets fall back to sequential per-project builds
+with `--no-restore`; a selective run with no affected tests builds only. Full
+runs still build the original solution. This is pending implementation, not a
+change made by this documentation PR.
+
 ## Configuration file
 
 Piston reads an optional `.piston.json` in the solution directory at startup.
