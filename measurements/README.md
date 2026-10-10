@@ -8,19 +8,31 @@ not implement engine features or launch agents. All scope is under this director
 
 ## Authorized validation
 
-Requires Linux, Python 3.10+ and exactly .NET SDK 10.0.401. Fixture configuration
-and NuGet lock files are independent of the root solution. No Docker is needed for
-these commands:
+Requires Linux and .NET SDK 10.0.401. The harness is a .NET console application
+with xUnit self-tests; Python is not required. Its separate `Measurements.slnx`
+does not build or run the Piston engine. Fixture configuration and NuGet lock
+files are independent of the root solution. No Docker is needed for these commands:
 
 ```sh
-python3 -m unittest discover -s measurements -p 'test_*.py'
+dotnet restore measurements/Measurements.slnx --locked-mode
+dotnet test measurements/Measurements.slnx --no-restore
+dotnet build measurements/Runner/Runner.csproj -c Release --no-restore
 dotnet restore measurements/fixtures/unit/Orders.slnx --locked-mode
 dotnet restore measurements/fixtures/integration/Persistence.slnx --locked-mode
 dotnet build measurements/fixtures/integration/Persistence.slnx --no-restore
-python3 measurements/harness.py --scenario baseline --output measurements/artifacts/baseline
-python3 measurements/harness.py --scenario regression --output measurements/artifacts/regression
-python3 measurements/harness.py --scenario repair --output measurements/artifacts/repair
+dotnet measurements/Runner/bin/Release/net10.0/Piston.Measurements.dll \
+  --scenario baseline --output measurements/artifacts/baseline
+dotnet measurements/Runner/bin/Release/net10.0/Piston.Measurements.dll \
+  --scenario regression --output measurements/artifacts/regression
+dotnet measurements/Runner/bin/Release/net10.0/Piston.Measurements.dll \
+  --scenario repair --output measurements/artifacts/repair
 ```
+
+Build the runner once before measuring, then execute the prebuilt assembly.
+Do not use `dotnet run` in measurement loops: it adds a runner build and changes
+MSBuild state. The console runner itself does not invoke MSBuild except for the
+fixture restore/test commands. Its .NET runtime and polling still add overhead;
+the manifest records the runner runtime, assembly hash and prebuilt policy.
 
 Use a new output directory for every run; existing directories are rejected.
 Additional unit smoke scenarios: `rounding`, `known-failure`,
@@ -51,7 +63,8 @@ Repeated or concurrent campaigns require operator approval, available host
 capacity, and `--approve-campaign`. For example, after approval:
 
 ```sh
-python3 measurements/harness.py --scenario regression --repetitions 5 \
+dotnet measurements/Runner/bin/Release/net10.0/Piston.Measurements.dll \
+  --scenario regression --repetitions 5 \
   --concurrency 2 --approve-campaign --output measurements/artifacts/pilot
 ```
 
@@ -73,7 +86,8 @@ immutable registry digest, and set:
 ```sh
 export DOCKER_HOST=unix://<approved-local-api-socket>
 export MEASUREMENT_POSTGRES_IMAGE=postgres@sha256:<approved-64-hex-digest>
-python3 measurements/harness.py --workload integration --scenario regression \
+dotnet measurements/Runner/bin/Release/net10.0/Piston.Measurements.dll \
+  --workload integration --scenario regression \
   --approve-containers --output measurements/artifacts/postgres-regression
 ```
 
@@ -92,6 +106,9 @@ local Docker-compatible API: image ID, CPU/memory limits, cumulative CPU and
 memory usage, with baseline/preparation/edited phases. It polls every 250 ms
 plus API latency (each request has a three-second timeout). Missing samples and
 telemetry errors are explicit, not zero usage.
+Samples spanning a phase transition are discarded rather than attributed to
+the later command. A cleanup DELETE returning 404 is not counted as a harness
+removal; the final exact-label query must still confirm an empty result.
 
 After execution it confirms no trial-labeled containers remain. Any leftovers
 are inspected again for the exact label before their explicit IDs are removed;
@@ -126,5 +143,7 @@ and preserve all test identities; otherwise its condition stays blocked. No
 backend latency improvement, paired confidence interval or cognitive benefit can
 be computed from baseline-only runs. The approved local G0 campaign and its
 scope-limited recommendation are recorded in [results/g0-local.md](results/g0-local.md).
+Those historical campaigns used the original Python runner; port-validation
+smokes are separate and do not replace or augment the campaign sample counts.
 See [methodology.md](methodology.md)
 and [agent-experiments.md](agent-experiments.md) for the comparison protocol.

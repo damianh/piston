@@ -63,7 +63,7 @@ turns for failure-related turns. If annotations are missing, the latter is null.
 
 Blocked-wait intervals require transcript/tool evidence that tests prevented
 productive progress. Exclude intervals where independent work continued. Compute
-the union per session, not summed overlapping tool durations; `harness.wait_union`
+the union per session, not summed overlapping tool durations; `Evidence.WaitUnion`
 implements this calculation. Report raw test-tool latency separately. No transcript
 or timing evidence means null metrics with a reason.
 

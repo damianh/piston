@@ -21,6 +21,11 @@ Combined fixture SHA-256:
 `585a57913afde1805a8a39b437091b9b2961adc1fc0d6b964ecc1fa5f518cc05`.
 Instrumented runner SHA-256 during the campaigns:
 `0eba93d6f1ecbbe7699e3d27c3ebb39f8c157320e9f42fd5b9f4a0206bb4719d`.
+This was the original Python runner, retained in Git history before its
+replacement by the .NET console harness. The tables and counts below remain
+historical Python-runner evidence, not measurements from the replacement.
+.NET port-validation smokes are recorded separately in [validation.md](../validation.md)
+and are not pooled into these campaigns. No claim of equal runner overhead is made.
 The fixtures and runner configuration were unchanged throughout the statistical
 campaigns. No MSBuild node-reuse environment override was applied.
 

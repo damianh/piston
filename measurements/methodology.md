@@ -39,6 +39,13 @@ order with a recorded random seed, match cache state, and keep batches as units
 of analysis. The current runner executes single-condition baseline campaigns, not a
 randomized two-condition comparison.
 
+The runner is a prebuilt .NET console application. Build it before the
+experiment, never inside a timed loop. Record its runtime and assembly hash;
+the runner does not load MSBuild or reference the Piston engine. Its own runtime,
+resource sampling and container polling still have unquantified overhead.
+The published local G0 campaigns used the previous Python runner, so new .NET
+runner samples must be identified separately rather than pooled into that report.
+
 Pair on workload, scenario, repetition and concurrency. Compute paired absolute
 and relative differences, median/p95 per condition, and batch-resampled
 uncertainty intervals with the recorded seed. Publish all attempted, invalid,

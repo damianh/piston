@@ -1,5 +1,43 @@
 # Harness validation
 
+## .NET harness replacement (2026-10-10)
+
+The measurement runner is now a .NET console application and has no Python
+runtime dependency. Build it once before a run and execute its compiled
+assembly; restore/build of the runner is not part of fixture edit latency.
+The runner preserves scenario edits, full-scope TRX oracles, isolated copies,
+edit barriers, resource/cleanup evidence and schema-version-1 JSON artifacts.
+Manifests additionally identify the runner runtime and compiled assembly hash.
+The paired-resampling helper uses .NET's seeded random generator; bootstrap
+draws are not claimed to be bit-for-bit identical to Python's.
+
+Validation on Linux with .NET SDK 10.0.401:
+
+- 39 xUnit test cases passed, covering every unit scenario with mocked concurrent
+  execution, scope/freshness/status guards, isolated sources, permission guards,
+  existing-output refusal, timeout/cancellation, summary/paired reduction,
+  Unix-socket HTTP response handling, phase-change sample rejection and exact-label
+  cleanup including a racing DELETE 404.
+- One real unit smoke per scenario passed its oracle: six full-scope 409-case
+  results and one CS0103 compile-diagnostic result. These include repair and a
+  regression that preserves the distinct existing failure.
+- Two regression batches at concurrency 2 and one at concurrency 4 validated
+  repetition/barrier execution on the shared host after load checks. All eight
+  additional worker trials passed their full-scope oracles, with no timeouts or
+  incidents. These few batches are functional checks, not statistical campaigns.
+- One PostgreSQL regression smoke passed the five-case full-scope oracle using
+  the same approved immutable image, 1 CPU / 512 MiB limits and label-scoped
+  cleanup. An earlier port smoke used an absent default Podman socket and is
+  retained as invalid; a temporary local API socket resolved the environment
+  issue. A missing-image-digest invocation was rejected before creating output.
+  The successful integration smoke retained 12 container samples with no
+  telemetry errors, inspected the expected image/config limits and confirmed no
+  exact trial-label leftovers. The temporary API service exited after validation.
+
+These are port-validation smokes, not new G0 campaign observations or proof of
+equivalent runner overhead. The long campaigns were not rerun. Historical
+Python results below and in the G0 report remain labeled as such.
+
 ## Approved local G0 campaign (2026-10-10)
 
 The approved local measurement evidence is in [results/g0-local.md](results/g0-local.md).
