@@ -187,9 +187,9 @@ Values are median / p95, not complete resource accounting.
 | Unit | 1 | 80 | 2.075 / 2.930 | 148.0 / 150.2 | N/A | N/A |
 | Unit | 2 | 160 | 2.720 / 3.190 | 148.5 / 150.4 | N/A | N/A |
 | Unit | 4 | 80 | 3.670 / 4.090 | 150.7 / 153.6 | N/A | N/A |
-| PostgreSQL | 1 | 60 | 0.945 / 1.080 | 135.3 / 136.0 | 0.772 / 0.918 | 40.1 / 73.5 |
-| PostgreSQL | 2 | 120 | 1.000 / 1.190 | 134.7 / 135.4 | 0.881 / 1.121 | 41.3 / 63.6 |
-| PostgreSQL | 4 | 80 | 1.145 / 1.430 | 134.9 / 135.5 | 0.953 / 1.199 | 40.3 / 51.1 |
+| PostgreSQL | 1 | 60 | 0.945 / 1.080 | 135.3 / 136.0 | Withdrawn | Withdrawn |
+| PostgreSQL | 2 | 120 | 1.000 / 1.190 | 134.7 / 135.4 | Withdrawn | Withdrawn |
+| PostgreSQL | 4 | 80 | 1.145 / 1.430 | 134.9 / 135.5 | Withdrawn | Withdrawn |
 
 Time-aligned process samples in regression batches gave median aggregate owned
 RSS peaks of 147.7/297.2/601.1 MiB for unit and 135.3/269.2/539.3 MiB for
@@ -198,16 +198,26 @@ sample or command end; it excludes containers, Ryuk and processes outside the
 observable owned tree. It must not be read as a complete host budget.
 
 There were 7,626 owned-container samples across baseline, repair preparation
-and edited commands, of which 3,419 were from edited commands (3,277 in
-statistical campaigns). All 617 observed PostgreSQL containers had the same
+and edited commands. All 617 observed PostgreSQL containers had the same
 config image ID, `NanoCpus=1000000000` and `Memory=536870912`; sampled memory
-limits also matched 512 MiB. Edited-command sampled peak usage never exceeded
-89.1 MiB, far below that cap, but sampling cannot establish the true peak.
+limits also matched 512 MiB.
+
+**Post-review telemetry correction:** the original observer read its phase
+after a blocking stats request, so a baseline/preparation sample could be
+misattributed to the edited command. Raw artifacts do not record the phase at
+request start; retrospective validation of phase attribution is impossible.
+The edited-container CPU/usage distributions, edited-sample counts, peak and
+claim of edited-sample coverage for every valid trial are therefore withdrawn.
+The observer now snapshots the phase before requesting stats and discards
+samples that cross a phase transition, with a deterministic regression test.
+These campaigns were not rerun. Image/limit inspection, total sample counts,
+independently recorded process resources and edit-to-result latency remain
+usable; no phase-specific container resource conclusion is made.
 
 **Telemetry gaps:** 65 observer errors occurred in 60 integration trials:
 48 missing `cpu_stats` responses, 14 HTTP 500 responses and three bounded API
 request timeouts. The three API timeouts are telemetry timeouts, not test-command
-timeouts. All valid integration trials still had edited-container samples.
+timeouts. Edited-container sample coverage cannot be established retrospectively.
 Campaign telemetry was flagged incomplete in 3/60 concurrency-1, 24/120
 concurrency-2 and 33/80 concurrency-4 trials. These errors occurred during
 baseline, preparation or edited observation; their cause was not proven.

@@ -195,6 +195,41 @@ class HarnessTests(unittest.TestCase):
         self.assertIn(unittest.mock.call("DELETE", "/containers/owned?force=true&v=true"),
                       calls.call_args_list)
 
+    def test_container_sample_crossing_phase_transition_is_discarded(self):
+        with patch.dict("os.environ", {"DOCKER_HOST": "unix:///local/socket"}):
+            observer = harness.ContainerObserver("trial")
+        observer.phase = "baseline"
+        observer.containers["owned"] = {}
+
+        def request(method, path):
+            self.assertEqual("/containers/owned/stats?stream=false", path)
+            observer.phase = "edited"
+            observer.stop.set()
+            return {"cpu_stats": {"cpu_usage": {"total_usage": 123}},
+                    "memory_stats": {"usage": 456, "limit": 512 * 1024**2}}
+
+        with patch.object(observer.api, "containers", return_value=[
+                {"Id": "owned", "State": "running"}]), \
+                patch.object(observer.api, "request", side_effect=request):
+            observer.observe()
+        self.assertEqual([], observer.samples)
+        self.assertEqual([], observer.errors)
+
+    def test_container_cleanup_does_not_claim_racing_404_removal(self):
+        with patch.dict("os.environ", {"DOCKER_HOST": "unix:///local/socket"}):
+            observer = harness.ContainerObserver("trial")
+        observer.stop.set()
+        observer.thread.start()
+        row = {"Id": "owned"}
+        details = {"Config": {"Labels": {"piston.measurement.trial": "trial"}}}
+        with patch.object(observer.api, "containers", side_effect=[[row], []]), \
+                patch.object(observer.api, "request", side_effect=[details, None]) as calls:
+            result = observer.finish()
+        self.assertTrue(result["confirmed"])
+        self.assertEqual([], result["removed_by_harness"])
+        self.assertIn(unittest.mock.call("DELETE", "/containers/owned?force=true&v=true"),
+                      calls.call_args_list)
+
     def test_container_cleanup_refuses_mismatched_labels_and_survivors(self):
         for mismatch in (True, False):
             with patch.dict("os.environ", {"DOCKER_HOST": "unix:///local/socket"}):

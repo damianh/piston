@@ -8,9 +8,10 @@ claim or a G1 result.
 
 Executed on Linux with .NET SDK 10.0.401 and Python 3.14.7:
 
-- Fifteen Python self-tests passed, including four new tests for local-socket
+- Seventeen Python self-tests passed, including tests for local-socket
   guards, exact-label container observation/removal, mismatched-label and
-  surviving-container cleanup refusal, and explicit telemetry errors.
+  surviving-container cleanup refusal, explicit telemetry errors, phase-crossing
+  sample rejection and a DELETE-404 cleanup race.
 - Eight five-batch pilots, then eighteen twenty-batch single-condition campaigns.
   Regression ran for both workloads at concurrency 1, 2 and 4. Repair and
   pre-existing-failure scenarios ran at concurrency 1 and 2; shared rounding and
@@ -29,6 +30,10 @@ Executed on Linux with .NET SDK 10.0.401 and Python 3.14.7:
 - Container telemetry retained 65 errors across 60 trials (missing counters,
   HTTP 500 and three telemetry API timeouts). These are not test-command
   timeouts, are not silently discarded, and limit resource/contention claims.
+  Review identified a phase-attribution race in the original observer.
+  Phase-specific container resource figures and edited-sample coverage claims
+  are withdrawn because raw records lack request-start phases. The observer is
+  fixed, but campaigns were not rerun; process resources and latency are unaffected.
 - One existing-Piston non-container reference subset, the 14 serializer tests,
   passed after restoring initially missing assets. No engine test or source was
   modified, and this is not a backend comparator.

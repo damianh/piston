@@ -335,12 +335,13 @@ class ContainerObserver:
                             "nano_cpus": config["NanoCpus"]}
                     if row["State"] != "running":
                         continue
+                    phase = self.phase
                     stats = self.api.request(
                         "GET", f"/containers/{identifier}/stats?stream=false")
-                    if stats is None:
+                    if stats is None or phase != self.phase:
                         continue
                     self.samples.append({
-                        "container_id": identifier, "phase": self.phase,
+                        "container_id": identifier, "phase": phase,
                         "monotonic_ns": time.monotonic_ns(),
                         "cpu_total_ns": stats["cpu_stats"]["cpu_usage"]["total_usage"],
                         "memory_usage_bytes": stats["memory_stats"]["usage"],
@@ -363,8 +364,10 @@ class ContainerObserver:
             if details.get("Config", {}).get("Labels", {}).get(
                     "piston.measurement.trial") != self.trial_id:
                 raise ContainerAPIError("Refusing cleanup: inspection label mismatch")
-            self.api.request("DELETE", f"/containers/{identifier}?force=true&v=true")
-            removed.append(identifier)
+            response = self.api.request(
+                "DELETE", f"/containers/{identifier}?force=true&v=true")
+            if response is not None:
+                removed.append(identifier)
         after = self.api.containers(self.trial_id)
         if after:
             raise ContainerAPIError("Trial-labeled containers remain after cleanup")
