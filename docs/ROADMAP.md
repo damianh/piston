@@ -131,6 +131,34 @@ gaps and synthetic workload scope limit the conclusion; G1 remains unproven.
 
 ## Phase 1: hub, workers, identity, and memory
 
+Following the narrowed G0 recommendation, Phase 1 starts with a bounded
+proof-of-value step (1a). The broader hub and memory work (1b) proceeds only if
+1a's comparison shows a benefit.
+
+### Phase 1a: fresh results and bounded execution (proof of value)
+
+- **Generation-bound results:** every reported result identifies the source
+  generation (content fingerprint plus build context) it executed against, and
+  covers the full requested test scope with stable test identities. Results for
+  an older generation are reported as stale, never as current.
+- **Explicit execution ownership:** one owner per worktree builds and runs tests.
+  It accepts explicit run requests, cancels or supersedes outdated runs, and
+  cleans up child processes and containers it started.
+- **Bounded resource budget:** cap concurrent build/test work across worktrees
+  with a configurable CPU/memory budget, and expose queueing explicitly.
+- **Comparator:** add a current-Piston condition to the `measurements/` harness
+  that meets its generation-bound, full-scope oracle. Compare it against plain
+  `dotnet test` on the same unit and PostgreSQL fixtures at concurrency 1, 2 and
+  4. Also measure telemetry overhead and include at least one larger,
+  representative repository before drawing conclusions.
+
+**Exit 1a:** the comparator is unblocked and records valid, matched samples.
+Decide from that evidence whether to continue to 1b, narrow further, or stop.
+Agent waiting time and known-failure effort still require separately authorized
+real-agent experiments.
+
+### Phase 1b: hub, workers and memory (conditional on 1a)
+
 - Split the existing daemon into worker execution and hub responsibilities.
 - Implement registration, leases, idle cleanup, supervised process shutdown, and
   protocol-version negotiation.
@@ -151,7 +179,7 @@ target framework, build configuration, relevant inputs/environment, and selected
 tests; reject or mark results stale if inputs change during execution. Identical
 source with different outcomes is evidence of nondeterminism, not a diagnosis.
 
-**Exit:** two worktrees share scheduling and history while execution remains
+**Exit 1b:** two worktrees share scheduling and history while execution remains
 isolated; ownership, cleanup, interruption, and baseline behavior have tests.
 
 ## Phase 2: agent API and harness integrations
