@@ -175,6 +175,10 @@ Run tests:
 dotnet test Piston.slnx
 ```
 
+### AI agent tooling (roslynk)
+
+The repo pins [roslynk](https://www.nuget.org/packages/roslynk) as a local .NET tool and registers it in `.mcp.json`, so Copilot CLI / agent sessions get semantic C# intelligence (diagnostics, find references, rename, code fixes) over `Piston.slnx`. Run `dotnet tool restore` once after cloning.
+
 ## Proposed direction
 
 Fine-grained coverage, a measurement harness, Copilot canvas/harness integrations,
