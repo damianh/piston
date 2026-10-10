@@ -1,6 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>piston</ToolCommandName>
+    <PackageId>Piston</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>Damian Hickey</Authors>
+    <Description>Continuous .NET test backend with a web dashboard and HTTP MCP test tools.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/damianh/piston</RepositoryUrl>
+    <PackageProjectUrl>https://github.com/damianh/piston</PackageProjectUrl>
   </PropertyGroup>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />

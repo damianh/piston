@@ -21,12 +21,13 @@ internal static class DaemonLauncher
     internal static async Task EnsureRunningAsync(
         string solutionPath,
         string pipeName,
+        int webPort,
         CancellationToken ct)
     {
         if (await IsPipeAvailableAsync(pipeName, ct))
             return;
 
-        SpawnDaemon(solutionPath, pipeName);
+        SpawnDaemon(solutionPath, pipeName, webPort);
 
         await WaitForPipeAsync(pipeName, ct);
     }
@@ -47,23 +48,13 @@ internal static class DaemonLauncher
         }
     }
 
-    private static void SpawnDaemon(string solutionPath, string pipeName)
+    private static void SpawnDaemon(string solutionPath, string pipeName, int webPort)
     {
         var pistonExe = Environment.ProcessPath
             ?? Process.GetCurrentProcess().MainModule?.FileName
             ?? throw new InvalidOperationException("Cannot determine piston executable path.");
 
-        var psi = new ProcessStartInfo
-        {
-            FileName               = pistonExe,
-            Arguments              = $"daemon \"{solutionPath}\" --pipe-name \"{pipeName}\"",
-            UseShellExecute        = false,
-            CreateNoWindow         = true,
-            RedirectStandardInput  = false,
-            RedirectStandardOutput = false,
-            RedirectStandardError  = false,
-        };
-
+        var psi = CreateStartInfo(pistonExe, solutionPath, pipeName, webPort);
         var process = Process.Start(psi);
         if (process is null)
             throw new InvalidOperationException("Failed to spawn piston daemon process.");
@@ -72,6 +63,32 @@ internal static class DaemonLauncher
         process.Dispose();
 
         Console.Error.WriteLine($"[piston] Started daemon (pipe: {pipeName})");
+    }
+
+    internal static ProcessStartInfo CreateStartInfo(
+        string executablePath, string solutionPath, string pipeName, int webPort)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName               = executablePath,
+            UseShellExecute        = false,
+            CreateNoWindow         = true,
+            RedirectStandardInput  = false,
+            RedirectStandardOutput = false,
+            RedirectStandardError  = false,
+        };
+
+        // Framework-dependent tool shims invoke dotnet rather than a Piston apphost.
+        if (string.Equals(Path.GetFileNameWithoutExtension(executablePath), "dotnet", StringComparison.OrdinalIgnoreCase))
+            psi.ArgumentList.Add(typeof(DaemonLauncher).Assembly.Location);
+
+        psi.ArgumentList.Add("daemon");
+        psi.ArgumentList.Add(solutionPath);
+        psi.ArgumentList.Add("--pipe-name");
+        psi.ArgumentList.Add(pipeName);
+        psi.ArgumentList.Add("--web-port");
+        psi.ArgumentList.Add(webPort.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return psi;
     }
 
     private static async Task WaitForPipeAsync(string pipeName, CancellationToken ct)

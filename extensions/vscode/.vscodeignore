@@ -1,9 +1,0 @@
-src/
-node_modules/
-.vscode/
-tsconfig.json
-esbuild.mjs
-*.ts
-!dist/
-.gitignore
-.eslintrc.json

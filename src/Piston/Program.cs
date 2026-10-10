@@ -45,7 +45,7 @@ var parallelismOpt = new Option<int>(
 
 var stdioOpt = new Option<bool>(
     name: "--stdio",
-    description: "Use stdin/stdout for JSON-RPC transport (for IDE extensions).");
+    description: "Use stdin/stdout for Piston JSON-RPC transport (not MCP).");
 
 var mcpPortOpt = new Option<int?>(
     name: "--mcp-port",
@@ -56,7 +56,7 @@ var webPortOpt = new Option<int>(
     description: "Port for the web UI and WebSocket server.",
     getDefaultValue: () => 5199);
 
-// ── Root command (default: TUI with auto-start) ────────────────────────────────
+// ── Root command (default: web UI with auto-start) ─────────────────────────────
 
 var rootCommand = new RootCommand("Piston — continuous test runner for .NET")
 {
@@ -190,7 +190,7 @@ static async Task RunWebAsync(FileInfo? solutionArg, string? cliPipeName, int we
     };
 
     // Ensure daemon is running (auto-start if not)
-    await DaemonLauncher.EnsureRunningAsync(solutionPath, pipeName, cts.Token);
+    await DaemonLauncher.EnsureRunningAsync(solutionPath, pipeName, webPort, cts.Token);
 
     var webUrl = $"http://localhost:{webPort}";
     Console.Error.WriteLine($"[piston] Opening browser: {webUrl}");

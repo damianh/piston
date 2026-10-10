@@ -9,10 +9,12 @@ public sealed class TestToolsTests
 {
     private static readonly IMcpCallRecorder NullRecorder = NullMcpCallRecorder.Instance;
 
-    [Fact]
-    public async Task RunTestsReturnsResultSummary()
+    [Theory]
+    [InlineData(PistonPhase.Idle)]
+    [InlineData(PistonPhase.Watching)]
+    public async Task RunTestsReturnsResultSummary(PistonPhase completedPhase)
     {
-        var engine = new StubEngine();
+        var engine = new StubEngine { CompletedPhase = completedPhase };
         engine.State.Phase = PistonPhase.Idle;
         engine.State.CompletedTests = 5;
         engine.State.TotalExpectedTests = 5;
@@ -26,12 +28,34 @@ public sealed class TestToolsTests
         ];
 
         var tools = new TestTools(engine, NullRecorder);
-        var result = await tools.RunTests(CancellationToken.None);
+        var result = await tools.RunTests(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(engine.ForceRunCalled);
-        Assert.Contains("Phase: Idle", result);
+        Assert.Contains($"Phase: {completedPhase}", result);
         Assert.Contains("Passed: 2", result);
         Assert.Contains("Suites: 1", result);
+    }
+
+    [Fact]
+    public async Task RunTestsCancellationStopsWaitingForEngine()
+    {
+        var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var engine = new StubEngine { ForceRunCompletion = completion.Task };
+        var tools = new TestTools(engine, NullRecorder);
+        using var cts = new CancellationTokenSource();
+        var run = tools.RunTests(cts.Token);
+        cts.Cancel();
+
+        try
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => run.WaitAsync(TimeSpan.FromSeconds(2)));
+            Assert.True(engine.ForceRunCalled);
+        }
+        finally
+        {
+            completion.SetResult();
+        }
     }
 
     [Fact]

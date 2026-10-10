@@ -9,6 +9,8 @@ internal sealed class StubEngine : IEngine
     public bool ForceRunCalled { get; private set; }
     public string? LastFilter { get; private set; }
     public bool ClearResultsCalled { get; private set; }
+    public PistonPhase CompletedPhase { get; set; } = PistonPhase.Idle;
+    public Task ForceRunCompletion { get; set; } = Task.CompletedTask;
 
     public Task StartAsync(string solutionPath)
     {
@@ -16,12 +18,11 @@ internal sealed class StubEngine : IEngine
         return Task.CompletedTask;
     }
 
-    public Task ForceRunAsync()
+    public async Task ForceRunAsync()
     {
         ForceRunCalled = true;
-        // Immediately go to Idle to simulate completion
-        State.Phase = PistonPhase.Idle;
-        return Task.CompletedTask;
+        await ForceRunCompletion;
+        State.Phase = CompletedPhase;
     }
 
     public void Stop() { }

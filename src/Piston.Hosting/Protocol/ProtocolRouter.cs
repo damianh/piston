@@ -22,13 +22,9 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
     private readonly ConcurrentDictionary<string, ClientSession> _pipeSessions = new();
     private readonly ConcurrentDictionary<string, WebSocketClientSession> _wsSessions = new();
     private int _sessionCounter;
-    private DiagnosticWatcherService? _diagnosticWatcher;
     private McpCallTracker? _mcpCallTracker;
 
     public int ClientCount => _pipeSessions.Count + _wsSessions.Count;
-
-    public void SetDiagnosticWatcher(DiagnosticWatcherService watcher) =>
-        _diagnosticWatcher = watcher;
 
     public void SetMcpCallTracker(McpCallTracker tracker) =>
         _mcpCallTracker = tracker;
@@ -36,8 +32,6 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
     private EngineCommandDispatcher CreateDispatcher()
     {
         var dispatcher = new EngineCommandDispatcher(engine);
-        if (_diagnosticWatcher is not null)
-            dispatcher.SetDiagnosticWatcher(_diagnosticWatcher);
         if (_mcpCallTracker is not null)
             dispatcher.SetMcpCallTracker(_mcpCallTracker);
         return dispatcher;

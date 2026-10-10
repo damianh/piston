@@ -1,4 +1,4 @@
-name: Release
+name: Release tool
 
 on:
   push:
@@ -7,11 +7,15 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to package (e.g. 0.1.0)"
+        description: "NuGet version to package (e.g. 0.1.0)"
         required: true
+      publish_to_nuget:
+        description: "Publish to NuGet.org (requires package ownership and NUGET_API_KEY)"
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   DOTNET_NOLOGO: true
@@ -30,80 +34,58 @@ jobs:
 
   package:
     needs: test
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - rid: win-x64
-            os: windows-latest
-          - rid: win-arm64
-            os: windows-latest
-          - rid: osx-x64
-            os: macos-latest
-          - rid: osx-arm64
-            os: macos-latest
-          - rid: linux-x64
-            os: ubuntu-latest
-          - rid: linux-arm64
-            os: ubuntu-24.04-arm
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
-
       - name: Determine version
-        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "VERSION=${{ github.event.inputs.version }}" >> "$GITHUB_ENV"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            version="$INPUT_VERSION"
           else
-            echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+            version="${GITHUB_REF_NAME#v}"
           fi
-
-      - name: Publish
-        shell: bash
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid NuGet version: $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Pack framework-dependent tool
+        run: dotnet pack src/Piston/Piston.csproj -c Release -p:Version="$VERSION" -o packages
+      - name: Install isolated package and check CLI, web assets and HTTP MCP
         run: |
-          dotnet publish src/Piston.Desktop/Piston.Desktop.csproj \
-            -c Release -r ${{ matrix.rid }} --self-contained \
-            -p:Version=$VERSION \
-            -o publish/${{ matrix.rid }}
-
-      - name: Install vpk
-        run: dotnet tool install -g vpk
-
-      - name: Pack (Velopack)
-        shell: bash
-        run: |
-          vpk pack \
-            --packId Piston \
-            --packVersion "$VERSION" \
-            --packDir publish/${{ matrix.rid }} \
-            --mainExe "$([[ '${{ matrix.rid }}' == win-* ]] && echo PistonDesktop.exe || echo PistonDesktop)" \
-            --packTitle "Piston" \
-            --packAuthors "Damian Hickey" \
-            --channel ${{ matrix.rid }} \
-            --outputDir releases/${{ matrix.rid }}
-
-      - name: Upload to GitHub Release
+          dotnet tool install Piston --version "$VERSION" --tool-path "$RUNNER_TEMP/piston-tool" \
+            --source "$PWD/packages" --no-cache
+          python3 .github/scripts/smoke-tool.py "$RUNNER_TEMP/piston-tool/piston"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: piston-nuget-tool
+          path: packages/*.nupkg
+          if-no-files-found: error
+      - name: Attach tool package to GitHub release
         if: github.event_name == 'push'
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          vpk upload github \
-            --repoUrl https://github.com/${{ github.repository }} \
-            --token "$GH_TOKEN" \
-            --channel ${{ matrix.rid }} \
-            --outputDir releases/${{ matrix.rid }} \
-            --tag "$GITHUB_REF_NAME" \
-            --merge
-
-      - name: Upload workflow artifact
-        if: github.event_name == 'workflow_dispatch'
-        uses: actions/upload-artifact@v4
-        with:
-          name: piston-${{ matrix.rid }}
-          path: releases/${{ matrix.rid }}
+          if ! gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
+          fi
+          gh release upload "$GITHUB_REF_NAME" packages/*.nupkg
+      - name: Publish tool to NuGet.org
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_to_nuget
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          if [ -z "$NUGET_API_KEY" ]; then
+            echo "::error::Publishing requires package ownership and the NUGET_API_KEY secret."
+            exit 1
+          fi
+          dotnet nuget push "packages/*.nupkg" --source https://api.nuget.org/v3/index.json \
+            --api-key "$NUGET_API_KEY"

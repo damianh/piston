@@ -15,13 +15,9 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
     private static readonly char[] ForbiddenFilterChars = ['"', '&', '|', ';', '`', '$'];
 
     private readonly IEngine _engine;
-    private DiagnosticWatcherService? _diagnosticWatcher;
     private McpCallTracker? _mcpCallTracker;
 
     public EngineCommandDispatcher(IEngine engine) => _engine = engine;
-
-    public void SetDiagnosticWatcher(DiagnosticWatcherService watcher) =>
-        _diagnosticWatcher = watcher;
 
     public void SetMcpCallTracker(McpCallTracker tracker) =>
         _mcpCallTracker = tracker;
@@ -65,14 +61,6 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                 var result = new FileCoverageDto(filePath, Array.Empty<CoverageLineDto>());
                 return JsonNode.Parse(
                     System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
-            }
-
-            case ProtocolMethods.DiagnosticsGetAll:
-            {
-                var diagnostics = _diagnosticWatcher?.CurrentDiagnostics ?? [];
-                var response = new DiagnosticsResponse(diagnostics);
-                return JsonNode.Parse(
-                    System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
             }
 
             case ProtocolMethods.McpGetCallLog:

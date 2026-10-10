@@ -18,16 +18,10 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         var succeeded = true;
         try
         {
-            await engine.ForceRunAsync().ConfigureAwait(false);
-
             var timeout = TimeSpan.FromMinutes(10);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(timeout);
-
-            while (engine.State.Phase != PistonPhase.Idle && engine.State.Phase != PistonPhase.Error)
-            {
-                await Task.Delay(500, cts.Token).ConfigureAwait(false);
-            }
+            await engine.ForceRunAsync().WaitAsync(cts.Token).ConfigureAwait(false);
 
             var state = engine.State;
             result = $"Phase: {state.Phase}, " +
