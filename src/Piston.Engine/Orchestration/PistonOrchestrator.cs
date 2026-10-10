@@ -225,7 +225,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             _state.Phase = PistonPhase.Building;
             _state.NotifyChanged();
 
-            IReadOnlyList<string>? buildTargets = impactResult.IsFullRun ? null : impactResult.AffectedProjectPaths;
+            IReadOnlyList<string>? buildTargets = impactResult.IsFullRun ? null : impactResult.BuildTargetPaths;
 
             BuildResult buildResult;
             try
@@ -278,6 +278,17 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             else
             {
                 testTargets = impactResult.AffectedTestProjectPaths;
+
+                // No test project depends on the change. An empty list would make the
+                // runner fall back to running the whole solution, so skip testing instead.
+                if (testTargets.Count == 0)
+                {
+                    log?.Write("Orchestrator", "Selective run has no affected test projects; skipping tests.");
+                    _state.Phase = PistonPhase.Watching;
+                    _state.NotifyChanged();
+                    ScheduleGraphRebuildIfNeeded(impactResult);
+                    return;
+                }
             }
 
             // Build the effective test filter:
@@ -550,29 +561,28 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
     /// <summary>
     /// Merges new suite results from a selective run into the existing full suite list.
-    /// Suites from the new run replace their counterparts (matched by name).
-    /// Suites not in the new run are preserved as-is.
+    /// Tests are matched by fully-qualified name: re-run tests replace their previous results,
+    /// while tests that were not re-run are preserved. Suite names are not used for matching
+    /// because they are not guaranteed to identify a project (e.g. TRX run names).
     /// </summary>
-    private static IReadOnlyList<TestSuite> MergeTestSuites(
+    internal static IReadOnlyList<TestSuite> MergeTestSuites(
         IReadOnlyList<TestSuite> existing,
         IReadOnlyList<TestSuite> newResults)
     {
         if (newResults.Count == 0) return existing;
         if (existing.Count == 0) return newResults;
 
-        var newByName = newResults.ToDictionary(s => s.Name, StringComparer.OrdinalIgnoreCase);
+        var rerun = newResults
+            .SelectMany(s => s.Tests)
+            .Select(t => t.FullyQualifiedName)
+            .ToHashSet(StringComparer.Ordinal);
 
-        // Replace existing suites that appear in new results; add any new ones not in existing
         var merged = existing
-            .Select(s => newByName.TryGetValue(s.Name, out var updated) ? updated : s)
+            .Select(s => s with { Tests = s.Tests.Where(t => !rerun.Contains(t.FullyQualifiedName)).ToList() })
+            .Where(s => s.Tests.Count > 0)
             .ToList();
 
-        foreach (var newSuite in newResults)
-        {
-            if (!existing.Any(s => string.Equals(s.Name, newSuite.Name, StringComparison.OrdinalIgnoreCase)))
-                merged.Add(newSuite);
-        }
-
+        merged.AddRange(newResults);
         return merged;
     }
 

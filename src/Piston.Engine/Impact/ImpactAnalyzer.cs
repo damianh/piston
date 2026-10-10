@@ -104,7 +104,7 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
 
             if (graph.IsTestProject(owningProject))
             {
-                // A test file change: just run that test project (no source build needed beyond itself)
+                // A test file change: rebuild and run only that test project
                 affectedTestProjects.Add(owningProject);
             }
             else
