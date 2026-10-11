@@ -95,4 +95,32 @@ public sealed class TrxResultParserTests
         Assert.All(suite.Tests, t =>
             Assert.StartsWith("MyProject.Tests.SuiteA.", t.FullyQualifiedName));
     }
+
+    [Fact]
+    public void Parse_QualifiedTestName_DoesNotDoubleClassName()
+    {
+        // xUnit writes testName as "Namespace.Class.Method" and className as "Namespace.Class".
+        const string trx = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <Results>
+                <UnitTestResult testId="t1" testName="Shop.Tests.PriceTests.Boundary(amount: 1)" outcome="Passed" duration="00:00:00.001" />
+              </Results>
+              <TestDefinitions>
+                <UnitTest id="t1"><TestMethod className="Shop.Tests.PriceTests" name="Boundary" /></UnitTest>
+              </TestDefinitions>
+            </TestRun>
+            """;
+        var path = Path.Combine(Path.GetTempPath(), $"piston-trx-{Guid.NewGuid():N}.trx");
+        File.WriteAllText(path, trx);
+        try
+        {
+            var test = Assert.Single(new TrxResultParser().Parse(path)[0].Tests);
+            Assert.Equal("Shop.Tests.PriceTests.Boundary(amount: 1)", test.FullyQualifiedName);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

@@ -67,7 +67,9 @@ public sealed class TrxResultParser : ITestResultParser
         var durationStr = (string?)r.Attribute("duration") ?? "0";
 
         var className = classNames.GetValueOrDefault(testId, string.Empty);
+        // xUnit reports testName already qualified ("Ns.Class.Method"); don't prefix it twice.
         var fullyQualifiedName = string.IsNullOrEmpty(className)
+            || testName.StartsWith(className + ".", StringComparison.Ordinal)
             ? testName
             : $"{className}.{testName}";
 

@@ -56,10 +56,13 @@ or dependent concurrent processes as independent observations.
 
 Freshness requires the exact edit hash, no source change during execution, new
 result artifacts, patch-sensitive sentinel statuses and the entire expected test
-identity/status set. Skips must agree. Existing Piston's MCP aggregate state does
-not prove this; current-Piston comparison is blocked until a bounded adapter
-demonstrates it with existing interfaces. Do not change the engine to rescue a
-benchmark. A static known-failure report is information assistance, not evidence
+identity/status set. Skips must agree. Piston's MCP aggregate state does
+not prove this. Phase 1a added per-run provenance (`get_test_run`,
+`piston.test-run/v1`), which `PistonRunOracle` validates against the
+harness-computed `piston-source-v1` fingerprint and the plain-dotnet identity set.
+A current-Piston comparison is still blocked until a Piston trial condition uses
+that oracle for every sample. Do not change the engine to rescue a benchmark;
+provenance changes belong to the roadmap, not to individual trials. A static known-failure report is information assistance, not evidence
 of an implemented history backend.
 
 ## Schema version 1

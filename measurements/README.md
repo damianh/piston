@@ -141,10 +141,46 @@ recorded as context on a shared host. High CPU does not itself establish a
 contention failure. Stage-level build/test timings and agent metrics are null
 with reasons when unobservable; unit trials have no container statistics.
 
-Only dotnet is executable as a condition initially. Existing MCP latest-state
-aggregates are not a valid generation-bound full-scope oracle. A future current-
-Piston adapter must first prove fresh per-test results on the exact edited source
-and preserve all test identities; otherwise its condition stays blocked. No
+Only dotnet is executable as a condition. MCP latest-state aggregates
+(`get_test_results`, `run_tests` counts) are not a valid generation-bound
+full-scope oracle. Piston now exposes per-run provenance through `get_test_run`.
+`PistonRunOracle` accepts a run only if all of these hold:
+
+- it has the requested run ID;
+- it is `Completed`;
+- it is unfiltered `Full` scope;
+- it is `Current`, with no source change observed;
+- its before and after `piston-source-v1` fingerprints equal the fingerprint the harness computed for the edited workspace;
+- it reports exactly the expected unique test identities and statuses.
+
+It rejects summary-only, missing, extra, duplicate or mismatched identities.
+
+An opt-in end-to-end smoke exercises this against a real daemon's HTTP MCP endpoint on the unit fixture. It covers:
+
+- a clean full run;
+- rejection of a prior run;
+- a generation mismatch after an edit;
+- rejection of the selective file-change run;
+- a regression full run;
+- rejection of a filtered run;
+- a source edit during a run (the run is cancelled or stale).
+
+Run it with:
+
+```sh
+dotnet build Piston.slnx
+PISTON_DAEMON_DLL=$PWD/src/Piston/bin/Debug/net10.0/Piston.dll \
+  dotnet test measurements/Runner.Tests --filter FullyQualifiedName~PistonOracleSmokeTests
+```
+
+The Piston condition is still **not wired into `Trials`**. These are still missing:
+
+- paired, repeated campaigns;
+- the PostgreSQL workload;
+- a larger repository;
+- telemetry-overhead measurement.
+
+The smoke is a correctness check, not a timing sample. No
 backend latency improvement, paired confidence interval or cognitive benefit can
 be computed from baseline-only runs. The approved local G0 campaign and its
 scope-limited recommendation are recorded in [results/g0-local.md](results/g0-local.md).

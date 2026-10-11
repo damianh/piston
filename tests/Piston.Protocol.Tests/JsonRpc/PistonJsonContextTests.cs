@@ -79,6 +79,42 @@ public sealed class PistonJsonContextTests
         Assert.DoesNotContain("\"lastBuild\"", json);
     }
 
+    [Fact]
+    public void StateSnapshotNotification_RunProvenance_Roundtrip()
+    {
+        var fingerprint = new SourceFingerprintDto("piston-source-v1", new string('a', 64), 12);
+        var run = new TestRunDto(
+            "run-1", "engine-1", 3, "Forced", "Completed", null, "Full", false, true, "Current", null, true,
+            DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch,
+            fingerprint, fingerprint, false, null, new List<string> { "/w/T.csproj" }, 2, 1, 1, 0, 0);
+        var snapshot = BuildSnapshot() with { LastRun = run };
+
+        var json   = JsonSerializer.Serialize(snapshot, JsonRpcSerializer.Options);
+        var result = JsonSerializer.Deserialize<StateSnapshotNotification>(json, JsonRpcSerializer.Options);
+
+        Assert.Contains("\"lastRun\":", json);
+        Assert.DoesNotContain("\"activeRun\"", json);
+        Assert.NotNull(result?.LastRun);
+        Assert.Equal("run-1", result.LastRun.RunId);
+        Assert.Equal(fingerprint, result.LastRun.SourceAfter);
+        Assert.True(result.LastRun.IsCurrentFullResult);
+        Assert.Null(result.ActiveRun);
+    }
+
+    [Fact]
+    public void StateSnapshotNotification_WithoutRunProvenance_DeserializesFromLegacyJson()
+    {
+        var json = JsonSerializer.Serialize(BuildSnapshot(), JsonRpcSerializer.Options);
+        var node = JsonNode.Parse(json)!.AsObject();
+        node.Remove("lastRun");
+        node.Remove("activeRun");
+
+        var result = JsonSerializer.Deserialize<StateSnapshotNotification>(node.ToJsonString(), JsonRpcSerializer.Options);
+
+        Assert.NotNull(result);
+        Assert.Null(result.LastRun);
+    }
+
     // ── IReadOnlyList / IReadOnlyDictionary concrete collection roundtrip ──────
 
     [Fact]

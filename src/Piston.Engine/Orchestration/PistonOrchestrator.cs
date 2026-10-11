@@ -22,6 +22,13 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     private Task? _graphInitTask;
     private readonly SemaphoreSlim _runLock = new(1, 1);
     private readonly SemaphoreSlim _coverageLock = new(1, 1);
+    private readonly string _engineInstanceId = Guid.NewGuid().ToString("N");
+    private readonly object _runRecordsLock = new();
+    private long _runSequence;
+    private long _fileChangeGeneration;
+
+    /// <summary>Resolves the .NET SDK version recorded in run context; null when unknown.</summary>
+    internal Func<string?>? SdkVersionProvider { get; set; }
 
     public PistonOrchestrator(
         IFileWatcherService fileWatcher,
@@ -115,13 +122,19 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         _fileWatcher.Start(solutionDir);
 
         // Kick off an initial build+test run immediately on startup.
-        _ = TriggerRunAsync(solutionPath, null);
+        _ = TriggerRunAsync(solutionPath, null, TestRunTrigger.Startup);
     }
 
-    public async Task ForceRunAsync()
+    public async Task ForceRunAsync() => await RequestRunAsync().ConfigureAwait(false);
+
+    /// <summary>
+    /// Requests a full-scope run and returns its provenance record once it reaches a terminal state.
+    /// Returns null when the engine has not been started.
+    /// </summary>
+    public async Task<TestRunRecord?> RequestRunAsync()
     {
-        if (_solutionPath is null) return;
-        await TriggerRunAsync(_solutionPath, null);
+        if (_solutionPath is null) return null;
+        return await TriggerRunAsync(_solutionPath, null, TestRunTrigger.Forced).ConfigureAwait(false);
     }
 
     internal void ClearResults(string solutionDirectory)
@@ -174,15 +187,18 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     private void OnFileChanged(FileChangeBatch batch)
     {
         if (_solutionPath is null) return;
+        Interlocked.Increment(ref _fileChangeGeneration);
         _state.LastFileChangeTime = batch.Timestamp;
         _state.LastChangedFiles = batch.Changes.Select(e => e.FilePath).ToList();
         _activitySink.Emit(ActivityEventFactory.FileChangesDetected(
             _solutionPath, _state.LastChangedFiles));
-        _ = TriggerRunAsync(_solutionPath, batch);
+        _ = TriggerRunAsync(_solutionPath, batch, TestRunTrigger.FileChange);
     }
 
-    private async Task TriggerRunAsync(string solutionPath, FileChangeBatch? batch)
+    private async Task<TestRunRecord> TriggerRunAsync(string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger)
     {
+        var run = CreateRunRecord(trigger);
+
         // Issue a new CTS, cancelling whatever was running before
         var oldCts = _cts;
         var newCts = new CancellationTokenSource();
@@ -197,8 +213,21 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         }
         catch (OperationCanceledException)
         {
-            return; // Superseded before we even started
+            return CompleteRun(run, TestRunStatus.Cancelled, "Superseded by a newer run before it started.");
         }
+
+        var solutionDir = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? solutionPath;
+        var changeGenerationAtStart = Interlocked.Read(ref _fileChangeGeneration);
+        run = run with
+        {
+            Status = TestRunStatus.Running,
+            StartedAt = DateTimeOffset.UtcNow,
+            SourceBefore = SourceFingerprinter.TryCompute(solutionDir),
+        };
+        PublishActiveRun(run);
+
+        TestRunRecord Finish(TestRunStatus status, string? reason, bool computeAfter = false) =>
+            CompleteRun(run, status, reason, solutionDir, changeGenerationAtStart, computeAfter);
 
         try
         {
@@ -236,7 +265,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             {
                 _state.Phase = PistonPhase.Watching;
                 _state.NotifyChanged();
-                return;
+                return Finish(TestRunStatus.Cancelled, "Cancelled during impact analysis.");
             }
 
             _state.AffectedProjects = impactResult.AffectedProjectPaths.Count > 0
@@ -253,18 +282,59 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             foreach (var tp in impactResult.AffectedTestProjectPaths)
                 log?.Write("Orchestrator", $"  TestProject: {Path.GetFileName(tp)}");
 
+            IReadOnlyList<string>? buildTargets = impactResult.IsFullRun ? null : impactResult.BuildTargetPaths;
+
+            // When the graph is available, always enumerate individual test projects
+            // so the composite strategy can route MTP projects to the MTP runner.
+            // Only fall back to null (single-solution-target) when no graph is loaded.
+            IReadOnlyList<string>? testTargets;
+            if (impactResult.IsFullRun)
+            {
+                var allTestProjects = _impactAnalyzer.GetAllTestProjectPaths();
+                testTargets = allTestProjects.Count > 0 ? allTestProjects : null;
+            }
+            else
+            {
+                testTargets = impactResult.AffectedTestProjectPaths;
+            }
+
+            // Build the effective test filter:
+            //   - If Tier 3 produced FQNs, build a dotnet-test filter expression
+            //   - If the user also has a TestFilter, AND the two together
+            var userFilter = _state.TestFilter;
+            string? effectiveFilter = BuildEffectiveFilter(impactResult, userFilter);
+
+            run = run with
+            {
+                Scope = impactResult.IsFullRun ? TestRunScope.Full : TestRunScope.Selective,
+                Context = new TestRunContext(
+                    SolutionPath: Path.GetFullPath(solutionPath),
+                    TestProjects: testTargets?.ToList(),
+                    BuildTargets: buildTargets?.ToList(),
+                    UserFilter: string.IsNullOrWhiteSpace(userFilter) ? null : userFilter,
+                    EffectiveFilter: string.IsNullOrWhiteSpace(effectiveFilter) ? null : effectiveFilter,
+                    CoverageSelectedTestCount: impactResult.AffectedTestFqns is { Count: > 0 and <= 100 } selected
+                        ? selected.Count
+                        : null,
+                    CoverageEnabled: _coverageEnabled,
+                    BuildConfiguration: "Debug",
+                    SdkVersion: SafeSdkVersion(),
+                    Runtime: System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
+                    OperatingSystem: System.Runtime.InteropServices.RuntimeInformation.OSDescription,
+                    WorkingDirectory: Environment.CurrentDirectory),
+            };
+            PublishActiveRun(run);
+
             if (ct.IsCancellationRequested)
             {
                 _state.Phase = PistonPhase.Watching;
                 _state.NotifyChanged();
-                return;
+                return Finish(TestRunStatus.Cancelled, "Cancelled after impact analysis.");
             }
 
             // ── Build ─────────────────────────────────────────────────────────
             _state.Phase = PistonPhase.Building;
             _state.NotifyChanged();
-
-            IReadOnlyList<string>? buildTargets = impactResult.IsFullRun ? null : impactResult.BuildTargetPaths;
 
             BuildResult buildResult;
             try
@@ -275,7 +345,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             {
                 _state.Phase = PistonPhase.Watching;
                 _state.NotifyChanged();
-                return;
+                return Finish(TestRunStatus.Cancelled, "Cancelled during build.");
             }
 
             _state.LastBuild = buildResult;
@@ -291,7 +361,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             {
                 _state.Phase = PistonPhase.Watching;
                 _state.NotifyChanged();
-                return;
+                return Finish(TestRunStatus.Cancelled, "Cancelled after build.");
             }
 
             if (buildResult.Status == BuildStatus.Failed)
@@ -299,41 +369,24 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                 _state.Phase = PistonPhase.Error;
                 _state.NotifyChanged();
                 ScheduleGraphRebuildIfNeeded(impactResult);
-                return;
+                return Finish(TestRunStatus.BuildFailed,
+                    $"Build failed with {buildResult.Errors.Count} error(s).", computeAfter: true);
             }
 
             // ── Test ──────────────────────────────────────────────────────────
             _state.Phase = PistonPhase.Testing;
 
-            // When the graph is available, always enumerate individual test projects
-            // so the composite strategy can route MTP projects to the MTP runner.
-            // Only fall back to null (single-solution-target) when no graph is loaded.
-            IReadOnlyList<string>? testTargets;
-            if (impactResult.IsFullRun)
+            // No test project depends on the change. An empty list would make the
+            // runner fall back to running the whole solution, so skip testing instead.
+            if (testTargets is { Count: 0 })
             {
-                var allTestProjects = _impactAnalyzer.GetAllTestProjectPaths();
-                testTargets = allTestProjects.Count > 0 ? allTestProjects : null;
+                log?.Write("Orchestrator", "Selective run has no affected test projects; skipping tests.");
+                _state.Phase = PistonPhase.Watching;
+                _state.NotifyChanged();
+                ScheduleGraphRebuildIfNeeded(impactResult);
+                return Finish(TestRunStatus.Completed,
+                    "No affected test projects; tests were not run.", computeAfter: true);
             }
-            else
-            {
-                testTargets = impactResult.AffectedTestProjectPaths;
-
-                // No test project depends on the change. An empty list would make the
-                // runner fall back to running the whole solution, so skip testing instead.
-                if (testTargets.Count == 0)
-                {
-                    log?.Write("Orchestrator", "Selective run has no affected test projects; skipping tests.");
-                    _state.Phase = PistonPhase.Watching;
-                    _state.NotifyChanged();
-                    ScheduleGraphRebuildIfNeeded(impactResult);
-                    return;
-                }
-            }
-
-            // Build the effective test filter:
-            //   - If Tier 3 produced FQNs, build a dotnet-test filter expression
-            //   - If the user also has a TestFilter, AND the two together
-            string? effectiveFilter = BuildEffectiveFilter(impactResult, _state.TestFilter);
 
             // Update coverage impact detail for TUI
             if (impactResult.AffectedTestFqns is { Count: > 0 } fqns)
@@ -361,6 +414,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                 ? testTargets.ToDictionary(p => p, _ => Models.ProjectRunStatus.Pending)
                 : new Dictionary<string, Models.ProjectRunStatus>();
 
+            // Run-local project outcomes (independent of the UI-facing ProjectStatuses).
+            var projectOutcomes = new Dictionary<string, TestRunProjectOutcome>(StringComparer.Ordinal);
+            foreach (var project in testTargets ?? [])
+                projectOutcomes[project] = new TestRunProjectOutcome(project, Models.ProjectRunStatus.Pending, 0);
+
             _state.NotifyChanged();
 
             var testStart = DateTimeOffset.UtcNow;
@@ -384,14 +442,17 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                 {
                     _state.CompletedTestProjects++;
 
+                    var projectStatus = result.Crashed
+                        ? Models.ProjectRunStatus.Crashed
+                        : result.RunnerError is not null && result.Suites.Count == 0
+                            ? Models.ProjectRunStatus.Failed
+                            : Models.ProjectRunStatus.Completed;
+
                     if (_state.ProjectStatuses is Dictionary<string, Models.ProjectRunStatus> mutableStatuses)
-                    {
-                        mutableStatuses[result.ProjectPath] = result.Crashed
-                            ? Models.ProjectRunStatus.Crashed
-                            : result.RunnerError is not null && result.Suites.Count == 0
-                                ? Models.ProjectRunStatus.Failed
-                                : Models.ProjectRunStatus.Completed;
-                    }
+                        mutableStatuses[result.ProjectPath] = projectStatus;
+
+                    projectOutcomes[result.ProjectPath] = new TestRunProjectOutcome(
+                        result.ProjectPath, projectStatus, result.Suites.Sum(s => s.Tests.Count));
 
                     // Merge the completed project's suites into InProgressSuites
                     if (result.Suites.Count > 0)
@@ -412,6 +473,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
             IReadOnlyList<TestSuite> newSuites;
             IReadOnlyList<string> coverageReportPaths;
+            string? runnerError;
             try
             {
                 var result = await _testRunner.RunTestsAsync(
@@ -422,8 +484,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                     OnProgress,
                     OnProjectCompleted,
                     ct).ConfigureAwait(false);
-                newSuites            = result.Suites;
+                newSuites            = result.Suites.Select(s => s with { RunId = run.RunId }).ToList();
                 coverageReportPaths  = result.CoverageReportPaths;
+                runnerError          = result.RunnerError;
                 _state.LastTestRunnerError = result.RunnerError;
 
                 var totalTests = newSuites.SelectMany(s => s.Tests).Count();
@@ -435,14 +498,14 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             {
                 _state.Phase = PistonPhase.Watching;
                 _state.NotifyChanged();
-                return;
+                return Finish(TestRunStatus.Cancelled, "Cancelled during test execution.");
             }
 
             if (ct.IsCancellationRequested)
             {
                 _state.Phase = PistonPhase.Watching;
                 _state.NotifyChanged();
-                return;
+                return Finish(TestRunStatus.Cancelled, "Cancelled after test execution; results discarded.");
             }
 
             // ── Coverage processing ────────────────────────────────────────────
@@ -496,21 +559,156 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                 _state.VerifiedSinceChangeCount = _state.TestSuites.SelectMany(s => s.Tests).Count();
             }
 
+            List<TestRunProjectOutcome> outcomes;
+            lock (liveResultsLock)
+                outcomes = projectOutcomes.Values.ToList();
+
+            var duplicates = newSuites
+                .SelectMany(s => s.Tests)
+                .GroupBy(t => t.FullyQualifiedName, StringComparer.Ordinal)
+                .Where(g => g.Count() > 1)
+                .Select(g => g.Key)
+                .Order(StringComparer.Ordinal)
+                .ToList();
+
+            run = run with
+            {
+                Suites = newSuites,
+                Projects = outcomes,
+                DuplicateTestIds = duplicates,
+                RunnerError = runnerError,
+            };
+
+            var incompleteReason = DescribeIncomplete(
+                outcomes, testTargets is null, newSuites, runnerError,
+                filtered: !string.IsNullOrWhiteSpace(effectiveFilter));
+            var finished = Finish(
+                incompleteReason is null ? TestRunStatus.Completed : TestRunStatus.Incomplete,
+                incompleteReason,
+                computeAfter: true);
+
             _state.Phase = PistonPhase.Watching;
             _state.NotifyChanged();
 
             ScheduleGraphRebuildIfNeeded(impactResult);
+            return finished;
         }
         catch (OperationCanceledException)
         {
             // Superseded by a newer run — reset phase cleanly
             _state.Phase = PistonPhase.Watching;
             _state.NotifyChanged();
+            return Finish(TestRunStatus.Cancelled, "Superseded by a newer run.");
+        }
+        catch (Exception ex)
+        {
+            Finish(TestRunStatus.Faulted, $"{ex.GetType().Name}: {ex.Message}");
+            throw;
         }
         finally
         {
             _runLock.Release();
         }
+    }
+
+    // ── Run provenance ────────────────────────────────────────────────────────
+
+    private TestRunRecord CreateRunRecord(TestRunTrigger trigger) => new()
+    {
+        RunId = Guid.NewGuid().ToString("N"),
+        EngineInstanceId = _engineInstanceId,
+        Sequence = Interlocked.Increment(ref _runSequence),
+        Trigger = trigger,
+        RequestedAt = DateTimeOffset.UtcNow,
+    };
+
+    private void PublishActiveRun(TestRunRecord run)
+    {
+        lock (_runRecordsLock)
+            _state.CurrentRun = run;
+    }
+
+    /// <summary>
+    /// Finalises a run record: captures the post-run fingerprint and decides freshness.
+    /// A run is <see cref="ResultFreshness.Current"/> only when both fingerprints are available and
+    /// equal and the file watcher reported no change while it executed.
+    /// </summary>
+    private TestRunRecord CompleteRun(
+        TestRunRecord run,
+        TestRunStatus status,
+        string? reason,
+        string? solutionDir = null,
+        long changeGenerationAtStart = 0,
+        bool computeAfter = false)
+    {
+        var started = run.StartedAt is not null;
+        var changeObserved = started && Interlocked.Read(ref _fileChangeGeneration) != changeGenerationAtStart;
+        var after = computeAfter && solutionDir is not null ? SourceFingerprinter.TryCompute(solutionDir) : null;
+
+        (ResultFreshness freshness, string? freshnessReason) = (run.SourceBefore, after) switch
+        {
+            _ when !started => (ResultFreshness.Unknown, "Run did not start."),
+            ({ } before, { } afterFp) when before != afterFp =>
+                (ResultFreshness.Stale, "Source fingerprint changed during the run."),
+            _ when changeObserved =>
+                (ResultFreshness.Stale, "File watcher reported a source change during the run."),
+            (null, _) => (ResultFreshness.Unknown, "Pre-run source fingerprint unavailable."),
+            (_, null) when computeAfter => (ResultFreshness.Unknown, "Post-run source fingerprint unavailable."),
+            (_, null) => (ResultFreshness.Unknown, "Run did not finish; post-run fingerprint not captured."),
+            _ => (ResultFreshness.Current, null),
+        };
+
+        var finished = run with
+        {
+            Status = status,
+            StatusReason = reason,
+            CompletedAt = DateTimeOffset.UtcNow,
+            SourceAfter = after,
+            SourceChangeObserved = changeObserved,
+            Freshness = freshness,
+            FreshnessReason = freshnessReason,
+        };
+
+        lock (_runRecordsLock)
+        {
+            if (_state.CurrentRun?.RunId == finished.RunId)
+                _state.CurrentRun = null;
+            if (_state.LastRun is null || _state.LastRun.Sequence < finished.Sequence)
+                _state.LastRun = finished;
+            var recent = new List<TestRunRecord>(_state.RecentRuns.Count + 1) { finished };
+            recent.AddRange(_state.RecentRuns.Take(PistonState.MaxRecentRuns - 1));
+            _state.RecentRuns = recent;
+        }
+
+        return finished;
+    }
+
+    private static string? DescribeIncomplete(
+        IReadOnlyList<TestRunProjectOutcome> outcomes,
+        bool solutionTarget,
+        IReadOnlyList<TestSuite> suites,
+        string? runnerError,
+        bool filtered)
+    {
+        // A filter can legitimately select no tests in a project; filtered runs are never full scope anyway.
+        var problems = outcomes
+            .Where(o => o.Status != Models.ProjectRunStatus.Completed || (o.TestCount == 0 && !filtered))
+            .Select(o => $"{Path.GetFileNameWithoutExtension(o.ProjectPath)}: " +
+                (o.Status == Models.ProjectRunStatus.Completed ? "no test results" : o.Status.ToString()))
+            .ToList();
+
+        if (solutionTarget && suites.Count == 0 && !filtered)
+            problems.Add("solution-level run produced no test results");
+        if (runnerError is not null && problems.Count == 0)
+            problems.Add("runner reported an error");
+
+        return problems.Count == 0 ? null : string.Join("; ", problems);
+    }
+
+    private string? SafeSdkVersion()
+    {
+        try { return SdkVersionProvider?.Invoke(); }
+        catch { return null; }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -653,9 +851,10 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         if (liveSuites.Count == 0) return SeedAsRunning(lastSuiteList);
 
         // Build a lookup from the flat live list
-        var liveByFqn = liveSuites
-            .SelectMany(s => s.Tests)
-            .ToDictionary(t => t.FullyQualifiedName, t => t.Status, StringComparer.Ordinal);
+        // Duplicate identities are tolerated here (last wins) and reported on the run record.
+        var liveByFqn = new Dictionary<string, TestStatus>(StringComparer.Ordinal);
+        foreach (var test in liveSuites.SelectMany(s => s.Tests))
+            liveByFqn[test.FullyQualifiedName] = test.Status;
 
         if (!lastSuiteList.Any())
         {

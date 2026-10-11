@@ -64,8 +64,43 @@ public static class DtoMapper
             suite.Name,
             suite.Tests.Select(t => t.ToDto()).ToList(),
             suite.Timestamp,
-            suite.TotalDuration.TotalMilliseconds
+            suite.TotalDuration.TotalMilliseconds,
+            suite.RunId
         );
+
+    public static SourceFingerprintDto ToDto(this SourceFingerprint fingerprint) =>
+        new(fingerprint.Algorithm, fingerprint.Value, fingerprint.FileCount);
+
+    public static TestRunDto ToDto(this TestRunRecord run)
+    {
+        var tests = run.Tests.ToList();
+        return new TestRunDto(
+            RunId:                run.RunId,
+            EngineInstanceId:     run.EngineInstanceId,
+            Sequence:             run.Sequence,
+            Trigger:              run.Trigger.ToString(),
+            Status:               run.Status.ToString(),
+            StatusReason:         run.StatusReason,
+            Scope:                run.Scope?.ToString(),
+            IsFiltered:           run.IsFiltered,
+            IsFullScope:          run.IsFullScope,
+            Freshness:            run.Freshness.ToString(),
+            FreshnessReason:      run.FreshnessReason,
+            IsCurrentFullResult:  run.IsCurrentFullResult,
+            RequestedAt:          run.RequestedAt,
+            StartedAt:            run.StartedAt,
+            CompletedAt:          run.CompletedAt,
+            SourceBefore:         run.SourceBefore?.ToDto(),
+            SourceAfter:          run.SourceAfter?.ToDto(),
+            SourceChangeObserved: run.SourceChangeObserved,
+            EffectiveFilter:      run.Context?.EffectiveFilter,
+            TestProjects:         run.Context?.TestProjects,
+            TotalTests:           tests.Count,
+            Passed:               tests.Count(t => t.Status == TestStatus.Passed),
+            Failed:               tests.Count(t => t.Status == TestStatus.Failed),
+            Skipped:              tests.Count(t => t.Status == TestStatus.Skipped),
+            DuplicateTestCount:   run.DuplicateTestIds.Count);
+    }
 
     public static BuildResultDto ToDto(this BuildResult result) =>
         new(
@@ -102,6 +137,8 @@ public static class DtoMapper
                 ? state.ProjectStatuses.ToDictionary(
                     kvp => kvp.Key,
                     kvp => kvp.Value.ToDto())
-                : null
+                : null,
+            LastRun:                state.LastRun?.ToDto(),
+            ActiveRun:              state.CurrentRun?.ToDto()
         );
 }
