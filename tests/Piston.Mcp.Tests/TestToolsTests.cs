@@ -3,6 +3,7 @@
 
 using System.ComponentModel;
 using System.Reflection;
+using ModelContextProtocol.Server;
 using Piston.Engine;
 using Piston.Engine.Models;
 using Piston.Mcp.Tools;
@@ -13,6 +14,16 @@ namespace Piston.Mcp.Tests;
 public sealed class TestToolsTests
 {
     private static readonly IMcpCallRecorder NullRecorder = NullMcpCallRecorder.Instance;
+
+    [Fact]
+    public void RunTestsToolMetadataPreservesWireName()
+    {
+        var tools = new TestTools(new StubEngine(), NullRecorder);
+        var method = typeof(TestTools).GetMethod(nameof(TestTools.RunTestsAsync))!;
+        var tool = McpServerTool.Create(method, tools);
+
+        Assert.Equal("run_tests", tool.ProtocolTool.Name);
+    }
 
     [Theory]
     [InlineData(PistonPhase.Idle)]
