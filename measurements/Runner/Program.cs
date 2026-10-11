@@ -6,12 +6,14 @@ namespace Piston.Measurements;
 public static class Program
 {
     public const string Usage = """
-        .NET baseline measurement runner (Linux only; no implicit agents or containers).
+        .NET single-condition measurement runner (Linux only; no implicit agents or containers).
         --output PATH [--workload unit|integration] [--scenario NAME]
+        [--condition dotnet|piston] [--piston-daemon-dll PATH]
         [--concurrency 1|2|4] [--repetitions N] [--timeout SECONDS]
         [--approve-campaign] [--approve-containers]
         Integration requires an approved immutable MEASUREMENT_POSTGRES_IMAGE
         and local unix:// DOCKER_HOST. Build the runner before measuring.
+        Piston requires a prebuilt daemon DLL; only unit per-test scenarios are supported.
         """;
 
     public static async Task<int> Main(string[] args)
@@ -42,7 +44,12 @@ public static class Program
             context["runner_build_policy"] = "prebuilt assembly; no runner build during trials";
             context["workload"] = options.Workload;
             context["scenario"] = options.Scenario;
-            context["conditions"] = new[] { "dotnet" };
+            context["conditions"] = new[] { options.Condition };
+            context["piston_daemon_dll"] = options.PistonDaemonDll;
+            context["piston_daemon_assembly_sha256"] = options.PistonDaemonDll is null ? null :
+                Evidence.Digest(File.ReadAllBytes(options.PistonDaemonDll));
+            context["piston_policy"] = options.Condition == "piston" ?
+                "isolated baseline-warmed daemon; watching enabled; watcher settling and forced full MCP run included in edit latency; project parallelism 1" : null;
             context["concurrency"] = options.Concurrency;
             context["repetitions"] = options.Repetitions;
             context["timeout_seconds"] = options.Timeout;
@@ -59,8 +66,8 @@ public static class Program
             context["permissions"] = new { campaign = options.ApproveCampaign, containers = options.ApproveContainers };
             context["comparator"] = new
             {
-                status = "blocked",
-                reason = "Piston run provenance and PistonRunOracle exist, but no Piston trial condition is wired"
+                status = "unit-full-scope-supported",
+                reason = "Piston trials use the generation-bound full-scope oracle; integration, compile diagnostics and randomized paired campaigns remain blocked"
             };
             Evidence.WriteJson(Path.Combine(options.Output, "manifest.json"), context);
             var records = new List<Trial>();

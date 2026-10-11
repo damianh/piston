@@ -36,12 +36,14 @@ Include localized regression/repair, shared dependency change and compile-error
 diagnostics. Concurrent batches use independent workspaces and an edit barrier;
 use concurrency 2 first, 4 only after capacity approval. Counterbalance condition
 order with a recorded random seed, match cache state, and keep batches as units
-of analysis. The current runner executes single-condition baseline campaigns, not a
-randomized two-condition comparison.
+of analysis. The current runner executes one selected condition (`dotnet` or
+unit full-scope `piston`), not a randomized two-condition comparison.
 
 The runner is a prebuilt .NET console application. Build it before the
 experiment, never inside a timed loop. Record its runtime and assembly hash;
-the runner does not load MSBuild or reference the Piston engine. Its own runtime,
+the runner does not load MSBuild or reference the Piston engine. The Piston
+condition launches the real prebuilt daemon over local HTTP MCP, rather than
+loading its assemblies into the runner. Its own runtime,
 resource sampling and container polling still have unquantified overhead.
 The published local G0 campaigns used the previous Python runner, so new .NET
 runner samples must be identified separately rather than pooled into that report.
@@ -60,8 +62,17 @@ identity/status set. Skips must agree. Piston's MCP aggregate state does
 not prove this. Phase 1a added per-run provenance (`get_test_run`,
 `piston.test-run/v1`), which `PistonRunOracle` validates against the
 harness-computed `piston-source-v2` fingerprint and the plain-dotnet identity set.
-A current-Piston comparison is still blocked until a Piston trial condition uses
-that oracle for every sample. Do not change the engine to rescue a benchmark;
+The unit Piston trial condition now uses that oracle for every accepted sample.
+It uses the same fixture edits, locked restore, plain-dotnet baseline and sentinel
+status set, including repair and existing failures. Its isolated daemon startup
+full run is validated during setup. Watching remains enabled; watcher settling
+plus one forced full MCP request and run-bound response are included in edit
+latency. Selective watcher results never replace the forced full result.
+The adapter records project parallelism 1 and normal daemon execution policy;
+it does not establish matched cache/host allocation or authorize a comparison.
+PostgreSQL and Piston compile-diagnostic conditions remain blocked, as do
+counterbalanced paired campaigns and telemetry-overhead quantification.
+Do not change the engine to rescue a benchmark;
 provenance changes belong to the roadmap, not to individual trials. A static known-failure report is information assistance, not evidence
 of an implemented history backend.
 

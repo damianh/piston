@@ -38,6 +38,8 @@ public sealed class Trial
     public CommandResult? BaselineSetup { get; set; }
     public CommandResult? RepairPreparation { get; set; }
     public CommandResult? Execution { get; set; }
+    public PistonExecution? PistonExecution { get; set; }
+    public string? PistonSourceFingerprint { get; set; }
     public Dictionary<string, string>? BaselineTests { get; set; }
     public Dictionary<string, string>? ExpectedTests { get; set; }
     public Dictionary<string, string>? ObservedTests { get; set; }
@@ -62,7 +64,8 @@ public static class Trials
 {
     public static async Task<Trial> Run(string root, Options options, Workload workload, string batchId,
         int index, EditBarrier barrier, CancellationToken cancellationToken = default,
-        ExecuteCommand? execute = null)
+        ExecuteCommand? execute = null,
+        Func<string, string, string, string, IPistonTrial>? startPiston = null)
     {
         execute ??= Processes.Command;
         var scenario = workload.Scenarios[options.Scenario];
@@ -98,10 +101,12 @@ public static class Trials
             BatchId = batchId,
             Workload = options.Workload,
             Scenario = options.Scenario,
+            Condition = options.Condition,
             ArtifactDirectory = artifacts
         };
         ContainerApi? api = null;
         ContainerObserver? observer = null;
+        IPistonTrial? piston = null;
         try
         {
             Evidence.CopyFixture(Path.Combine(root, "fixtures"), workspace);
@@ -164,6 +169,25 @@ public static class Trials
                 string.Join(", ", baseline.Keys.Order(StringComparer.Ordinal)
                     .Select(name => JsonSerializer.Serialize(name))) + "]");
             var expected = Evidence.ExpectedResults(baseline, scenario.FailedSuffixes);
+            if (options.Condition == "piston")
+            {
+                piston = (startPiston ?? ((dll, cwd, target, directory) =>
+                    new PistonTrial(dll, cwd, target, directory)))(
+                    options.PistonDaemonDll!, workspace, solution, artifacts);
+                using var setupTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                setupTimeout.CancelAfter(TimeSpan.FromSeconds(options.Timeout));
+                try
+                {
+                    await piston.Prepare(PistonSourceFingerprint.ForSolution(solution),
+                        scenario.Repair ? Evidence.ExpectedResults(baseline, workload.Scenarios["regression"].FailedSuffixes)
+                            : baseline, setupTimeout.Token);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    record.TimedOut = true;
+                    throw new TimeoutException("Piston daemon setup timed out");
+                }
+            }
             var previousSource = File.ReadAllText(source);
             Event("queued");
             await barrier.Wait(options.Timeout, cancellationToken);
@@ -175,18 +199,41 @@ public static class Trials
             Directory.CreateDirectory(resultsDirectory);
             Event("command-started");
             if (observer is not null) observer.Phase = "edited";
-            record.Execution = await execute(Processes.TestCommand(solution, resultsDirectory),
-                workspace, artifacts, "edited", options.Timeout, environment, cancellationToken);
+            if (piston is not null)
+            {
+                record.PistonSourceFingerprint = PistonSourceFingerprint.ForSolution(solution);
+                using var runTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                runTimeout.CancelAfter(TimeSpan.FromSeconds(options.Timeout));
+                try { record.PistonExecution = await piston.Run(record.PistonSourceFingerprint, runTimeout.Token); }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    record.TimedOut = true;
+                    throw new TimeoutException("Piston measured execution timed out");
+                }
+            }
+            else
+                record.Execution = await execute(Processes.TestCommand(solution, resultsDirectory),
+                    workspace, artifacts, "edited", options.Timeout, environment, cancellationToken);
             var available = Evidence.NowNs;
-            Event("result-available", new() { ["exit_code"] = record.Execution.ExitCode });
-            record.TimedOut = record.Execution.TimedOut;
+            Event("result-available", new() { ["exit_code"] = record.Execution?.ExitCode,
+                ["piston_run_id"] = record.PistonExecution?.RunId });
+            record.TimedOut = record.Execution?.TimedOut ?? false;
             if (record.TimedOut) throw new InvalidDataException("Measured command timed out");
             if (Evidence.SourceHash(workspace) != record.EditHash)
                 throw new InvalidDataException("Source changed during measured execution");
-            if (scenario.Diagnostic is not null)
+            if (piston is not null)
+            {
+                if (PistonSourceFingerprint.ForSolution(solution) != record.PistonSourceFingerprint)
+                    throw new InvalidDataException("Piston source inputs changed during measured execution");
+                record.ExpectedTests = expected;
+                record.ObservedTests = PistonRunOracle.Validate(record.PistonExecution!.RunJson,
+                    record.PistonExecution.RunId, record.PistonSourceFingerprint!, expected, solution);
+                record.OracleKind = "piston-generation-bound-full-test-scope";
+            }
+            else if (scenario.Diagnostic is not null)
             {
                 var text = File.ReadAllText(Path.Combine(artifacts, "edited.log"));
-                if (record.Execution.ExitCode == 0 ||
+                if (record.Execution!.ExitCode == 0 ||
                     !Regex.IsMatch(text, @"\berror " + Regex.Escape(scenario.Diagnostic) + @"\b"))
                     throw new InvalidDataException("Expected compile diagnostics absent");
                 if (Directory.GetFiles(resultsDirectory, "*.trx").Length > 0)
@@ -195,7 +242,7 @@ public static class Trials
             }
             else
             {
-                var observed = Evidence.ParseTrx(resultsDirectory, record.Execution.StartedWallNs);
+                var observed = Evidence.ParseTrx(resultsDirectory, record.Execution!.StartedWallNs);
                 Evidence.Oracle(expected, observed, record.Execution.ExitCode);
                 record.ExpectedTests = expected;
                 record.ObservedTests = observed;
@@ -206,7 +253,8 @@ public static class Trials
             Event("oracle-checked", new() { ["correct"] = true });
         }
         catch (Exception error) when (error is InvalidDataException or IOException or XmlException or KeyNotFoundException or
-            ArgumentException or TimeoutException or OperationCanceledException or System.ComponentModel.Win32Exception)
+            ArgumentException or TimeoutException or OperationCanceledException or System.ComponentModel.Win32Exception or
+            HttpRequestException or InvalidOperationException or JsonException)
         {
             barrier.Abort();
             record.Error = error.Message;
@@ -224,6 +272,20 @@ public static class Trials
         }
         finally
         {
+            if (piston is not null)
+            {
+                try { await piston.DisposeAsync(); }
+                catch (Exception error) when (error is IOException or InvalidOperationException or
+                    System.ComponentModel.Win32Exception)
+                {
+                    record.Correct = false;
+                    record.EditToCorrectResultMs = null;
+                    record.Error = "Piston cleanup failed: " + error.Message;
+                    record.Incidents.Add(new() { ["kind"] = "daemon-cleanup-failure",
+                        ["attribution"] = "infrastructure", ["evidence"] = error.Message });
+                    Event("incident", new() { ["error"] = record.Error });
+                }
+            }
             if (observer is not null)
             {
                 try

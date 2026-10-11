@@ -1,16 +1,17 @@
-# Measurement harness (Phase 0)
+# Measurement harness
 
 This is **baseline instrumentation, not evidence that Piston is faster**. It
 launches ordinary `dotnet test` in isolated fixture copies, verifies
 the full test identity/status set, and records source provenance, monotonic
 edit-to-result timing, sampled owned-process resources and raw evidence. It does
-not implement engine features or launch agents. All scope is under this directory.
+not implement engine features or launch agents. The optional Piston condition
+starts a real, isolated daemon from a prebuilt DLL. All harness code is under this directory.
 
 ## Authorized validation
 
 Requires Linux and .NET SDK 10.0.401. The harness is a .NET console application
 with xUnit self-tests; Python is not required. Its separate `Measurements.slnx`
-does not build or run the Piston engine. Fixture configuration and NuGet lock
+does not build the Piston engine; its real-daemon tests are opt-in. Fixture configuration and NuGet lock
 files are independent of the root solution. No Docker is needed for these commands:
 
 ```sh
@@ -30,8 +31,9 @@ dotnet measurements/Runner/bin/Release/net10.0/Piston.Measurements.dll \
 
 Build the runner once before measuring, then execute the prebuilt assembly.
 Do not use `dotnet run` in measurement loops: it adds a runner build and changes
-MSBuild state. The console runner itself does not invoke MSBuild except for the
-fixture restore/test commands. Its .NET runtime and polling still add overhead;
+MSBuild state. The dotnet condition invokes MSBuild only for fixture restore/test commands.
+The Piston condition additionally invokes the prebuilt daemon's normal build/test path.
+The runner's .NET runtime and polling still add overhead;
 the manifest records the runner runtime, assembly hash and prebuilt policy.
 
 Use a new output directory for every run; existing directories are rejected.
@@ -141,7 +143,10 @@ recorded as context on a shared host. High CPU does not itself establish a
 contention failure. Stage-level build/test timings and agent metrics are null
 with reasons when unobservable; unit trials have no container statistics.
 
-Only dotnet is executable as a condition. MCP latest-state aggregates
+Both `--condition dotnet` (the default) and `--condition piston` are executable.
+Piston currently supports only the unit fixture's six per-test scenarios;
+integration and `compile-error` are rejected before output creation.
+MCP latest-state aggregates
 (`get_test_results`, `run_tests` counts) are not a valid generation-bound
 full-scope oracle. Piston now exposes per-run provenance through `get_test_run`.
 `PistonRunOracle` accepts a run only if all of these hold:
@@ -149,11 +154,54 @@ full-scope oracle. Piston now exposes per-run provenance through `get_test_run`.
 - it has the requested run ID;
 - it is `Completed`;
 - it is unfiltered `Full` scope;
+- its solution path matches the trial's isolated workspace;
 - it is `Current`, with no source change observed;
 - its before and after `piston-source-v2` fingerprints equal the fingerprint the harness computed for the edited workspace;
 - it reports exactly the expected unique test identities and statuses.
 
 It rejects summary-only, missing, extra, duplicate or mismatched identities.
+Expected assertion failures are correct results; cancelled, build-failed,
+faulted or incomplete runs are not.
+
+### Piston trial condition
+
+Build the daemon and runner before any trial. One unit correctness smoke can be
+invoked with a new output directory:
+
+```sh
+dotnet build Piston.slnx
+dotnet build measurements/Runner/Runner.csproj -c Release
+dotnet measurements/Runner/bin/Release/net10.0/Piston.Measurements.dll \
+  --condition piston --piston-daemon-dll "$PWD/src/Piston/bin/Debug/net10.0/Piston.dll" \
+  --scenario regression --output measurements/artifacts/piston-regression-smoke
+```
+
+Each trial restores and establishes the same plain-dotnet full identity/status
+baseline in its isolated copy. Repair preparation and seeded existing failures
+are unchanged. Before the edit barrier, it starts a daemon with unique local
+ports, pipe and configuration directory, sets project parallelism to 1, and
+validates its startup full run against that pre-edit source and expected results.
+Daemon startup/warming is setup, not edit latency. Port reservation is best
+effort: bind/start failures invalidate the attempt rather than retrying it.
+
+Watching stays enabled. Edit latency includes the watcher-triggered run settling,
+then exactly one `run_tests` call and `get_test_run` for the returned run ID.
+The watcher result is retained but **never** accepted as the full-scope trial.
+No retry or dotnet fallback rescues a failed forced run. Timing ends after the
+run-bound response and raw capture, before offline oracle validation and cleanup.
+The harness computes the edited solution fingerprint independently and checks
+it again after execution, as well as comparing the fixture source hash.
+Generated `.piston` state is excluded from fixture copying/source hashes.
+
+Trials retain daemon launch arguments/hash, setup and watcher run documents,
+the MCP response, full run document, daemon logs, measured-phase owned-process
+samples and cleanup evidence. `piston_execution` records the run ID and observed
+resources; `execution` is null because an MCP result has no test-command exit
+code. Resource sampling includes the live daemon and its observable descendants
+during the edited phase only, not complete lifetime CPU or startup resource cost.
+The owned daemon tree is terminated before the trial is persisted; a cleanup
+error invalidates even an oracle-correct result. Timeouts and MCP errors remain
+invalid attempted samples. Campaign/container consent guards are unchanged.
 
 An opt-in end-to-end smoke exercises this against a real daemon's HTTP MCP endpoint on the unit fixture. It covers:
 
@@ -170,17 +218,23 @@ Run it with:
 ```sh
 dotnet build Piston.slnx
 PISTON_DAEMON_DLL=$PWD/src/Piston/bin/Debug/net10.0/Piston.dll \
-  dotnet test measurements/Runner.Tests --filter FullyQualifiedName~PistonOracleSmokeTests
+  dotnet test measurements/Runner.Tests \
+    --filter 'FullyQualifiedName~PistonOracleSmokeTests|FullyQualifiedName~PistonTrialSmokeTests'
 ```
 
-The Piston condition is still **not wired into `Trials`**. These are still missing:
+The trial smoke exercises the actual harness with a regression plus a distinct
+existing failure, all 409 identities, and daemon cleanup. Both smokes are opt-in
+through `PISTON_DAEMON_DLL`; ordinary self-tests launch no daemon.
+These are still missing:
 
 - paired, repeated campaigns;
 - the PostgreSQL workload;
+- a Piston compile-diagnostic trial condition;
 - a larger repository;
 - telemetry-overhead measurement.
 
-The smoke is a correctness check, not a timing sample. No
+The oracle smoke is a correctness check, not a timing sample; the harness smoke's
+trial timing is functional evidence only, not comparison-campaign evidence. No
 backend latency improvement, paired confidence interval or cognitive benefit can
 be computed from baseline-only runs. The approved local G0 campaign and its
 scope-limited recommendation are recorded in [results/g0-local.md](results/g0-local.md).

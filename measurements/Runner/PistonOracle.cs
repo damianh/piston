@@ -76,7 +76,8 @@ public static class PistonRunOracle
     /// <returns>Observed identity → TRX-style outcome (Passed/Failed/NotExecuted).</returns>
     /// <exception cref="InvalidDataException">The run cannot satisfy the oracle.</exception>
     public static Dictionary<string, string> Validate(string runJson, string expectedRunId,
-        string expectedSourceFingerprint, IReadOnlyDictionary<string, string> expected)
+        string expectedSourceFingerprint, IReadOnlyDictionary<string, string> expected,
+        string? expectedSolutionPath = null)
     {
         JsonObject run;
         try
@@ -97,6 +98,9 @@ public static class PistonRunOracle
             $"run status is {Text(run, "status")} ({Text(run, "statusReason")})");
         Require(Text(run, "scope") == "Full", $"run scope is {Text(run, "scope") ?? "unknown"}, not Full");
         var context = run["context"] as JsonObject ?? throw Reject("run context is missing or not an object");
+        if (expectedSolutionPath is not null)
+            Require(Text(context, "solutionPath") == Path.GetFullPath(expectedSolutionPath),
+                "run solution path does not match the trial workspace");
         Require(!Bool(run, "isFiltered") && context["effectiveFilter"] is null,
             "run was filtered: " + context["effectiveFilter"]);
         Require(Bool(run, "isFullScope"), "run is not full scope");

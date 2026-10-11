@@ -29,7 +29,7 @@ public static class Evidence
     public static IEnumerable<string> SourceFiles(string root) =>
         Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
             .Where(path => !Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar)
-                .Any(part => part is "bin" or "obj" or "TestResults"))
+                .Any(part => part is "bin" or "obj" or "TestResults" or ".piston"))
             // Preserve the original runner's component-wise pathlib ordering.
             .OrderBy(path => Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '\0'),
                 StringComparer.Ordinal);
@@ -250,7 +250,7 @@ public static class Evidence
             ["groups"] = groups,
             ["paired_improvement"] = null,
             ["uncertainty"] = null,
-            ["reason"] = "Baseline instrumentation only; no validated backend or real-agent comparison"
+            ["reason"] = "Single-condition instrumentation only; no paired campaign or real-agent comparison"
         };
     }
 }
@@ -303,13 +303,15 @@ public sealed class FixtureManifest
 }
 
 public sealed record Options(string Workload, string Scenario, string Output, int Concurrency = 1,
-    int Repetitions = 1, double Timeout = 180, bool ApproveCampaign = false, bool ApproveContainers = false)
+    int Repetitions = 1, double Timeout = 180, bool ApproveCampaign = false, bool ApproveContainers = false,
+    string Condition = "dotnet", string? PistonDaemonDll = null)
 {
     public static Options Parse(string[] args)
     {
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         var flags = new HashSet<string>(StringComparer.Ordinal);
-        var names = new[] { "--workload", "--scenario", "--output", "--concurrency", "--repetitions", "--timeout" };
+        var names = new[] { "--workload", "--scenario", "--output", "--concurrency", "--repetitions", "--timeout",
+            "--condition", "--piston-daemon-dll" };
         for (var i = 0; i < args.Length; i++)
         {
             if (args[i] is "--approve-campaign" or "--approve-containers")
@@ -329,7 +331,9 @@ public sealed record Options(string Workload, string Scenario, string Output, in
             int.Parse(values.GetValueOrDefault("--concurrency", "1"), CultureInfo.InvariantCulture),
             int.Parse(values.GetValueOrDefault("--repetitions", "1"), CultureInfo.InvariantCulture),
             double.Parse(values.GetValueOrDefault("--timeout", "180"), CultureInfo.InvariantCulture),
-            flags.Contains("--approve-campaign"), flags.Contains("--approve-containers"));
+            flags.Contains("--approve-campaign"), flags.Contains("--approve-containers"),
+            values.GetValueOrDefault("--condition", "dotnet"),
+            values.TryGetValue("--piston-daemon-dll", out var daemon) ? Path.GetFullPath(daemon) : null);
     }
 
     public Workload Validate(FixtureManifest manifest)
@@ -342,6 +346,18 @@ public sealed record Options(string Workload, string Scenario, string Output, in
             throw new ArgumentException("Concurrency must be 1, 2 or 4; timeout/repetitions must be positive and finite");
         if ((Concurrency > 1 || Repetitions > 1) && !ApproveCampaign)
             throw new ArgumentException("Repeated/concurrent runs require explicit --approve-campaign");
+        if (Condition is not ("dotnet" or "piston"))
+            throw new ArgumentException("Condition must be dotnet or piston");
+        if (Condition == "piston")
+        {
+            if (Workload != "unit" || workload.Scenarios[Scenario].Diagnostic is not null)
+                throw new ArgumentException("Piston supports only unit full-test-scope scenarios; integration and compile diagnostics are blocked");
+            if (PistonDaemonDll is null || !File.Exists(PistonDaemonDll) ||
+                !PistonDaemonDll.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Piston requires --piston-daemon-dll pointing to a prebuilt daemon DLL");
+        }
+        else if (PistonDaemonDll is not null)
+            throw new ArgumentException("--piston-daemon-dll requires --condition piston");
         if (Workload == "integration")
         {
             if (!ApproveContainers)
