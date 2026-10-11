@@ -60,7 +60,7 @@ public static class Program
             context["comparator"] = new
             {
                 status = "blocked",
-                reason = "Current MCP lacks generation-bound full-scope result evidence"
+                reason = "Piston run provenance and PistonRunOracle exist, but no Piston trial condition is wired"
             };
             Evidence.WriteJson(Path.Combine(options.Output, "manifest.json"), context);
             var records = new List<Trial>();

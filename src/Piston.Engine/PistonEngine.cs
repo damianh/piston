@@ -1,5 +1,6 @@
 using Piston.Engine.Coverage;
 using Piston.Engine.Impact;
+using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
 using Piston.Engine.Services;
 using Piston.Protocol.Messages;
@@ -93,6 +94,36 @@ public sealed class PistonEngine : IEngine
             coverageProcessor,
             options.CoverageEnabled,
             activitySink);
+
+        var sdkVersion = new Lazy<string?>(ProbeSdkVersion);
+        _orchestrator.SdkVersionProvider = () => sdkVersion.Value;
+    }
+
+    /// <summary>Runs <c>dotnet --version</c> in the daemon's working directory (same as build/test processes).</summary>
+    private static string? ProbeSdkVersion()
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("dotnet", "--version")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            });
+            if (process is null) return null;
+            var output = process.StandardOutput.ReadToEndAsync();
+            if (!process.WaitForExit(10_000))
+            {
+                try { process.Kill(entireProcessTree: true); } catch { /* ignore */ }
+                return null;
+            }
+            var version = output.GetAwaiter().GetResult().Trim();
+            return process.ExitCode == 0 && version.Length > 0 ? version : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public PistonState State => _state;
@@ -104,6 +135,9 @@ public sealed class PistonEngine : IEngine
     }
 
     public Task ForceRunAsync() => _orchestrator.ForceRunAsync();
+
+    public Task<TestRunRecord?> RequestRunAsync() => _orchestrator.RequestRunAsync();
+
     public void Stop() => _orchestrator.Stop();
 
     public void SetFilter(string? filter)

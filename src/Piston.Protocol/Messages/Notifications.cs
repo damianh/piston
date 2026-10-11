@@ -29,7 +29,9 @@ public sealed record StateSnapshotNotification(
     string? CoverageImpactDetail,
     int TotalTestProjects,
     int CompletedTestProjects,
-    IReadOnlyDictionary<string, ProjectRunStatusDto>? ProjectStatuses
+    IReadOnlyDictionary<string, ProjectRunStatusDto>? ProjectStatuses,
+    TestRunDto? LastRun = null,
+    TestRunDto? ActiveRun = null
 );
 
 public sealed record TestProgressNotification(

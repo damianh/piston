@@ -152,6 +152,18 @@ proof-of-value step (1a). The broader hub and memory work (1b) proceeds only if
   4. Also measure telemetry overhead and include at least one larger,
   representative repository before drawing conclusions.
 
+**Status:** generation-bound result provenance has landed (run IDs, the
+`piston-source-v2` fingerprint before and after each started run, run context, explicit
+full/selective/filtered scope, terminal status, and `Current`/`Stale` freshness via
+`get_test_run`). A harness oracle that validates this has landed too
+(`measurements/Runner/PistonOracle.cs`), with an opt-in end-to-end smoke.
+
+Still to do in 1a:
+- execution ownership across worktrees;
+- resource budgets;
+- the Piston trial condition in the harness;
+- matched comparison samples.
+
 **Exit 1a:** the comparator is unblocked and records valid, matched samples.
 Decide from that evidence whether to continue to 1b, narrow further, or stop.
 Agent waiting time and known-failure effort still require separately authorized

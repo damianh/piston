@@ -81,6 +81,28 @@ public sealed class PistonState
     /// <summary>Human-readable Tier 3 impact detail, e.g. "Tier 3: 5 test(s) (coverage)". Null when using Tier 2.</summary>
     public string? CoverageImpactDetail { get; set; }
 
+    // ── Run provenance ───────────────────────────────────────────────────────
+
+    /// <summary>Number of terminal runs retained in <see cref="RecentRuns"/> (in memory only).</summary>
+    public const int MaxRecentRuns = 16;
+
+    /// <summary>The run currently executing (after it acquired the run lock), or null.</summary>
+    public TestRunRecord? CurrentRun { get; set; }
+
+    /// <summary>The most recently requested run that reached a terminal state.</summary>
+    public TestRunRecord? LastRun { get; set; }
+
+    /// <summary>Terminal runs, newest first, bounded by <see cref="MaxRecentRuns"/>.</summary>
+    public IReadOnlyList<TestRunRecord> RecentRuns { get; set; } = [];
+
+    /// <summary>Finds a retained run by ID, including the active run.</summary>
+    public TestRunRecord? FindRun(string runId)
+    {
+        var current = CurrentRun;
+        if (current?.RunId == runId) return current;
+        return RecentRuns.FirstOrDefault(r => r.RunId == runId);
+    }
+
     public int TotalPassed => TestSuites.SelectMany(s => s.Tests).Count(t => t.Status == TestStatus.Passed);
     public int TotalFailed => TestSuites.SelectMany(s => s.Tests).Count(t => t.Status == TestStatus.Failed);
     public int TotalSkipped => TestSuites.SelectMany(s => s.Tests).Count(t => t.Status == TestStatus.Skipped);

@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
+using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using Piston.Engine;
 using Piston.Engine.Models;
@@ -10,7 +11,7 @@ namespace Piston.Mcp.Tools;
 [McpServerToolType]
 public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
 {
-    [McpServerTool, Description("Force a full test run of the loaded solution. Returns test results summary.")]
+    [McpServerTool, Description("Force a full test run of the loaded solution. Returns a results summary plus the run ID, status, scope, freshness and source fingerprint; use GetTestRun with the run ID for per-test provenance.")]
     public async Task<string> RunTests(CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
@@ -21,13 +22,16 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
             var timeout = TimeSpan.FromMinutes(10);
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(timeout);
-            await engine.ForceRunAsync().WaitAsync(cts.Token).ConfigureAwait(false);
+            var run = await engine.RequestRunAsync().WaitAsync(cts.Token).ConfigureAwait(false);
 
             var state = engine.State;
             result = $"Phase: {state.Phase}, " +
                      $"Passed: {state.TotalPassed}, Failed: {state.TotalFailed}, Skipped: {state.TotalSkipped}, " +
                      $"Tests: {state.CompletedTests}/{state.TotalExpectedTests}, " +
-                     $"Suites: {state.TestSuites.Count}";
+                     $"Suites: {state.TestSuites.Count}" +
+                     Environment.NewLine + DescribeRun(run, includeCounts: true);
+            if (run is not null)
+                result += Environment.NewLine + $"Use GetTestRun(\"{run.RunId}\") for per-test results bound to this run.";
         }
         catch
         {
@@ -52,10 +56,12 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         sb.AppendLine($"Phase: {state.Phase}");
         sb.AppendLine($"Passed: {state.TotalPassed}, Failed: {state.TotalFailed}, Skipped: {state.TotalSkipped}");
         sb.AppendLine($"Tests: {state.CompletedTests}/{state.TotalExpectedTests}");
+        sb.AppendLine($"Latest {DescribeRun(state.LastRun, includeCounts: false)}");
+        sb.AppendLine("Note: these aggregate results may combine several runs; use GetTestRun for run-bound provenance.");
 
         foreach (var suite in state.TestSuites)
         {
-            sb.AppendLine($"\nSuite: {suite.Name}");
+            sb.AppendLine($"\nSuite: {suite.Name}" + (suite.RunId is null ? "" : $" (run {suite.RunId})"));
             foreach (var test in suite.Tests)
             {
                 sb.Append($"  [{test.Status}] {test.DisplayName}");
@@ -71,6 +77,61 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         sw.Stop();
         recorder.Record(nameof(GetTestResults), null, $"{state.TotalPassed} passed, {state.TotalFailed} failed", sw.Elapsed.TotalMilliseconds, true);
         return result;
+    }
+
+    [McpServerTool, Description(
+        "Get provenance and per-test results for exactly one test run as JSON (schema piston.test-run/v1): " +
+        "run ID, status, full/selective scope, filters, freshness, source fingerprints captured before and after the run, " +
+        "build/runner context, and every test's fully-qualified name and status. " +
+        "Pass a run ID, \"latest\" or empty for the most recent finished run, or \"active\" for the run in progress. " +
+        "A result is trustworthy for a full-scope oracle only when isCurrentFullResult is true and sourceAfter matches the expected source.")]
+    public string GetTestRun(string runId = "")
+    {
+        var sw = Stopwatch.StartNew();
+        var state = engine.State;
+        var key = runId?.Trim() ?? "";
+        var run = key switch
+        {
+            "" or "latest" => state.LastRun,
+            "active" => state.CurrentRun,
+            _ => state.FindRun(key),
+        };
+
+        if (run is null)
+        {
+            var message = key switch
+            {
+                "" or "latest" => "No test run has finished yet.",
+                "active" => "No test run is in progress.",
+                _ => $"Test run '{key}' was not found; only the {PistonState.MaxRecentRuns} most recent runs are retained in memory.",
+            };
+            sw.Stop();
+            recorder.Record(nameof(GetTestRun), runId, message, sw.Elapsed.TotalMilliseconds, false);
+            throw new McpException(message);
+        }
+
+        var result = TestRunJson.Serialize(run);
+        sw.Stop();
+        recorder.Record(nameof(GetTestRun), runId, $"{run.RunId} {run.Status}", sw.Elapsed.TotalMilliseconds, true);
+        return result;
+    }
+
+    private static string DescribeRun(TestRunRecord? run, bool includeCounts)
+    {
+        if (run is null) return "Run: (none)";
+        var fp = run.SourceAfter ?? run.SourceBefore;
+        var source = fp is null ? "unknown" : $"{fp.Algorithm}:{fp.Value}";
+        var text = $"Run: {run.RunId} | Status: {run.Status} | Scope: {run.Scope?.ToString() ?? "Unknown"} | " +
+                   $"Filtered: {(run.IsFiltered ? "yes" : "no")} | Freshness: {run.Freshness} | " +
+                   $"Source: {source}";
+        if (includeCounts)
+        {
+            var tests = run.Tests.ToList();
+            text += $" | Run tests: {tests.Count} (Passed: {tests.Count(t => t.Status == TestStatus.Passed)}, " +
+                    $"Failed: {tests.Count(t => t.Status == TestStatus.Failed)}, " +
+                    $"Skipped: {tests.Count(t => t.Status == TestStatus.Skipped)})";
+        }
+        return text;
     }
 
     [McpServerTool, Description("Set a test filter to narrow which tests are run. Pass empty string to clear.")]

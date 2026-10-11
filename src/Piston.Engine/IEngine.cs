@@ -5,6 +5,16 @@ public interface IEngine : IDisposable
     // Lifecycle
     Task StartAsync(string solutionPath);
     Task ForceRunAsync();
+
+    /// <summary>
+    /// Requests a full-scope run and returns that run's provenance record once it is terminal.
+    /// The default implementation is for test doubles; it cannot bind the result to the request.
+    /// </summary>
+    async Task<Models.TestRunRecord?> RequestRunAsync()
+    {
+        await ForceRunAsync().ConfigureAwait(false);
+        return State.LastRun;
+    }
     void Stop();
 
     // State queries

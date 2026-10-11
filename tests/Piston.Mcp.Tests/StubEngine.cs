@@ -12,6 +12,9 @@ internal sealed class StubEngine : IEngine
     public PistonPhase CompletedPhase { get; set; } = PistonPhase.Idle;
     public Task ForceRunCompletion { get; set; } = Task.CompletedTask;
 
+    /// <summary>Run record published as the latest finished run when ForceRunAsync completes.</summary>
+    public TestRunRecord? NextRun { get; set; }
+
     public Task StartAsync(string solutionPath)
     {
         State.SolutionPath = solutionPath;
@@ -23,6 +26,11 @@ internal sealed class StubEngine : IEngine
         ForceRunCalled = true;
         await ForceRunCompletion;
         State.Phase = CompletedPhase;
+        if (NextRun is not null)
+        {
+            State.LastRun = NextRun;
+            State.RecentRuns = [NextRun, .. State.RecentRuns];
+        }
     }
 
     public void Stop() { }

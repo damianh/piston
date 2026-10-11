@@ -245,16 +245,30 @@ excluded by a physical file provider.
 
 ## MCP behavior and limitations
 
-The retained MCP wire names are `run_tests`, `get_test_results`,
+The MCP wire names are `run_tests`, `get_test_run`, `get_test_results`,
 `set_test_filter`, and `clear_results` (implemented by the corresponding
 PascalCase methods in `TestTools`). They use the same engine state and pipeline
 as other clients; MCP does not bypass builds or provide prewarmed test processes.
 
-`run_tests` requests a full run and returns a textual summary. The pending
-packaging companion awaits the engine run with timeout/cancellation and removes
-redundant phase polling, so normal completion in `Watching` can return. This
-documentation change does not implement that fix. `get_test_results` reads
+`run_tests` requests a full run, awaits that specific engine request with
+timeout/cancellation, and returns a textual summary and its run ID. Completion
+does not depend on polling the aggregate phase or prior results. `get_test_results` reads
 current accumulated state without initiating a run.
+
+Run provenance (Phase 1a): `PistonOrchestrator` creates a `TestRunRecord` for every
+run request and publishes it as `PistonState.CurrentRun`. When the run finishes, the
+record becomes `LastRun` and is kept in a bounded in-memory `RecentRuns` list. Each record holds:
+
+- the run context;
+- `SourceFingerprinter` fingerprints from before and after the run;
+- watcher-observed changes;
+- per-project outcomes;
+- its own suites. Aggregate suites carry their originating `RunId`.
+
+`run_tests` returns the new run ID. `get_test_run` serializes a record as
+`piston.test-run/v1`. The protocol `StateSnapshotNotification` carries optional
+`LastRun`/`ActiveRun` (`TestRunDto`, counts only), and `TestSuiteDto` carries an
+optional `RunId`; older clients can ignore all three.
 
 `set_test_filter` changes the active filter but does not itself run tests.
 `clear_results` clears in-memory suites, the last-run timestamp, coverage state,

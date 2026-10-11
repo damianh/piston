@@ -97,19 +97,42 @@ With `--mcp-port` (or `mcpPort` in `.piston.json`), the daemon exposes an HTTP M
 
 | Tool | Description |
 |---|---|
-| `run_tests` | Request a full build + test run and a textual summary. |
-| `get_test_results` | Read current test results. |
+| `run_tests` | Request a full build + test run; returns a textual summary plus a `Run:` line with the run ID, status, scope, freshness and source fingerprint. |
+| `get_test_run` | Read one run's provenance and per-test results as JSON (`piston.test-run/v1`): `runId` = an ID, `latest` (default) or `active`. |
+| `get_test_results` | Read current accumulated test results (may combine several runs; each suite shows its run ID). |
 | `set_test_filter` | Apply a test name filter. |
 | `clear_results` | Clear current test suites, last-run timestamp, coverage state, and persisted coverage in the current solution directory. A running test run may publish new results afterwards. |
 
 These are the retained Phase 0 tools. The companion surface-reduction change removes `LoadWorkspace`, `GetDiagnostics`, `SemanticSearch`, `GetAst`, `Rename`, and `NotifyFileChanged`; Piston will not own Roslyn workspace synchronization.
 
-The packaging companion also corrects `run_tests` completion handling: it awaits
-the engine run with timeout/cancellation instead of polling for a phase that
-normal completion never reaches. That fix is not included in this
-documentation-only change. `get_test_results` reads
+`run_tests` awaits the specific engine request with timeout/cancellation and
+returns that run's record, rather than polling an aggregate phase or reading
+results from an earlier run. `get_test_results` reads
 accumulated state without starting a run; preserved results from unaffected
 suites are not proof that every test ran after the latest edit.
+
+### Run provenance
+
+Every run, including startup and file-change runs, gets a record in the
+`piston.test-run/v1` JSON format that `get_test_run` returns. The record holds:
+
+- a unique `runId` and a sequence number;
+- the trigger (`Startup`, `Forced` or `FileChange`);
+- the status: `Completed`, `Incomplete`, `BuildFailed`, `Cancelled` or `Faulted`;
+- the scope (`Full` or `Selective`), `isFiltered` and the effective filter;
+- the run context: solution, test projects, build targets, configuration, SDK, runtime and OS;
+- per-project outcomes, duplicate test IDs, and every test's fully qualified name and status.
+
+The source fingerprint (`piston-source-v2`) is a SHA-256 over every file under the solution directory except `bin`, `obj`, `TestResults`, `.git`, `.vs`, `.idea`, `.piston` and `node_modules`. It also covers the nearest ancestor `global.json`, `Directory.Build.*`, `Directory.Packages.props` and `NuGet.config`. Paths and contents are length-prefixed (unsigned 64-bit big-endian byte lengths), so embedded NUL bytes cannot collide with file boundaries. Capture is attempted before and after every started run, including cancellation and faults; unavailable fingerprints are reported as `Unknown`. Queued requests cancelled before starting have no fingerprints. A run is `Stale` if the fingerprint changed or the file watcher saw a change during the run; a watcher change also cancels the run.
+
+`isCurrentFullResult` is true only for a `Completed`, unfiltered, `Full`-scope, `Current` run with no duplicate IDs. Selective or filtered runs never qualify, and a filter can turn even a forced run into a filtered one.
+
+Limits:
+
+- Only the 16 most recent runs are kept, and only in memory.
+- The fingerprint does not cover sources outside the solution directory, installed SDKs, the NuGet cache, or merged user/machine NuGet configuration.
+- The SDK version is recorded from `dotnet --version` run in the daemon's working directory.
+- `context.workingDirectory` is the build/SDK-probe directory. `context.testWorkingDirectories` records each test target's actual directory: the solution directory for MTP, the daemon directory for VSTest.
 
 ## Coverage and impact selection
 

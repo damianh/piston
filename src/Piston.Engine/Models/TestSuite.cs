@@ -5,4 +5,8 @@ public sealed record TestSuite(
     IReadOnlyList<TestResult> Tests,
     DateTimeOffset Timestamp,
     TimeSpan TotalDuration
-);
+)
+{
+    /// <summary>Identifier of the <see cref="TestRunRecord"/> that produced this suite, when known.</summary>
+    public string? RunId { get; init; }
+}
