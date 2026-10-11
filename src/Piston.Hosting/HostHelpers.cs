@@ -1,7 +1,10 @@
+// Copyright (c) Damian Hickey. All rights reserved.
+// See LICENSE in the project root for license information.
+
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
-using Piston.Hosting.Configuration;
 using Piston.Engine;
+using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
 using Piston.Protocol.JsonRpc;
 

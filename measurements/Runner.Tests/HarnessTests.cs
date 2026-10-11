@@ -1,3 +1,6 @@
+// Copyright (c) Damian Hickey. All rights reserved.
+// See LICENSE in the project root for license information.
+
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Piston.Measurements;
@@ -77,7 +80,7 @@ public sealed class HarnessTests
     [Fact]
     public void SourceHashAndCopiesExcludeBuildArtifacts()
     {
-        Assert.Equal("585a57913afde1805a8a39b437091b9b2961adc1fc0d6b964ecc1fa5f518cc05",
+        Assert.Equal("d69cb1bfeefcfb2e50f517be8fba550b4df88a974dec989333a9671c15bae8da",
             Evidence.SourceHash(System.IO.Path.Combine(Root, "fixtures")));
         using var temp = new TemporaryDirectory();
         var source = System.IO.Path.Combine(temp.Path, "source");
