@@ -33,7 +33,7 @@ public sealed class TestToolsTests
         ];
 
         var tools = new TestTools(engine, NullRecorder);
-        var result = await tools.RunTests(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+        var result = await tools.RunTestsAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(engine.ForceRunCalled);
         Assert.Contains($"Phase: {completedPhase}", result);
@@ -48,7 +48,7 @@ public sealed class TestToolsTests
         var engine = new StubEngine { ForceRunCompletion = completion.Task };
         var tools = new TestTools(engine, NullRecorder);
         using var cts = new CancellationTokenSource();
-        var run = tools.RunTests(cts.Token);
+        var run = tools.RunTestsAsync(cts.Token);
         cts.Cancel();
 
         try

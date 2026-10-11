@@ -14,8 +14,8 @@ namespace Piston.Mcp.Tools;
 [McpServerToolType]
 public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
 {
-    [McpServerTool, Description("Force a full test run of the loaded solution. Returns a results summary plus the run ID, status, scope, freshness and source fingerprint; use GetTestRun with the run ID for per-test provenance.")]
-    public async Task<string> RunTests(CancellationToken ct)
+    [McpServerTool(Name = "run_tests"), Description("Force a full test run of the loaded solution. Returns a results summary plus the run ID, status, scope, freshness and source fingerprint; use GetTestRun with the run ID for per-test provenance.")]
+    public async Task<string> RunTestsAsync(CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
         var result = string.Empty;
@@ -46,7 +46,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         finally
         {
             sw.Stop();
-            recorder.Record(nameof(RunTests), null, succeeded ? result! : null, sw.Elapsed.TotalMilliseconds, succeeded);
+            recorder.Record("RunTests", null, succeeded ? result! : null, sw.Elapsed.TotalMilliseconds, succeeded);
         }
 
         return result;

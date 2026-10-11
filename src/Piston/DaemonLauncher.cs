@@ -4,7 +4,7 @@
 using System.Diagnostics;
 using Piston.Protocol.Transports;
 
-namespace Piston.Cli;
+namespace Piston;
 
 /// <summary>
 /// Ensures a Piston daemon is running for the given solution.

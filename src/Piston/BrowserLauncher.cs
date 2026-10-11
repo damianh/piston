@@ -4,7 +4,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
-namespace Piston.Cli;
+namespace Piston;
 
 /// <summary>
 /// Cross-platform utility to open a URL in the default browser.

@@ -103,11 +103,11 @@ public sealed class TestProcessPool : ITestProcessPool
         Action<ProjectTestResult>? onProjectCompleted,
         CancellationToken ct)
     {
-        var tasks = requests.Select(req => RunAndReport(req, onProjectCompleted, ct)).ToList();
+        var tasks = requests.Select(req => RunAndReportAsync(req, onProjectCompleted, ct)).ToList();
         return await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
-    private async Task<ProjectTestResult> RunAndReport(
+    private async Task<ProjectTestResult> RunAndReportAsync(
         ProjectTestRequest request,
         Action<ProjectTestResult>? onProjectCompleted,
         CancellationToken ct)

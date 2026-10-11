@@ -2,7 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.CommandLine;
-using Piston.Cli;
+using Piston;
 using Piston.Engine;
 using Piston.Engine.Models;
 using Piston.Hosting;

@@ -49,7 +49,7 @@ public sealed class TestRunToolTests
         var engine = new StubEngine { NextRun = Run("run-1", 2) };
         var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
 
-        var result = await tools.RunTests(CancellationToken.None);
+        var result = await tools.RunTestsAsync(CancellationToken.None);
 
         Assert.Contains("Run: run-1 | Status: Completed | Scope: Full | Filtered: no | Freshness: Current", result);
         Assert.Contains($"Source: piston-source-v2:{Source.Value}", result);
