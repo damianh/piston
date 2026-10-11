@@ -167,10 +167,12 @@ user coordinate through OS file locks in a per-user directory:
 - Runs are admitted strictly FIFO. Waiting runs are visible as `Queued` with queue position and
   budget usage in `get_test_run`, `get_test_results` and the state snapshot.
 - Leases are released on completion, cancellation, faults, exit and crash.
-- Invalid budgets, unsatisfiable reservations and unenforced file locking fail explicitly.
+- Graceful disposal drains active and pending pipelines before releasing worktree ownership.
+- Invalid or unreadable budgets, unsatisfiable reservations and unenforced file locking fail explicitly.
 
 This is admission by reservation, not OS-level CPU/memory capping. A hung but live daemon keeps
-its lease. Only Linux is validated so far. See the README and `ARCHITECTURE.md` for the exact
+its lease. Local validation covers Linux; CI is configured for Linux and Windows, while macOS
+execution remains unvalidated. See the README and `ARCHITECTURE.md` for the exact
 behavior and limits.
 
 Still to do in 1a:

@@ -30,11 +30,6 @@ internal static class ExclusiveFileLock
         {
             return null;
         }
-        catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows() && File.Exists(path))
-        {
-            // A file pending deletion by its releasing holder reports access denied on Windows.
-            return null;
-        }
     }
 
     public static async Task<FileStream> AcquireAsync(string path, CancellationToken ct)

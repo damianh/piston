@@ -1,6 +1,9 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -19,8 +22,8 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
     public static WorktreeIdentity FromSolutionPath(string solutionPath)
     {
         var full = Path.GetFullPath(solutionPath);
-        var start = Directory.Exists(full) ? full : Path.GetDirectoryName(full) ?? full;
-        var resolved = ResolveLinks(start);
+        var resolvedPath = ResolveLinks(full);
+        var resolved = Directory.Exists(resolvedPath) ? resolvedPath : Path.GetDirectoryName(resolvedPath) ?? resolvedPath;
 
         var root = resolved;
         for (var dir = new DirectoryInfo(resolved); dir is not null; dir = dir.Parent)
@@ -41,9 +44,41 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
     private static string Normalize(string path)
     {
         var trimmed = Path.TrimEndingDirectorySeparator(path);
-        // Default Windows and macOS filesystems are case-insensitive.
-        return OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? trimmed.ToLowerInvariant() : trimmed;
+        if (OperatingSystem.IsMacOS())
+        {
+            return GetMacDirectoryPath(trimmed);
+        }
+
+        return OperatingSystem.IsWindows() ? trimmed.ToLowerInvariant() : trimmed;
     }
+
+    [SupportedOSPlatform("macos")]
+    private static string GetMacDirectoryPath(string path)
+    {
+        // F_GETPATH returns the actual directory spelling on both case-sensitive and insensitive volumes.
+        var fd = Open(path, 0);
+        if (fd < 0)
+        {
+            throw new ExecutionCoordinationException(
+                $"Cannot canonicalize worktree '{path}': {new Win32Exception(Marshal.GetLastPInvokeError()).Message}");
+        }
+
+        using var handle = new Microsoft.Win32.SafeHandles.SafeFileHandle(new IntPtr(fd), ownsHandle: true);
+        var buffer = new byte[1024];
+        if (GetPath(fd, 50, buffer) < 0)
+        {
+            throw new ExecutionCoordinationException(
+                $"Cannot canonicalize worktree '{path}': {new Win32Exception(Marshal.GetLastPInvokeError()).Message}");
+        }
+
+        return Path.TrimEndingDirectorySeparator(Encoding.UTF8.GetString(buffer, 0, Array.IndexOf(buffer, (byte)0)));
+    }
+
+    [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "open", SetLastError = true)]
+    private static extern int Open([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
+
+    [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "fcntl", SetLastError = true)]
+    private static extern int GetPath(int fd, int command, [Out] byte[] buffer);
 
     /// <summary>Resolves symbolic links in every segment of an absolute path.</summary>
     private static string ResolveLinks(string path)
@@ -69,8 +104,8 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
             }
 
             var candidate = Path.Combine(current, segment);
-            var info = new DirectoryInfo(candidate);
-            if (info.Exists && info.LinkTarget is { } target)
+            FileSystemInfo info = Directory.Exists(candidate) ? new DirectoryInfo(candidate) : new FileInfo(candidate);
+            if (info.LinkTarget is { } target)
             {
                 if (++depth > MaxLinkDepth)
                 {
@@ -94,5 +129,5 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
     }
 }
 
-/// <summary>Details a worktree owner records for diagnostics when another daemon is refused.</summary>
+/// <summary>Details recorded by a worktree owner for diagnostics when another daemon is refused.</summary>
 public sealed record ExecutionOwnerInfo(int ProcessId, string SolutionPath, string WorktreePath, DateTimeOffset AcquiredAt);

@@ -96,6 +96,47 @@ public sealed class WorktreeOwnershipTests : IDisposable
     }
 
     [Fact]
+    public void Identity_ResolvesSolutionFileSymbolicLinkOutsideWorktree()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var solution = CreateSolution(CreateWorktree("real"));
+        var alias = Path.Combine(_root, "alias.slnx");
+        _ = File.CreateSymbolicLink(alias, solution);
+
+        Assert.Equal(WorktreeIdentity.FromSolutionPath(solution), WorktreeIdentity.FromSolutionPath(alias));
+        using var owner = WorktreeOwnership.Acquire(_directory, solution);
+        _ = Assert.Throws<WorktreeOwnershipConflictException>(() => WorktreeOwnership.Acquire(_directory, alias));
+    }
+
+    [Fact]
+    public void Identity_MacDirectorySpelling_RespectsVolumeCaseSensitivity()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            return;
+        }
+
+        var upper = CreateWorktree("Case");
+        var lower = CreateWorktree("case");
+        var directories = Directory.GetDirectories(_root).Select(Path.GetFileName).ToList();
+        var a = WorktreeIdentity.FromSolutionPath(CreateSolution(upper));
+        var b = WorktreeIdentity.FromSolutionPath(CreateSolution(lower));
+
+        if (directories.Contains("Case") && directories.Contains("case"))
+        {
+            Assert.NotEqual(a.Key, b.Key);
+        }
+        else
+        {
+            Assert.Equal(a.Key, b.Key);
+        }
+    }
+
+    [Fact]
     public void Acquire_RefusesSecondOwnerOfSameWorktree_EvenForAnotherSolution()
     {
         var worktree = CreateWorktree("wt");

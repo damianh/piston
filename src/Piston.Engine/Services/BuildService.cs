@@ -156,7 +156,15 @@ public sealed class BuildService : IBuildService
         }
         catch (OperationCanceledException)
         {
-            try { process.Kill(entireProcessTree: true); } catch { /* best effort */ }
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (InvalidOperationException) when (process.HasExited) { }
+            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
             sw.Stop();
             return new BuildResult(BuildStatus.Failed, errors, warnings, sw.Elapsed);
         }

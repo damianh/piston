@@ -4,6 +4,7 @@
 using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
+using Piston.Engine.Services;
 using Piston.Engine.Tests.Orchestration;
 using Xunit;
 
@@ -68,6 +69,70 @@ public sealed class OrchestratorAdmissionTests : IDisposable
         NewCoordinator().AdmitAsync(Guid.NewGuid().ToString("N"), _ => { }, null, CancellationToken.None);
 
     private int Entries(string dir) => Directory.GetFiles(dir).Length;
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Dispose_DrainsPipelineAndQueuedReplacement_BeforeReleasingAdmission(bool synchronous)
+    {
+        var runner = new UnwindingTestRunner();
+        var orchestrator = new PistonOrchestrator(
+            new StubFileWatcherService(), new ProvenanceBuildService(), runner, new ProvenanceImpactAnalyzer(Projects), _state,
+            null, null, false, NullActivityEventSink.Instance, NewCoordinator());
+        Task? disposal = null;
+        try
+        {
+            await orchestrator.StartAsync(SolutionPath);
+            await runner.Started.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            var replacement = orchestrator.RequestRunAsync();
+            await runner.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+            disposal = synchronous ? Task.Run(orchestrator.Dispose) : orchestrator.DisposeAsync().AsTask();
+            _ = await replacement.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.False(disposal.IsCompleted);
+            Assert.Equal(1, Entries(_directory.LeasesDirectory));
+
+            runner.Release.SetResult();
+            await disposal.WaitAsync(TimeSpan.FromSeconds(15));
+
+            Assert.Equal(0, Entries(_directory.LeasesDirectory));
+            Assert.Equal(0, Entries(_directory.QueueDirectory));
+            Assert.Equal(TestRunStatus.Cancelled, _state.LastRun!.Status);
+            using var free = await OccupyBudget();
+        }
+        finally
+        {
+            _ = runner.Release.TrySetResult();
+            await (disposal ?? orchestrator.DisposeAsync().AsTask());
+        }
+    }
+
+    private sealed class UnwindingTestRunner : ITestRunnerService
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Cancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<TestRunResult> RunTestsAsync(
+            string solutionPath, string? filter, Action<IReadOnlyList<TestSuite>>? onProgress, CancellationToken ct) =>
+            RunTestsAsync(solutionPath, null, filter, false, onProgress, null, ct);
+
+        public Task<TestRunResult> RunTestsAsync(
+            string solutionPath, IReadOnlyList<string>? testProjectPaths, string? filter, bool collectCoverage,
+            Action<IReadOnlyList<TestSuite>>? onProgress, CancellationToken ct) =>
+            RunTestsAsync(solutionPath, testProjectPaths, filter, collectCoverage, onProgress, null, ct);
+
+        public async Task<TestRunResult> RunTestsAsync(
+            string solutionPath, IReadOnlyList<string>? testProjectPaths, string? filter, bool collectCoverage,
+            Action<IReadOnlyList<TestSuite>>? onProgress, Action<ProjectTestResult>? onProjectCompleted, CancellationToken ct)
+        {
+            using var registration = ct.Register(() => Cancelled.TrySetResult());
+            Started.SetResult();
+            await Release.Task.ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            return new TestRunResult([], null, []);
+        }
+    }
 
     [Fact]
     public async Task Run_IsPublishedAsQueued_WhileWaitingForAdmission_ThenRunsAdmitted()

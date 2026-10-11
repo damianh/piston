@@ -9,7 +9,7 @@ using Piston.Protocol.Messages;
 
 namespace Piston.Engine.Orchestration;
 
-public sealed class PistonOrchestrator : IPistonOrchestrator
+public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 {
     private readonly IFileWatcherService _fileWatcher;
     private readonly IBuildService _buildService;
@@ -24,6 +24,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
     private CancellationTokenSource? _cts;
     private volatile bool _stopping;
+    private readonly object _lifecycleLock = new();
+    private int _activePipelines;
+    private TaskCompletionSource? _pipelinesDrained;
+    private Task? _disposeTask;
+    private bool _disposed;
 
     // Queue position of a run superseded while queued for machine admission; guarded by _runLock.
     private long? _inheritedQueueSequence;
@@ -209,7 +214,10 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     {
         _stopping = true;
         _fileWatcher.Stop();
-        _cts?.Cancel();
+        lock (_lifecycleLock)
+        {
+            _cts?.Cancel();
+        }
 
         _state.Phase = PistonPhase.Idle;
         _state.NotifyChanged();
@@ -230,16 +238,58 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         _ = TriggerRunAsync(_solutionPath, batch, TestRunTrigger.FileChange);
     }
 
-    private async Task<TestRunRecord> TriggerRunAsync(string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger)
+    private Task<TestRunRecord> TriggerRunAsync(string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger)
+    {
+        CancellationTokenSource cts;
+        lock (_lifecycleLock)
+        {
+            if (_disposed)
+            {
+                return Task.FromResult(CompleteRun(CreateRunRecord(trigger), TestRunStatus.Cancelled, "Engine is shutting down."));
+            }
+
+            if (_activePipelines++ == 0)
+            {
+                _pipelinesDrained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
+            cts = new CancellationTokenSource();
+            var oldCts = _cts;
+            _cts = cts;
+            oldCts?.Cancel();
+        }
+        return RunTrackedAsync(solutionPath, batch, trigger, cts);
+    }
+
+    private async Task<TestRunRecord> RunTrackedAsync(
+        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, CancellationTokenSource cts)
+    {
+        try
+        {
+            return await RunPipelineAsync(solutionPath, batch, trigger, cts).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_lifecycleLock)
+            {
+                if (ReferenceEquals(_cts, cts))
+                {
+                    _cts = null;
+                }
+
+                cts.Dispose();
+                if (--_activePipelines == 0)
+                {
+                    _pipelinesDrained!.SetResult();
+                }
+            }
+        }
+    }
+
+    private async Task<TestRunRecord> RunPipelineAsync(
+        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, CancellationTokenSource newCts)
     {
         var run = CreateRunRecord(trigger);
-
-        // Issue a new CTS, cancelling whatever was running before
-        var oldCts = _cts;
-        var newCts = new CancellationTokenSource();
-        _cts = newCts;
-        oldCts?.Cancel();
-        oldCts?.Dispose();
 
         // Serialize: only one pipeline runs at a time
         try
@@ -692,8 +742,14 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         }
         finally
         {
-            lease.Dispose();
-            _ = _runLock.Release();
+            try
+            {
+                lease.Dispose();
+            }
+            finally
+            {
+                _ = _runLock.Release();
+            }
         }
     }
 
@@ -989,13 +1045,35 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             .ToList();
     }
 
-    public void Dispose()
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+    public ValueTask DisposeAsync()
     {
-        _stopping = true;
+        lock (_lifecycleLock)
+        {
+            if (_disposeTask is not null)
+            {
+                return new ValueTask(_disposeTask);
+            }
+
+            _disposed = true;
+            _stopping = true;
+            _cts?.Cancel();
+            _disposeTask = DisposeCoreAsync(_activePipelines == 0 ? Task.CompletedTask : _pipelinesDrained!.Task);
+            return new ValueTask(_disposeTask);
+        }
+    }
+
+    private async Task DisposeCoreAsync(Task drained)
+    {
         _fileWatcher.FileChanged -= OnFileChanged;
         _fileWatcher.Dispose();
-        _cts?.Cancel();
-        _cts?.Dispose();
+        await drained.ConfigureAwait(false);
+        if (_graphInitTask is { } graphInit)
+        {
+            await graphInit.ConfigureAwait(false);
+        }
+
         _runLock.Dispose();
         _coverageLock.Dispose();
     }

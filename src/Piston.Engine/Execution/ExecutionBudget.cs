@@ -26,12 +26,11 @@ public sealed record ExecutionBudget(int CpuSlots, int? MemoryMb, string Source)
         string text;
         try
         {
-            if (!File.Exists(path))
-            {
-                return Default;
-            }
-
             text = File.ReadAllText(path);
+        }
+        catch (FileNotFoundException)
+        {
+            return Default;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

@@ -45,6 +45,78 @@ public sealed class ExecutionConfigurationTests : IDisposable
         Assert.Equal(new ExecutionBudget(2, null, path), ExecutionBudget.Load(path));
     }
 
+    [Fact]
+    public void Budget_InaccessiblePath_DoesNotUseDefault()
+    {
+        var ex = Assert.Throws<ExecutionCoordinationException>(() => ExecutionBudget.Load(_root));
+        _ = Assert.IsType<UnauthorizedAccessException>(ex.InnerException);
+    }
+
+    [Fact]
+    public void Budget_UnreadableFile_IsExplicitError()
+    {
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        {
+            return;
+        }
+
+        var path = Budget("""{ "cpuSlots": 1 }""");
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var ex = Assert.Throws<ExecutionCoordinationException>(() => ExecutionBudget.Load(path));
+            _ = Assert.IsType<UnauthorizedAccessException>(ex.InnerException);
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        }
+    }
+
+    [Fact]
+    public void Lock_ReadOnlyFileOnWindows_IsAnAccessError_NotContention()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var path = Budget("{}");
+        File.SetAttributes(path, FileAttributes.ReadOnly);
+        try
+        {
+            _ = Assert.Throws<UnauthorizedAccessException>(() => ExclusiveFileLock.TryAcquire(path, FileMode.Open));
+        }
+        finally
+        {
+            File.SetAttributes(path, FileAttributes.Normal);
+        }
+    }
+
+    [Fact]
+    public void EnsureReady_TightensExistingUnixDirectories()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dir = new ExecutionCoordinationDirectory(Path.Combine(_root, "coordination"));
+        var paths = new[] { dir.BaseDirectory, dir.StateDirectory, dir.OwnersDirectory, dir.QueueDirectory, dir.LeasesDirectory };
+        foreach (var path in paths)
+        {
+            _ = Directory.CreateDirectory(path);
+            File.SetUnixFileMode(path, (UnixFileMode)511);
+        }
+
+        dir.EnsureReady();
+
+        foreach (var path in paths)
+        {
+            Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(path));
+        }
+    }
+
     [Theory]
     [InlineData("""{ "cpuSlots": 0 }""", "cpuSlots")]
     [InlineData("""{ "cpuSlots": -1 }""", "cpuSlots")]

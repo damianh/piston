@@ -11,7 +11,7 @@ using Piston.Protocol.Messages;
 
 namespace Piston.Engine;
 
-public sealed class PistonEngine : IEngine
+public sealed class PistonEngine : IEngine, IAsyncDisposable
 {
     private readonly PistonState _state;
     private readonly PistonOrchestrator _orchestrator;
@@ -148,7 +148,7 @@ public sealed class PistonEngine : IEngine
     public PistonState State => _state;
 
     /// <summary>Worktree ownership held by this engine; null before <see cref="StartAsync"/>.</summary>
-    public WorktreeOwnership? Ownership => _ownership;
+    internal WorktreeOwnership? Ownership => _ownership;
 
     /// <summary>
     /// Acquires exclusive ownership of the solution's worktree and validates the machine execution
@@ -178,6 +178,7 @@ public sealed class PistonEngine : IEngine
         }
         catch
         {
+            await _orchestrator.DisposeAsync().ConfigureAwait(false);
             _ownership.Dispose();
             _ownership = null;
             throw;
@@ -200,13 +201,16 @@ public sealed class PistonEngine : IEngine
 
     public void ClearResults() => _orchestrator.ClearResults(_solutionDirectory);
 
-    public void Dispose()
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+    public async ValueTask DisposeAsync()
     {
-        _orchestrator.Dispose();
+        await _orchestrator.DisposeAsync().ConfigureAwait(false);
         _coverageStore?.Dispose();
         _pool.Dispose();
         // Released after the orchestrator so no run executes without ownership.
         _ownership?.Dispose();
+        _ownership = null;
         _diagnosticLog.Dispose();
     }
 }

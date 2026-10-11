@@ -93,25 +93,27 @@ public sealed class ExecutionCoordinationDirectory
                 else
                 {
                     _ = Directory.CreateDirectory(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                    File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
                 }
             }
+            VerifyLockingIsEnforced();
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw new ExecutionCoordinationException(
-                $"Cannot create the execution coordination directory '{BaseDirectory}': {ex.Message}", ex);
+                $"Cannot prepare the execution coordination directory '{BaseDirectory}': {ex.Message}", ex);
         }
-
-        VerifyLockingIsEnforced();
     }
 
     private void VerifyLockingIsEnforced()
     {
         var probePath = Path.Combine(StateDirectory, $"lock-probe-{Environment.ProcessId}-{Guid.NewGuid():N}");
+        var created = false;
         try
         {
-            using var first = ExclusiveFileLock.TryAcquire(probePath, FileMode.CreateNew, FileOptions.DeleteOnClose)
+            using var first = ExclusiveFileLock.TryAcquire(probePath, FileMode.CreateNew)
                 ?? throw new ExecutionCoordinationException($"Could not lock new probe file '{probePath}'.");
+            created = true;
             using var second = ExclusiveFileLock.TryAcquire(probePath, FileMode.Open);
             if (second is not null)
             {
@@ -121,10 +123,17 @@ public sealed class ExecutionCoordinationDirectory
                     $"(and the System.IO.DisableFileLocking switch) or set {EnvironmentVariable} to a local filesystem.");
             }
         }
-        catch (IOException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw new ExecutionCoordinationException(
                 $"Cannot verify exclusive file locking in '{StateDirectory}': {ex.Message}", ex);
+        }
+        finally
+        {
+            if (created)
+            {
+                File.Delete(probePath);
+            }
         }
     }
 }

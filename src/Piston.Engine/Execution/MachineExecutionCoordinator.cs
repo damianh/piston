@@ -83,6 +83,7 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
 
         var queuedAt = new DateTimeOffset(Math.Clamp(sequence, 0, DateTime.MaxValue.Ticks), TimeSpan.Zero);
         TestRunAdmission? lastPublished = null;
+        FileStream? unreturnedLease = null;
         try
         {
             while (true)
@@ -96,17 +97,19 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
                     var ahead = tickets.Count(t => t.CompareTo(sequence, ticketName) < 0);
                     var cpuInUse = leases.Sum(l => l.CpuSlots);
                     var memoryInUse = leases.Sum(l => (long)(l.MemoryMb ?? 0));
-                    var fits = cpuInUse + _reservation.CpuSlots <= budget.CpuSlots
+                    var fits = (long)cpuInUse + _reservation.CpuSlots <= budget.CpuSlots
                         && (budget.MemoryMb is not { } memoryBudget || memoryInUse + (_reservation.MemoryMb ?? 0) <= memoryBudget);
 
                     if (ahead == 0 && fits)
                     {
                         var leasePath = Path.Combine(_directory.LeasesDirectory, EntryName(sequence, runId) + LeaseExtension);
-                        var lease = CreateEntry(leasePath);
-                        ticket.Dispose();
+                        unreturnedLease = CreateEntry(leasePath);
+                        ReleaseEntry(ticket, _directory.AdmissionLockPath, lockHeld: true);
                         var admitted = Snapshot(TestRunAdmissionState.Admitted, budget, 0, tickets.Count - 1,
                             leases.Count, cpuInUse, memoryInUse, queuedAt, DateTimeOffset.UtcNow);
-                        return new Lease(lease, admitted);
+                        var lease = new Lease(unreturnedLease, admitted, _directory.AdmissionLockPath);
+                        unreturnedLease = null;
+                        return lease;
                     }
 
                     status = Snapshot(TestRunAdmissionState.Queued, budget, ahead, tickets.Count,
@@ -124,12 +127,22 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            ticket.Dispose();
+            ReleaseEntry(ticket, _directory.AdmissionLockPath);
             throw new ExecutionAdmissionCancelledException(sequence, ct);
         }
         catch
         {
-            ticket.Dispose();
+            try
+            {
+                if (unreturnedLease is not null)
+                {
+                    ReleaseEntry(unreturnedLease, _directory.AdmissionLockPath);
+                }
+            }
+            finally
+            {
+                ReleaseEntry(ticket, _directory.AdmissionLockPath);
+            }
             throw;
         }
     }
@@ -173,7 +186,10 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
         try
         {
             // Created under the admission lock, so no evaluator can observe it before it is locked.
-            return ExclusiveFileLock.TryAcquire(path, FileMode.CreateNew, FileOptions.DeleteOnClose)
+            // Windows delete-pending files can report access denied rather than sharing violation.
+            // Keep entries reopenable for liveness checks; remove them explicitly after releasing.
+            var options = OperatingSystem.IsWindows() ? FileOptions.None : FileOptions.DeleteOnClose;
+            return ExclusiveFileLock.TryAcquire(path, FileMode.CreateNew, options)
                 ?? throw new ExecutionCoordinationException($"Queue entry '{path}' is unexpectedly locked.");
         }
         catch (IOException ex)
@@ -249,9 +265,38 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
         }
     }
 
-    private sealed class Lease(FileStream file, TestRunAdmission status) : IExecutionLease
+    private sealed class Lease(FileStream file, TestRunAdmission status, string admissionLockPath) : IExecutionLease
     {
+        private int _disposed;
         public TestRunAdmission? Status { get; } = status;
-        public void Dispose() => file.Dispose();
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                ReleaseEntry(file, admissionLockPath);
+            }
+        }
+    }
+
+    private static void ReleaseEntry(FileStream file, string admissionLockPath, bool lockHeld = false)
+    {
+        var path = file.Name;
+        try
+        {
+            // Serialize close-and-delete with scanners on Windows, where an open handle can deny deletion.
+            using var globalLock = OperatingSystem.IsWindows() && !lockHeld
+                ? ExclusiveFileLock.AcquireAsync(admissionLockPath, CancellationToken.None).GetAwaiter().GetResult()
+                : null;
+            file.Dispose();
+            if (OperatingSystem.IsWindows())
+            {
+                File.Delete(path);
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            file.Dispose();
+            throw new ExecutionCoordinationException($"Cannot release execution entry '{path}': {ex.Message}", ex);
+        }
     }
 }

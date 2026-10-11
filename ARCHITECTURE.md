@@ -210,7 +210,7 @@ LocalApplicationData. State lives in `v1/` (`owners/`, `queue/`, `leases/`,
 description. On Windows it uses share modes. Either way the OS drops the lock
 when the process exits or is killed, which is how stale owners are recovered. No
 PID liveness checks or heartbeats are involved. `EnsureReady` creates the
-directories (mode 0700 on Unix) and opens a probe file twice. If the second open
+directories, tightens existing Unix directories to mode 0700, and opens a probe file twice. If the second open
 does not conflict (`DOTNET_SYSTEM_IO_DISABLEFILELOCKING`), it throws instead of
 continuing without enforcement.
 
@@ -220,10 +220,13 @@ continuing without enforcement.
 `owners/<sha256(canonical worktree)>.lock`, plus a JSON sidecar with PID, solution,
 worktree and acquisition time used in conflict messages. The canonical worktree is
 the solution path with symlinks resolved, walked up to the first `.git` directory
-or file. Without one, it is the solution directory. The path is case-folded on
-Windows and macOS. A conflict raises `WorktreeOwnershipConflictException`. The CLI
+or file, including solution-file symlinks. Without one, it is the solution directory.
+Windows paths are case-folded; macOS uses `F_GETPATH` to preserve actual directory
+spelling on both case-sensitive and case-insensitive volumes. A conflict raises `WorktreeOwnershipConflictException`. The CLI
 prints it and exits 1, and the launcher reports the daemon's early exit instead of
-waiting for its pipe. The lock is released on engine dispose, or by the OS on crash.
+waiting for its pipe. Engine disposal cancels and drains every tracked pipeline before
+disposing shared services and releasing ownership. Both `DisposeAsync` and synchronous
+`Dispose` wait for this drain. The OS releases ownership on crash.
 Lock files are never deleted, so a deleted-and-recreated file can never let two
 holders coexist.
 
@@ -244,18 +247,23 @@ On admission it creates `leases/<…>.lease` and releases the ticket. Queue stat
 changes are published as the active `TestRunRecord` with `Status = Queued` and a
 `TestRunAdmission`. The admitted status is kept on the record and mapped to
 `TestRunAdmissionDto`, MCP `get_test_run` JSON and `get_test_results` text.
+Windows entries are explicitly closed and deleted under the admission lock rather
+than marked delete-pending while held. This keeps sharing violations distinct from
+permission failures; access denial is an explicit coordination error, not a retry loop.
 
 The lease is disposed in the pipeline's `finally` (completion, cancellation, fault)
 before the run lock is released. Cancellation while queued removes the ticket.
 When a newer trigger supersedes a queued run, the replacement reuses its sequence
 and keeps its place. Stop/dispose does not. Admission errors (invalid budget,
-unrecognised held entries, IO) fault the run with an explicit reason.
+unrecognised held entries, IO) fault the run with an explicit reason. Only a missing
+budget file selects the default; unreadable files do not. Build/test cancellation
+waits for the killed runner to exit before the pipeline releases its lease.
 
 Limits: budgets are admission reservations, not OS resource caps. Liveness
 means "process alive", so a hung daemon keeps its lease. Orphaned children of a
 crashed daemon are not counted. Coordination is per OS user and needs a local
-filesystem. Graph loading at startup is not admitted. Tests cover Linux; the
-Windows and macOS code paths are not yet validated on those platforms.
+filesystem. Graph loading at startup is not admitted. Local validation covers Linux;
+CI is configured for Linux and Windows. macOS execution has not been validated.
 
 ## Coverage and persistence
 

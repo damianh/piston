@@ -197,7 +197,7 @@ public sealed class DaemonHost : IAsyncDisposable
         if (_engine is not null)
         {
             _engine.Stop();
-            _engine.Dispose();
+            await _engine.DisposeAsync().ConfigureAwait(false);
             _engine = null;
         }
     }

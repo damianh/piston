@@ -12,6 +12,58 @@ public sealed class PistonEngineTests : IDisposable
 {
     private readonly string _root = Directory.CreateTempSubdirectory("piston-clear-test-").FullName;
 
+    [Fact]
+    public void OwnershipHandle_IsNotExposedToLibraryConsumers() => Assert.Null(typeof(PistonEngine).GetProperty("Ownership"));
+
+    [Fact]
+    public async Task DisposeAsync_HoldsWorktreeOwnership_UntilActivePipelineUnwinds()
+    {
+        var solution = Path.Combine(_root, "Test.slnx");
+        File.WriteAllText(solution, "<Solution />");
+        var directory = new ExecutionCoordinationDirectory(Path.Combine(_root, "coordination"));
+        var engine = new PistonEngine(new PistonOptions
+        {
+            SolutionPath = solution,
+            ProcessPoolSize = 1,
+            ExecutionCoordinationDirectory = directory.BaseDirectory,
+        });
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var blocked = 0;
+        engine.State.StateChanged += () =>
+        {
+            if (engine.State.Phase == PistonPhase.Building && Interlocked.Exchange(ref blocked, 1) == 0)
+            {
+                entered.SetResult();
+                release.Wait();
+                throw new OperationCanceledException();
+            }
+        };
+        var starting = Task.Run(() => engine.StartAsync(solution));
+        Task? disposing = null;
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            disposing = engine.DisposeAsync().AsTask();
+            Assert.False(disposing.IsCompleted);
+            _ = Assert.Throws<WorktreeOwnershipConflictException>(() => WorktreeOwnership.Acquire(directory, solution));
+            _ = Assert.Single(Directory.GetFiles(directory.LeasesDirectory));
+
+            release.Set();
+            await starting.WaitAsync(TimeSpan.FromSeconds(30));
+            await disposing.WaitAsync(TimeSpan.FromSeconds(30));
+
+            Assert.Empty(Directory.GetFiles(directory.LeasesDirectory));
+            using var free = WorktreeOwnership.Acquire(directory, solution);
+        }
+        finally
+        {
+            release.Set();
+            await starting;
+            await (disposing ?? engine.DisposeAsync().AsTask());
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -64,6 +64,30 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
     private int EntryCount(string directory) => Directory.GetFiles(directory).Length;
 
     [Fact]
+    public async Task CpuBudget_IntMaxReservation_DoesNotOverflowAdmissionComparison()
+    {
+        SetBudget("""{ "cpuSlots": 2147483647 }""");
+        var holder = await Admit(Coordinator(int.MaxValue));
+        using var cancellation = new CancellationTokenSource();
+        var log = new StatusLog();
+        var waiting = Admit(Coordinator(1), log, ct: cancellation.Token);
+        try
+        {
+            await WaitForAsync(() => log.Last is not null || waiting.IsCompleted, "second request did not enter admission");
+            Assert.False(waiting.IsCompleted);
+            Assert.Equal(int.MaxValue, log.Last!.CpuSlotsInUse);
+            holder.Dispose();
+            using var admitted = await waiting.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Equal(TestRunAdmissionState.Admitted, admitted.Status!.State);
+        }
+        finally
+        {
+            cancellation.Cancel();
+            holder.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task Admit_WhenBudgetIsFree_IsImmediate_AndReportsReservation()
     {
         SetBudget("""{ "cpuSlots": 4, "memoryMb": 2048 }""");
