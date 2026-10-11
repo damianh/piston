@@ -216,6 +216,13 @@ directories, tightens existing Unix directories to mode 0700, and opens a probe 
 does not conflict (`DOTNET_SYSTEM_IO_DISABLEFILELOCKING`), it throws instead of
 continuing without enforcement.
 
+Update `budget.json` with atomic replacement: write complete JSON to a temporary
+file in the same directory, then rename it over the existing file without deleting
+the old file first. `ExecutionBudget.Load` retries JSON parse failures (including
+empty/partial writes) and I/O failures five times with 20 ms waits, adding at most
+100 ms of delay per load. Persistent failures remain explicit invalid-budget
+errors; schema errors and access denial fail immediately.
+
 **Ownership** is separate from the orchestrator's per-daemon run semaphore.
 `PistonEngine.StartAsync` validates the budget, then takes
 `WorktreeOwnership`. That is an exclusive lock on
