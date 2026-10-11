@@ -5,7 +5,7 @@ namespace Piston.Engine;
 
 /// <summary>
 /// Abstraction for recording MCP tool call events.
-/// Decouples Piston.Mcp tools from protocol-layer types.
+/// Decouples MCP tools from protocol-layer types.
 /// </summary>
 public interface IMcpCallRecorder
 {

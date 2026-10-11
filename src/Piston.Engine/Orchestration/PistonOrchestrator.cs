@@ -5,7 +5,6 @@ using Piston.Engine.Coverage;
 using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
-using Piston.Protocol.Messages;
 
 namespace Piston.Engine.Orchestration;
 
@@ -233,7 +232,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         _ = Interlocked.Increment(ref _fileChangeGeneration);
         _state.LastFileChangeTime = batch.Timestamp;
         _state.LastChangedFiles = batch.Changes.Select(e => e.FilePath).ToList();
-        _activitySink.Emit(ActivityEventFactory.FileChangesDetected(
+        _activitySink.Emit(new FileChangesDetectedActivityEvent(
             _solutionPath, _state.LastChangedFiles));
         _ = TriggerRunAsync(_solutionPath, batch, TestRunTrigger.FileChange);
     }
@@ -484,7 +483,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             _state.LastBuild = buildResult;
             _state.LastBuildDuration = buildResult.Duration;
 
-            _activitySink.Emit(ActivityEventFactory.BuildCompleted(
+            _activitySink.Emit(new BuildCompletedActivityEvent(
                 solutionPath,
                 buildResult.Status == BuildStatus.Succeeded,
                 buildResult.Duration.TotalMilliseconds,
@@ -884,10 +883,10 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
         var failures = allTests
             .Where(t => t.Status == TestStatus.Failed)
-            .Select(t => new TestFailureData(t.FullyQualifiedName, t.ErrorMessage))
+            .Select(t => new TestFailure(t.FullyQualifiedName, t.ErrorMessage))
             .ToList();
 
-        _activitySink.Emit(ActivityEventFactory.TestRunCompleted(
+        _activitySink.Emit(new TestRunCompletedActivityEvent(
             solutionPath, passed, failed, skipped, duration.TotalMilliseconds, failures));
     }
 

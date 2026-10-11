@@ -7,7 +7,6 @@ using Piston.Engine.Impact;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
 using Piston.Engine.Services;
-using Piston.Protocol.Messages;
 
 namespace Piston.Engine;
 
@@ -184,7 +183,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             throw;
         }
 
-        _activitySink.Emit(ActivityEventFactory.SolutionLoaded(solutionPath, 0));
+        _activitySink.Emit(new SolutionLoadedActivityEvent(solutionPath, 0));
     }
 
     public Task ForceRunAsync() => _orchestrator.ForceRunAsync();

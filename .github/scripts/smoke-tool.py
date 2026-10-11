@@ -88,10 +88,12 @@ def main():
                     try:
                         with urllib.request.urlopen(web_url, timeout=2) as response:
                             page = response.read().decode()
+                        with socket.create_connection(("localhost", mcp_port), timeout=2):
+                            pass
                         break
-                    except (urllib.error.URLError, TimeoutError):
+                    except (urllib.error.URLError, TimeoutError, ConnectionRefusedError):
                         if time.monotonic() >= deadline:
-                            raise TimeoutError("Installed tool did not start its web server")
+                            raise TimeoutError("Installed tool did not start its web and MCP servers")
                         time.sleep(0.25)
                 assert "_framework/" in page, page
                 framework = re.search(r'src="(_framework/blazor\.webassembly[^"]*\.js)"', page)
@@ -107,7 +109,7 @@ def main():
                 }, 1)
                 tools = rpc(mcp_url, "tools/list", {}, 2)["tools"]
                 names = {tool["name"] for tool in tools}
-                assert names == {"run_tests", "get_test_results", "set_test_filter", "clear_results"}, names
+                assert names == {"run_tests", "get_test_run", "get_test_results", "set_test_filter", "clear_results"}, names
                 result = rpc(mcp_url, "tools/call", {"name": "run_tests", "arguments": {}}, 3)
                 assert not result.get("isError", False), result
                 text = "\n".join(item.get("text", "") for item in result["content"])

@@ -6,44 +6,50 @@ Piston is an agent-facing continuous test backend for .NET, with a CLI daemon,
 HTTP MCP test tools, and a web dashboard. It builds and tests in the watched
 checkout using standard `dotnet` commands, not shadow workspaces or IL rewriting.
 
-This document separates implemented behavior from proposed work. The Phase 0
-build-correctness and [surface reduction/tool packaging (#4)](https://github.com/damianh/piston/pull/4)
-changes described below are **pending companion changes**, not features already
-shipped by this documentation change.
-Until those changes land, the checkout still includes the Roslyn worker/tools,
-diagnostic UI, VSCode extension, and desktop installer release workflow.
+This document separates implemented behavior from proposed work. Phase 0 build
+correctness, surface reduction, and .NET tool packaging have landed. The project
+structure is consolidated below; it does not introduce a hub/worker split,
+change runtime scheduling, or select a new UI/canvas architecture.
 
 ## Components
 
 | Project | Responsibility |
 |---|---|
-| `Piston` | CLI: launch/attach to daemon, open browser, foreground daemon, stop/status. |
-| `Piston.Hosting` | Daemon composition, protocol router, web hosting, configuration, MCP call tracking. |
+| `Piston` | .NET tool: CLI launch/attach, browser, foreground daemon, stop/status; daemon composition, protocol routing, web hosting, configuration, HTTP MCP tools and call tracking. |
 | `Piston.Engine` | Watcher, impact analysis, builds, test execution, current state, coverage processing. |
 | `Piston.Protocol` | JSON-RPC contracts, DTOs, framing, named-pipe and stdio transports. |
-| `Piston.Mcp` | HTTP MCP server and test tools backed by the engine. |
 | `Piston.Web` | Blazor WebAssembly dashboard connected over WebSocket. |
-| `Piston.Desktop` | Existing Photino host; source is to be frozen in Phase 0, not the primary delivery surface. |
 
-The current checkout additionally has `Piston.Roslyn`, `Piston.Roslyn.Worker`,
-Roslyn MCP tools, and `extensions/vscode`. Phase 0 removes these and diagnostic
-polling/UI/contracts rather than maintaining a second code-intelligence backend.
-The retained MCP surface is test-oriented; clients can use their own code
-intelligence alongside Piston.
+Hosting and MCP source live in `src/Piston/Hosting` and `src/Piston/Mcp`.
+Their `Piston.Hosting` and `Piston.Mcp` namespaces remain, but they are not
+separate projects or assemblies. Desktop source and its project are deleted.
+The Roslyn worker/tools, diagnostic polling/UI, and VS Code extension have also
+been removed. Clients can use their own code intelligence alongside Piston.
 
-The retained dependency shape after the companion reduction is:
+The production dependency shape is:
 
 ```text
-Piston (CLI) ------> Piston.Hosting ------> Piston.Engine ------> Piston.Protocol
-                           |
-                           +------------> Piston.Mcp ----------> Piston.Engine
-Piston.Web -----------------------------------------------> Piston.Protocol
-Piston.Desktop ---> Piston.Hosting  (frozen source)
+Piston (CLI + host + MCP) ------> Piston.Engine
+         |
+         +---------------------> Piston.Protocol <----- Piston.Web
+         |
+         +---- publishes/copies Piston.Web static assets (not an assembly reference)
 ```
 
-The CLI runs the daemon in a separate process. The existing desktop host embeds
-`DaemonHost` in-process. Neither arrangement implements a per-user hub with
-isolated worktree workers.
+`Piston.Engine` remains the MSBuild-loading and test-execution boundary and has
+no reference to `Piston.Protocol`. Its typed `EngineActivityEvent` records carry
+engine activity without JSON payloads. The host's `DtoMapper` converts them to
+the existing wire `ActivityEvent` and data DTOs, preserving discriminators,
+timestamps, camel-case fields, null omission, and protocol source generation.
+MCP call-log data remains a host/protocol concern.
+
+`Piston.Tests` combines tool/hosting, protocol, and MCP tests.
+`Piston.Engine.Tests` retains `Piston.TestProcessHost` and
+`Piston.ExecutionLeaseHolder` for process-tree cleanup and cross-process lease
+coverage. The measurement solution and its locked dependencies remain separate.
+
+The CLI runs the daemon in a separate process. `piston daemon` hosts `DaemonHost`
+in that process; it is not a per-user hub with isolated worktree workers.
 
 ## Transports and clients
 
@@ -59,7 +65,7 @@ The file-coverage request currently returns an empty line list; the presence of
 coverage contracts does not establish a working line-coverage client API.
 Clients receive state, test progress, build errors, and activity notifications.
 The dashboard presents current test/build state, activity, and MCP call history;
-the diagnostic view is removed by the Phase 0 companion change.
+there is no diagnostic view.
 
 See [README.md](README.md) for executable commands and the actual configuration
 shape. The protocol's stdio transport is not an MCP stdio server.
@@ -150,15 +156,11 @@ processing path, not every capability offered by test frameworks or collectors.
 ## Builds and execution
 
 Builds use standard `dotnet build`. Full runs target the original solution and
-allow restore. Before the Phase 0 correction, selective builds target affected
-non-test projects sequentially with `--no-restore`, which can leave stale
-libraries in test output directories.
-
-**Pending Phase 0 correction:** the build target set becomes the union of affected
+allow restore. The selective build target set is the union of affected
 non-test projects and affected test projects. A test-only edit targets that test
 project, rather than accidentally building the whole solution.
 
-For solution-member targets, the companion issues one
+For solution-member targets, Piston issues one
 `dotnet build <temporary-filter>.slnf`, with restore enabled. The filter is written
 outside the watched tree and removed afterwards. MSBuild handles parallel
 scheduling and ProjectReferences; Piston does not launch independent concurrent
@@ -174,7 +176,7 @@ solution path, fall back to sequential per-project
 
 A selective run with no affected test projects builds only and skips tests.
 Startup/manual runs and full-run fallbacks use the original solution, then all
-test projects available from the graph. Selective result merging is changed to
+test projects available from the graph. Selective result merging uses
 test FQN rather than timestamp-dependent TRX suite names, avoiding stale
 duplicates from that merge path. Neither selective building nor this merge fix
 establishes fine-grained coverage correctness or a measured latency budget.
@@ -343,8 +345,8 @@ record becomes `LastRun` and is kept in a bounded in-memory `RecentRuns` list. E
 `clear_results` clears in-memory suites, the last-run timestamp, coverage state,
 and persisted coverage in the current solution directory. It does not cancel an
 active pipeline; a subsequent completion can publish fresh results. Structured
-agent contracts, freshness semantics, and reliable run completion are future
-backend work, not guarantees of the existing text-based tools.
+agent APIs and durable history beyond the implemented run provenance remain
+future backend work.
 
 Engine-test setup process helpers drain both stdout and stderr and enforce a
 90-second deadline. A small test-only process host establishes a Unix session or
@@ -370,15 +372,16 @@ setup stalls, including restore/network or filesystem locking.
 The focus is a reliable test backend that agents can combine with independent
 code-intelligence tools, not a replacement IDE or a Roslyn service.
 
-Future work includes a measurement harness with an approved methodology,
-fine-grained coverage experiments, explicit run/freshness contracts, and
-Copilot canvas/harness integrations. None is an existing Piston feature, and
-performance budgets are hypotheses until measured against representative
-solutions and correctness checks.
+The separate measurement harness and run/freshness contracts exist.
+A matched current-Piston comparison, fine-grained coverage experiments, and
+Copilot canvas/harness integrations remain deferred. Performance budgets are
+hypotheses until measured against representative solutions and correctness checks.
 
 A per-user hub with an isolated worker per worktree is also proposed. Current
 pipe names are derived from solution paths and each daemon builds in its watched
-checkout; this is not worktree isolation or a shared hub.
+checkout. The separate engine assembly is an ownership boundary, not an
+implemented worker process or shared hub. The existing Blazor UI remains until
+a later UI/canvas decision.
 
 Aspire is one possible integration-test example for the generic backend. There
 is no implemented Aspire-specific lifecycle, service orchestration, or dedicated

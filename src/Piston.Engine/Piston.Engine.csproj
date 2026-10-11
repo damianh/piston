@@ -10,8 +10,4 @@
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
   </ItemGroup>
-
-  <ItemGroup>
-    <ProjectReference Include="..\Piston.Protocol\Piston.Protocol.csproj" />
-  </ItemGroup>
 </Project>

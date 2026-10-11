@@ -15,6 +15,52 @@ namespace Piston.Engine.Tests.Orchestration;
 public sealed class OrchestratorProgressTests
 {
     [Fact]
+    public async Task PipelineAndFileChanges_EmitEngineOwnedActivity()
+    {
+        var projects = new[] { "a.csproj" };
+        var watcher = new StubFileWatcherService();
+        var sink = new RecordingActivitySink();
+        await using var orchestrator = new PistonOrchestrator(
+            watcher, new StubBuildService(), new StubTestRunnerService(projects, TimeSpan.Zero),
+            new StubImpactAnalyzer(projects), new PistonState(), null, null, false, sink);
+
+        await orchestrator.StartAsync("/fake/solution.slnx");
+        await sink.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var build = Assert.Single(sink.Events.OfType<BuildCompletedActivityEvent>());
+        Assert.True(build.Succeeded);
+        Assert.Empty(build.Errors);
+        Assert.Equal("/fake/solution.slnx", build.SolutionPath);
+        var tests = Assert.Single(sink.Events.OfType<TestRunCompletedActivityEvent>());
+        Assert.Equal(1, tests.Passed);
+        Assert.Equal(0, tests.Failed);
+        Assert.Empty(tests.Failures);
+
+        watcher.TriggerChange(new FileChangeBatch(
+            [new FileChangeEvent("/fake/A.cs", WatcherChangeTypes.Changed, DateTimeOffset.UtcNow)],
+            DateTimeOffset.UtcNow));
+
+        var changed = Assert.Single(sink.Events.OfType<FileChangesDetectedActivityEvent>());
+        Assert.Equal(new[] { "/fake/A.cs" }, changed.ChangedFiles);
+        Assert.Equal("/fake/solution.slnx", changed.SolutionPath);
+    }
+
+    private sealed class RecordingActivitySink : IActivityEventSink
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<EngineActivityEvent> Events { get; } = new();
+        public TaskCompletionSource Completed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Emit(EngineActivityEvent activity)
+        {
+            Events.Enqueue(activity);
+            if (activity is TestRunCompletedActivityEvent)
+            {
+                _ = Completed.TrySetResult();
+            }
+        }
+    }
+
+    [Fact]
     public async Task ProjectStatuses_AreInitializedAsPending_BeforeTestRun()
     {
         var state = new PistonState();
