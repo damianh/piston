@@ -1,3 +1,6 @@
+// Copyright (c) Damian Hickey. All rights reserved.
+// See LICENSE in the project root for license information.
+
 using System.Buffers.Binary;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
