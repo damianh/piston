@@ -55,6 +55,13 @@ public static class TestRunJson
             ["sourceAfter"] = Fingerprint(run.SourceAfter),
             ["sourceChangeObserved"] = run.SourceChangeObserved,
             ["context"] = Context(run.Context),
+            ["build"] = run.Build is null ? null : new JsonObject
+            {
+                ["status"] = run.Build.Status.ToString(),
+                ["errors"] = Strings(run.Build.Errors),
+                ["warnings"] = Strings(run.Build.Warnings),
+                ["durationMs"] = Math.Round(run.Build.Duration.TotalMilliseconds, 3),
+            },
             ["projects"] = new JsonArray(run.Projects
                 .Select(p => (JsonNode)new JsonObject
                 {

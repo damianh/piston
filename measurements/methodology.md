@@ -37,7 +37,7 @@ diagnostics. Concurrent batches use independent workspaces and an edit barrier;
 use concurrency 2 first, 4 only after capacity approval. Counterbalance condition
 order with a recorded random seed, match cache state, and keep batches as units
 of analysis. The runner executes one selected condition (`dotnet` or unit
-full-scope `piston`) or, with `--paired`, counterbalanced unit full-scope
+full-scope/compile-diagnostic `piston`) or, with `--paired`, counterbalanced unit
 dotnet/Piston batch pairs with a recorded seed and order plan (see the README).
 No paired campaign or pilot has been run; that still needs approval.
 
@@ -78,11 +78,34 @@ from the operator's daemons and other trials and cross-daemon scheduling is not
 measured. Paired statistics require identical source/edit hashes, identity
 sets, parallelism, full-scope oracles and isolated admission in every pair.
 Matched cache state is not enforced: build servers and OS/NuGet caches are
-shared across trials. PostgreSQL and Piston compile-diagnostic conditions remain
-blocked, and so do larger repositories, telemetry-overhead quantification and
+shared across trials. PostgreSQL remains blocked, as do larger repositories, telemetry-overhead quantification and
 any executed paired campaign.
+
+Compile-error trials use a separate oracle, never per-test result counts.
+The expected diagnostic is error CS0103 in the edited `Pricing/PriceRules.cs`
+at its one-based edit line (currently 15), derived independently from the fixture.
+Dotnet must exit nonzero, report that exact ID/file/line in its new command log,
+and produce no TRX. Piston must report a terminal, forced, unfiltered full-solution
+`BuildFailed` run for the returned run ID and exact solution path, with both
+`piston-source-v2` fingerprints matching the harness, `Current` freshness and
+no watcher-observed source change. Its own `build.status` must be `Failed`,
+its tests empty, and `build.errors` must carry the matching MSBuild diagnostic.
+Warning-only, missing/wrong locations or IDs, stale/mismatched generations and
+aggregate build output cannot satisfy this oracle. Repeated MSBuild summary
+lines and solution-relative locations are allowed; columns are not required.
+An additional error cannot replace the expected one. This does not broaden the
+definition of `isCurrentFullResult`, which remains a test-result claim. The
+compile oracle requires this field to be explicitly boolean `false`; a `true`,
+missing, null or non-boolean value is rejected as invalid build-failure evidence.
+Compile pair comparability requires identical expected ID/solution-relative
+file/line, source/edit/baseline identity hashes, nominal parallelism and isolated
+admission. One pair at concurrency 1 is correctness evidence only, with
+statistics withheld; campaigns, pilots and real-agent experiments still need
+separate approval.
+
 Do not change the engine to rescue a benchmark;
-provenance changes belong to the roadmap, not to individual trials. A static known-failure report is information assistance, not evidence
+generation-bound run-local build output is roadmap provenance support, not
+special diagnostic fabrication for individual trials. A static known-failure report is information assistance, not evidence
 of an implemented history backend.
 
 ## Schema version 1

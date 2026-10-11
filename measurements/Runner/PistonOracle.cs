@@ -7,6 +7,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 
 namespace Piston.Measurements;
 
@@ -67,9 +68,10 @@ public static class PistonSourceFingerprint
 }
 
 /// <summary>
-/// Full-scope oracle for a Piston <c>GetTestRun</c> (<c>piston.test-run/v1</c>) document. A run is accepted
-/// only if it is the requested run, completed, unfiltered full scope, current for the harness-computed
-/// source fingerprint, and reports exactly the expected unique test identities and statuses.
+/// Full-scope oracles for a Piston <c>GetTestRun</c> (<c>piston.test-run/v1</c>) document.
+/// Test results require completion and exactly the expected unique identities/statuses.
+/// Compile results require a forced build failure with the expected run-local diagnostic location.
+/// Both require the requested run, unfiltered full scope and the harness-computed source generation.
 /// Summary counts are never accepted as evidence.
 /// </summary>
 public static class PistonRunOracle
@@ -82,43 +84,7 @@ public static class PistonRunOracle
         string expectedSourceFingerprint, IReadOnlyDictionary<string, string> expected,
         string? expectedSolutionPath = null)
     {
-        JsonObject run;
-        try
-        {
-            run = JsonNode.Parse(runJson) as JsonObject ?? throw Reject("run document must be a JSON object");
-        }
-        catch (JsonException ex)
-        {
-            throw Reject("run document is not JSON: " + ex.Message);
-        }
-
-        Require(Text(run, "schema") == Schema, "unsupported schema " + Text(run, "schema"));
-        Require(!string.IsNullOrEmpty(expectedRunId), "expected run ID is missing");
-        Require(Text(run, "runId") == expectedRunId,
-            $"run ID {Text(run, "runId")} is not the requested run {expectedRunId}");
-        Require(Bool(run, "isTerminal"), "run has not finished");
-        Require(Text(run, "status") == "Completed",
-            $"run status is {Text(run, "status")} ({Text(run, "statusReason")})");
-        Require(Text(run, "scope") == "Full", $"run scope is {Text(run, "scope") ?? "unknown"}, not Full");
-        var context = run["context"] as JsonObject ?? throw Reject("run context is missing or not an object");
-        if (expectedSolutionPath is not null)
-            Require(Text(context, "solutionPath") == Path.GetFullPath(expectedSolutionPath),
-                "run solution path does not match the trial workspace");
-        Require(!Bool(run, "isFiltered") && context["effectiveFilter"] is null,
-            "run was filtered: " + context["effectiveFilter"]);
-        Require(Bool(run, "isFullScope"), "run is not full scope");
-        Require(Text(run, "freshness") == "Current",
-            $"run freshness is {Text(run, "freshness")} ({Text(run, "freshnessReason")})");
-        Require(!Bool(run, "sourceChangeObserved"), "a source change was observed during the run");
-        foreach (var key in new[] { "sourceBefore", "sourceAfter" })
-        {
-            var fingerprint = run[key] as JsonObject ?? throw Reject(key + " fingerprint is missing");
-            Require(Text(fingerprint, "algorithm") == PistonSourceFingerprint.Algorithm,
-                $"{key} uses unsupported algorithm {Text(fingerprint, "algorithm")}");
-            Require(Text(fingerprint, "value") == expectedSourceFingerprint,
-                $"{key} fingerprint {Text(fingerprint, "value")} does not match expected source {expectedSourceFingerprint}");
-        }
-        Require(run["duplicateTestIds"] is JsonArray { Count: 0 }, "run reported duplicate test identities");
+        var run = ValidateProvenance(runJson, expectedRunId, expectedSourceFingerprint, "Completed", expectedSolutionPath);
         Require(Bool(run, "isCurrentFullResult"), "Piston does not mark the run as a current full result");
 
         if (run["tests"] is not JsonArray tests)
@@ -151,6 +117,69 @@ public static class PistonRunOracle
         return observed;
     }
 
+    public static void ValidateCompileDiagnostic(string runJson, string expectedRunId,
+        string expectedSourceFingerprint, CompileDiagnostic expected, string expectedSolutionPath)
+    {
+        var run = ValidateProvenance(runJson, expectedRunId, expectedSourceFingerprint, "BuildFailed", expectedSolutionPath);
+        Require(run["isCurrentFullResult"] is JsonValue currentFullResult
+            && currentFullResult.TryGetValue<bool>(out var flag) && !flag,
+            "build failure must explicitly report isCurrentFullResult as false");
+        Require(Text(run, "trigger") == "Forced", "compile diagnostic is not from a forced run");
+        Require(run["context"]!["buildTargets"] is null, "compile diagnostic is not from a full solution build");
+        Require(run["tests"] is JsonArray { Count: 0 }, "build failure must not carry test results");
+        var build = run["build"] as JsonObject ?? throw Reject("run-local build output is missing");
+        Require(Text(build, "status") == "Failed", "run-local build did not fail");
+        var errors = build["errors"] as JsonArray ?? throw Reject("run-local build errors are missing");
+        var lines = errors.Select(error =>
+            error is JsonValue value && value.TryGetValue<string>(out var text)
+                ? text : throw Reject("build error must be a string")).ToArray();
+        Require(expected.Matches(string.Join("\n", lines), expectedSolutionPath),
+            $"expected error {expected.Id} at {expected.File}:{expected.Line} is absent");
+    }
+
+    private static JsonObject ValidateProvenance(string runJson, string expectedRunId,
+        string expectedSourceFingerprint, string status, string? expectedSolutionPath)
+    {
+        JsonObject run;
+        try
+        {
+            run = JsonNode.Parse(runJson) as JsonObject ?? throw Reject("run document must be a JSON object");
+        }
+        catch (JsonException ex)
+        {
+            throw Reject("run document is not JSON: " + ex.Message);
+        }
+
+        Require(Text(run, "schema") == Schema, "unsupported schema " + Text(run, "schema"));
+        Require(!string.IsNullOrEmpty(expectedRunId), "expected run ID is missing");
+        Require(Text(run, "runId") == expectedRunId,
+            $"run ID {Text(run, "runId")} is not the requested run {expectedRunId}");
+        Require(Bool(run, "isTerminal"), "run has not finished");
+        Require(Text(run, "status") == status,
+            $"run status is {Text(run, "status")} ({Text(run, "statusReason")})");
+        Require(Text(run, "scope") == "Full", $"run scope is {Text(run, "scope") ?? "unknown"}, not Full");
+        var context = run["context"] as JsonObject ?? throw Reject("run context is missing or not an object");
+        if (expectedSolutionPath is not null)
+            Require(Text(context, "solutionPath") == Path.GetFullPath(expectedSolutionPath),
+                "run solution path does not match the trial workspace");
+        Require(!Bool(run, "isFiltered") && context["effectiveFilter"] is null,
+            "run was filtered: " + context["effectiveFilter"]);
+        Require(Bool(run, "isFullScope"), "run is not full scope");
+        Require(Text(run, "freshness") == "Current",
+            $"run freshness is {Text(run, "freshness")} ({Text(run, "freshnessReason")})");
+        Require(!Bool(run, "sourceChangeObserved"), "a source change was observed during the run");
+        foreach (var key in new[] { "sourceBefore", "sourceAfter" })
+        {
+            var fingerprint = run[key] as JsonObject ?? throw Reject(key + " fingerprint is missing");
+            Require(Text(fingerprint, "algorithm") == PistonSourceFingerprint.Algorithm,
+                $"{key} uses unsupported algorithm {Text(fingerprint, "algorithm")}");
+            Require(Text(fingerprint, "value") == expectedSourceFingerprint,
+                $"{key} fingerprint {Text(fingerprint, "value")} does not match expected source {expectedSourceFingerprint}");
+        }
+        Require(run["duplicateTestIds"] is JsonArray { Count: 0 }, "run reported duplicate test identities");
+        return run;
+    }
+
     private static string? Text(JsonObject node, string name) =>
         node[name] is JsonValue value && value.TryGetValue<string>(out var text) ? text : null;
 
@@ -163,6 +192,24 @@ public static class PistonRunOracle
     }
 
     private static InvalidDataException Reject(string reason) => new("Piston run rejected: " + reason);
+}
+
+/// <summary>Expected compiler error at a solution-relative file and one-based source line.</summary>
+public sealed record CompileDiagnostic(string Id, string File, int Line)
+{
+    public bool Matches(string output, string solution)
+    {
+        var root = Path.GetDirectoryName(Path.GetFullPath(solution))!;
+        var expectedPath = Path.GetFullPath(Path.Combine(root, File));
+        foreach (Match match in Regex.Matches(output,
+                     @"(?m)^\s*(?<file>[^\r\n]+)\((?<line>[0-9]+),(?<column>[0-9]+)\):\s*error\s+(?<id>[A-Z]+[0-9]+)\s*:"))
+        {
+            if (match.Groups["id"].Value == Id && match.Groups["line"].Value == Line.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                && Path.GetFullPath(Path.Combine(root, match.Groups["file"].Value.Trim())) == expectedPath)
+                return true;
+        }
+        return false;
+    }
 }
 
 /// <summary>Minimal JSON-RPC client for Piston's stateless streamable-HTTP MCP endpoint.</summary>

@@ -274,7 +274,8 @@ public sealed class HarnessTests
             {
                 var directory = argv[Array.IndexOf(argv, "--results-directory") + 1];
                 if (label == "edited" && scenario.Diagnostic is not null)
-                    File.WriteAllText(System.IO.Path.Combine(artifacts, "edited.log"), "error CS0103");
+                    File.WriteAllText(System.IO.Path.Combine(artifacts, "edited.log"),
+                        $"{System.IO.Path.Combine(cwd, workload.Source)}(15,9): error CS0103: MissingSymbol");
                 else
                 {
                     var expected = Evidence.ExpectedResults(baseline, scenario.BaselineFailedSuffixes);

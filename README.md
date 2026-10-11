@@ -101,7 +101,7 @@ With `--mcp-port` (or `mcpPort` in `.piston.json`), the daemon exposes an HTTP M
 | Tool | Description |
 |---|---|
 | `run_tests` | Request a full build + test run; returns a textual summary plus a `Run:` line with the run ID, status, scope, freshness and source fingerprint. |
-| `get_test_run` | Read one run's provenance and per-test results as JSON (`piston.test-run/v1`): `runId` = an ID, `latest` (default) or `active`. |
+| `get_test_run` | Read one run's provenance, build diagnostics and per-test results as JSON (`piston.test-run/v1`): `runId` = an ID, `latest` (default) or `active`. |
 | `get_test_results` | Read current accumulated test results (may combine several runs; each suite shows its run ID). |
 | `set_test_filter` | Apply a test name filter. |
 | `clear_results` | Clear current test suites, last-run timestamp, coverage state, and persisted coverage in the current solution directory. A running test run may publish new results afterwards. |
@@ -127,11 +127,18 @@ Every run, including startup and file-change runs, gets a record in the
 - for runs that went through machine-wide admission, an `admission` object (see below);
 - the scope (`Full` or `Selective`), `isFiltered` and the effective filter;
 - the run context: solution, test projects, build targets, configuration, SDK, runtime and OS;
+- run-local `build` output (status, raw MSBuild errors/warnings including diagnostic IDs and locations, duration), or null if the build did not return;
 - per-project outcomes, duplicate test IDs, and every test's fully qualified name and status.
 
 The source fingerprint (`piston-source-v2`) is a SHA-256 over every file under the solution directory except `bin`, `obj`, `TestResults`, `.git`, `.vs`, `.idea`, `.piston` and `node_modules`. It also covers the nearest ancestor `global.json`, `Directory.Build.*`, `Directory.Packages.props` and `NuGet.config`. Paths and contents are length-prefixed (unsigned 64-bit big-endian byte lengths), so embedded NUL bytes cannot collide with file boundaries. Capture is attempted before and after every started run, including cancellation and faults; unavailable fingerprints are reported as `Unknown`. Queued requests cancelled before starting have no fingerprints. A run is `Stale` if the fingerprint changed or the file watcher saw a change during the run; a watcher change also cancels the run.
 
 `isCurrentFullResult` is true only for a `Completed`, unfiltered, `Full`-scope, `Current` run with no duplicate IDs. Selective or filtered runs never qualify, and a filter can turn even a forced run into a filtered one.
+
+A `BuildFailed` run can have `Current` build diagnostics but is never a current full
+**test** result. Its `build` is captured from that run, not the aggregate `LastBuild`,
+and is also available as `TestRunDto.Build` in protocol snapshots. Consumers must
+check the requested run ID, solution path, before/after source fingerprints and
+freshness before treating a diagnostic as evidence for their source generation.
 
 Limits:
 

@@ -16,9 +16,9 @@ public static class Program
         [--approve-campaign] [--approve-containers]
         Integration requires an approved immutable MEASUREMENT_POSTGRES_IMAGE
         and local unix:// DOCKER_HOST. Build the runner before measuring.
-        Piston requires a prebuilt daemon DLL; only unit per-test scenarios are supported.
+        Piston requires a prebuilt daemon DLL; unit per-test and compile-diagnostic scenarios are supported.
         --paired runs counterbalanced dotnet/piston batch pairs (one pair per repetition);
-        it is blocked for integration and compile-diagnostic scenarios.
+        it is blocked for integration scenarios.
         """;
 
     public static async Task<int> Main(string[] args)
@@ -101,8 +101,9 @@ public static class Program
             context["comparator"] = new
             {
                 status = options.Paired ? "unit-full-scope-paired" : "unit-full-scope-supported",
-                reason = "Piston trials use the generation-bound full-scope oracle; paired mode is unit full scope only. " +
-                    "PostgreSQL, compile diagnostics, larger repositories and telemetry-overhead quantification remain blocked"
+                reason = "Piston trials use generation-bound full-scope test or compile-diagnostic oracles; paired mode is unit only. " +
+                    "Compile diagnostics use run-local build errors and source provenance. " +
+                    "PostgreSQL, larger repositories and telemetry-overhead quantification remain blocked"
             };
             Evidence.WriteJson(Path.Combine(options.Output, "manifest.json"), context);
             var records = new List<Trial>();

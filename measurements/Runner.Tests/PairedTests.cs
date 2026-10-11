@@ -152,7 +152,7 @@ public sealed class PairedTests
         Withheld(rows => rows.First(row => row.Condition == "piston").PistonAdmissionIsolated = false,
             "admission was not isolated");
         Withheld(rows => rows.First(row => row.Condition == "piston").OracleKind = "piston-selective",
-            "oracle is not full test scope");
+            "oracle does not match");
         Withheld(rows => rows.RemoveAt(0), "1 of 2 trials attempted");
         Withheld(rows => rows[0].TimedOut = !(rows[0].Correct = false), "invalid: timeout");
         Withheld(_ => { }, "cancelled", cancelled: true);
@@ -189,7 +189,6 @@ public sealed class PairedTests
     [InlineData("--repetitions", "2")]
     [InlineData("--concurrency", "2")]
     [InlineData("--workload", "integration")]
-    [InlineData("--scenario", "compile-error")]
     [InlineData("--seed", "-1")]
     [InlineData("--condition", "piston")]
     [InlineData("--condition", "dotnet")]
@@ -213,6 +212,45 @@ public sealed class PairedTests
         var parsed = Options.Parse(["--output", output, "--paired", "--seed", "42"]);
         Assert.True(parsed.Paired);
         Assert.Equal(42, parsed.Seed);
+    }
+
+    [Fact]
+    public async Task SingleCompilePairRequiresMatchingDiagnosticAndWithholdsStatistics()
+    {
+        using var temp = new TemporaryDirectory();
+        var options = new Options("unit", "compile-error", temp.Path, Timeout: 30,
+            PistonDaemonDll: typeof(Program).Assembly.Location, Paired: true);
+        options.Validate(FixtureManifest.Load(Path.Combine(Root, "scenarios.json")));
+        var plan = Paired.Schedule(1, 42);
+        var records = await Paired.Run(options, plan, FakeBatches(new()), CancellationToken.None);
+        Assert.Equal(2, records.Count);
+        Assert.All(records, row =>
+        {
+            Assert.True(row.Correct, row.Error);
+            Assert.Null(row.ExpectedTests);
+            Assert.Null(row.ObservedTests);
+            Assert.Equal(new CompileDiagnostic("CS0103", "Pricing/PriceRules.cs", 15), row.ExpectedDiagnostic);
+        });
+        var analysis = Paired.Analyze(options, plan, records, 42, false);
+        Assert.Equal(1, analysis["complete_valid_comparable_pairs"]);
+        Assert.False((bool)analysis["statistics_eligible"]!);
+        Assert.Null(analysis["paired_changes"]);
+        records[0].ExpectedDiagnostic = records[0].ExpectedDiagnostic! with { Line = 16 };
+        Assert.Contains("Non-comparable: expected compile diagnostic differs",
+            Paired.PairProblems(plan[0], records, 1));
+    }
+
+    [Theory]
+    [InlineData("--repetitions", "2")]
+    [InlineData("--concurrency", "2")]
+    [InlineData("--concurrency", "4")]
+    public async Task CompilePairCannotBypassCampaignApproval(string option, string value)
+    {
+        using var temp = new TemporaryDirectory();
+        var output = Path.Combine(temp.Path, "output");
+        Assert.Equal(2, await Program.Main(["--output", output, "--paired", "--scenario", "compile-error",
+            "--piston-daemon-dll", typeof(Program).Assembly.Location, option, value]));
+        Assert.False(Directory.Exists(output));
     }
 
     [Fact]
@@ -298,6 +336,12 @@ public sealed class PairedTests
                 double timeout, Dictionary<string, string>? environment, CancellationToken cancellationToken)
             {
                 var tests = label == "edited" ? expected : baseline;
+                if (label == "edited" && scenario.Diagnostic is not null)
+                {
+                    File.WriteAllText(Path.Combine(artifacts, "edited.log"),
+                        $"{Path.Combine(cwd, workload.Source)}(15,9): error CS0103: MissingSymbol");
+                    return Task.FromResult(new CommandResult(argv, 1, 1, false, 1, 0, label + ".log", 0, 0));
+                }
                 if (label != "restore")
                     HarnessTests.WriteTrx(argv[Array.IndexOf(argv, "--results-directory") + 1], tests);
                 return Task.FromResult(new CommandResult(argv, 1,
@@ -312,7 +356,8 @@ public sealed class PairedTests
                         launches.Add(launch);
                         return new PistonTrialTests.FakePiston(launch.Solution,
                             Path.Combine(launch.Workspace, workload.Source), expected, baseline, null, false, false,
-                            fail: pairId == failPiston, false, launch.Parallelism, delayMs: 5);
+                            fail: pairId == failPiston, false, launch.Parallelism, delayMs: 5,
+                            diagnostic: scenario.Diagnostic);
                     }, pairId, position)));
         };
     }

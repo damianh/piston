@@ -320,10 +320,43 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         var run = await _orchestrator.RequestRunAsync();
 
         Assert.Equal(TestRunStatus.BuildFailed, run!.Status);
+        Assert.Equal(BuildStatus.Failed, run.Build!.Status);
+        Assert.Equal(["CS0001: boom"], run.Build.Errors);
+        Assert.Equal(ResultFreshness.Current, run.Freshness);
         Assert.Empty(run.Tests);
         Assert.False(run.IsCurrentFullResult);
         Assert.Same(run, terminal);
         Assert.Equal(SourceFingerprinter.Compute(_root), run.SourceAfter);
+    }
+
+    [Fact]
+    public async Task BuildDiagnosticsStayWithTheirRunAfterLaterBuilds()
+    {
+        await StartAndWaitForStartupRunAsync();
+        _build.Fail = true;
+        var failed = await _orchestrator.RequestRunAsync();
+        _build.Errors.Clear();
+        _build.Fail = false;
+        var succeeded = await _orchestrator.RequestRunAsync();
+
+        Assert.NotEqual(failed!.RunId, succeeded!.RunId);
+        Assert.Equal(BuildStatus.Succeeded, _state.LastBuild!.Status);
+        Assert.Empty(succeeded.Build!.Errors);
+        Assert.Equal(["CS0001: boom"], _state.FindRun(failed.RunId)!.Build!.Errors);
+    }
+
+    [Fact]
+    public async Task BuildFailureWithSourceMutationIsStale()
+    {
+        await StartAndWaitForStartupRunAsync();
+        _build.Fail = true;
+        _build.DuringBuild = () => File.WriteAllText(Path.Combine(_root, "Code.cs"), "class Changed { }");
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(TestRunStatus.BuildFailed, run!.Status);
+        Assert.Equal(ResultFreshness.Stale, run.Freshness);
+        Assert.NotEqual(run.SourceBefore, run.SourceAfter);
+        Assert.Equal(["CS0001: boom"], run.Build!.Errors);
     }
 }
 
@@ -348,13 +381,18 @@ internal sealed class ProvenanceImpactAnalyzer(IReadOnlyList<string> testProject
 internal sealed class ProvenanceBuildService : IBuildService
 {
     public bool Fail { get; set; }
+    public Action? DuringBuild { get; set; }
+    public List<string> Errors { get; } = ["CS0001: boom"];
 
     public Task<BuildResult> BuildAsync(string solutionPath, CancellationToken ct) => BuildAsync(solutionPath, null, ct);
 
-    public Task<BuildResult> BuildAsync(string solutionPath, IReadOnlyList<string>? projectPaths, CancellationToken ct) =>
-        Task.FromResult(Fail
-            ? new BuildResult(BuildStatus.Failed, ["CS0001: boom"], [], TimeSpan.FromMilliseconds(1))
+    public Task<BuildResult> BuildAsync(string solutionPath, IReadOnlyList<string>? projectPaths, CancellationToken ct)
+    {
+        DuringBuild?.Invoke();
+        return Task.FromResult(Fail
+            ? new BuildResult(BuildStatus.Failed, Errors, [], TimeSpan.FromMilliseconds(1))
             : new BuildResult(BuildStatus.Succeeded, [], [], TimeSpan.FromMilliseconds(1)));
+    }
 }
 
 internal sealed class ProvenanceTestRunner : ITestRunnerService
