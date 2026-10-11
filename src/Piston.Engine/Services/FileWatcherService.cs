@@ -8,14 +8,25 @@ namespace Piston.Engine.Services;
 public sealed class FileWatcherService : IFileWatcherService
 {
     private readonly TimeSpan _debounceInterval;
+    private readonly TimeProvider _timeProvider;
     private FileSystemWatcher? _watcher;
-    private Timer? _debounceTimer;
+    private ITimer? _debounceTimer;
+    private long _debounceGeneration;
     private readonly Dictionary<string, FileChangeEvent> _pendingEvents = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _lock = new();
 
     public event Action<FileChangeBatch>? FileChanged;
 
-    public FileWatcherService(TimeSpan? debounceInterval = null) => _debounceInterval = debounceInterval ?? TimeSpan.FromMilliseconds(300);
+    public FileWatcherService(TimeSpan? debounceInterval = null)
+        : this(debounceInterval ?? TimeSpan.FromMilliseconds(300), TimeProvider.System)
+    {
+    }
+
+    internal FileWatcherService(TimeSpan debounceInterval, TimeProvider timeProvider)
+    {
+        _debounceInterval = debounceInterval;
+        _timeProvider = timeProvider;
+    }
 
     public void Start(string solutionDirectory)
     {
@@ -47,6 +58,7 @@ public sealed class FileWatcherService : IFileWatcherService
 
         lock (_lock)
         {
+            _debounceGeneration++;
             _debounceTimer?.Dispose();
             _debounceTimer = null;
             _pendingEvents.Clear();
@@ -60,7 +72,7 @@ public sealed class FileWatcherService : IFileWatcherService
             return;
         }
 
-        ScheduleDebounce(new FileChangeEvent(e.FullPath, e.ChangeType, DateTimeOffset.UtcNow));
+        ScheduleDebounce(new FileChangeEvent(e.FullPath, e.ChangeType, _timeProvider.GetUtcNow()));
     }
 
     private void OnRenamed(object sender, RenamedEventArgs e)
@@ -70,7 +82,7 @@ public sealed class FileWatcherService : IFileWatcherService
             return;
         }
 
-        ScheduleDebounce(new FileChangeEvent(e.FullPath, e.ChangeType, DateTimeOffset.UtcNow));
+        ScheduleDebounce(new FileChangeEvent(e.FullPath, e.ChangeType, _timeProvider.GetUtcNow()));
     }
 
     private static bool IsExcluded(string fullPath)
@@ -82,14 +94,15 @@ public sealed class FileWatcherService : IFileWatcherService
             || normalized.Contains("/node_modules/");
     }
 
-    private void ScheduleDebounce(FileChangeEvent evt)
+    internal void ScheduleDebounce(FileChangeEvent evt)
     {
         lock (_lock)
         {
             // Deduplicate: same file path keeps the latest event
             _pendingEvents[evt.FilePath] = evt;
             _debounceTimer?.Dispose();
-            _debounceTimer = new Timer(FireDebounced, null, _debounceInterval, Timeout.InfiniteTimeSpan);
+            _debounceTimer = _timeProvider.CreateTimer(
+                FireDebounced, ++_debounceGeneration, _debounceInterval, Timeout.InfiniteTimeSpan);
         }
     }
 
@@ -98,6 +111,12 @@ public sealed class FileWatcherService : IFileWatcherService
         FileChangeBatch? batch;
         lock (_lock)
         {
+            // Disposing a timer does not cancel callbacks already queued on the thread pool.
+            if (state is not long generation || generation != _debounceGeneration)
+            {
+                return;
+            }
+
             if (_pendingEvents.Count == 0)
             {
                 _debounceTimer?.Dispose();
