@@ -27,7 +27,7 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
     public Task DisposeAsync()
     {
         _sut.Dispose();
-        try { Directory.Delete(_tempDir, recursive: true); } catch { /* ignore */ }
+        Directory.Delete(_tempDir, recursive: true);
         return Task.CompletedTask;
     }
 
@@ -58,7 +58,11 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
         Assert.False(_sut.HasCoverageData(freshFile));
         Assert.Empty(_sut.GetTestsCoveringFile(freshFile));
         Assert.Empty(_sut.GetTestsCoveringLines(staleFile, 1, 10));
-        using (var connection = new SqliteConnection($"Data Source={Path.Combine(_dbDir, ".piston", "piston.db")}"))
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = Path.Combine(_dbDir, ".piston", "piston.db"),
+            Pooling = false,
+        }.ToString()))
         {
             await connection.OpenAsync();
             using var command = connection.CreateCommand();
@@ -72,6 +76,23 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
         Assert.False(_sut.HasCoverageData(freshFile));
         await _sut.StoreCoverageAsync(_sut.CreateRunId(), MakeMap("Tests.New", freshFile, 5));
         Assert.Equal(["Tests.New"], _sut.GetTestsCoveringFile(freshFile));
+    }
+
+    [Fact]
+    public async Task Dispose_AfterClear_ReleasesDatabaseFileHandles()
+    {
+        await _sut.StoreCoverageAsync(_sut.CreateRunId(), MakeMap("Tests.Pass", "/repo/Code.cs", 1));
+        SqliteCoverageStore.Clear(_dbDir);
+        _sut.Dispose();
+
+        var dbPath = Path.Combine(_dbDir, ".piston", "piston.db");
+        using (var file = File.Open(dbPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Assert.True(file.Length > 0);
+        }
+
+        Directory.Delete(Path.Combine(_dbDir, ".piston"), recursive: true);
+        Assert.False(File.Exists(dbPath));
     }
 
     [Fact]
