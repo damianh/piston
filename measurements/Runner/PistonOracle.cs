@@ -121,6 +121,9 @@ public static class PistonRunOracle
         string expectedSourceFingerprint, CompileDiagnostic expected, string expectedSolutionPath)
     {
         var run = ValidateProvenance(runJson, expectedRunId, expectedSourceFingerprint, "BuildFailed", expectedSolutionPath);
+        Require(run["isCurrentFullResult"] is JsonValue currentFullResult
+            && currentFullResult.TryGetValue<bool>(out var flag) && !flag,
+            "build failure must explicitly report isCurrentFullResult as false");
         Require(Text(run, "trigger") == "Forced", "compile diagnostic is not from a forced run");
         Require(run["context"]!["buildTargets"] is null, "compile diagnostic is not from a full solution build");
         Require(run["tests"] is JsonArray { Count: 0 }, "build failure must not carry test results");

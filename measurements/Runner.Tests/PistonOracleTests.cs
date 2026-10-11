@@ -315,6 +315,10 @@ public sealed class PistonCompileOracleTests
     [InlineData("scope", "\"Selective\"")]
     [InlineData("isFiltered", "true")]
     [InlineData("isFullScope", "false")]
+    [InlineData("isCurrentFullResult", "true")]
+    [InlineData("isCurrentFullResult", "null")]
+    [InlineData("isCurrentFullResult", "\"false\"")]
+    [InlineData("isCurrentFullResult", "0")]
     [InlineData("freshness", "\"Stale\"")]
     [InlineData("freshness", "\"Unknown\"")]
     [InlineData("sourceChangeObserved", "true")]
@@ -338,6 +342,14 @@ public sealed class PistonCompileOracleTests
     {
         var run = ValidRun();
         run[key] = JsonNode.Parse(json);
+        Assert.Throws<InvalidDataException>(() => Validate(run));
+    }
+
+    [Fact]
+    public void RejectsMissingCurrentFullResultClaim()
+    {
+        var run = ValidRun();
+        run.Remove("isCurrentFullResult");
         Assert.Throws<InvalidDataException>(() => Validate(run));
     }
 

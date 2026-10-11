@@ -94,7 +94,9 @@ Warning-only, missing/wrong locations or IDs, stale/mismatched generations and
 aggregate build output cannot satisfy this oracle. Repeated MSBuild summary
 lines and solution-relative locations are allowed; columns are not required.
 An additional error cannot replace the expected one. This does not broaden the
-definition of `isCurrentFullResult`, which remains a test-result claim.
+definition of `isCurrentFullResult`, which remains a test-result claim. The
+compile oracle requires this field to be explicitly boolean `false`; a `true`,
+missing, null or non-boolean value is rejected as invalid build-failure evidence.
 Compile pair comparability requires identical expected ID/solution-relative
 file/line, source/edit/baseline identity hashes, nominal parallelism and isolated
 admission. One pair at concurrency 1 is correctness evidence only, with
