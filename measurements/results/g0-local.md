@@ -276,11 +276,14 @@ The separate container observer polls at 250 ms plus API latency with bounded
 three-second requests, adds unquantified overhead and can miss teardown peaks.
 Telemetry errors remain explicit and are not treated as zero resource usage.
 
-**Current-Piston comparator: blocked.** Existing MCP aggregate state does not
+**Current-Piston comparator: blocked at campaign time.** Existing MCP aggregate state does not
 prove generation-bound, fresh per-test full-scope results for the exact edited
 source. No adapter with that provenance was demonstrated, and the engine was not
 changed to make a benchmark work. Paired backend improvement, confidence
 intervals and G1 goals therefore remain uncomputed.
+Subsequent provenance work and the unit full-scope trial adapter remove that
+unit instrumentation blocker; they do not add comparator samples to this
+historical report or establish a paired campaign result.
 
 **Agent effort and blocked-wait metrics: null.** No real-agent sessions or
 consented transcripts were authorized. Test-command duration is not agent

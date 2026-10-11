@@ -1,5 +1,33 @@
 # Harness validation
 
+## Piston trial integration (2026-10-11)
+
+The executable harness now supports an opt-in `piston` condition for unit
+full-test-scope scenarios. Every accepted result passes `PistonRunOracle` with
+the returned forced run ID, independently computed edited fingerprint and the
+plain-dotnet baseline's full identity/status set. Integration and Piston compile
+diagnostics remain blocked; the runner still does not orchestrate paired campaigns.
+
+Focused tests cover all six supported scenario oracles, preparation state,
+source mutation, wrong run IDs/workspace paths, failed/cancelled/incomplete/build-failed runs,
+unfinished/filtered/selective/stale runs, missing/mismatched fingerprints,
+summary-only/incomplete/extra/status-mismatched results, timeout/MCP errors,
+cleanup invalidation, persisted invalid attempts and pre-output option guards.
+The opt-in `PistonTrialSmokeTests` exercises the real daemon/MCP path with
+409 identities and both new and existing failures. See [README.md](README.md)
+for commands and artifact/timing policy.
+
+Validation on Linux with .NET SDK 10.0.401: 123 harness self-test cases passed
+with the two daemon smokes skipped by default; both opt-in daemon smokes also
+passed when explicitly enabled. The trial smoke verified all 409 identities and
+three expected failures. A prebuilt CLI repair trial and a default-dotnet
+baseline smoke each passed their full-scope oracle. The root solution built
+without warnings/errors and its 321 tests passed. No engine code was changed.
+
+These are correctness checks only. No comparison campaign, performance claim,
+container execution or paid/real-agent experiment is part of this integration.
+Historical G0 observations below are unchanged.
+
 ## .NET harness replacement (2026-10-10)
 
 The measurement runner is now a .NET console application and has no Python
@@ -78,7 +106,9 @@ Executed on Linux with .NET SDK 10.0.401 and Python 3.14.7:
   passed after restoring initially missing assets. No engine test or source was
   modified, and this is not a backend comparator.
 
-Current-Piston A/B remains blocked by generation-bound full-scope provenance.
+At the time of this historical campaign, current-Piston A/B was blocked by
+generation-bound full-scope provenance. The unit adapter now exists, but no
+paired comparison campaign has been executed.
 Agent metrics remain null because no real-agent sessions/transcripts were
 authorized. Raw evidence remains gitignored. The report separates worker and
 batch distributions, setup, telemetry gaps, measured facts and recommendation.

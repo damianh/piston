@@ -85,11 +85,14 @@ public sealed class HarnessTests
         File.WriteAllText(System.IO.Path.Combine(source, "file.cs"), "original");
         var hash = Evidence.SourceHash(source);
         File.WriteAllText(System.IO.Path.Combine(source, "bin", "ignored"), "noise");
+        Directory.CreateDirectory(System.IO.Path.Combine(source, ".piston"));
+        File.WriteAllText(System.IO.Path.Combine(source, ".piston", "piston.db"), "generated state");
         Assert.Equal(hash, Evidence.SourceHash(source));
         var copy = System.IO.Path.Combine(temp.Path, "copy");
         Evidence.CopyFixture(source, copy);
         Assert.Equal(hash, Evidence.SourceHash(copy));
         Assert.False(Directory.Exists(System.IO.Path.Combine(copy, "bin")));
+        Assert.False(Directory.Exists(System.IO.Path.Combine(copy, ".piston")));
         File.WriteAllText(System.IO.Path.Combine(copy, "file.cs"), "changed");
         Assert.NotEqual(hash, Evidence.SourceHash(copy));
     }
