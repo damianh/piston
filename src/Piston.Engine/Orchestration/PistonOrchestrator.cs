@@ -315,7 +315,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             //   - If Tier 3 produced FQNs, build a dotnet-test filter expression
             //   - If the user also has a TestFilter, AND the two together
             var userFilter = _state.TestFilter;
-            string? effectiveFilter = BuildEffectiveFilter(impactResult, userFilter);
+            var effectiveFilter = BuildEffectiveFilter(impactResult, userFilter);
 
             run = run with
             {
@@ -489,7 +489,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             }
 
             // Generate a run ID before running tests (per plan: CreateRunId before ProcessCoverageAsync)
-            long runId = _coverageEnabled && _coverageStore is not null
+            var runId = _coverageEnabled && _coverageStore is not null
                 ? _coverageStore.CreateRunId()
                 : 0;
 
@@ -673,7 +673,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         var changeObserved = started && Interlocked.Read(ref _fileChangeGeneration) != changeGenerationAtStart;
         var after = computeAfter && solutionDir is not null ? SourceFingerprinter.TryCompute(solutionDir) : null;
 
-        (var freshness, string? freshnessReason) = (run.SourceBefore, after) switch
+        (var freshness, var freshnessReason) = (run.SourceBefore, after) switch
         {
             _ when !started => (ResultFreshness.Unknown, "Run did not start."),
             ({ } before, { } afterFp) when before != afterFp =>

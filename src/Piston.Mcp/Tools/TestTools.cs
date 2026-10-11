@@ -18,7 +18,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
     public async Task<string> RunTests(CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
-        string result = string.Empty;
+        var result = string.Empty;
         var succeeded = true;
         try
         {

@@ -34,7 +34,9 @@ public sealed class EngineClientService : IAsyncDisposable
 
     public IReadOnlyList<ActivityEvent> ActivityLog
     {
-        get { lock (_activityLog)
+        get
+        {
+            lock (_activityLog)
             {
                 return _activityLog.ToList();
             }
@@ -105,7 +107,7 @@ public sealed class EngineClientService : IAsyncDisposable
 
         while (!ct.IsCancellationRequested && ws.State == WebSocketState.Open)
         {
-            int totalBytes = 0;
+            var totalBytes = 0;
             WebSocketReceiveResult? result = null;
 
             do

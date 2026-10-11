@@ -31,7 +31,7 @@ public sealed class WebSocketClientSession(WebSocket webSocket, string sessionId
             while (!ct.IsCancellationRequested && webSocket.State == WebSocketState.Open)
             {
                 WebSocketReceiveResult result;
-                int totalBytes = 0;
+                var totalBytes = 0;
 
                 try
                 {
