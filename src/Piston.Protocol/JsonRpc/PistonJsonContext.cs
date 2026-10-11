@@ -1,3 +1,6 @@
+// Copyright (c) Damian Hickey. All rights reserved.
+// See LICENSE in the project root for license information.
+
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Nodes;

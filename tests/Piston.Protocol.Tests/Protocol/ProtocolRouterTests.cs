@@ -1,7 +1,10 @@
+// Copyright (c) Damian Hickey. All rights reserved.
+// See LICENSE in the project root for license information.
+
 using System.Text.Json.Nodes;
-using Piston.Hosting.Protocol;
 using Piston.Engine;
 using Piston.Engine.Models;
+using Piston.Hosting.Protocol;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;

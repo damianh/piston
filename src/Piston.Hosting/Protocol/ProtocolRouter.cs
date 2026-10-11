@@ -1,10 +1,13 @@
+// Copyright (c) Damian Hickey. All rights reserved.
+// See LICENSE in the project root for license information.
+
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text.Json.Nodes;
-using Piston.Hosting.Services;
 using Piston.Engine;
 using Piston.Engine.Models;
 using Piston.Hosting.Mapping;
+using Piston.Hosting.Services;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
