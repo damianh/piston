@@ -36,8 +36,10 @@ Include localized regression/repair, shared dependency change and compile-error
 diagnostics. Concurrent batches use independent workspaces and an edit barrier;
 use concurrency 2 first, 4 only after capacity approval. Counterbalance condition
 order with a recorded random seed, match cache state, and keep batches as units
-of analysis. The current runner executes one selected condition (`dotnet` or
-unit full-scope `piston`), not a randomized two-condition comparison.
+of analysis. The runner executes one selected condition (`dotnet` or unit
+full-scope `piston`) or, with `--paired`, counterbalanced unit full-scope
+dotnet/Piston batch pairs with a recorded seed and order plan (see the README).
+No paired campaign or pilot has been run; that still needs approval.
 
 The runner is a prebuilt .NET console application. Build it before the
 experiment, never inside a timed loop. Record its runtime and assembly hash;
@@ -68,10 +70,17 @@ status set, including repair and existing failures. Its isolated daemon startup
 full run is validated during setup. Watching remains enabled; watcher settling
 plus one forced full MCP request and run-bound response are included in edit
 latency. Selective watcher results never replace the forced full result.
-The adapter records project parallelism 1 and normal daemon execution policy;
-it does not establish matched cache/host allocation or authorize a comparison.
-PostgreSQL and Piston compile-diagnostic conditions remain blocked, as do
-counterbalanced paired campaigns and telemetry-overhead quantification.
+The single-condition adapter uses test-process parallelism 1. Paired mode sets
+Piston's parallelism to dotnet's nominal test-project concurrency. That match is
+nominal, not OS-enforced. Every daemon uses a private, initially empty
+machine-wide admission directory (default budget), so admission is isolated
+from the operator's daemons and other trials and cross-daemon scheduling is not
+measured. Paired statistics require identical source/edit hashes, identity
+sets, parallelism, full-scope oracles and isolated admission in every pair.
+Matched cache state is not enforced: build servers and OS/NuGet caches are
+shared across trials. PostgreSQL and Piston compile-diagnostic conditions remain
+blocked, and so do larger repositories, telemetry-overhead quantification and
+any executed paired campaign.
 Do not change the engine to rescue a benchmark;
 provenance changes belong to the roadmap, not to individual trials. A static known-failure report is information assistance, not evidence
 of an implemented history backend.

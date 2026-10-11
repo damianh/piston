@@ -1,5 +1,35 @@
 # Harness validation
 
+## Paired comparison support (2026-10-11)
+
+`--paired` adds counterbalanced unit full-scope dotnet/Piston pairs. It reuses both
+trial paths and `PistonRunOracle`. Each Piston daemon now uses a private
+machine-wide admission directory. Focused tests cover:
+
+- balanced, seed-deterministic schedules;
+- sequential planned order and cancellation;
+- pair/batch identity persistence;
+- consent and blocked-combination guards (campaign, PostgreSQL,
+  compile-error, `--condition`, `--seed`);
+- retained invalid attempts that withhold statistics;
+- non-comparable hashes, parallelism, oracle and admission;
+- incomplete, cancelled and out-of-plan pairs;
+- batch-mean reduction;
+- the exit code.
+
+Validation on Linux with .NET SDK 10.0.401:
+
+- 143 harness self-test cases passed, with the two daemon smokes skipped by
+  default; both opt-in daemon smokes passed when enabled.
+- The default single-condition dotnet regression CLI path passed its oracle.
+- One paired regression smoke used one pair at concurrency 1 with seed 42 and
+  ran piston first. Both trials passed their oracles. The pair was comparable:
+  two test assemblies, parallelism 2 for both conditions, and admission alone
+  against the default budget. Statistics were withheld (fewer than two pairs).
+
+No campaign or pilot was run, no timing from the smoke is a comparison result,
+and no G1 claim is made. No engine code was changed.
+
 ## Piston trial integration (2026-10-11)
 
 The executable harness now supports an opt-in `piston` condition for unit

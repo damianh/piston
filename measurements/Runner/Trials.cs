@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using System.Xml;
 
@@ -16,6 +17,8 @@ public sealed class Trial
     public string Condition { get; init; } = "dotnet";
     public string Workload { get; init; } = "";
     public string Scenario { get; init; } = "";
+    public string? PairId { get; init; }
+    public int? PairPosition { get; init; }
     public bool Correct { get; set; }
     public bool TimedOut { get; set; }
     public double? EditToCorrectResultMs { get; set; }
@@ -43,6 +46,12 @@ public sealed class Trial
     public CommandResult? Execution { get; set; }
     public PistonExecution? PistonExecution { get; set; }
     public string? PistonSourceFingerprint { get; set; }
+    public int? BaselineTestAssemblies { get; set; }
+    public int? TestProcessParallelism { get; set; }
+    public string? ParallelismPolicy { get; set; }
+    public string? PistonExecutionDirectory { get; set; }
+    public JsonNode? PistonAdmission { get; set; }
+    public bool? PistonAdmissionIsolated { get; set; }
     public Dictionary<string, string>? BaselineTests { get; set; }
     public Dictionary<string, string>? ExpectedTests { get; set; }
     public Dictionary<string, string>? ObservedTests { get; set; }
@@ -68,7 +77,7 @@ public static class Trials
     public static async Task<Trial> Run(string root, Options options, Workload workload, string batchId,
         int index, EditBarrier barrier, CancellationToken cancellationToken = default,
         ExecuteCommand? execute = null,
-        Func<string, string, string, string, IPistonTrial>? startPiston = null)
+        Func<PistonLaunch, IPistonTrial>? startPiston = null, string? pairId = null, int? pairPosition = null)
     {
         execute ??= Processes.Command;
         var scenario = workload.Scenarios[options.Scenario];
@@ -105,6 +114,8 @@ public static class Trials
             Workload = options.Workload,
             Scenario = options.Scenario,
             Condition = options.Condition,
+            PairId = pairId,
+            PairPosition = pairPosition,
             ArtifactDirectory = artifacts
         };
         ContainerApi? api = null;
@@ -149,6 +160,22 @@ public static class Trials
             Evidence.Oracle(Evidence.ExpectedResults(clean, scenario.BaselineFailedSuffixes),
                 baseline, record.BaselineSetup.ExitCode);
             record.BaselineTests = baseline;
+            // dotnet test runs up to one test host per test project, bounded by MSBuild's default node count.
+            record.BaselineTestAssemblies = Directory.GetFiles(baselineDirectory, "*.trx").Length;
+            var nominal = Math.Min(record.BaselineTestAssemblies.Value, Environment.ProcessorCount);
+            if (options.Condition == "piston")
+            {
+                record.TestProcessParallelism = options.Paired ? nominal : 1;
+                record.ParallelismPolicy = options.Paired
+                    ? "piston test-process pool matched to dotnet's nominal test-project concurrency min(test assemblies, logical CPUs)"
+                    : "piston test-process pool 1 (single-condition default)";
+            }
+            else
+            {
+                record.TestProcessParallelism = nominal;
+                record.ParallelismPolicy = "dotnet test default: MSBuild node count = logical CPUs; nominal concurrency " +
+                    "min(test assemblies, logical CPUs), not enforced by the harness";
+            }
             var original = File.ReadAllText(source);
             var edited = ReplaceUnique(original, scenario.Before, scenario.After);
             if (scenario.Repair)
@@ -174,9 +201,10 @@ public static class Trials
             var expected = Evidence.ExpectedResults(baseline, scenario.FailedSuffixes);
             if (options.Condition == "piston")
             {
-                piston = (startPiston ?? ((dll, cwd, target, directory) =>
-                    new PistonTrial(dll, cwd, target, directory)))(
-                    options.PistonDaemonDll!, workspace, solution, artifacts);
+                record.PistonExecutionDirectory = Path.Combine(artifacts, "piston-execution");
+                piston = (startPiston ?? (launch => new PistonTrial(launch)))(new PistonLaunch(
+                    options.PistonDaemonDll!, workspace, solution, artifacts,
+                    record.TestProcessParallelism!.Value, record.PistonExecutionDirectory));
                 using var setupTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 setupTimeout.CancelAfter(TimeSpan.FromSeconds(options.Timeout));
                 try
@@ -232,6 +260,8 @@ public static class Trials
                 record.ObservedTests = PistonRunOracle.Validate(record.PistonExecution!.RunJson,
                     record.PistonExecution.RunId, record.PistonSourceFingerprint!, expected, solution);
                 record.OracleKind = "piston-generation-bound-full-test-scope";
+                record.PistonAdmission = (JsonNode.Parse(record.PistonExecution.RunJson) as JsonObject)?["admission"]?.DeepClone();
+                record.PistonAdmissionIsolated = AdmissionIsolated(record.PistonAdmission, record.TestProcessParallelism!.Value);
             }
             else if (scenario.Diagnostic is not null)
             {
@@ -337,6 +367,16 @@ public static class Trials
             Evidence.WriteLines(Path.Combine(artifacts, "events.jsonl"), events);
         }
         return record;
+    }
+
+    /// <summary>True only when the run was admitted alone against the default budget with the launched reservation.</summary>
+    public static bool AdmissionIsolated(JsonNode? admission, int parallelism)
+    {
+        if (admission is not JsonObject value) return false;
+        string? Text(string key) => value[key] is JsonValue node && node.TryGetValue<string>(out var text) ? text : null;
+        int? Number(string key) => value[key] is JsonValue node && node.TryGetValue<int>(out var number) ? number : null;
+        return Text("state") == "Admitted" && Text("budgetSource") == "default" &&
+            Number("otherAdmittedRuns") == 0 && Number("queuedAhead") == 0 && Number("reservedCpuSlots") == parallelism;
     }
 
     public static string ReplaceUnique(string source, string before, string after)
