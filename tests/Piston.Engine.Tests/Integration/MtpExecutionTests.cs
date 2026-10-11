@@ -1,7 +1,6 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
-using System.Diagnostics;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
 using Xunit;
@@ -101,15 +100,18 @@ public sealed class MtpExecutionTests : IAsyncLifetime
     [Fact]
     public async Task RunAsync_ReturnsOnePassAndOneFail()
     {
-        if (!_available) return; // packages unavailable — skip gracefully
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
 
         var result = await MtpTestProcessRunner.RunAsync(
-            projectPath:      _testCsproj,
+            projectPath: _testCsproj,
             solutionDirectory: _root,
-            filter:           null,
-            collectCoverage:  false,
-            onProgress:       null,
-            ct:               CancellationToken.None);
+            filter: null,
+            collectCoverage: false,
+            onProgress: null,
+            ct: CancellationToken.None);
 
         Assert.NotNull(result);
         Assert.False(result.Crashed);
@@ -119,8 +121,8 @@ public sealed class MtpExecutionTests : IAsyncLifetime
         var passing = allTests.Where(t => t.Status == TestStatus.Passed).ToList();
         var failing = allTests.Where(t => t.Status == TestStatus.Failed).ToList();
 
-        Assert.Single(passing);
-        Assert.Single(failing);
+        _ = Assert.Single(passing);
+        _ = Assert.Single(failing);
 
         Assert.Contains(passing, t => t.FullyQualifiedName.Contains("PassingTest", StringComparison.Ordinal));
         Assert.Contains(failing, t => t.FullyQualifiedName.Contains("FailingTest", StringComparison.Ordinal));
@@ -129,15 +131,18 @@ public sealed class MtpExecutionTests : IAsyncLifetime
     [Fact]
     public async Task RunAsync_FailingTest_HasNonEmptyErrorMessage()
     {
-        if (!_available) return; // packages unavailable — skip gracefully
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
 
         var result = await MtpTestProcessRunner.RunAsync(
-            projectPath:      _testCsproj,
+            projectPath: _testCsproj,
             solutionDirectory: _root,
-            filter:           null,
-            collectCoverage:  false,
-            onProgress:       null,
-            ct:               CancellationToken.None);
+            filter: null,
+            collectCoverage: false,
+            onProgress: null,
+            ct: CancellationToken.None);
 
         var failing = result.Suites
             .SelectMany(s => s.Tests)
@@ -150,36 +155,44 @@ public sealed class MtpExecutionTests : IAsyncLifetime
     [Fact]
     public async Task RunAsync_AllTests_HaveNonNegativeDuration()
     {
-        if (!_available) return; // packages unavailable — skip gracefully
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
 
         var result = await MtpTestProcessRunner.RunAsync(
-            projectPath:      _testCsproj,
+            projectPath: _testCsproj,
             solutionDirectory: _root,
-            filter:           null,
-            collectCoverage:  false,
-            onProgress:       null,
-            ct:               CancellationToken.None);
+            filter: null,
+            collectCoverage: false,
+            onProgress: null,
+            ct: CancellationToken.None);
 
         var allTests = result.Suites.SelectMany(s => s.Tests).ToList();
         Assert.NotEmpty(allTests);
 
         foreach (var test in allTests)
+        {
             Assert.True(test.Duration >= TimeSpan.Zero,
                 $"Expected non-negative duration for {test.FullyQualifiedName}");
+        }
     }
 
     [Fact]
     public async Task RunAsync_WithFilter_RunsOnlyMatchingTest()
     {
-        if (!_available) return; // packages unavailable — skip gracefully
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
 
         var result = await MtpTestProcessRunner.RunAsync(
-            projectPath:      _testCsproj,
+            projectPath: _testCsproj,
             solutionDirectory: _root,
-            filter:           "PassingTest",
-            collectCoverage:  false,
-            onProgress:       null,
-            ct:               CancellationToken.None);
+            filter: "PassingTest",
+            collectCoverage: false,
+            onProgress: null,
+            ct: CancellationToken.None);
 
         var allTests = result.Suites.SelectMany(s => s.Tests).ToList();
 

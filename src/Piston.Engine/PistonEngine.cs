@@ -46,7 +46,7 @@ public sealed class PistonEngine : IEngine
 
         _state = new PistonState
         {
-            TestFilter      = options.TestFilter,
+            TestFilter = options.TestFilter,
             CoverageEnabled = options.CoverageEnabled,
         };
 
@@ -59,9 +59,9 @@ public sealed class PistonEngine : IEngine
         if (options.CoverageEnabled)
         {
             var coberturaParser = new CoberturaParser();
-            var coverageStore   = new SqliteCoverageStore();
-            _coverageStore      = coverageStore;
-            coverageProcessor   = new CoverageProcessor(coberturaParser);
+            var coverageStore = new SqliteCoverageStore();
+            _coverageStore = coverageStore;
+            coverageProcessor = new CoverageProcessor(coberturaParser);
         }
 
         var impactAnalyzer = new ImpactAnalyzer(
@@ -69,7 +69,7 @@ public sealed class PistonEngine : IEngine
             _coverageStore);
 
         var vsTestStrategy = new ProcessTestExecutionStrategy(trxParser);
-        var mtpStrategy    = new MtpTestExecutionStrategy(
+        var mtpStrategy = new MtpTestExecutionStrategy(
             projectPath => impactAnalyzer.GetMtpOutputPath(projectPath),
             solutionDir);
 
@@ -113,7 +113,11 @@ public sealed class PistonEngine : IEngine
                 RedirectStandardError = true,
                 UseShellExecute = false,
             });
-            if (process is null) return null;
+            if (process is null)
+            {
+                return null;
+            }
+
             var output = process.StandardOutput.ReadToEndAsync();
             if (!process.WaitForExit(10_000))
             {

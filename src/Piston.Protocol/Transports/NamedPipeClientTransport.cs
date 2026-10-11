@@ -17,7 +17,7 @@ public sealed class NamedPipeClientTransport : IProtocolTransport
 
     public NamedPipeClientTransport(string pipeName, string serverName = ".")
     {
-        _pipeName   = pipeName;
+        _pipeName = pipeName;
         _serverName = serverName;
     }
 
@@ -49,7 +49,10 @@ public sealed class NamedPipeClientTransport : IProtocolTransport
         EnsureConnected();
         var message = await MessageFramer.ReadMessageAsync(_pipe!, ct).ConfigureAwait(false);
         if (message is null)
+        {
             throw new IOException("Named pipe was closed by the remote end.");
+        }
+
         return message.Value;
     }
 
@@ -62,6 +65,8 @@ public sealed class NamedPipeClientTransport : IProtocolTransport
     private void EnsureConnected()
     {
         if (_pipe is null || !_pipe.IsConnected)
+        {
             throw new InvalidOperationException("Transport is not connected. Call ConnectAsync first.");
+        }
     }
 }

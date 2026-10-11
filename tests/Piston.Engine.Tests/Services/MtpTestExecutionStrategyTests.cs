@@ -37,7 +37,7 @@ public sealed class MtpTestExecutionStrategyTests
             p => { seenPath = p; return null; },
             Path.GetTempPath());
 
-        strategy.CanExecute("specific.csproj");
+        _ = strategy.CanExecute("specific.csproj");
 
         Assert.Equal("specific.csproj", seenPath);
     }
@@ -53,7 +53,7 @@ public sealed class MtpTestExecutionStrategyTests
         await cts.CancelAsync();
 
         var request = new ProjectTestRequest("my.csproj", null, false);
-        var result  = await strategy.ExecuteAsync(request, onProgress: null, cts.Token);
+        var result = await strategy.ExecuteAsync(request, onProgress: null, cts.Token);
 
         Assert.NotNull(result);
         Assert.Empty(result.Suites);
@@ -74,7 +74,7 @@ public sealed class MtpTestExecutionStrategyTests
         await cts.CancelAsync();
 
         var request = new ProjectTestRequest("my.csproj", null, false);
-        var result  = await strategy.ExecuteAsync(request, onProgress: null, cts.Token);
+        var result = await strategy.ExecuteAsync(request, onProgress: null, cts.Token);
 
         Assert.NotNull(result);
         Assert.Empty(result.Suites);

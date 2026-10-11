@@ -1,8 +1,6 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
-using System.Runtime.InteropServices;
-
 namespace Piston.Desktop;
 
 /// <summary>
@@ -22,26 +20,41 @@ public static class AutostartManager
             ?? throw new InvalidOperationException("Cannot determine the executable path.");
 
         if (OperatingSystem.IsWindows())
+        {
             SetWindows(enabled, exePath);
+        }
         else if (OperatingSystem.IsMacOS())
+        {
             SetMacOs(enabled, exePath);
+        }
         else if (OperatingSystem.IsLinux())
+        {
             SetLinux(enabled, exePath);
+        }
         else
+        {
             throw new PlatformNotSupportedException();
+        }
     }
 
     private static void SetWindows(bool enabled, string exePath)
     {
-        if (!OperatingSystem.IsWindows()) return;
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
 
         using var key = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(
             @"Software\Microsoft\Windows\CurrentVersion\Run", writable: true);
 
         if (enabled)
+        {
             key.SetValue(AppName, $"\"{exePath}\"");
+        }
         else
+        {
             key.DeleteValue(AppName, throwOnMissingValue: false);
+        }
     }
 
     private static void SetMacOs(bool enabled, string exePath)
@@ -52,11 +65,15 @@ public static class AutostartManager
 
         if (!enabled)
         {
-            if (File.Exists(plistPath)) File.Delete(plistPath);
+            if (File.Exists(plistPath))
+            {
+                File.Delete(plistPath);
+            }
+
             return;
         }
 
-        Directory.CreateDirectory(agentsDir);
+        _ = Directory.CreateDirectory(agentsDir);
         File.WriteAllText(plistPath, $"""
             <?xml version="1.0" encoding="UTF-8"?>
             <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -79,18 +96,24 @@ public static class AutostartManager
     {
         var configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
         if (string.IsNullOrEmpty(configHome))
+        {
             configHome = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config");
+        }
 
         var autostartDir = Path.Combine(configHome, "autostart");
         var desktopPath = Path.Combine(autostartDir, "piston.desktop");
 
         if (!enabled)
         {
-            if (File.Exists(desktopPath)) File.Delete(desktopPath);
+            if (File.Exists(desktopPath))
+            {
+                File.Delete(desktopPath);
+            }
+
             return;
         }
 
-        Directory.CreateDirectory(autostartDir);
+        _ = Directory.CreateDirectory(autostartDir);
         File.WriteAllText(desktopPath, $"""
             [Desktop Entry]
             Type=Application

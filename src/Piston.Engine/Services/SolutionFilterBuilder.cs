@@ -29,11 +29,15 @@ internal static class SolutionFilterBuilder
         {
             var fullPath = Path.GetFullPath(solutionPath);
             if (!File.Exists(fullPath))
+            {
                 return null;
+            }
 
             var ext = Path.GetExtension(fullPath);
             if (ext.Equals(".slnf", StringComparison.OrdinalIgnoreCase))
+            {
                 return ReadFilter(fullPath);
+            }
 
             var dir = Path.GetDirectoryName(fullPath)!;
             IEnumerable<string> relative;
@@ -82,7 +86,10 @@ internal static class SolutionFilterBuilder
             writer.WriteString("path", underlyingSolutionPath);
             writer.WriteStartArray("projects");
             foreach (var project in projects)
+            {
                 writer.WriteStringValue(Path.GetRelativePath(solutionDir, project));
+            }
+
             writer.WriteEndArray();
             writer.WriteEndObject();
             writer.WriteEndObject();
@@ -98,7 +105,9 @@ internal static class SolutionFilterBuilder
         var slnRelative = NormalizeSeparators(solution.GetProperty("path").GetString()!);
         var slnPath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(filterPath)!, slnRelative));
         if (!File.Exists(slnPath))
+        {
             return null;
+        }
 
         var relative = solution.TryGetProperty("projects", out var projects)
             ? projects.EnumerateArray().Select(p => p.GetString()).OfType<string>()

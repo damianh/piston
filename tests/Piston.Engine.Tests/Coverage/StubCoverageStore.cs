@@ -15,7 +15,7 @@ internal sealed class StubCoverageStore : ICoverageStore
     public List<string> MarkedStaleFiles { get; } = [];
 
     // Pre-configured query responses
-    public Dictionary<string, List<string>> TestsCoveringFile  { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, List<string>> TestsCoveringFile { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, List<string>> TestsCoveringLines { get; } = new(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> FilesWithCoverage { get; } = new(StringComparer.OrdinalIgnoreCase);
 

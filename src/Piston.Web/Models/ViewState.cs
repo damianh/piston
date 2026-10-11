@@ -9,10 +9,10 @@ namespace Piston.Web.Models;
 public sealed class ViewState
 {
     // ── Status filter toggles ──
-    public bool ShowPassed  { get; set; } = true;
-    public bool ShowFailed  { get; set; } = true;
+    public bool ShowPassed { get; set; } = true;
+    public bool ShowFailed { get; set; } = true;
     public bool ShowSkipped { get; set; } = true;
-    public bool ShowNotRun  { get; set; } = true;
+    public bool ShowNotRun { get; set; } = true;
 
     // ── Grouping mode ──
     public GroupingMode Grouping { get; set; } = GroupingMode.ProjectNamespaceClass;

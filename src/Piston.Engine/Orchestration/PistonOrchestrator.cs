@@ -69,15 +69,15 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         bool coverageEnabled,
         IActivityEventSink activitySink)
     {
-        _fileWatcher       = fileWatcher;
-        _buildService      = buildService;
-        _testRunner        = testRunner;
-        _impactAnalyzer    = impactAnalyzer;
-        _state             = state;
-        _coverageStore     = coverageStore;
+        _fileWatcher = fileWatcher;
+        _buildService = buildService;
+        _testRunner = testRunner;
+        _impactAnalyzer = impactAnalyzer;
+        _state = state;
+        _coverageStore = coverageStore;
         _coverageProcessor = coverageProcessor;
-        _coverageEnabled   = coverageEnabled;
-        _activitySink      = activitySink;
+        _coverageEnabled = coverageEnabled;
+        _activitySink = activitySink;
 
         _fileWatcher.FileChanged += OnFileChanged;
     }
@@ -136,7 +136,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     /// </summary>
     public async Task<TestRunRecord?> RequestRunAsync()
     {
-        if (_solutionPath is null) return null;
+        if (_solutionPath is null)
+        {
+            return null;
+        }
+
         return await TriggerRunAsync(_solutionPath, null, TestRunTrigger.Forced).ConfigureAwait(false);
     }
 
@@ -153,7 +157,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         }
         finally
         {
-            _coverageLock.Release();
+            _ = _coverageLock.Release();
         }
         _state.NotifyChanged();
     }
@@ -174,7 +178,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         }
         finally
         {
-            _coverageLock.Release();
+            _ = _coverageLock.Release();
         }
     }
 
@@ -189,8 +193,12 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
     private void OnFileChanged(FileChangeBatch batch)
     {
-        if (_solutionPath is null) return;
-        Interlocked.Increment(ref _fileChangeGeneration);
+        if (_solutionPath is null)
+        {
+            return;
+        }
+
+        _ = Interlocked.Increment(ref _fileChangeGeneration);
         _state.LastFileChangeTime = batch.Timestamp;
         _state.LastChangedFiles = batch.Changes.Select(e => e.FilePath).ToList();
         _activitySink.Emit(ActivityEventFactory.FileChangesDetected(
@@ -283,9 +291,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                 $"affectedProjects={impactResult.AffectedProjectPaths.Count} | " +
                 $"affectedTestProjects={impactResult.AffectedTestProjectPaths.Count}");
             foreach (var tp in impactResult.AffectedTestProjectPaths)
+            {
                 log?.Write("Orchestrator", $"  TestProject: {Path.GetFileName(tp)}");
+            }
 
-            IReadOnlyList<string>? buildTargets = impactResult.IsFullRun ? null : impactResult.BuildTargetPaths;
+            var buildTargets = impactResult.IsFullRun ? null : impactResult.BuildTargetPaths;
 
             // When the graph is available, always enumerate individual test projects
             // so the composite strategy can route MTP projects to the MTP runner.
@@ -305,7 +315,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             //   - If Tier 3 produced FQNs, build a dotnet-test filter expression
             //   - If the user also has a TestFilter, AND the two together
             var userFilter = _state.TestFilter;
-            string? effectiveFilter = BuildEffectiveFilter(impactResult, userFilter);
+            var effectiveFilter = BuildEffectiveFilter(impactResult, userFilter);
 
             run = run with
             {
@@ -425,7 +435,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             // Run-local project outcomes (independent of the UI-facing ProjectStatuses).
             var projectOutcomes = new Dictionary<string, TestRunProjectOutcome>(StringComparer.Ordinal);
             foreach (var project in testTargets ?? [])
+            {
                 projectOutcomes[project] = new TestRunProjectOutcome(project, Models.ProjectRunStatus.Pending, 0);
+            }
 
             _state.NotifyChanged();
 
@@ -457,7 +469,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                             : Models.ProjectRunStatus.Completed;
 
                     if (_state.ProjectStatuses is Dictionary<string, Models.ProjectRunStatus> mutableStatuses)
+                    {
                         mutableStatuses[result.ProjectPath] = projectStatus;
+                    }
 
                     projectOutcomes[result.ProjectPath] = new TestRunProjectOutcome(
                         result.ProjectPath, projectStatus, result.Suites.Sum(s => s.Tests.Count));
@@ -475,7 +489,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             }
 
             // Generate a run ID before running tests (per plan: CreateRunId before ProcessCoverageAsync)
-            long runId = _coverageEnabled && _coverageStore is not null
+            var runId = _coverageEnabled && _coverageStore is not null
                 ? _coverageStore.CreateRunId()
                 : 0;
 
@@ -492,9 +506,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                     OnProgress,
                     OnProjectCompleted,
                     ct).ConfigureAwait(false);
-                newSuites            = result.Suites.Select(s => s with { RunId = run.RunId }).ToList();
-                coverageReportPaths  = result.CoverageReportPaths;
-                runnerError          = result.RunnerError;
+                newSuites = result.Suites.Select(s => s with { RunId = run.RunId }).ToList();
+                coverageReportPaths = result.CoverageReportPaths;
+                runnerError = result.RunnerError;
                 _state.LastTestRunnerError = result.RunnerError;
 
                 var totalTests = newSuites.SelectMany(s => s.Tests).Count();
@@ -569,7 +583,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
             List<TestRunProjectOutcome> outcomes;
             lock (liveResultsLock)
+            {
                 outcomes = projectOutcomes.Values.ToList();
+            }
 
             var duplicates = newSuites
                 .SelectMany(s => s.Tests)
@@ -610,12 +626,12 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         }
         catch (Exception ex)
         {
-            Finish(TestRunStatus.Faulted, $"{ex.GetType().Name}: {ex.Message}");
+            _ = Finish(TestRunStatus.Faulted, $"{ex.GetType().Name}: {ex.Message}");
             throw;
         }
         finally
         {
-            _runLock.Release();
+            _ = _runLock.Release();
         }
     }
 
@@ -633,7 +649,10 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     private void PublishActiveRun(TestRunRecord run)
     {
         lock (_runRecordsLock)
+        {
             _state.CurrentRun = run;
+        }
+
         _state.NotifyChanged();
     }
 
@@ -654,7 +673,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         var changeObserved = started && Interlocked.Read(ref _fileChangeGeneration) != changeGenerationAtStart;
         var after = computeAfter && solutionDir is not null ? SourceFingerprinter.TryCompute(solutionDir) : null;
 
-        (ResultFreshness freshness, string? freshnessReason) = (run.SourceBefore, after) switch
+        (var freshness, var freshnessReason) = (run.SourceBefore, after) switch
         {
             _ when !started => (ResultFreshness.Unknown, "Run did not start."),
             ({ } before, { } afterFp) when before != afterFp =>
@@ -681,9 +700,15 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         lock (_runRecordsLock)
         {
             if (_state.CurrentRun?.RunId == finished.RunId)
+            {
                 _state.CurrentRun = null;
+            }
+
             if (_state.LastRun is null || _state.LastRun.Sequence < finished.Sequence)
+            {
                 _state.LastRun = finished;
+            }
+
             var recent = new List<TestRunRecord>(_state.RecentRuns.Count + 1) { finished };
             recent.AddRange(_state.RecentRuns.Take(PistonState.MaxRecentRuns - 1));
             _state.RecentRuns = recent;
@@ -708,9 +733,14 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             .ToList();
 
         if (solutionTarget && suites.Count == 0 && !filtered)
+        {
             problems.Add("solution-level run produced no test results");
+        }
+
         if (runnerError is not null && problems.Count == 0)
+        {
             problems.Add("runner reported an error");
+        }
 
         return problems.Count == 0 ? null : string.Join("; ", problems);
     }
@@ -726,9 +756,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     private void EmitTestRunCompleted(string solutionPath, IReadOnlyList<TestSuite> suites, TimeSpan duration)
     {
         var allTests = suites.SelectMany(s => s.Tests).ToList();
-        var passed   = allTests.Count(t => t.Status == TestStatus.Passed);
-        var failed   = allTests.Count(t => t.Status == TestStatus.Failed);
-        var skipped  = allTests.Count(t => t.Status == TestStatus.Skipped);
+        var passed = allTests.Count(t => t.Status == TestStatus.Passed);
+        var failed = allTests.Count(t => t.Status == TestStatus.Failed);
+        var skipped = allTests.Count(t => t.Status == TestStatus.Skipped);
 
         var failures = allTests
             .Where(t => t.Status == TestStatus.Failed)
@@ -758,10 +788,14 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         }
 
         if (tier3Filter is null)
+        {
             return userFilter;
+        }
 
         if (string.IsNullOrWhiteSpace(userFilter))
+        {
             return tier3Filter;
+        }
 
         return $"({tier3Filter})&({userFilter})";
     }
@@ -785,7 +819,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     private void ScheduleGraphRebuildIfNeeded(ImpactAnalysisResult impactResult)
     {
         if (impactResult.RequiresGraphRebuild)
+        {
             _impactAnalyzer.InvalidateGraph();
+        }
     }
 
     /// <summary>
@@ -793,16 +829,14 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     /// Matches by suite name suffix against project directory/name heuristic.
     /// Falls back to including all suites when uncertain.
     /// </summary>
-    private static bool IsSuiteAffected(TestSuite suite, IReadOnlyList<string> testProjectPaths)
-    {
+    private static bool IsSuiteAffected(TestSuite suite, IReadOnlyList<string> testProjectPaths) =>
         // If we have test project paths, check if the suite's source matches any
-        return testProjectPaths.Any(p =>
+        testProjectPaths.Any(p =>
         {
             var projectDir = Path.GetDirectoryName(p);
             return projectDir is not null &&
                 suite.Name.Contains(Path.GetFileNameWithoutExtension(p), StringComparison.OrdinalIgnoreCase);
         });
-    }
 
     /// <summary>
     /// Merges new suite results from a selective run into the existing full suite list.
@@ -814,8 +848,15 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         IReadOnlyList<TestSuite> existing,
         IReadOnlyList<TestSuite> newResults)
     {
-        if (newResults.Count == 0) return existing;
-        if (existing.Count == 0) return newResults;
+        if (newResults.Count == 0)
+        {
+            return existing;
+        }
+
+        if (existing.Count == 0)
+        {
+            return newResults;
+        }
 
         var rerun = newResults
             .SelectMany(s => s.Tests)
@@ -835,9 +876,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     /// Returns a copy of <paramref name="suites"/> with every test status set to Running.
     /// Used to seed the live overlay at the start of a test phase.
     /// </summary>
-    private static IReadOnlyList<TestSuite> SeedAsRunning(IEnumerable<TestSuite> suites)
-    {
-        return suites
+    private static IReadOnlyList<TestSuite> SeedAsRunning(IEnumerable<TestSuite> suites) => suites
             .Select(s => s with
             {
                 Tests = s.Tests
@@ -845,7 +884,6 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                     .ToList()
             })
             .ToList();
-    }
 
     /// <summary>
     /// Merges live stdout progress into the last known suite results.
@@ -858,13 +896,18 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     {
         var lastSuiteList = lastSuites as IReadOnlyList<TestSuite> ?? lastSuites.ToList();
 
-        if (liveSuites.Count == 0) return SeedAsRunning(lastSuiteList);
+        if (liveSuites.Count == 0)
+        {
+            return SeedAsRunning(lastSuiteList);
+        }
 
         // Build a lookup from the flat live list
         // Duplicate identities are tolerated here (last wins) and reported on the run record.
         var liveByFqn = new Dictionary<string, TestStatus>(StringComparer.Ordinal);
         foreach (var test in liveSuites.SelectMany(s => s.Tests))
+        {
             liveByFqn[test.FullyQualifiedName] = test.Status;
+        }
 
         if (!lastSuiteList.Any())
         {

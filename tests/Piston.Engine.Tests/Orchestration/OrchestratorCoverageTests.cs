@@ -42,7 +42,7 @@ public sealed class OrchestratorCoverageTests
             }
             finally
             {
-                processor.Release.TrySetResult();
+                _ = processor.Release.TrySetResult();
                 await Task.WhenAll(processing, clearing).WaitAsync(TimeSpan.FromSeconds(5));
             }
 
@@ -73,7 +73,7 @@ public sealed class OrchestratorCoverageTests
                 {
                     [testFqns[0]] = [new(file, 1, 1)],
                 });
-            Committed.TrySetResult();
+            _ = Committed.TrySetResult();
             await Release.Task;
         }
     }

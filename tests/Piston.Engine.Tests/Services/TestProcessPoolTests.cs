@@ -15,13 +15,10 @@ public sealed class TestProcessPoolTests
     /// </summary>
     private static TestProcessPool CreatePool(
         int poolSize,
-        Func<ProjectTestRequest, CancellationToken, Task<ProjectTestResult>> workFunc)
-    {
-        return new TestProcessPool(
+        Func<ProjectTestRequest, CancellationToken, Task<ProjectTestResult>> workFunc) => new TestProcessPool(
             poolSize,
             recycleAfter: 50,
             runDelegate: (req, _, ct) => workFunc(req, ct));
-    }
 
     [Fact]
     public void PoolSize_ReturnsConfiguredSize()
@@ -93,7 +90,9 @@ public sealed class TestProcessPoolTests
             {
                 current = ++currentConcurrent;
                 if (current > maxConcurrent)
+                {
                     maxConcurrent = current;
+                }
             }
 
             await Task.Delay(50, ct); // hold the slot briefly
@@ -107,7 +106,7 @@ public sealed class TestProcessPoolTests
             .Select(i => new ProjectTestRequest($"proj{i}.csproj", null, false))
             .ToList();
 
-        await pool.RunProjectsAsync(requests, null, CancellationToken.None);
+        _ = await pool.RunProjectsAsync(requests, null, CancellationToken.None);
 
         Assert.True(maxConcurrent <= poolSize,
             $"Max concurrent ({maxConcurrent}) exceeded pool size ({poolSize}).");
@@ -129,7 +128,7 @@ public sealed class TestProcessPoolTests
             new ProjectTestRequest("c.csproj", null, false),
         }.ToList();
 
-        await pool.RunProjectsAsync(requests, r => completedPaths.Add(r.ProjectPath), CancellationToken.None);
+        _ = await pool.RunProjectsAsync(requests, r => completedPaths.Add(r.ProjectPath), CancellationToken.None);
 
         Assert.Equal(3, completedPaths.Count);
         Assert.Contains("a.csproj", completedPaths);
@@ -143,7 +142,9 @@ public sealed class TestProcessPoolTests
         using var pool = CreatePool(2, (req, ct) =>
         {
             if (req.ProjectPath == "crash.csproj")
+            {
                 throw new InvalidOperationException("project crash");
+            }
 
             return Task.FromResult(new ProjectTestResult(req.ProjectPath, [], null, [], false));
         });
@@ -174,7 +175,9 @@ public sealed class TestProcessPoolTests
         using var pool = CreatePool(4, (req, ct) =>
         {
             if (req.ProjectPath.StartsWith("crash", StringComparison.Ordinal))
+            {
                 throw new Exception("crash");
+            }
 
             return Task.FromResult(new ProjectTestResult(req.ProjectPath, [], null, [], false));
         });
@@ -202,7 +205,7 @@ public sealed class TestProcessPoolTests
             }
             return new ProjectTestResult(req.ProjectPath, [], null, [], false);
         });
-        using var _ = pool;
+        using var poolScope = pool;
 
         var requests = new[]
         {
@@ -210,7 +213,7 @@ public sealed class TestProcessPoolTests
             new ProjectTestRequest("fast.csproj", null, false),
         }.ToList();
 
-        await pool.RunProjectsAsync(requests, null, CancellationToken.None);
+        _ = await pool.RunProjectsAsync(requests, null, CancellationToken.None);
 
         // At least one was active when we checked
         Assert.True(activeCountDuringRun >= 1);

@@ -32,7 +32,7 @@ public sealed class SolutionFilterBuilderTests : IDisposable
 
         var result = SolutionFilterBuilder.ReadSolution(slnx);
 
-        Assert.NotNull(result);
+        _ = Assert.NotNull(result);
         Assert.Equal(slnx, result.Value.SolutionPath);
         Assert.Equal(2, result.Value.Projects.Count);
         Assert.Contains(P("src", "Lib", "Lib.csproj"), result.Value.Projects);
@@ -55,14 +55,14 @@ public sealed class SolutionFilterBuilderTests : IDisposable
 
         var result = SolutionFilterBuilder.ReadSolution(sln);
 
-        Assert.NotNull(result);
+        _ = Assert.NotNull(result);
         Assert.Equal([P("src", "Lib", "Lib.csproj")], result.Value.Projects);
     }
 
     [Fact]
     public void ReadSolution_Slnf_ResolvesUnderlyingSolutionAndFilteredProjects()
     {
-        Directory.CreateDirectory(P("sub"));
+        _ = Directory.CreateDirectory(P("sub"));
         var slnx = P("All.slnx");
         File.WriteAllText(slnx, """<Solution><Project Path="A/A.csproj" /><Project Path="B/B.csproj" /></Solution>""");
         var slnf = P("sub", "Only.slnf");
@@ -70,7 +70,7 @@ public sealed class SolutionFilterBuilderTests : IDisposable
 
         var result = SolutionFilterBuilder.ReadSolution(slnf);
 
-        Assert.NotNull(result);
+        _ = Assert.NotNull(result);
         Assert.Equal(slnx, result.Value.SolutionPath);
         Assert.Equal([P("A", "A.csproj")], result.Value.Projects);
     }
@@ -82,7 +82,9 @@ public sealed class SolutionFilterBuilderTests : IDisposable
     {
         var path = P(name);
         if (name.EndsWith(".csproj"))
+        {
             File.WriteAllText(path, "<Project />");
+        }
 
         Assert.Null(SolutionFilterBuilder.ReadSolution(path));
     }
@@ -99,7 +101,7 @@ public sealed class SolutionFilterBuilderTests : IDisposable
             Assert.False(filter.StartsWith(_root, StringComparison.OrdinalIgnoreCase));
 
             var result = SolutionFilterBuilder.ReadSolution(filter);
-            Assert.NotNull(result);
+            _ = Assert.NotNull(result);
             Assert.Equal(slnx, result.Value.SolutionPath);
             Assert.Equal([P("B", "B.csproj")], result.Value.Projects);
         }

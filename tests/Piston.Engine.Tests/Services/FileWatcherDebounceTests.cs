@@ -28,9 +28,9 @@ public sealed class FileWatcherDebounceTests
         time.Advance(TimeSpan.FromMilliseconds(89));
         Assert.Empty(fired);
         time.Advance(TimeSpan.FromMilliseconds(1));
-        Assert.Single(fired);
+        _ = Assert.Single(fired);
         time.Advance(debounce * 2);
-        Assert.Single(fired);
+        _ = Assert.Single(fired);
     }
 
     [Fact]
@@ -91,7 +91,10 @@ public sealed class FileWatcherDebounceTests
         var oldTimer = Assert.Single(time.Timers);
         time.Advance(TimeSpan.FromMilliseconds(90));
         if (stopBeforeNewEvent)
+        {
             sut.Stop();
+        }
+
         sut.ScheduleDebounce(new("New.cs", WatcherChangeTypes.Changed, time.GetUtcNow()));
 
         oldTimer.FireQueuedCallback();
@@ -103,7 +106,7 @@ public sealed class FileWatcherDebounceTests
         Assert.Equal(stopBeforeNewEvent ? ["New.cs"] : ["New.cs", "Old.cs"],
             batch.Changes.Select(c => c.FilePath).Order().ToArray());
         time.Advance(debounce);
-        Assert.Single(batches);
+        _ = Assert.Single(batches);
     }
 
     [Fact]
@@ -217,7 +220,7 @@ public sealed class FileWatcherDebounceTests
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
             var timer = new TestTimer(this, callback, state);
-            timer.Change(dueTime, period);
+            _ = timer.Change(dueTime, period);
             Timers.Add(timer);
             return timer;
         }
@@ -226,7 +229,9 @@ public sealed class FileWatcherDebounceTests
         {
             _elapsed += elapsed;
             foreach (var timer in Timers.Where(t => !t.IsDisposed && t.DueAt <= _elapsed).ToArray())
+            {
                 timer.FireQueuedCallback();
+            }
         }
 
         public sealed class TestTimer(TestTimeProvider time, TimerCallback callback, object? state) : ITimer

@@ -105,7 +105,11 @@ public sealed class TrxResultParser : ITestResultParser
 
     private static DateTimeOffset? ParseDateTimeOffset(string? value)
     {
-        if (string.IsNullOrEmpty(value)) return null;
+        if (string.IsNullOrEmpty(value))
+        {
+            return null;
+        }
+
         return DateTimeOffset.TryParse(value, out var dt) ? dt : null;
     }
 }

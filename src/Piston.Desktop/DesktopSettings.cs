@@ -51,7 +51,7 @@ public sealed class DesktopSettings
 
     public void Save()
     {
-        Directory.CreateDirectory(SettingsDirectory);
+        _ = Directory.CreateDirectory(SettingsDirectory);
         File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this, JsonOptions));
     }
 }

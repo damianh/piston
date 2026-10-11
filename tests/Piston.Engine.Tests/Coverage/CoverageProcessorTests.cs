@@ -10,10 +10,7 @@ public sealed class CoverageProcessorTests : IDisposable
 {
     private readonly string _tempDir;
 
-    public CoverageProcessorTests()
-    {
-        _tempDir = Directory.CreateTempSubdirectory("piston-coverage-proc-test-").FullName;
-    }
+    public CoverageProcessorTests() => _tempDir = Directory.CreateTempSubdirectory("piston-coverage-proc-test-").FullName;
 
     public void Dispose()
     {
@@ -58,16 +55,16 @@ public sealed class CoverageProcessorTests : IDisposable
     [Fact]
     public async Task ProcessCoverageAsync_SingleReport_StoresCorrectMappings()
     {
-        var store     = new StubCoverageStore();
+        var store = new StubCoverageStore();
         var processor = new CoverageProcessor(new CoberturaParser());
 
         var xmlPath = WriteCoberturaXml(SimpleXml("src/Lib/Code.cs", 5, 6, 7));
         var testFqns = new[] { "Lib.Tests.Test1", "Lib.Tests.Test2" };
-        var runId    = store.CreateRunId();
+        var runId = store.CreateRunId();
 
         await processor.ProcessCoverageAsync(runId, [xmlPath], testFqns, store);
 
-        Assert.Single(store.StoredCoverage);
+        _ = Assert.Single(store.StoredCoverage);
         var (storedRunId, map) = store.StoredCoverage[0];
         Assert.Equal(runId, storedRunId);
 
@@ -85,21 +82,21 @@ public sealed class CoverageProcessorTests : IDisposable
     [Fact]
     public async Task ProcessCoverageAsync_MultipleReports_UnionOfCoverage()
     {
-        var store     = new StubCoverageStore();
+        var store = new StubCoverageStore();
         var processor = new CoverageProcessor(new CoberturaParser());
 
         var xml1 = WriteCoberturaXml(SimpleXml("src/Lib/File1.cs", 1, 2));
         var xml2 = WriteCoberturaXml(SimpleXml("src/Lib/File2.cs", 10, 11));
         var testFqns = new[] { "Lib.Tests.Test1" };
-        var runId    = store.CreateRunId();
+        var runId = store.CreateRunId();
 
         await processor.ProcessCoverageAsync(runId, [xml1, xml2], testFqns, store);
 
-        Assert.Single(store.StoredCoverage);
+        _ = Assert.Single(store.StoredCoverage);
         var (_, map) = store.StoredCoverage[0];
 
         var entries = map["Lib.Tests.Test1"];
-        var files   = entries.Select(e => e.FilePath).Distinct().ToList();
+        var files = entries.Select(e => e.FilePath).Distinct().ToList();
 
         // Both files should appear
         Assert.Contains(files, f => f.EndsWith("File1.cs", StringComparison.OrdinalIgnoreCase));
@@ -109,9 +106,9 @@ public sealed class CoverageProcessorTests : IDisposable
     [Fact]
     public async Task ProcessCoverageAsync_EmptyXmlPaths_DoesNotStoreAnything()
     {
-        var store     = new StubCoverageStore();
+        var store = new StubCoverageStore();
         var processor = new CoverageProcessor(new CoberturaParser());
-        var runId     = store.CreateRunId();
+        var runId = store.CreateRunId();
 
         await processor.ProcessCoverageAsync(runId, [], ["Lib.Tests.Test1"], store);
 
@@ -121,11 +118,11 @@ public sealed class CoverageProcessorTests : IDisposable
     [Fact]
     public async Task ProcessCoverageAsync_EmptyTestFqns_DoesNotStoreAnything()
     {
-        var store     = new StubCoverageStore();
+        var store = new StubCoverageStore();
         var processor = new CoverageProcessor(new CoberturaParser());
 
         var xmlPath = WriteCoberturaXml(SimpleXml("src/Lib/Code.cs", 5));
-        var runId   = store.CreateRunId();
+        var runId = store.CreateRunId();
 
         await processor.ProcessCoverageAsync(runId, [xmlPath], [], store);
 
@@ -135,7 +132,7 @@ public sealed class CoverageProcessorTests : IDisposable
     [Fact]
     public async Task ProcessCoverageAsync_ZeroHitLines_ExcludedFromMapping()
     {
-        var store     = new StubCoverageStore();
+        var store = new StubCoverageStore();
         var processor = new CoverageProcessor(new CoberturaParser());
 
         var xmlPath = WriteCoberturaXml("""
@@ -170,17 +167,17 @@ public sealed class CoverageProcessorTests : IDisposable
     [Fact]
     public async Task ProcessCoverageAsync_MalformedXml_SkipsAndDoesNotThrow()
     {
-        var store     = new StubCoverageStore();
+        var store = new StubCoverageStore();
         var processor = new CoverageProcessor(new CoberturaParser());
 
-        var badXml  = WriteCoberturaXml("this is not xml");
+        var badXml = WriteCoberturaXml("this is not xml");
         var goodXml = WriteCoberturaXml(SimpleXml("src/Lib/Code.cs", 5));
-        var runId   = store.CreateRunId();
+        var runId = store.CreateRunId();
 
         // Should not throw; bad file is skipped, good file processed
         await processor.ProcessCoverageAsync(runId, [badXml, goodXml], ["Lib.Tests.Test1"], store);
 
         // Good file coverage is stored
-        Assert.Single(store.StoredCoverage);
+        _ = Assert.Single(store.StoredCoverage);
     }
 }

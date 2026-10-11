@@ -66,7 +66,7 @@ public sealed class MtpHostingSpikeTests
         await cts.CancelAsync();
 
         var request = new ProjectTestRequest("hypothetical-mtp-project.csproj", null, false);
-        var result  = await strategy.ExecuteAsync(request, onProgress: null, cts.Token);
+        var result = await strategy.ExecuteAsync(request, onProgress: null, cts.Token);
 
         Assert.NotNull(result);
         Assert.Empty(result.Suites);

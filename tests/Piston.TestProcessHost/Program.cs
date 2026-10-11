@@ -18,17 +18,25 @@ public static class Program
         // containing this host would kill the host before it returns its exit code.
         _job = OperatingSystem.IsWindows() ? CreateJob() : null;
         if (_job is null && setsid() == -1)
+        {
             throw new Win32Exception(Marshal.GetLastPInvokeError());
+        }
 
         var start = new ProcessStartInfo(args[0])
         {
             UseShellExecute = false,
         };
         if (args[1].Length > 0)
+        {
             start.Arguments = args[1];
+        }
         else
+        {
             foreach (var argument in args.Skip(2))
+            {
                 start.ArgumentList.Add(argument);
+            }
+        }
 
         using var child = Process.Start(start)
             ?? throw new InvalidOperationException("Could not start test child process.");
@@ -40,13 +48,19 @@ public static class Program
     {
         var job = CreateJobObjectW(IntPtr.Zero, null);
         if (job.IsInvalid)
+        {
             throw new Win32Exception(Marshal.GetLastPInvokeError());
+        }
+
         try
         {
             var limits = new JobLimits { Basic = new BasicLimits { Flags = 0x2000 } };
             if (!SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf<JobLimits>())
                 || !AssignProcessToJobObject(job, Process.GetCurrentProcess().Handle))
+            {
                 throw new Win32Exception(Marshal.GetLastPInvokeError());
+            }
+
             return job;
         }
         catch

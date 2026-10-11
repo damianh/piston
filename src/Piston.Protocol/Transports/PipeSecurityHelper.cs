@@ -23,7 +23,9 @@ internal static class PipeSecurityHelper
     public static PipeSecurity? CreateCurrentUserOnly()
     {
         if (!OperatingSystem.IsWindows())
+        {
             return null;
+        }
 
         return CreateCurrentUserOnlyWindows();
     }

@@ -34,7 +34,9 @@ public sealed class OrchestratorProgressTests
         state.StateChanged += () =>
         {
             if (state.ProjectStatuses.Count > 0)
+            {
                 statuses.Add(new Dictionary<string, ProjectRunStatus>(state.ProjectStatuses));
+            }
         };
 
         await orchestrator.StartAsync("/fake/solution.slnx");
@@ -64,7 +66,9 @@ public sealed class OrchestratorProgressTests
         state.StateChanged += () =>
         {
             if (state.Phase == PistonPhase.Testing)
+            {
                 completedCounts.Add(state.CompletedTestProjects);
+            }
         };
 
         await orchestrator.StartAsync("/fake/solution.slnx");
@@ -94,7 +98,9 @@ public sealed class OrchestratorProgressTests
         state.StateChanged += () =>
         {
             if (state.Phase == PistonPhase.Testing)
+            {
                 totalCounts.Add(state.TotalTestProjects);
+            }
         };
 
         await orchestrator.StartAsync("/fake/solution.slnx");
@@ -132,10 +138,7 @@ internal sealed class StubImpactAnalyzer : IImpactAnalyzer
 {
     private readonly IReadOnlyList<string> _testProjects;
 
-    public StubImpactAnalyzer(IReadOnlyList<string> testProjects)
-    {
-        _testProjects = testProjects;
-    }
+    public StubImpactAnalyzer(IReadOnlyList<string> testProjects) => _testProjects = testProjects;
 
     public Task InitializeAsync(string solutionPath, CancellationToken ct) => Task.CompletedTask;
 
@@ -196,7 +199,9 @@ internal sealed class StubTestRunnerService : ITestRunnerService
         foreach (var path in paths)
         {
             if (_delay > TimeSpan.Zero)
+            {
                 await Task.Delay(_delay, ct).ConfigureAwait(false);
+            }
 
             var suite = new TestSuite(
                 path,
@@ -210,7 +215,7 @@ internal sealed class StubTestRunnerService : ITestRunnerService
             onProjectCompleted?.Invoke(projectResult);
         }
 
-        _completionSource.TrySetResult();
+        _ = _completionSource.TrySetResult();
         return new TestRunResult(allSuites, null, []);
     }
 }

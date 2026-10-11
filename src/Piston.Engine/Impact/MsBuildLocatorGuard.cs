@@ -24,11 +24,19 @@ internal static class MsBuildLocatorGuard
     /// </summary>
     internal static void EnsureRegistered()
     {
-        if (_registered) return;
+        if (_registered)
+        {
+            return;
+        }
+
         lock (Lock)
         {
-            if (_registered) return;
-            MSBuildLocator.RegisterDefaults();
+            if (_registered)
+            {
+                return;
+            }
+
+            _ = MSBuildLocator.RegisterDefaults();
             _registered = true;
         }
     }

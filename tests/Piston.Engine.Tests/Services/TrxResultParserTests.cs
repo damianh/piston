@@ -19,7 +19,7 @@ public sealed class TrxResultParserTests
 
         var suites = sut.Parse(FixturePath("sample-mixed.trx"));
 
-        Assert.Single(suites);
+        _ = Assert.Single(suites);
     }
 
     [Fact]
@@ -30,9 +30,9 @@ public sealed class TrxResultParserTests
         var suite = sut.Parse(FixturePath("sample-mixed.trx"))[0];
 
         Assert.Equal(3, suite.Tests.Count);
-        Assert.Single(suite.Tests, t => t.Status == TestStatus.Passed);
-        Assert.Single(suite.Tests, t => t.Status == TestStatus.Failed);
-        Assert.Single(suite.Tests, t => t.Status == TestStatus.Skipped);
+        _ = Assert.Single(suite.Tests, t => t.Status == TestStatus.Passed);
+        _ = Assert.Single(suite.Tests, t => t.Status == TestStatus.Failed);
+        _ = Assert.Single(suite.Tests, t => t.Status == TestStatus.Skipped);
     }
 
     [Fact]

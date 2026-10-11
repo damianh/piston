@@ -68,7 +68,9 @@ public sealed class FileWatcherService : IFileWatcherService
     private void OnFileSystemEvent(object sender, FileSystemEventArgs e)
     {
         if (IsExcluded(e.FullPath))
+        {
             return;
+        }
 
         ScheduleDebounce(new FileChangeEvent(e.FullPath, e.ChangeType, _timeProvider.GetUtcNow()));
     }
@@ -76,7 +78,9 @@ public sealed class FileWatcherService : IFileWatcherService
     private void OnRenamed(object sender, RenamedEventArgs e)
     {
         if (IsExcluded(e.FullPath))
+        {
             return;
+        }
 
         ScheduleDebounce(new FileChangeEvent(e.FullPath, e.ChangeType, _timeProvider.GetUtcNow()));
     }
@@ -109,7 +113,9 @@ public sealed class FileWatcherService : IFileWatcherService
         {
             // Disposing a timer does not cancel callbacks already queued on the thread pool.
             if (state is not long generation || generation != _debounceGeneration)
+            {
                 return;
+            }
 
             if (_pendingEvents.Count == 0)
             {

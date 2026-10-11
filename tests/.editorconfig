@@ -1,0 +1,3 @@
+[*.cs]
+# xUnit test methods don't use the Async suffix.
+dotnet_naming_rule.async_methods_must_end_with_async.severity = none

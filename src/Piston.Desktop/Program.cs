@@ -51,14 +51,21 @@ public static class Program
         }
 
         if (solutionPath is not null)
+        {
             StartDaemonInBackground(solutionPath);
+        }
         else
-            _window.LoadRawString(PickerHtml);
+        {
+            _ = _window.LoadRawString(PickerHtml);
+        }
 
         _window.WaitForClose();
 
         if (OperatingSystem.IsWindows())
+        {
             _tray?.Dispose();
+        }
+
         StopDaemon();
         updates.ApplyPendingOnExit();
     }
@@ -68,10 +75,14 @@ public static class Program
     private static string? ResolveSolution(string[] args)
     {
         if (args.Length > 0 && File.Exists(args[0]) && IsSolutionFile(args[0]))
+        {
             return Path.GetFullPath(args[0]);
+        }
 
         if (_settings.LastSolutionPath is { } saved && File.Exists(saved))
+        {
             return saved;
+        }
 
         var cwd = Directory.GetCurrentDirectory();
         var candidates = Directory.GetFiles(cwd, "*.sln")
@@ -89,7 +100,7 @@ public static class Program
 
     private static void StartDaemonInBackground(string solutionPath)
     {
-        _window!.Load(new Uri("data:text/html," + Uri.EscapeDataString(LoadingHtml)));
+        _ = _window!.Load(new Uri("data:text/html," + Uri.EscapeDataString(LoadingHtml)));
 
         _ = Task.Run(async () =>
         {
@@ -98,16 +109,16 @@ public static class Program
                 var host = await StartDaemonAsync(solutionPath);
                 _settings.LastSolutionPath = solutionPath;
                 _settings.Save();
-                _window!.Invoke(() => _window.Load(new Uri(host.WebUrl)));
+                _ = _window!.Invoke(() => _window.Load(new Uri(host.WebUrl)));
             }
             catch (Exception ex)
             {
-                _window!.Invoke(() =>
+                _ = _window!.Invoke(() =>
                 {
-                    _window.ShowMessage("Piston",
+                    _ = _window.ShowMessage("Piston",
                         $"Failed to start Piston for:\n{solutionPath}\n\n{ex.Message}",
                         PhotinoDialogButtons.Ok, PhotinoDialogIcon.Error);
-                    _window.LoadRawString(PickerHtml);
+                    _ = _window.LoadRawString(PickerHtml);
                 });
             }
         });
@@ -123,15 +134,17 @@ public static class Program
 
         var webPort = _settings.WebPort > 0 ? _settings.WebPort : 5199;
         if (!IsPortFree(webPort))
+        {
             webPort = GetFreePort();
+        }
 
         var host = new DaemonHost(new DaemonHostOptions
         {
-            SolutionPath  = solutionPath,
+            SolutionPath = solutionPath,
             EngineOptions = engineOptions,
-            PipeName      = config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath),
-            WebPort       = webPort,
-            McpPort       = config.McpPort,
+            PipeName = config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath),
+            WebPort = webPort,
+            McpPort = config.McpPort,
         });
 
         await host.StartAsync(CancellationToken.None);
@@ -142,7 +155,11 @@ public static class Program
     private static void StopDaemon()
     {
         var host = Interlocked.Exchange(ref _host, null);
-        if (host is null) return;
+        if (host is null)
+        {
+            return;
+        }
+
         try
         {
             host.DisposeAsync().AsTask().GetAwaiter().GetResult();
@@ -199,22 +216,30 @@ public static class Program
 
     private static void ShowWindow()
     {
-        if (_window is null || !OperatingSystem.IsWindows()) return;
+        if (_window is null || !OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         var hwnd = _window.WindowHandle;
-        ShowWindowNative(hwnd, 9 /* SW_RESTORE */);
-        SetForegroundWindow(hwnd);
+        _ = ShowWindowNative(hwnd, 9 /* SW_RESTORE */);
+        _ = SetForegroundWindow(hwnd);
     }
 
     private static void HideWindow()
     {
-        if (_window is null || !OperatingSystem.IsWindows()) return;
-        ShowWindowNative(_window.WindowHandle, 0 /* SW_HIDE */);
+        if (_window is null || !OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        _ = ShowWindowNative(_window.WindowHandle, 0 /* SW_HIDE */);
     }
 
     private static void Quit()
     {
         _quitting = true;
-        _window?.Invoke(() => _window.Close());
+        _ = (_window?.Invoke(() => _window.Close()));
     }
 
     private static void ToggleAutostart(bool enabled)
@@ -235,9 +260,12 @@ public static class Program
 
     private static void OnWebMessage(object? sender, string message)
     {
-        if (message != "pick-solution") return;
+        if (message != "pick-solution")
+        {
+            return;
+        }
 
-        _window!.Invoke(() =>
+        _ = _window!.Invoke(() =>
         {
             var picked = _window.ShowOpenFile(
                 "Choose a solution",
@@ -246,7 +274,9 @@ public static class Program
                 filters: [("Solution files", ["*.sln", "*.slnx", "*.slnf"])]);
 
             if (picked is { Length: > 0 } && IsSolutionFile(picked[0]))
+            {
                 SwitchSolution(picked[0]);
+            }
         });
     }
 

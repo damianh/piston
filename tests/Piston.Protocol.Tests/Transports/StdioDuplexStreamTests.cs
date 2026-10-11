@@ -14,14 +14,14 @@ public sealed class StdioDuplexStreamTests
     [Fact]
     public async Task ReadAsync_ReadsFromReadFromStream()
     {
-        var data        = "hello world"u8.ToArray();
-        var readFrom    = new MemoryStream(data);
-        var writeTo     = new MemoryStream();
-        var duplex      = new StdioDuplexStream(readFrom, writeTo);
-        var cts         = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var data = "hello world"u8.ToArray();
+        var readFrom = new MemoryStream(data);
+        var writeTo = new MemoryStream();
+        var duplex = new StdioDuplexStream(readFrom, writeTo);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
-        var buffer      = new byte[data.Length];
-        var bytesRead   = await duplex.ReadAsync(buffer, cts.Token);
+        var buffer = new byte[data.Length];
+        var bytesRead = await duplex.ReadAsync(buffer, cts.Token);
 
         Assert.Equal(data.Length, bytesRead);
         Assert.Equal(data, buffer);
@@ -31,9 +31,9 @@ public sealed class StdioDuplexStreamTests
     public async Task WriteAsync_WritesToWriteToStream()
     {
         var readFrom = new MemoryStream();
-        var writeTo  = new MemoryStream();
-        var duplex   = new StdioDuplexStream(readFrom, writeTo);
-        var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var writeTo = new MemoryStream();
+        var duplex = new StdioDuplexStream(readFrom, writeTo);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
         var data = "test message"u8.ToArray();
         await duplex.WriteAsync(data, cts.Token);
@@ -55,13 +55,13 @@ public sealed class StdioDuplexStreamTests
         // Reset so the duplex reads from the beginning.
         buffer.Position = 0;
         var readFrom = buffer;
-        var writeTo  = new MemoryStream();
-        var duplex   = new StdioDuplexStream(readFrom, writeTo);
-        var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var writeTo = new MemoryStream();
+        var duplex = new StdioDuplexStream(readFrom, writeTo);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
         var received = await MessageFramer.ReadMessageAsync(duplex, cts.Token);
 
-        Assert.NotNull(received);
+        _ = Assert.NotNull(received);
         Assert.Equal(message, received!.Value.ToArray());
     }
 
@@ -78,17 +78,19 @@ public sealed class StdioDuplexStreamTests
         // Write all messages to a buffer (simulating stdout).
         var outputBuffer = new MemoryStream();
         foreach (var msg in messages)
+        {
             await MessageFramer.WriteMessageAsync(outputBuffer, msg, CancellationToken.None);
+        }
 
         // Read them back via a duplex stream.
         outputBuffer.Position = 0;
         var duplex = new StdioDuplexStream(outputBuffer, new MemoryStream());
-        var cts    = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
         for (var i = 0; i < messages.Length; i++)
         {
             var received = await MessageFramer.ReadMessageAsync(duplex, cts.Token);
-            Assert.NotNull(received);
+            _ = Assert.NotNull(received);
             Assert.Equal(messages[i], received!.Value.ToArray());
         }
     }
@@ -99,8 +101,8 @@ public sealed class StdioDuplexStreamTests
     public async Task ReadAsync_EmptyStream_ReturnsNullFromMessageFramer()
     {
         var emptyStream = new MemoryStream(Array.Empty<byte>());
-        var duplex      = new StdioDuplexStream(emptyStream, new MemoryStream());
-        var cts         = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var duplex = new StdioDuplexStream(emptyStream, new MemoryStream());
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
         var result = await MessageFramer.ReadMessageAsync(duplex, cts.Token);
 

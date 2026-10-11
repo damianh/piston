@@ -134,7 +134,7 @@ public sealed class CoberturaParserTests : IDisposable
         var report = sut.Parse(xmlPath);
 
         // Deduplicated to one file
-        Assert.Single(report.Files);
+        _ = Assert.Single(report.Files);
         var file = report.Files[0];
 
         // Line 1 hits accumulated: 2 + 3 = 5
@@ -179,7 +179,7 @@ public sealed class CoberturaParserTests : IDisposable
 
         var report = sut.Parse(xmlPath);
 
-        Assert.Single(report.Files);
+        _ = Assert.Single(report.Files);
         Assert.True(Path.IsPathRooted(report.Files[0].FilePath));
     }
 
@@ -206,7 +206,7 @@ public sealed class CoberturaParserTests : IDisposable
 
         var report = sut.Parse(xmlPath);
 
-        Assert.Single(report.Files);
+        _ = Assert.Single(report.Files);
         // Path should be normalized even without a source element
         Assert.True(Path.IsPathRooted(report.Files[0].FilePath));
     }

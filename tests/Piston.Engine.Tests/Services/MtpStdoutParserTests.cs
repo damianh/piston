@@ -15,7 +15,7 @@ public sealed class MtpStdoutParserTests
     public void SinglePassed_ReturnsPassedResult()
     {
         var sut = new MtpStdoutParser();
-        sut.ProcessLine("passed Ns.Class.Method (7ms)");
+        _ = sut.ProcessLine("passed Ns.Class.Method (7ms)");
         var result = sut.Flush();
 
         Assert.NotNull(result);
@@ -30,10 +30,10 @@ public sealed class MtpStdoutParserTests
     public void SingleFailed_ReturnsFailedResult()
     {
         var sut = new MtpStdoutParser();
-        sut.ProcessLine("failed Ns.Class.FailingTest (12ms)");
-        sut.ProcessLine("  from C:\\path\\to.dll (net10.0|x64)");
-        sut.ProcessLine("  Expected true but got false");
-        sut.ProcessLine("  at Ns.Class.FailingTest() in Tests.cs:line 42");
+        _ = sut.ProcessLine("failed Ns.Class.FailingTest (12ms)");
+        _ = sut.ProcessLine("  from C:\\path\\to.dll (net10.0|x64)");
+        _ = sut.ProcessLine("  Expected true but got false");
+        _ = sut.ProcessLine("  at Ns.Class.FailingTest() in Tests.cs:line 42");
         var result = sut.Flush();
 
         Assert.NotNull(result);
@@ -51,7 +51,7 @@ public sealed class MtpStdoutParserTests
     public void SingleSkipped_ReturnsSkippedResult()
     {
         var sut = new MtpStdoutParser();
-        sut.ProcessLine("skipped Ns.Class.SkippedTest (0ms)");
+        _ = sut.ProcessLine("skipped Ns.Class.SkippedTest (0ms)");
         var result = sut.Flush();
 
         Assert.NotNull(result);
@@ -61,10 +61,10 @@ public sealed class MtpStdoutParserTests
     // ── Duration variants ──────────────────────────────────────────────────────
 
     [Theory]
-    [InlineData("7ms",    7.0)]
-    [InlineData("150ms",  150.0)]
-    [InlineData("1.2s",   1200.0)]
-    [InlineData("< 1ms",  0.5)]
+    [InlineData("7ms", 7.0)]
+    [InlineData("150ms", 150.0)]
+    [InlineData("1.2s", 1200.0)]
+    [InlineData("< 1ms", 0.5)]
     public void ParseDuration_VariousFormats(string input, double expectedMs)
     {
         var duration = MtpStdoutParser.ParseDuration(input);
@@ -77,8 +77,8 @@ public sealed class MtpStdoutParserTests
     public void SourceLine_PopulatesSource()
     {
         var sut = new MtpStdoutParser();
-        sut.ProcessLine("passed Ns.Class.Method (5ms)");
-        sut.ProcessLine("  from C:\\repos\\project\\tests\\Tests.dll (net10.0|x64)");
+        _ = sut.ProcessLine("passed Ns.Class.Method (5ms)");
+        _ = sut.ProcessLine("  from C:\\repos\\project\\tests\\Tests.dll (net10.0|x64)");
         var result = sut.Flush();
 
         Assert.NotNull(result);
@@ -89,7 +89,7 @@ public sealed class MtpStdoutParserTests
     public void NoSourceLine_SourceIsNull()
     {
         var sut = new MtpStdoutParser();
-        sut.ProcessLine("passed Ns.Class.Method (5ms)");
+        _ = sut.ProcessLine("passed Ns.Class.Method (5ms)");
         var result = sut.Flush();
 
         Assert.NotNull(result);
@@ -104,7 +104,7 @@ public sealed class MtpStdoutParserTests
         var sut = new MtpStdoutParser();
         var results = new List<MtpParsedResult>();
 
-        void Feed(string line) { if (sut.ProcessLine(line) is { } r) results.Add(r); }
+        void Feed(string line) { if (sut.ProcessLine(line) is { } r) { results.Add(r); } }
 
         Feed("passed Ns.Class.Test1 (1ms)");
         Feed("  from a.dll (net10.0|x64)");
@@ -112,7 +112,10 @@ public sealed class MtpStdoutParserTests
         Feed("  from a.dll (net10.0|x64)");
         Feed("failed Ns.Class.Test3 (3ms)");
 
-        if (sut.Flush() is { } last) results.Add(last);
+        if (sut.Flush() is { } last)
+        {
+            results.Add(last);
+        }
 
         Assert.Equal(3, results.Count);
         Assert.Equal("Ns.Class.Test1", results[0].FullyQualifiedName);
@@ -126,7 +129,7 @@ public sealed class MtpStdoutParserTests
     public void ProcessLine_ReturnsPreviousResult_WhenNewHeaderSeen()
     {
         var sut = new MtpStdoutParser();
-        sut.ProcessLine("passed Ns.Class.First (1ms)");
+        _ = sut.ProcessLine("passed Ns.Class.First (1ms)");
         var result = sut.ProcessLine("passed Ns.Class.Second (2ms)");
 
         Assert.NotNull(result);
@@ -148,9 +151,9 @@ public sealed class MtpStdoutParserTests
     public void BlankLines_AreIgnored()
     {
         var sut = new MtpStdoutParser();
-        sut.ProcessLine("");
-        sut.ProcessLine("   ");
-        sut.ProcessLine("passed Ns.Class.Method (7ms)");
+        _ = sut.ProcessLine("");
+        _ = sut.ProcessLine("   ");
+        _ = sut.ProcessLine("passed Ns.Class.Method (7ms)");
         var result = sut.Flush();
 
         Assert.NotNull(result);
@@ -163,11 +166,11 @@ public sealed class MtpStdoutParserTests
     public void FailedTest_MultiLineStackTrace_AllLinesCollected()
     {
         var sut = new MtpStdoutParser();
-        sut.ProcessLine("failed Ns.Class.ComplexFail (30ms)");
-        sut.ProcessLine("  from tests.dll (net10.0|x64)");
-        sut.ProcessLine("  Assert.Equal() failure: expected 1 but got 2");
-        sut.ProcessLine("  at Ns.Class.ComplexFail() in Tests.cs:line 10");
-        sut.ProcessLine("  at Ns.Base.RunTest() in Base.cs:line 5");
+        _ = sut.ProcessLine("failed Ns.Class.ComplexFail (30ms)");
+        _ = sut.ProcessLine("  from tests.dll (net10.0|x64)");
+        _ = sut.ProcessLine("  Assert.Equal() failure: expected 1 but got 2");
+        _ = sut.ProcessLine("  at Ns.Class.ComplexFail() in Tests.cs:line 10");
+        _ = sut.ProcessLine("  at Ns.Base.RunTest() in Base.cs:line 5");
         var result = sut.Flush();
 
         Assert.NotNull(result);
@@ -183,7 +186,7 @@ public sealed class MtpStdoutParserTests
     {
         // Parametrised test names often include parentheses
         var sut = new MtpStdoutParser();
-        sut.ProcessLine("passed Ns.Class.Method(42, \"hello\") (7ms)");
+        _ = sut.ProcessLine("passed Ns.Class.Method(42, \"hello\") (7ms)");
         var result = sut.Flush();
 
         Assert.NotNull(result);
@@ -198,7 +201,7 @@ public sealed class MtpStdoutParserTests
     public void PassedTest_ErrorAndStackAreNull()
     {
         var sut = new MtpStdoutParser();
-        sut.ProcessLine("passed Ns.Class.Method (7ms)");
+        _ = sut.ProcessLine("passed Ns.Class.Method (7ms)");
         var result = sut.Flush();
 
         Assert.NotNull(result);

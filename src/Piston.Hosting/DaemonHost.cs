@@ -88,17 +88,17 @@ public sealed class DaemonHost : IAsyncDisposable
 
         _webApp = webBuilder.Build();
         _webApp.Urls.Add(WebUrl);
-        _webApp.UseWebSockets();
+        _ = _webApp.UseWebSockets();
 
         // Serve Blazor WASM framework files (handles content negotiation for .br/.gz compressed
         // assets) and static files. UseBlazorFrameworkFiles must come before UseStaticFiles.
-        _webApp.UseBlazorFrameworkFiles();
-        _webApp.UseDefaultFiles();
-        _webApp.UseStaticFiles();
-        _webApp.UseRouting();
+        _ = _webApp.UseBlazorFrameworkFiles();
+        _ = _webApp.UseDefaultFiles();
+        _ = _webApp.UseStaticFiles();
+        _ = _webApp.UseRouting();
 
         var router = _router;
-        _webApp.Map("/ws", async context =>
+        _ = _webApp.Map("/ws", async context =>
         {
             if (!context.WebSockets.IsWebSocketRequest)
             {
@@ -111,7 +111,7 @@ public sealed class DaemonHost : IAsyncDisposable
         });
 
         // Fallback to index.html for Blazor SPA client-side routing
-        _webApp.MapFallbackToFile("index.html");
+        _ = _webApp.MapFallbackToFile("index.html");
 
         await _webApp.StartAsync(ct).ConfigureAwait(false);
         _log($"[piston] Web server (WebSocket) listening on port: {_options.WebPort}");
@@ -120,10 +120,10 @@ public sealed class DaemonHost : IAsyncDisposable
         {
             // MCP always runs on its own dedicated app to avoid middleware conflicts
             var mcpBuilder = WebApplication.CreateBuilder();
-            mcpBuilder.Services.AddSingleton<IEngine>(_engine);
-            mcpBuilder.Services.AddPistonMcp(mcpCallTracker);
+            _ = mcpBuilder.Services.AddSingleton<IEngine>(_engine);
+            _ = mcpBuilder.Services.AddPistonMcp(mcpCallTracker);
             _mcpApp = mcpBuilder.Build();
-            _mcpApp.MapMcp();
+            _ = _mcpApp.MapMcp();
             _mcpApp.Urls.Add($"http://localhost:{_options.McpPort}");
 
             await _mcpApp.StartAsync(ct).ConfigureAwait(false);
@@ -140,7 +140,7 @@ public sealed class DaemonHost : IAsyncDisposable
         try
         {
             var cancelled = Task.Delay(Timeout.Infinite, ct);
-            await Task.WhenAny(RouterTask, cancelled).ConfigureAwait(false);
+            _ = await Task.WhenAny(RouterTask, cancelled).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { }
     }
@@ -180,7 +180,11 @@ public sealed class DaemonHost : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            return;
+        }
+
         await StopAsync().ConfigureAwait(false);
         _disposed = true;
     }

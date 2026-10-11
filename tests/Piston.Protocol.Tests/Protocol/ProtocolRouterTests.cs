@@ -1,12 +1,9 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
-using System.Text.Json.Nodes;
 using Piston.Engine;
-using Piston.Engine.Models;
 using Piston.Hosting.Protocol;
 using Piston.Protocol.JsonRpc;
-using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
 using Xunit;
 
@@ -22,7 +19,7 @@ public sealed class ProtocolRouterTests
     private static async Task<(NamedPipeClientTransport client, Task readerTask, List<object> received)>
         ConnectClientAsync(string pipeName, CancellationToken ct)
     {
-        var client   = new NamedPipeClientTransport(pipeName);
+        var client = new NamedPipeClientTransport(pipeName);
         await client.ConnectAsync(ct);
 
         var received = new List<object>();
@@ -33,8 +30,11 @@ public sealed class ProtocolRouterTests
                 while (!ct.IsCancellationRequested)
                 {
                     var bytes = await client.ReceiveAsync(ct);
-                    var msg   = JsonRpcSerializer.DeserializeMessage(bytes);
-                    lock (received) received.Add(msg);
+                    var msg = JsonRpcSerializer.DeserializeMessage(bytes);
+                    lock (received)
+                    {
+                        received.Add(msg);
+                    }
                 }
             }
             catch (OperationCanceledException) { }
@@ -50,17 +50,17 @@ public sealed class ProtocolRouterTests
     public async Task ClientConnects_ReceivesStateSnapshot()
     {
         var pipeName = UniquePipeName();
-        var engine   = new StubEngine();
+        var engine = new StubEngine();
         var listener = new NamedPipeListener(pipeName);
-        var router   = new ProtocolRouter(engine, listener);
-        var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var router = new ProtocolRouter(engine, listener);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         var routerTask = Task.Run(() => router.RunAsync(cts.Token), cts.Token);
 
         var (client, readerTask, received) = await ConnectClientAsync(pipeName, cts.Token);
 
         // Wait for snapshot
-        await WaitForConditionAsync(() => { lock (received) return received.Count >= 1; }, TimeSpan.FromSeconds(5));
+        await WaitForConditionAsync(() => { lock (received) { return received.Count >= 1; } }, TimeSpan.FromSeconds(5));
 
         lock (received)
         {
@@ -80,10 +80,10 @@ public sealed class ProtocolRouterTests
     public async Task ClientSendsForceRun_EngineForceRunCalled_ReceivesResponse()
     {
         var pipeName = UniquePipeName();
-        var engine   = new StubEngine();
+        var engine = new StubEngine();
         var listener = new NamedPipeListener(pipeName);
-        var router   = new ProtocolRouter(engine, listener);
-        var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var router = new ProtocolRouter(engine, listener);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         _ = Task.Run(() => router.RunAsync(cts.Token), cts.Token);
 
@@ -91,7 +91,7 @@ public sealed class ProtocolRouterTests
         await client.ConnectAsync(cts.Token);
 
         // Drain the initial snapshot
-        await client.ReceiveAsync(cts.Token);
+        _ = await client.ReceiveAsync(cts.Token);
 
         // Send forceRun request
         var request = new JsonRpcRequest("req-1", ProtocolMethods.EngineForceRun);
@@ -99,7 +99,7 @@ public sealed class ProtocolRouterTests
 
         // Read response
         var responseBytes = await client.ReceiveAsync(cts.Token);
-        var response      = JsonRpcSerializer.DeserializeResponse(responseBytes);
+        var response = JsonRpcSerializer.DeserializeResponse(responseBytes);
 
         Assert.Equal("req-1", response.Id);
         Assert.Null(response.Error);
@@ -118,10 +118,10 @@ public sealed class ProtocolRouterTests
     public async Task ClientSendsUnknownMethod_ReceivesMethodNotFoundError(string method)
     {
         var pipeName = UniquePipeName();
-        var engine   = new StubEngine();
+        var engine = new StubEngine();
         var listener = new NamedPipeListener(pipeName);
-        var router   = new ProtocolRouter(engine, listener);
-        var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var router = new ProtocolRouter(engine, listener);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         _ = Task.Run(() => router.RunAsync(cts.Token), cts.Token);
 
@@ -129,13 +129,13 @@ public sealed class ProtocolRouterTests
         await client.ConnectAsync(cts.Token);
 
         // Drain snapshot
-        await client.ReceiveAsync(cts.Token);
+        _ = await client.ReceiveAsync(cts.Token);
 
         var request = new JsonRpcRequest("req-x", method);
         await client.SendAsync(JsonRpcSerializer.Serialize(request), cts.Token);
 
         var responseBytes = await client.ReceiveAsync(cts.Token);
-        var response      = JsonRpcSerializer.DeserializeResponse(responseBytes);
+        var response = JsonRpcSerializer.DeserializeResponse(responseBytes);
 
         Assert.NotNull(response.Error);
         Assert.Equal(JsonRpcErrorCodes.MethodNotFound, response.Error!.Code);
@@ -151,17 +151,17 @@ public sealed class ProtocolRouterTests
     public async Task EngineStateChange_ClientReceivesNotification()
     {
         var pipeName = UniquePipeName();
-        var engine   = new StubEngine();
+        var engine = new StubEngine();
         var listener = new NamedPipeListener(pipeName);
-        var router   = new ProtocolRouter(engine, listener);
-        var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var router = new ProtocolRouter(engine, listener);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         _ = Task.Run(() => router.RunAsync(cts.Token), cts.Token);
 
         var (client, _, received) = await ConnectClientAsync(pipeName, cts.Token);
 
         // Wait for initial snapshot
-        await WaitForConditionAsync(() => { lock (received) return received.Count >= 1; }, TimeSpan.FromSeconds(5));
+        await WaitForConditionAsync(() => { lock (received) { return received.Count >= 1; } }, TimeSpan.FromSeconds(5));
 
         var countBefore = received.Count;
 
@@ -169,7 +169,7 @@ public sealed class ProtocolRouterTests
         engine.TriggerStateChange();
 
         await WaitForConditionAsync(
-            () => { lock (received) return received.Count > countBefore; },
+            () => { lock (received) { return received.Count > countBefore; } },
             TimeSpan.FromSeconds(5));
 
         lock (received)
@@ -194,10 +194,10 @@ public sealed class ProtocolRouterTests
     public async Task TwoClients_BothReceiveNotifications()
     {
         var pipeName = UniquePipeName();
-        var engine   = new StubEngine();
+        var engine = new StubEngine();
         var listener = new NamedPipeListener(pipeName);
-        var router   = new ProtocolRouter(engine, listener);
-        var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var router = new ProtocolRouter(engine, listener);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         _ = Task.Run(() => router.RunAsync(cts.Token), cts.Token);
 
@@ -206,10 +206,10 @@ public sealed class ProtocolRouterTests
 
         // Wait for both initial snapshots
         await WaitForConditionAsync(
-            () => { lock (received1) return received1.Count >= 1; },
+            () => { lock (received1) { return received1.Count >= 1; } },
             TimeSpan.FromSeconds(5));
         await WaitForConditionAsync(
-            () => { lock (received2) return received2.Count >= 1; },
+            () => { lock (received2) { return received2.Count >= 1; } },
             TimeSpan.FromSeconds(5));
 
         var count1 = received1.Count;
@@ -221,7 +221,9 @@ public sealed class ProtocolRouterTests
             () =>
             {
                 lock (received1) lock (received2)
+                {
                     return received1.Count > count1 && received2.Count > count2;
+                }
             },
             TimeSpan.FromSeconds(5));
 
@@ -240,10 +242,10 @@ public sealed class ProtocolRouterTests
     public async Task OneClientDisconnects_RemainingClientUnaffected()
     {
         var pipeName = UniquePipeName();
-        var engine   = new StubEngine();
+        var engine = new StubEngine();
         var listener = new NamedPipeListener(pipeName);
-        var router   = new ProtocolRouter(engine, listener);
-        var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var router = new ProtocolRouter(engine, listener);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         _ = Task.Run(() => router.RunAsync(cts.Token), cts.Token);
 
@@ -252,9 +254,9 @@ public sealed class ProtocolRouterTests
 
         // Wait for initial snapshots
         await WaitForConditionAsync(
-            () => { lock (received1) return received1.Count >= 1; }, TimeSpan.FromSeconds(5));
+            () => { lock (received1) { return received1.Count >= 1; } }, TimeSpan.FromSeconds(5));
         await WaitForConditionAsync(
-            () => { lock (received2) return received2.Count >= 1; }, TimeSpan.FromSeconds(5));
+            () => { lock (received2) { return received2.Count >= 1; } }, TimeSpan.FromSeconds(5));
 
         // Disconnect client1
         await client1.DisposeAsync();
@@ -268,7 +270,7 @@ public sealed class ProtocolRouterTests
         engine.TriggerStateChange();
 
         await WaitForConditionAsync(
-            () => { lock (received2) return received2.Count > count2; },
+            () => { lock (received2) { return received2.Count > count2; } },
             TimeSpan.FromSeconds(5));
 
         Assert.True(received2.Count > count2);
@@ -285,7 +287,11 @@ public sealed class ProtocolRouterTests
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
-            if (condition()) return;
+            if (condition())
+            {
+                return;
+            }
+
             await Task.Delay(50);
         }
         Assert.Fail("Condition was not met within timeout.");

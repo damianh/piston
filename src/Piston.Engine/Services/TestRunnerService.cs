@@ -10,15 +10,12 @@ public sealed class TestRunnerService : ITestRunnerService
     private readonly ITestExecutionStrategy _strategy;
     private readonly ITestProcessPool? _pool;
 
-    public TestRunnerService(ITestExecutionStrategy strategy)
-    {
-        _strategy = strategy;
-    }
+    public TestRunnerService(ITestExecutionStrategy strategy) => _strategy = strategy;
 
     public TestRunnerService(ITestExecutionStrategy strategy, ITestProcessPool pool)
     {
         _strategy = strategy;
-        _pool     = pool;
+        _pool = pool;
     }
 
     public Task<TestRunResult> RunTestsAsync(
@@ -50,7 +47,7 @@ public sealed class TestRunnerService : ITestRunnerService
         {
             // Single target (whole solution path) — run directly
             var request = new ProjectTestRequest(solutionPath, filter, collectCoverage);
-            var single  = await _strategy.ExecuteAsync(request, onProgress, ct).ConfigureAwait(false);
+            var single = await _strategy.ExecuteAsync(request, onProgress, ct).ConfigureAwait(false);
             return new TestRunResult(single.Suites, single.RunnerError, single.CoverageReportPaths);
         }
 
@@ -83,7 +80,7 @@ public sealed class TestRunnerService : ITestRunnerService
             {
                 onProjectCompleted?.Invoke(result);
             }
-            : null;
+        : null;
 
         var results = await _pool!.RunProjectsAsync(requests, wrappedOnProjectCompleted, ct)
             .ConfigureAwait(false);
@@ -97,7 +94,9 @@ public sealed class TestRunnerService : ITestRunnerService
             allSuites.AddRange(result.Suites);
             allCoveragePaths.AddRange(result.CoverageReportPaths);
             if (result.RunnerError is not null)
+            {
                 lastRunnerError = result.RunnerError;
+            }
         }
 
         return new TestRunResult(allSuites, lastRunnerError, allCoveragePaths);
@@ -118,17 +117,21 @@ public sealed class TestRunnerService : ITestRunnerService
         foreach (var projectPath in testProjectPaths)
         {
             if (ct.IsCancellationRequested)
+            {
                 return new TestRunResult(allSuites, null, allCoveragePaths);
+            }
 
             try
             {
                 var request = new ProjectTestRequest(projectPath, filter, collectCoverage);
-                var result  = await _strategy.ExecuteAsync(request, onProgress, ct).ConfigureAwait(false);
+                var result = await _strategy.ExecuteAsync(request, onProgress, ct).ConfigureAwait(false);
 
                 allSuites.AddRange(result.Suites);
                 allCoveragePaths.AddRange(result.CoverageReportPaths);
                 if (result.RunnerError is not null)
+                {
                     lastRunnerError = result.RunnerError;
+                }
 
                 onProjectCompleted?.Invoke(result);
             }

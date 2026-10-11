@@ -18,8 +18,11 @@ internal static class TestProcess
     {
         var result = await RunDotnetResultAsync(args, workDir);
         if (result.ExitCode != 0)
+        {
             throw new InvalidOperationException(
                 $"dotnet {args} failed with exit code {result.ExitCode} in '{workDir}'.\n{result.Output}");
+        }
+
         return result.ExitCode;
     }
 
@@ -50,17 +53,23 @@ internal static class TestProcess
         hostInfo.ArgumentList.Add(startInfo.FileName);
         hostInfo.ArgumentList.Add(startInfo.Arguments);
         foreach (var argument in startInfo.ArgumentList)
+        {
             hostInfo.ArgumentList.Add(argument);
+        }
+
         hostInfo.Environment.Clear();
         foreach (var entry in startInfo.Environment)
+        {
             hostInfo.Environment.Add(entry);
+        }
+
         using var process = new Process { StartInfo = hostInfo };
         var stdout = new ConcurrentQueue<string>();
         var stderr = new ConcurrentQueue<string>();
         process.OutputDataReceived += (_, e) => Capture(stdout, "stdout", e.Data);
         process.ErrorDataReceived += (_, e) => Capture(stderr, "stderr", e.Data);
 
-        process.Start();
+        _ = process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
         using var cts = new CancellationTokenSource(timeout);
@@ -79,15 +88,22 @@ internal static class TestProcess
                     // Closing the host's kill-on-close job also kills descendants
                     // if their immediate parent has already exited.
                     if (!process.HasExited)
+                    {
                         process.Kill(entireProcessTree: true);
+                    }
                 }
                 else if (kill(-process.Id, 9) != 0)
                 {
                     var error = Marshal.GetLastPInvokeError();
                     if (error != 3) // ESRCH: the entire group has already exited.
+                    {
                         throw new Win32Exception(error);
+                    }
+
                     if (!process.HasExited)
+                    {
                         process.Kill(entireProcessTree: true);
+                    }
                 }
                 await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
             }
@@ -110,10 +126,15 @@ internal static class TestProcess
         static void Capture(ConcurrentQueue<string> output, string stream, string? line)
         {
             if (line is null)
+            {
                 return;
+            }
+
             output.Enqueue($"[{stream}] {line}");
             while (output.Count > 50)
-                output.TryDequeue(out _);
+            {
+                _ = output.TryDequeue(out _);
+            }
         }
     }
 

@@ -14,10 +14,7 @@ internal sealed class ProcessTestExecutionStrategy : ITestExecutionStrategy
 {
     private readonly ITestResultParser _parser;
 
-    public ProcessTestExecutionStrategy(ITestResultParser parser)
-    {
-        _parser = parser;
-    }
+    public ProcessTestExecutionStrategy(ITestResultParser parser) => _parser = parser;
 
     /// <inheritdoc/>
     /// <remarks>Always returns <see langword="true"/> — process-based execution works for any project.</remarks>

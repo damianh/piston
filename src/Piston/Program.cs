@@ -2,7 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.CommandLine;
-using Piston.Cli;
+using Piston;
 using Piston.Engine;
 using Piston.Engine.Models;
 using Piston.Hosting;
@@ -81,8 +81,8 @@ var rootCommand = new RootCommand("Piston — continuous test runner for .NET")
 rootCommand.SetHandler(async ctx =>
 {
     var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
-    var pipeName     = ctx.ParseResult.GetValueForOption(pipeNameOpt);
-    var webPort      = ctx.ParseResult.GetValueForOption(webPortOpt);
+    var pipeName = ctx.ParseResult.GetValueForOption(pipeNameOpt);
+    var webPort = ctx.ParseResult.GetValueForOption(webPortOpt);
     await RunWebAsync(solutionFile, pipeName, webPort);
 });
 
@@ -106,15 +106,15 @@ var daemonCmd = new Command("daemon", "Start the Piston daemon in the foreground
 daemonCmd.SetHandler(async ctx =>
 {
     var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
-    var debounceMs   = ctx.ParseResult.GetValueForOption(debounceOpt);
-    var filter       = ctx.ParseResult.GetValueForOption(filterOpt);
-    var coverage     = ctx.ParseResult.GetValueForOption(coverageOpt);
-    var parallelism  = ctx.ParseResult.GetValueForOption(parallelismOpt);
-    var stdio        = ctx.ParseResult.GetValueForOption(stdioOpt);
-    var noStdio      = ctx.ParseResult.GetValueForOption(noStdioOpt);
-    var pipeName     = ctx.ParseResult.GetValueForOption(pipeNameOpt);
-    var mcpPort      = ctx.ParseResult.GetValueForOption(mcpPortOpt);
-    var webPort      = ctx.ParseResult.GetValueForOption(webPortOpt);
+    var debounceMs = ctx.ParseResult.GetValueForOption(debounceOpt);
+    var filter = ctx.ParseResult.GetValueForOption(filterOpt);
+    var coverage = ctx.ParseResult.GetValueForOption(coverageOpt);
+    var parallelism = ctx.ParseResult.GetValueForOption(parallelismOpt);
+    var stdio = ctx.ParseResult.GetValueForOption(stdioOpt);
+    var noStdio = ctx.ParseResult.GetValueForOption(noStdioOpt);
+    var pipeName = ctx.ParseResult.GetValueForOption(pipeNameOpt);
+    var mcpPort = ctx.ParseResult.GetValueForOption(mcpPortOpt);
+    var webPort = ctx.ParseResult.GetValueForOption(webPortOpt);
     var configDirectory = ctx.ParseResult.GetValueForOption(configDirectoryOpt);
 
     if (stdio && noStdio)
@@ -168,8 +168,8 @@ var stopCmd = new Command("stop", "Stop the running Piston daemon.")
 stopCmd.SetHandler(async ctx =>
 {
     var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
-    var pipeName     = ctx.ParseResult.GetValueForOption(pipeNameOpt);
-    var exitCode     = await RunStopAsync(solutionFile, pipeName);
+    var pipeName = ctx.ParseResult.GetValueForOption(pipeNameOpt);
+    var exitCode = await RunStopAsync(solutionFile, pipeName);
     ctx.ExitCode = exitCode;
 });
 
@@ -186,8 +186,8 @@ var statusCmd = new Command("status", "Show the status of the running Piston dae
 statusCmd.SetHandler(async ctx =>
 {
     var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
-    var pipeName     = ctx.ParseResult.GetValueForOption(pipeNameOpt);
-    var exitCode     = await RunStatusAsync(solutionFile, pipeName);
+    var pipeName = ctx.ParseResult.GetValueForOption(pipeNameOpt);
+    var exitCode = await RunStatusAsync(solutionFile, pipeName);
     ctx.ExitCode = exitCode;
 });
 
@@ -212,7 +212,7 @@ static async Task RunWebAsync(FileInfo? solutionArg, string? cliPipeName, int we
         return;
     }
 
-    var pipeName    = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
+    var pipeName = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
 
     using var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) =>
@@ -270,7 +270,7 @@ static async Task RunDaemonAsync(
         return;
     }
 
-    var options     = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
+    var options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
 
     if (!HostHelpers.DotnetSdkAvailable())
     {
@@ -280,7 +280,7 @@ static async Task RunDaemonAsync(
     }
 
     var pipeName = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
-    var mcpPort  = cliMcpPort ?? config.McpPort;
+    var mcpPort = cliMcpPort ?? config.McpPort;
 
     using var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) =>
@@ -291,11 +291,11 @@ static async Task RunDaemonAsync(
 
     await using var host = new DaemonHost(new DaemonHostOptions
     {
-        SolutionPath  = solutionPath,
+        SolutionPath = solutionPath,
         EngineOptions = options,
-        PipeName      = pipeName,
-        WebPort       = webPort,
-        McpPort       = mcpPort,
+        PipeName = pipeName,
+        WebPort = webPort,
+        McpPort = mcpPort,
     });
 
     await host.StartAsync(cts.Token);
@@ -329,7 +329,7 @@ static async Task RunDaemonStdioAsync(
         return;
     }
 
-    var options     = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
+    var options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
 
     if (!HostHelpers.DotnetSdkAvailable())
     {
@@ -352,12 +352,12 @@ static async Task RunDaemonStdioAsync(
     Console.Error.WriteLine("[piston] Listening on stdio.");
 
     // NOTE: Do NOT write PIPE: line — stdout is reserved for JSON-RPC in stdio mode.
-    var stdinStream  = Console.OpenStandardInput();
+    var stdinStream = Console.OpenStandardInput();
     var stdoutStream = Console.OpenStandardOutput();
     var duplexStream = new StdioDuplexStream(stdinStream, stdoutStream);
 
     var dispatcher = new EngineCommandDispatcher(engine);
-    var session    = new ClientSession(duplexStream, "stdio-session", dispatcher);
+    var session = new ClientSession(duplexStream, "stdio-session", dispatcher);
 
     engine.State.StateChanged += OnEngineStateChanged;
 
@@ -420,7 +420,9 @@ static async Task RunDaemonStdioAsync(
             .ContinueWith(t =>
             {
                 if (t.IsFaulted)
+                {
                     Console.Error.WriteLine($"[piston] Failed to send notification: {t.Exception?.GetBaseException().Message}");
+                }
             }, TaskScheduler.Default);
     }
 }
@@ -441,7 +443,7 @@ static async Task<int> RunStopAsync(FileInfo? solutionArg, string? cliPipeName)
         return 1;
     }
 
-    var pipeName    = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
+    var pipeName = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
 
     await using var client = new RemoteEngineClient(pipeName);
 
@@ -482,7 +484,7 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
         return 1;
     }
 
-    var pipeName    = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
+    var pipeName = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
 
     await using var client = new RemoteEngineClient(pipeName);
 
@@ -505,7 +507,9 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
     client.StateChanged += _ => snapshot = client.CurrentSnapshot;
 
     if (client.CurrentSnapshot is not null)
+    {
         snapshot = client.CurrentSnapshot;
+    }
     else
     {
         try { await Task.Delay(500, snapshotCts.Token); } catch (OperationCanceledException) { }

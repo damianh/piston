@@ -30,7 +30,7 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
         _coveredFilePath = Path.Combine(_tempDir, "src", "Lib", "Code.cs");
 
         // Create the source file on disk so CoberturaParser can resolve it via File.Exists
-        Directory.CreateDirectory(Path.GetDirectoryName(_coveredFilePath)!);
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(_coveredFilePath)!);
         File.WriteAllText(_coveredFilePath, "namespace Lib; public class Code {}");
 
         _store = new SqliteCoverageStore();
@@ -95,9 +95,9 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
     public async Task ProcessCoverage_PopulatesStore_HasCoverageDataReturnsTrue()
     {
         var processor = new CoverageProcessor(new CoberturaParser());
-        var testFqns  = new[] { "Lib.Tests.LibTests.Passes" };
-        var xmlPath   = WriteCoberturaXml(_coveredFilePath, 5, 6, 7);
-        var runId     = _store.CreateRunId();
+        var testFqns = new[] { "Lib.Tests.LibTests.Passes" };
+        var xmlPath = WriteCoberturaXml(_coveredFilePath, 5, 6, 7);
+        var runId = _store.CreateRunId();
 
         await processor.ProcessCoverageAsync(runId, [xmlPath], testFqns, _store);
 
@@ -108,9 +108,9 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
     public async Task ProcessCoverage_GetTestsCoveringFile_ReturnsStoredTestFqns()
     {
         var processor = new CoverageProcessor(new CoberturaParser());
-        var testFqns  = new[] { "Lib.Tests.LibTests.Passes", "Lib.Tests.LibTests.AlsoPasses" };
-        var xmlPath   = WriteCoberturaXml(_coveredFilePath, 10, 11);
-        var runId     = _store.CreateRunId();
+        var testFqns = new[] { "Lib.Tests.LibTests.Passes", "Lib.Tests.LibTests.AlsoPasses" };
+        var xmlPath = WriteCoberturaXml(_coveredFilePath, 10, 11);
+        var runId = _store.CreateRunId();
 
         await processor.ProcessCoverageAsync(runId, [xmlPath], testFqns, _store);
 
@@ -132,8 +132,8 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
 
         // Do a round-trip to confirm the file is a valid SQLite database
         var processor = new CoverageProcessor(new CoberturaParser());
-        var xmlPath   = WriteCoberturaXml(_coveredFilePath, 1);
-        var runId     = _store.CreateRunId();
+        var xmlPath = WriteCoberturaXml(_coveredFilePath, 1);
+        var runId = _store.CreateRunId();
         await processor.ProcessCoverageAsync(runId, [xmlPath], ["Lib.Tests.T1"], _store);
 
         Assert.True(_store.HasCoverageData(_coveredFilePath));
@@ -144,13 +144,13 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
     {
         // Seed the store with coverage for the covered file
         var processor = new CoverageProcessor(new CoberturaParser());
-        var testFqns  = new[] { "Lib.Tests.LibTests.Passes" };
-        var xmlPath   = WriteCoberturaXml(_coveredFilePath, 5, 6);
-        var runId     = _store.CreateRunId();
+        var testFqns = new[] { "Lib.Tests.LibTests.Passes" };
+        var xmlPath = WriteCoberturaXml(_coveredFilePath, 5, 6);
+        var runId = _store.CreateRunId();
         await processor.ProcessCoverageAsync(runId, [xmlPath], testFqns, _store);
 
         // Create a .csproj next to the covered file so Tier 1 can find the owning project
-        var libDir    = Path.GetDirectoryName(_coveredFilePath)!;
+        var libDir = Path.GetDirectoryName(_coveredFilePath)!;
         var libCsproj = Path.Combine(libDir, "Lib.csproj");
         File.WriteAllText(libCsproj, """
             <Project Sdk="Microsoft.NET.Sdk">
@@ -181,7 +181,7 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
     {
         // No coverage stored — store is empty
         // Create a .csproj next to the covered file so Tier 1 can find the owning project
-        var libDir    = Path.GetDirectoryName(_coveredFilePath)!;
+        var libDir = Path.GetDirectoryName(_coveredFilePath)!;
         var libCsproj = Path.Combine(libDir, "Lib.csproj");
         File.WriteAllText(libCsproj, """
             <Project Sdk="Microsoft.NET.Sdk">
@@ -210,8 +210,8 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
     public async Task MarkFileStale_AfterProcessing_ExcludesFromTier3()
     {
         var processor = new CoverageProcessor(new CoberturaParser());
-        var xmlPath   = WriteCoberturaXml(_coveredFilePath, 5);
-        var runId     = _store.CreateRunId();
+        var xmlPath = WriteCoberturaXml(_coveredFilePath, 5);
+        var runId = _store.CreateRunId();
         await processor.ProcessCoverageAsync(runId, [xmlPath], ["Lib.Tests.T1"], _store);
 
         // Confirm data exists
@@ -232,8 +232,8 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
         const string testFqn = "Lib.Tests.LibTests.Passes";
 
         // Run 1: lines 1, 2, 3
-        var xml1  = WriteCoberturaXml(_coveredFilePath, 1, 2, 3);
-        var run1  = _store.CreateRunId();
+        var xml1 = WriteCoberturaXml(_coveredFilePath, 1, 2, 3);
+        var run1 = _store.CreateRunId();
         await processor.ProcessCoverageAsync(run1, [xml1], [testFqn], _store);
 
         // Verify run 1 data
@@ -241,8 +241,8 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
         Assert.NotEmpty(_store.GetTestsCoveringLines(_coveredFilePath, 1, 3));
 
         // Run 2: line 10 only (run1's lines should be gone)
-        var xml2  = WriteCoberturaXml(_coveredFilePath, 10);
-        var run2  = _store.CreateRunId();
+        var xml2 = WriteCoberturaXml(_coveredFilePath, 10);
+        var run2 = _store.CreateRunId();
         await processor.ProcessCoverageAsync(run2, [xml2], [testFqn], _store);
 
         Assert.Empty(_store.GetTestsCoveringLines(_coveredFilePath, 1, 3));
@@ -261,7 +261,7 @@ file sealed class StubSolutionGraph : ISolutionGraph
 
     public StubSolutionGraph(string projectPath, bool isTestProject)
     {
-        _projectPath   = Path.GetFullPath(projectPath);
+        _projectPath = Path.GetFullPath(projectPath);
         _isTestProject = isTestProject;
     }
 

@@ -1,7 +1,6 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
-using Piston.Cli;
 using Piston.Hosting;
 using Xunit;
 
@@ -51,7 +50,10 @@ public sealed class DaemonLauncherTests
         var start = DaemonLauncher.CreateStartInfo(executable, "/solution with spaces/test.slnx", "test-pipe", 5321);
         var expected = new List<string>();
         if (usesDotnet)
+        {
             expected.Add(typeof(DaemonLauncher).Assembly.Location);
+        }
+
         expected.AddRange(["daemon", "/solution with spaces/test.slnx", "--no-stdio", "--pipe-name", "test-pipe", "--web-port", "5321"]);
 
         Assert.Equal(executable, start.FileName);

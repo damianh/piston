@@ -51,20 +51,30 @@ public static class SourceFingerprinter
         {
             var relative = Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
             if (relative.Split('/').Any(ExcludedComponents.Contains))
+            {
                 continue;
+            }
+
             inputs.Add((relative, path));
         }
 
         foreach (var name in AncestorInputs)
         {
             if (File.Exists(Path.Combine(root, name)))
+            {
                 continue;
+            }
+
             var depth = 0;
             for (var dir = Directory.GetParent(root); dir is not null; dir = dir.Parent)
             {
                 depth++;
                 var candidate = Path.Combine(dir.FullName, name);
-                if (!File.Exists(candidate)) continue;
+                if (!File.Exists(candidate))
+                {
+                    continue;
+                }
+
                 inputs.Add((string.Concat(Enumerable.Repeat("../", depth)) + name, candidate));
                 break;
             }

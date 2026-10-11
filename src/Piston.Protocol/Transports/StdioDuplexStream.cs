@@ -15,14 +15,14 @@ public sealed class StdioDuplexStream : Stream
     public StdioDuplexStream(Stream readFrom, Stream writeTo)
     {
         _readFrom = readFrom;
-        _writeTo  = writeTo;
+        _writeTo = writeTo;
     }
 
-    public override bool CanRead  => true;
+    public override bool CanRead => true;
     public override bool CanWrite => true;
-    public override bool CanSeek  => false;
+    public override bool CanSeek => false;
 
-    public override long Length   => throw new NotSupportedException();
+    public override long Length => throw new NotSupportedException();
     public override long Position
     {
         get => throw new NotSupportedException();
