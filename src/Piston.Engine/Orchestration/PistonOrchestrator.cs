@@ -482,6 +482,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
             _state.LastBuild = buildResult;
             _state.LastBuildDuration = buildResult.Duration;
+            run = run with
+            {
+                Build = buildResult with { Errors = buildResult.Errors.ToArray(), Warnings = buildResult.Warnings.ToArray() },
+            };
+            PublishActiveRun(run);
 
             _activitySink.Emit(new BuildCompletedActivityEvent(
                 solutionPath,

@@ -122,7 +122,8 @@ public static class DtoMapper
             Failed: tests.Count(t => t.Status == TestStatus.Failed),
             Skipped: tests.Count(t => t.Status == TestStatus.Skipped),
             DuplicateTestCount: run.DuplicateTestIds.Count,
-            Admission: run.Admission?.ToDto());
+            Admission: run.Admission?.ToDto(),
+            Build: run.Build?.ToDto());
     }
 
     public static TestRunAdmissionDto ToDto(this TestRunAdmission admission) =>

@@ -98,9 +98,13 @@ public static class Paired
             (row.ExpectedTests ?? []).OrderBy(pair => pair.Key, StringComparer.Ordinal)
                 .Select(pair => pair.Key + "\t" + pair.Value)));
         Same("test-process parallelism", row => row.TestProcessParallelism);
-        if (rows.Any(row => row.Condition == "dotnet" && row.OracleKind != "full-test-scope") ||
-            rows.Any(row => row.Condition == "piston" && row.OracleKind != "piston-generation-bound-full-test-scope"))
-            problems.Add("Non-comparable: oracle is not full test scope");
+        Same("expected compile diagnostic", row => row.ExpectedDiagnostic);
+        var compile = rows.Any(row => row.ExpectedDiagnostic is not null);
+        if (rows.Any(row => row.Condition == "dotnet" &&
+                row.OracleKind != (compile ? "compile-diagnostic" : "full-test-scope")) ||
+            rows.Any(row => row.Condition == "piston" &&
+                row.OracleKind != (compile ? "piston-generation-bound-compile-diagnostic" : "piston-generation-bound-full-test-scope")))
+            problems.Add("Non-comparable: oracle does not match full test scope or compile diagnostic");
         if (rows.Any(row => row.Condition == "piston" && row.PistonAdmissionIsolated != true))
             problems.Add("Non-comparable: Piston admission was not isolated (shared budget, queueing or other admitted runs)");
         return problems;

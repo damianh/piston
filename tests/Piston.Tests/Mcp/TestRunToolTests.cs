@@ -5,7 +5,10 @@ using System.Text.Json;
 using ModelContextProtocol;
 using Piston.Engine;
 using Piston.Engine.Models;
+using Piston.Hosting.Mapping;
 using Piston.Mcp.Tools;
+using Piston.Protocol.Dtos;
+using Piston.Protocol.JsonRpc;
 using Xunit;
 
 namespace Piston.Tests.Mcp;
@@ -122,6 +125,38 @@ public sealed class TestRunToolTests
 
         Assert.Equal("Running", doc.RootElement.GetProperty("status").GetString());
         Assert.False(doc.RootElement.GetProperty("isTerminal").GetBoolean());
+    }
+
+    [Fact]
+    public void BuildFailureDiagnosticsAreRunBoundInMcpAndProtocol()
+    {
+        const string diagnostic = "/w/Code.cs(15,9): error CS0103: MissingSymbol [App.csproj]";
+        var failed = Run("failed-build", 1, status: TestRunStatus.BuildFailed) with
+        {
+            Build = new BuildResult(BuildStatus.Failed, [diagnostic], [], TimeSpan.FromMilliseconds(12)),
+            Suites = [],
+            Projects = [],
+        };
+        var engine = new StubEngine();
+        engine.State.RecentRuns = [Run("newer", 2), failed];
+        engine.State.LastBuild = new BuildResult(BuildStatus.Succeeded, [], [], TimeSpan.Zero);
+        var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
+        using var doc = JsonDocument.Parse(tools.GetTestRun(failed.RunId));
+        var root = doc.RootElement;
+        Assert.Equal("BuildFailed", root.GetProperty("status").GetString());
+        Assert.Equal("Current", root.GetProperty("freshness").GetString());
+        Assert.False(root.GetProperty("isCurrentFullResult").GetBoolean());
+        Assert.Equal(0, root.GetProperty("tests").GetArrayLength());
+        Assert.Equal("Failed", root.GetProperty("build").GetProperty("status").GetString());
+        Assert.Equal(diagnostic, root.GetProperty("build").GetProperty("errors")[0].GetString());
+
+        var json = JsonSerializer.Serialize(failed.ToDto(), JsonRpcSerializer.Options);
+        var dto = JsonSerializer.Deserialize<TestRunDto>(json, JsonRpcSerializer.Options)!;
+        Assert.Equal(failed.RunId, dto.RunId);
+        Assert.Equal(BuildStatusDto.Failed, dto.Build!.Status);
+        Assert.Equal([diagnostic], dto.Build.Errors);
+        Assert.Equal(12, dto.Build.DurationMs);
+        Assert.Null(Run("no-build", 3).ToDto().Build);
     }
 
     [Fact]

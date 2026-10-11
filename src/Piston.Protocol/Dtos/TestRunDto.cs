@@ -57,5 +57,6 @@ public sealed record TestRunDto(
     int Failed,
     int Skipped,
     int DuplicateTestCount,
-    TestRunAdmissionDto? Admission = null
+    TestRunAdmissionDto? Admission = null,
+    BuildResultDto? Build = null
 );

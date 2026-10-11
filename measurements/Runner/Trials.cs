@@ -3,7 +3,6 @@
 
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using System.Xml;
 
 namespace Piston.Measurements;
@@ -40,6 +39,7 @@ public sealed class Trial
     public string? EditHash { get; set; }
     public string? OracleDiscoveryHash { get; set; }
     public string? OracleKind { get; set; }
+    public CompileDiagnostic? ExpectedDiagnostic { get; set; }
     public CommandResult? Restore { get; set; }
     public CommandResult? BaselineSetup { get; set; }
     public CommandResult? RepairPreparation { get; set; }
@@ -178,6 +178,10 @@ public static class Trials
             }
             var original = File.ReadAllText(source);
             var edited = ReplaceUnique(original, scenario.Before, scenario.After);
+            if (scenario.Diagnostic is not null)
+                record.ExpectedDiagnostic = new CompileDiagnostic(scenario.Diagnostic,
+                    Path.GetRelativePath(Path.GetDirectoryName(solution)!, source),
+                    1 + edited[..edited.IndexOf(scenario.After, StringComparison.Ordinal)].Count(character => character == '\n'));
             if (scenario.Repair)
             {
                 File.WriteAllText(source, edited);
@@ -256,18 +260,26 @@ public static class Trials
             {
                 if (PistonSourceFingerprint.ForSolution(solution) != record.PistonSourceFingerprint)
                     throw new InvalidDataException("Piston source inputs changed during measured execution");
-                record.ExpectedTests = expected;
-                record.ObservedTests = PistonRunOracle.Validate(record.PistonExecution!.RunJson,
-                    record.PistonExecution.RunId, record.PistonSourceFingerprint!, expected, solution);
-                record.OracleKind = "piston-generation-bound-full-test-scope";
-                record.PistonAdmission = (JsonNode.Parse(record.PistonExecution.RunJson) as JsonObject)?["admission"]?.DeepClone();
+                if (record.ExpectedDiagnostic is { } diagnostic)
+                {
+                    PistonRunOracle.ValidateCompileDiagnostic(record.PistonExecution!.RunJson,
+                        record.PistonExecution.RunId, record.PistonSourceFingerprint!, diagnostic, solution);
+                    record.OracleKind = "piston-generation-bound-compile-diagnostic";
+                }
+                else
+                {
+                    record.ExpectedTests = expected;
+                    record.ObservedTests = PistonRunOracle.Validate(record.PistonExecution!.RunJson,
+                        record.PistonExecution.RunId, record.PistonSourceFingerprint!, expected, solution);
+                    record.OracleKind = "piston-generation-bound-full-test-scope";
+                }
+                record.PistonAdmission = (JsonNode.Parse(record.PistonExecution!.RunJson) as JsonObject)?["admission"]?.DeepClone();
                 record.PistonAdmissionIsolated = AdmissionIsolated(record.PistonAdmission, record.TestProcessParallelism!.Value);
             }
             else if (scenario.Diagnostic is not null)
             {
                 var text = File.ReadAllText(Path.Combine(artifacts, "edited.log"));
-                if (record.Execution!.ExitCode == 0 ||
-                    !Regex.IsMatch(text, @"\berror " + Regex.Escape(scenario.Diagnostic) + @"\b"))
+                if (record.Execution!.ExitCode == 0 || !record.ExpectedDiagnostic!.Matches(text, solution))
                     throw new InvalidDataException("Expected compile diagnostics absent");
                 if (Directory.GetFiles(resultsDirectory, "*.trx").Length > 0)
                     throw new InvalidDataException("Compile-error trial unexpectedly produced test results");

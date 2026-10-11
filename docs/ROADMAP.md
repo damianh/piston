@@ -195,8 +195,22 @@ execution remains unvalidated. See the README and `ARCHITECTURE.md` for the exac
 behavior and limits.
 
 Still to do in 1a:
-- the Piston trial condition in the harness;
-- matched comparison samples.
+- the PostgreSQL Piston trial condition and pairing;
+- approved matched comparison campaigns, a larger representative repository,
+  and telemetry-overhead quantification.
+
+The unit Piston trial condition landed in #12 and counterbalanced paired mode
+landed in #19; neither is still to do. The harness now also supports the unit
+CS0103 compile-diagnostic trial and compile-error pairing. `get_test_run` and
+protocol snapshots expose each run's own build output, bound to its source
+fingerprints. The compile oracle requires a current full-solution build failure
+for the returned forced run ID and exact workspace, carrying the expected
+diagnostic ID/file/line, not aggregate or stale errors. Wrong/missing diagnostics
+and provenance are rejected; `isCurrentFullResult` remains a test-result claim.
+Validation includes the opt-in real-daemon compile trial and one single-pair,
+concurrency-1 compile correctness smoke. This unblocks unit compile pairing, not
+PostgreSQL, performance claims or G1; no campaign/pilot or real-agent experiment
+was run for this addition. See [harness validation](../measurements/validation.md).
 
 **Exit 1a:** the comparator is unblocked and records valid, matched samples.
 Decide from that evidence whether to continue to 1b, narrow further, or stop.

@@ -271,6 +271,103 @@ public sealed class PistonOracleTests
     }
 }
 
+public sealed class PistonCompileOracleTests
+{
+    private const string Source = "1111111111111111111111111111111111111111111111111111111111111111";
+    private const string Solution = "/workspace/unit/Orders.slnx";
+    private static readonly CompileDiagnostic Expected = new("CS0103", "Pricing/PriceRules.cs", 15);
+
+    private static JsonObject ValidRun() => new()
+    {
+        ["schema"] = PistonRunOracle.Schema, ["runId"] = "forced-run", ["trigger"] = "Forced",
+        ["status"] = "BuildFailed", ["isTerminal"] = true,
+        ["scope"] = "Full", ["isFiltered"] = false, ["isFullScope"] = true,
+        ["freshness"] = "Current", ["sourceChangeObserved"] = false, ["isCurrentFullResult"] = false,
+        ["sourceBefore"] = new JsonObject { ["algorithm"] = PistonSourceFingerprint.Algorithm, ["value"] = Source },
+        ["sourceAfter"] = new JsonObject { ["algorithm"] = PistonSourceFingerprint.Algorithm, ["value"] = Source },
+        ["context"] = new JsonObject { ["solutionPath"] = Solution, ["effectiveFilter"] = null, ["buildTargets"] = null },
+        ["build"] = new JsonObject { ["status"] = "Failed",
+            ["errors"] = new JsonArray("/workspace/unit/Pricing/PriceRules.cs(15,9): error CS0103: MissingSymbol [Pricing.csproj]") },
+        ["tests"] = new JsonArray(), ["duplicateTestIds"] = new JsonArray(),
+    };
+
+    private static void Validate(JsonObject run) => PistonRunOracle.ValidateCompileDiagnostic(
+        run.ToJsonString(), "forced-run", Source, Expected, Solution);
+
+    [Fact]
+    public void AcceptsOnlyRunLocalCurrentCompileEvidenceNotCurrentTestResults()
+    {
+        Validate(ValidRun());
+        Assert.Throws<InvalidDataException>(() => PistonRunOracle.Validate(
+            ValidRun().ToJsonString(), "forced-run", Source, new Dictionary<string, string>(), Solution));
+    }
+
+    [Theory]
+    [InlineData("schema", "\"unknown\"")]
+    [InlineData("runId", "\"old-run\"")]
+    [InlineData("trigger", "\"FileChange\"")]
+    [InlineData("trigger", "\"Startup\"")]
+    [InlineData("status", "\"Completed\"")]
+    [InlineData("status", "\"Cancelled\"")]
+    [InlineData("status", "\"Faulted\"")]
+    [InlineData("status", "\"Incomplete\"")]
+    [InlineData("isTerminal", "false")]
+    [InlineData("scope", "\"Selective\"")]
+    [InlineData("isFiltered", "true")]
+    [InlineData("isFullScope", "false")]
+    [InlineData("freshness", "\"Stale\"")]
+    [InlineData("freshness", "\"Unknown\"")]
+    [InlineData("sourceChangeObserved", "true")]
+    [InlineData("sourceBefore", "null")]
+    [InlineData("sourceAfter", "{}")]
+    [InlineData("sourceAfter", "{\"algorithm\":\"piston-source-v1\",\"value\":\"old\"}")]
+    [InlineData("sourceAfter", "{\"algorithm\":\"piston-source-v2\",\"value\":\"old\"}")]
+    [InlineData("context", "{\"solutionPath\":\"/different/unit/Orders.slnx\"}")]
+    [InlineData("context", "{\"solutionPath\":\"/workspace/unit/Orders.slnx\",\"effectiveFilter\":\"A\"}")]
+    [InlineData("context", "{\"solutionPath\":\"/workspace/unit/Orders.slnx\",\"buildTargets\":[\"Pricing.csproj\"]}")]
+    [InlineData("build", "null")]
+    [InlineData("build", "{\"status\":\"Succeeded\",\"errors\":[]}")]
+    [InlineData("build", "{\"status\":\"Failed\"}")]
+    [InlineData("build", "{\"status\":\"Failed\",\"errors\":[]}")]
+    [InlineData("build", "{\"status\":\"Failed\",\"errors\":[42]}")]
+    [InlineData("build", "{\"status\":\"Failed\",\"warnings\":[\"CS0103\"]}")]
+    [InlineData("tests", "null")]
+    [InlineData("tests", "[{\"fullyQualifiedName\":\"OldTest\",\"status\":\"Passed\"}]")]
+    [InlineData("duplicateTestIds", "[\"OldTest\"]")]
+    public void RejectsInvalidProvenanceAndMissingDiagnostics(string key, string json)
+    {
+        var run = ValidRun();
+        run[key] = JsonNode.Parse(json);
+        Assert.Throws<InvalidDataException>(() => Validate(run));
+    }
+
+    [Theory]
+    [InlineData("/workspace/unit/Pricing/PriceRules.cs(15,9): error CS0104: wrong ID")]
+    [InlineData("/workspace/unit/Pricing/Other.cs(15,9): error CS0103: wrong file")]
+    [InlineData("/workspace/other/Pricing/PriceRules.cs(15,9): error CS0103: wrong workspace")]
+    [InlineData("/workspace/unit/Pricing/PriceRules.cs(16,9): error CS0103: wrong line")]
+    [InlineData("/workspace/unit/Pricing/PriceRules.cs(15,9): warning CS0103: not an error")]
+    [InlineData("error CS0103: no stable location")]
+    [InlineData("CS0103 at PriceRules.cs:15")]
+    public void RejectsWrongIdFileLineOrSeverity(string error)
+    {
+        var run = ValidRun();
+        run["build"]!["errors"] = new JsonArray(error);
+        Assert.Throws<InvalidDataException>(() => Validate(run));
+        Assert.False(Expected.Matches(error, Solution));
+    }
+
+    [Fact]
+    public void MatchesSolutionRelativeLocationAndRepeatedMsbuildSummary()
+    {
+        const string error = "Pricing/PriceRules.cs(15,9): error CS0103: MissingSymbol";
+        Assert.True(Expected.Matches(error + "\n" + error, Solution));
+        var run = ValidRun();
+        run["build"]!["errors"] = new JsonArray(error, error);
+        Validate(run);
+    }
+}
+
 /// <summary>Skips unless <c>PISTON_DAEMON_DLL</c> points at a built <c>piston.dll</c>.</summary>
 public sealed class PistonDaemonFactAttribute : FactAttribute
 {

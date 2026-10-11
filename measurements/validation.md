@@ -1,5 +1,62 @@
 # Harness validation
 
+## Piston compile-diagnostic condition (2026-10-11)
+
+The unit `piston` condition now supports `compile-error`, and `--paired` supports
+the same compile-error scenario. The oracle accepts only a terminal, forced,
+unfiltered full-solution `BuildFailed` run for the returned run ID and exact
+solution path. Before/after `piston-source-v2` fingerprints must equal the
+independently computed edited fingerprint, freshness must be `Current`, and no
+source change may have been observed. The run's own failed `build.errors` must
+contain error CS0103 at `Pricing/PriceRules.cs:15`; tests must be empty.
+The expected file/line comes from the fixture/edit, not Piston's response.
+Dotnet now checks the same diagnostic ID/file/line and absence of TRX.
+
+Minimal engine support captures the build result in each `TestRunRecord`, with
+copied error/warning lists, and exposes it through MCP `build` and protocol
+`TestRunDto.Build`. This is additive v1 provenance, not aggregate `LastBuild`
+reuse; `isCurrentFullResult` remains false for a build failure.
+
+Focused self-tests cover missing/wrong diagnostics (ID, file, line, severity),
+run IDs and workspace paths, incomplete/nonterminal/cancelled/filtered/selective
+runs, stale/mismatched fingerprints and source changes, missing/malformed
+build output, stale test results, compile pair comparability and unchanged
+campaign approval. Engine/MCP/protocol tests cover run-local diagnostic retention
+after a later successful build, stale build failures, and wire serialization.
+
+Validation on Linux with .NET SDK 10.0.401:
+
+- `dotnet build Piston.slnx -c Release`: zero warnings and errors.
+- Full root suite: 430 tests passed (299 Engine, 131 tool/host/protocol/MCP).
+- `dotnet format Piston.slnx --verify-no-changes --no-restore`: passed.
+- Locked harness restore and complete self-tests: 189 passed, three daemon
+  smokes skipped by default.
+- All three opt-in `PISTON_DAEMON_DLL` smokes passed, run sequentially: the
+  generation-bound oracle smoke, existing/new failure trial, and new CS0103
+  compile trial. The latter also rejects earlier runs and wrong fingerprints
+  and verifies daemon cleanup.
+- Exactly one real paired compile-error correctness smoke, concurrency 1,
+  repetitions 1, seed 42, piston first: both trials valid, one comparable pair,
+  zero timeouts/incidents, no pairing problems. The same expected CS0103
+  file/line, source/edit hashes and baseline identity hash matched; both
+  conditions had nominal test-process parallelism 2. Piston admission was
+  isolated and cleanup completed. `paired_improvement`, `uncertainty` and
+  `paired_changes` were null, with statistics withheld for fewer than two pairs.
+
+The smoke used prebuilt Release runner/daemon assemblies and no
+`--approve-campaign`. Raw evidence is retained in the gitignored
+`measurements/artifacts/paired-compile-diagnostic-correctness` directory.
+No smoke timings are published as comparison results. No campaign/pilot,
+real-agent experiment, containers/PostgreSQL execution, NuGet publishing or
+performance claim was made. G1 remains unproven.
+
+Supplemental harness-wide `dotnet format` reports existing formatting debt
+(including the untouched `PistonTrial.cs`); no unrelated formatting sweep was
+performed. The required root-solution formatting check passes.
+
+The sections below are historical validation records; their blocked-condition
+statements describe the implementation at that time.
+
 ## Paired comparison support (2026-10-11)
 
 `--paired` adds counterbalanced unit full-scope dotnet/Piston pairs. It reuses both

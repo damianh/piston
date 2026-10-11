@@ -380,12 +380,10 @@ public sealed record Options(string Workload, string Scenario, string Output, in
             throw new ArgumentException("--paired selects both conditions itself");
         if (Paired && Workload == "integration")
             throw new ArgumentException("Paired PostgreSQL/Piston comparison is blocked: no Piston integration condition exists");
-        if (Paired && workload.Scenarios[Scenario].Diagnostic is not null)
-            throw new ArgumentException("Paired compile-diagnostic comparison is blocked: no Piston compile-diagnostic oracle exists");
         if (Condition == "piston" || Paired)
         {
-            if (Workload != "unit" || workload.Scenarios[Scenario].Diagnostic is not null)
-                throw new ArgumentException("Piston supports only unit full-test-scope scenarios; integration and compile diagnostics are blocked");
+            if (Workload != "unit")
+                throw new ArgumentException("Piston supports only unit scenarios; integration is blocked");
             if (PistonDaemonDll is null || !File.Exists(PistonDaemonDll) ||
                 !PistonDaemonDll.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException("Piston requires --piston-daemon-dll pointing to a prebuilt daemon DLL");

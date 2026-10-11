@@ -58,7 +58,8 @@ An expected failing test command is a **correct result**, not a contention incid
 failure before timing a new regression; the oracle must preserve both. The
 `known-failure` scenario merely demonstrates introducing that sentinel, not agent
 effort in investigating an existing failure.
-Compile-error trials check CS0103 and absence of test execution and are summarized
+Compile-error trials check error CS0103 at the edited `Pricing/PriceRules.cs`
+line (currently 15) and absence of test execution and are summarized
 separately. Timing ends at command completion, before offline oracle validation;
 source hashing and result capture overhead after edit are included.
 
@@ -144,8 +145,8 @@ contention failure. Stage-level build/test timings and agent metrics are null
 with reasons when unobservable; unit trials have no container statistics.
 
 Both `--condition dotnet` (the default) and `--condition piston` are executable.
-Piston currently supports only the unit fixture's six per-test scenarios;
-integration and `compile-error` are rejected before output creation.
+Piston supports the unit fixture's six per-test scenarios and `compile-error`;
+integration is rejected before output creation.
 MCP latest-state aggregates
 (`get_test_results`, `run_tests` counts) are not a valid generation-bound
 full-scope oracle. Piston now exposes per-run provenance through `get_test_run`.
@@ -160,8 +161,25 @@ full-scope oracle. Piston now exposes per-run provenance through `get_test_run`.
 - it reports exactly the expected unique test identities and statuses.
 
 It rejects summary-only, missing, extra, duplicate or mismatched identities.
-Expected assertion failures are correct results; cancelled, build-failed,
+Expected assertion failures are correct test results; cancelled, build-failed,
 faulted or incomplete runs are not.
+
+For `compile-error`, `PistonRunOracle.ValidateCompileDiagnostic` instead requires
+a terminal `BuildFailed` **forced**, unfiltered full-solution run at the exact
+trial solution path. Both independently computed source fingerprints must match,
+freshness must be `Current`, and no source change may have been observed.
+The run-local `build.status` must be `Failed`, `tests` must be empty, and a raw
+`build.errors` line must report **error CS0103 at the exact source file and
+one-based line**. The harness derives the solution-relative file and line from
+the fixture/edit, not Piston's output; column is not part of this oracle.
+Absolute or solution-relative MSBuild locations and repeated summary lines are
+accepted. Wrong/missing IDs, locations or provenance are rejected; a diagnostic
+in warnings, a summary count, or the aggregate/latest `LastBuild` is not evidence.
+Additional build errors do not substitute for the expected diagnostic.
+`isCurrentFullResult` stays false: current build failure evidence is not passing
+test evidence. The dotnet compile oracle now checks the same ID/file/line against
+its fresh command log and rejects any TRX output. Compile trials retain
+`expected_diagnostic` and never invent expected/observed per-test counts.
 
 ### Piston trial condition
 
@@ -234,15 +252,16 @@ PISTON_DAEMON_DLL=$PWD/src/Piston/bin/Debug/net10.0/Piston.dll \
     --filter 'FullyQualifiedName~PistonOracleSmokeTests|FullyQualifiedName~PistonTrialSmokeTests'
 ```
 
-The trial smoke exercises the actual harness with a regression plus a distinct
-existing failure, all 409 identities, and daemon cleanup. Both smokes are opt-in
+The trial smokes exercise the actual harness with a regression plus a distinct
+existing failure (all 409 identities), and the current, run-bound CS0103 compile
+failure, including rejection of prior runs and wrong source fingerprints and
+daemon cleanup. All daemon smokes are opt-in
 through `PISTON_DAEMON_DLL`; ordinary self-tests launch no daemon.
 These are still missing:
 
 - an executed paired campaign (the paired mode below exists but no repeated
   campaign or pilot has been approved or run);
 - the PostgreSQL workload for Piston (and so any PostgreSQL pairing);
-- a Piston compile-diagnostic trial condition (and so any compile-error pairing);
 - a larger repository;
 - telemetry-overhead measurement.
 
@@ -250,7 +269,7 @@ These are still missing:
 
 `--paired` runs both conditions as counterbalanced pairs on the unit fixture;
 `--repetitions N` is the number of pairs and `--concurrency` the trials per
-condition batch. It reuses the unchanged dotnet and Piston trial paths and
+condition batch. It reuses the dotnet and Piston trial paths and
 `PistonRunOracle`. A single pair at concurrency 1 is a bounded correctness smoke;
 more pairs or concurrency are a campaign and still require `--approve-campaign`
 (and operator approval):
@@ -263,7 +282,7 @@ dotnet measurements/Runner/bin/Release/net10.0/Piston.Measurements.dll \
 ```
 
 - `--paired` cannot be combined with `--condition`; `--seed` requires `--paired`.
-  Integration (PostgreSQL) and `compile-error` are rejected before output creation
+  Integration (PostgreSQL) is rejected before output creation
   rather than falling back to a single condition.
 - The order plan is fixed before any trial: balanced dotnet-first/piston-first
   counts (an odd pair decided by the seed), shuffled with the seed. The seed is
@@ -286,7 +305,9 @@ dotnet measurements/Runner/bin/Release/net10.0/Piston.Measurements.dll \
   usable only if both batches are complete and correct. The base, baseline,
   pre-edit and edited source hashes, baseline identity hash and expected statuses
   must be identical. Test-process parallelism must match, oracles must be full
-  scope, and Piston admission must be isolated.
+  scope (or both must validate the identical compile diagnostic), and Piston
+  admission must be isolated. Compile-error pairs additionally require the same
+  solution-relative diagnostic ID/file/line and are never pooled with test-result pairs.
 - `paired_improvement` is computed only when **every** planned pair is usable, at
   least two pairs exist and the run was not cancelled. No pair is dropped to
   rescue statistics. Otherwise it is null and `statistics_withheld_reasons`
@@ -297,6 +318,10 @@ dotnet measurements/Runner/bin/Release/net10.0/Piston.Measurements.dll \
 
 Paired output is scripted-command evidence, not a real-agent result. It is not
 a G1 decision (`summary.G1` is `not evaluated`).
+
+For the bounded compile-error correctness smoke, use the same paired command
+with `--scenario compile-error`, a new output directory, and the prebuilt daemon.
+Keep `--repetitions 1 --concurrency 1`; no `--approve-campaign` is needed or implied.
 
 The oracle smoke is a correctness check, not a timing sample; the harness smoke's
 trial timing is functional evidence only, not comparison-campaign evidence. No

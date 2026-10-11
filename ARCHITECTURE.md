@@ -340,13 +340,18 @@ record becomes `LastRun` and is kept in a bounded in-memory `RecentRuns` list. E
 - the run context;
 - `SourceFingerprinter` fingerprints from before and after the run;
 - watcher-observed changes;
+- its own build result (copied errors/warnings, status and duration), never borrowed from `LastBuild`;
 - per-project outcomes;
 - its own suites. Aggregate suites carry their originating `RunId`.
 
 `run_tests` returns the new run ID. `get_test_run` serializes a record as
 `piston.test-run/v1`. The protocol `StateSnapshotNotification` carries optional
-`LastRun`/`ActiveRun` (`TestRunDto`, counts only, plus an optional `Admission`), and
+`LastRun`/`ActiveRun` (`TestRunDto`, test counts plus optional `Admission` and run-local `Build`), and
 `TestSuiteDto` carries an optional `RunId`; older clients can ignore all of them.
+MCP adds `build` (null before a build result is captured) to the existing v1
+document. Raw diagnostic lines retain MSBuild's ID and file/line/column location.
+A build failure uses the same source-freshness computation as test completion;
+`Current` build diagnostics do not make `isCurrentFullResult` true.
 
 `set_test_filter` changes the active filter but does not itself run tests.
 `clear_results` clears in-memory suites, the last-run timestamp, coverage state,

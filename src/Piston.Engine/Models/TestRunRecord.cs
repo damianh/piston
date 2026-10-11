@@ -185,6 +185,10 @@ public sealed record TestRunRecord
     public bool SourceChangeObserved { get; init; }
 
     public TestRunContext? Context { get; init; }
+
+    /// <summary>Build output from this run only; null if its build did not return a result.</summary>
+    public BuildResult? Build { get; init; }
+
     public IReadOnlyList<TestRunProjectOutcome> Projects { get; init; } = [];
 
     /// <summary>Suites produced by this run only (never merged with earlier runs).</summary>
