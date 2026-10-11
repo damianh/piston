@@ -45,6 +45,19 @@ public sealed class ExecutionConfigurationTests : IDisposable
         Assert.Equal(new ExecutionBudget(2, null, path), ExecutionBudget.Load(path));
     }
 
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{ "memoryMb": 4096 }""")]
+    public void Budget_ExistingFileWithoutCpuSlots_IsExplicitError(string json)
+    {
+        var path = Budget(json);
+
+        var ex = Assert.Throws<ExecutionCoordinationException>(() => ExecutionBudget.Load(path));
+
+        Assert.Contains("'cpuSlots' is required", ex.Message, StringComparison.Ordinal);
+        Assert.Contains(path, ex.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Budget_InaccessiblePath_DoesNotUseDefault()
     {

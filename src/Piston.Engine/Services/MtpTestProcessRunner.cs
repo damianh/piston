@@ -114,7 +114,10 @@ internal static class MtpTestProcessRunner
                 }
             }
             catch (InvalidOperationException) when (process.HasExited) { }
-            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            finally
+            {
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            }
             log?.Write("MtpRunner", "Cancelled — returning empty result");
             return new ProjectTestResult(projectPath, [], null, [], Crashed: false);
         }

@@ -72,7 +72,12 @@ public sealed record ExecutionBudget(int CpuSlots, int? MemoryMb, string Source)
                 }
             }
 
-            return new ExecutionBudget(cpuSlots ?? Environment.ProcessorCount, memoryMb, path);
+            if (cpuSlots is null)
+            {
+                throw Invalid(path, "'cpuSlots' is required when the budget file exists.");
+            }
+
+            return new ExecutionBudget(cpuSlots.Value, memoryMb, path);
         }
     }
 

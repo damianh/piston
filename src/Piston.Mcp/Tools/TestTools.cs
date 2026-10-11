@@ -164,7 +164,9 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
     {
         var memory = a.BudgetMemoryMb is { } budgetMb
             ? $", memory {a.MemoryMbInUse}+{a.ReservedMemoryMb ?? 0}/{budgetMb} MiB"
-            : "";
+            : a.ReservedMemoryMb is { } reservedMb
+                ? $", memory {a.MemoryMbInUse}+{reservedMb} MiB (unbudgeted)"
+                : "";
         var queue = a.State == TestRunAdmissionState.Queued
             ? $"Queued ({a.QueuedAhead} ahead, {a.QueueLength} waiting)"
             : "Admitted";

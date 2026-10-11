@@ -186,4 +186,28 @@ public sealed class TestRunToolTests
         using var doc = JsonDocument.Parse(tools.GetTestRun("latest"));
         Assert.True(!doc.RootElement.TryGetProperty("admission", out var a) || a.ValueKind == JsonValueKind.Null);
     }
+
+    [Theory]
+    [InlineData(TestRunAdmissionState.Queued)]
+    [InlineData(TestRunAdmissionState.Admitted)]
+    public async Task ToolsReportMemoryReservationWhenMemoryIsUnbudgeted(TestRunAdmissionState admissionState)
+    {
+        var admission = QueuedAdmission() with { State = admissionState, BudgetMemoryMb = null };
+        var run = Run("unbudgeted-run", 5) with { Admission = admission };
+        var engine = new StubEngine { NextRun = run };
+        engine.State.CurrentRun = run;
+        engine.State.LastRun = run;
+        var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
+
+        var results = tools.GetTestResults();
+        Assert.Contains("Active Run: unbudgeted-run", results);
+        Assert.Contains("Latest Run: unbudgeted-run", results);
+        Assert.Equal(2, results.Split("memory 1024+512 MiB (unbudgeted)", StringSplitOptions.None).Length - 1);
+        Assert.Contains("memory 1024+512 MiB (unbudgeted)", await tools.RunTestsAsync(CancellationToken.None));
+
+        using var doc = JsonDocument.Parse(tools.GetTestRun("latest"));
+        var recorded = doc.RootElement.GetProperty("admission");
+        Assert.Equal(512, recorded.GetProperty("reservedMemoryMb").GetInt32());
+        Assert.Equal(JsonValueKind.Null, recorded.GetProperty("budgetMemoryMb").ValueKind);
+    }
 }

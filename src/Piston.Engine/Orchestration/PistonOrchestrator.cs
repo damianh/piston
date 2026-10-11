@@ -298,7 +298,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         }
         catch (OperationCanceledException)
         {
-            return CompleteRun(run, TestRunStatus.Cancelled, "Superseded by a newer run before it started.");
+            return CompleteRun(run, TestRunStatus.Cancelled, _stopping
+                ? "Engine stopped before the run started."
+                : "Superseded by a newer run before it started.");
         }
 
         // Machine-wide admission is distinct from the per-daemon run lock: the lock serializes this
@@ -328,7 +330,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
             _ = _runLock.Release();
             return CompleteRun(run, TestRunStatus.Cancelled,
-                "Superseded by a newer run while waiting for machine-wide execution admission.");
+                _stopping
+                    ? "Engine stopped while waiting for machine-wide execution admission."
+                    : "Superseded by a newer run while waiting for machine-wide execution admission.");
         }
         catch (Exception ex)
         {

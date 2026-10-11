@@ -88,7 +88,9 @@ public sealed class OrchestratorAdmissionTests : IDisposable
             await runner.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(15));
 
             disposal = synchronous ? Task.Run(orchestrator.Dispose) : orchestrator.DisposeAsync().AsTask();
-            _ = await replacement.WaitAsync(TimeSpan.FromSeconds(15));
+            var cancelledReplacement = await replacement.WaitAsync(TimeSpan.FromSeconds(15));
+            Assert.Equal(TestRunStatus.Cancelled, cancelledReplacement!.Status);
+            Assert.Equal("Engine stopped before the run started.", cancelledReplacement.StatusReason);
             Assert.False(disposal.IsCompleted);
             Assert.Equal(1, Entries(_directory.LeasesDirectory));
 
@@ -203,7 +205,7 @@ public sealed class OrchestratorAdmissionTests : IDisposable
 
         var cancelled = _state.LastRun!;
         Assert.Equal(TestRunStatus.Cancelled, cancelled.Status);
-        Assert.Contains("machine-wide execution admission", cancelled.StatusReason, StringComparison.Ordinal);
+        Assert.Equal("Superseded by a newer run while waiting for machine-wide execution admission.", cancelled.StatusReason);
         Assert.Null(cancelled.StartedAt);
         Assert.Equal(ResultFreshness.Unknown, cancelled.Freshness);
 
@@ -218,18 +220,34 @@ public sealed class OrchestratorAdmissionTests : IDisposable
         Assert.Equal(0, Entries(_directory.QueueDirectory));
     }
 
-    [Fact]
-    public async Task Stop_WhileQueued_CancelsAndRemovesTicket()
+    [Theory]
+    [InlineData("stop")]
+    [InlineData("dispose")]
+    [InlineData("disposeAsync")]
+    public async Task Shutdown_WhileQueued_CancelsAndRemovesTicket(string shutdown)
     {
         using var other = await OccupyBudget();
         await _orchestrator.StartAsync(SolutionPath);
         await WaitForAsync(() => _state.CurrentRun?.Admission is { State: TestRunAdmissionState.Queued },
             "startup run was not queued");
 
-        _orchestrator.Stop();
+        switch (shutdown)
+        {
+            case "stop":
+                _orchestrator.Stop();
+                break;
+            case "dispose":
+                _orchestrator.Dispose();
+                break;
+            case "disposeAsync":
+                await _orchestrator.DisposeAsync();
+                break;
+        }
 
         await WaitForAsync(() => _state.LastRun is not null, "queued run did not end");
         Assert.Equal(TestRunStatus.Cancelled, _state.LastRun!.Status);
+        Assert.Equal("Engine stopped while waiting for machine-wide execution admission.", _state.LastRun.StatusReason);
+        Assert.Null(_state.LastRun.StartedAt);
         Assert.Equal(0, Entries(_directory.QueueDirectory));
     }
 
