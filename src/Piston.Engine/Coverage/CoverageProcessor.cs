@@ -12,10 +12,7 @@ internal sealed class CoverageProcessor : ICoverageProcessor
 {
     private readonly ICoberturaParser _parser;
 
-    public CoverageProcessor(ICoberturaParser parser)
-    {
-        _parser = parser;
-    }
+    public CoverageProcessor(ICoberturaParser parser) => _parser = parser;
 
     public async Task ProcessCoverageAsync(
         long runId,
@@ -24,7 +21,9 @@ internal sealed class CoverageProcessor : ICoverageProcessor
         ICoverageStore store)
     {
         if (coberturaXmlPaths.Count == 0 || testFqns.Count == 0)
+        {
             return;
+        }
 
         // Aggregate all file→line coverage from all Cobertura reports
         // Key: filePath, Value: set of line numbers with hits > 0
@@ -54,13 +53,17 @@ internal sealed class CoverageProcessor : ICoverageProcessor
                 foreach (var line in fileCoverage.Lines)
                 {
                     if (line.HitCount > 0)
-                        lineSet.Add(line.LineNumber);
+                    {
+                        _ = lineSet.Add(line.LineNumber);
+                    }
                 }
             }
         }
 
         if (coveredLines.Count == 0)
+        {
             return;
+        }
 
         // Build the test coverage map: each test FQN → all covered file+line entries
         var testCoverageMap = new Dictionary<string, IReadOnlyList<TestLineCoverage>>(
@@ -73,7 +76,9 @@ internal sealed class CoverageProcessor : ICoverageProcessor
             foreach (var (filePath, lines) in coveredLines)
             {
                 foreach (var lineNumber in lines)
+                {
                     entries.Add(new TestLineCoverage(filePath, lineNumber, 1));
+                }
             }
 
             testCoverageMap[testFqn] = entries;

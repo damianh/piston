@@ -16,10 +16,7 @@ public sealed class NamedPipeListener : IAsyncDisposable
     private readonly string _pipeName;
     private bool _disposed;
 
-    public NamedPipeListener(string pipeName)
-    {
-        _pipeName = pipeName;
-    }
+    public NamedPipeListener(string pipeName) => _pipeName = pipeName;
 
     /// <summary>
     /// Yields a connected <see cref="Stream"/> for each new client.
@@ -58,7 +55,7 @@ public sealed class NamedPipeListener : IAsyncDisposable
     public static string GeneratePipeName(string solutionPath)
     {
         var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(solutionPath));
-        var hex   = Convert.ToHexString(bytes)[..8].ToLowerInvariant();
+        var hex = Convert.ToHexString(bytes)[..8].ToLowerInvariant();
         return $"piston-{hex}";
     }
 

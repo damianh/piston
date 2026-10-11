@@ -30,7 +30,9 @@ internal static class DaemonLauncher
         CancellationToken ct)
     {
         if (await IsPipeAvailableAsync(pipeName, ct))
+        {
             return;
+        }
 
         SpawnDaemon(solutionPath, pipeName, webPort, configurationDirectory);
 
@@ -62,7 +64,9 @@ internal static class DaemonLauncher
         var psi = CreateStartInfo(pistonExe, solutionPath, pipeName, webPort, configurationDirectory);
         var process = Process.Start(psi);
         if (process is null)
+        {
             throw new InvalidOperationException("Failed to spawn piston daemon process.");
+        }
 
         // Detach — we don't own the daemon lifecycle
         process.Dispose();
@@ -76,17 +80,19 @@ internal static class DaemonLauncher
     {
         var psi = new ProcessStartInfo
         {
-            FileName               = executablePath,
-            UseShellExecute        = false,
-            CreateNoWindow         = true,
-            RedirectStandardInput  = false,
+            FileName = executablePath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = false,
             RedirectStandardOutput = false,
-            RedirectStandardError  = false,
+            RedirectStandardError = false,
         };
 
         // Framework-dependent tool shims invoke dotnet rather than a Piston apphost.
         if (string.Equals(Path.GetFileNameWithoutExtension(executablePath), "dotnet", StringComparison.OrdinalIgnoreCase))
+        {
             psi.ArgumentList.Add(typeof(DaemonLauncher).Assembly.Location);
+        }
 
         psi.ArgumentList.Add("daemon");
         psi.ArgumentList.Add(solutionPath);

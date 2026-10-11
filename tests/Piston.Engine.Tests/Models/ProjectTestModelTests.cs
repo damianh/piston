@@ -67,7 +67,7 @@ public sealed class ProjectTestModelTests
 
         var result = new ProjectTestResult("proj.csproj", suites, null, [], Crashed: false);
 
-        Assert.Single(result.Suites);
+        _ = Assert.Single(result.Suites);
         Assert.Equal("MySuite", result.Suites[0].Name);
     }
 }

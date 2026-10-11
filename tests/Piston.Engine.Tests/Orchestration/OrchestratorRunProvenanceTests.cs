@@ -26,7 +26,7 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
 
     public OrchestratorRunProvenanceTests()
     {
-        Directory.CreateDirectory(_root);
+        _ = Directory.CreateDirectory(_root);
         File.WriteAllText(Path.Combine(_root, "App.slnx"), "<Solution />");
         File.WriteAllText(Path.Combine(_root, "Code.cs"), "class Code { }");
         _orchestrator = new PistonOrchestrator(_watcher, _build, _runner, _impact, _state);
@@ -51,7 +51,11 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         var deadline = DateTime.UtcNow.AddSeconds(10);
         while (!condition())
         {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException("Condition was not met.");
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new TimeoutException("Condition was not met.");
+            }
+
             await Task.Delay(10);
         }
     }
@@ -73,7 +77,7 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         }
         finally
         {
-            releaseGraph.TrySetResult();
+            _ = releaseGraph.TrySetResult();
             await WaitForAsync(() => _state.LastRun is not null);
         }
     }
@@ -81,7 +85,7 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     [Fact]
     public async Task RunContext_RecordsBuildAndMixedRunnerWorkingDirectories()
     {
-        _impact.MtpProjects.Add(Projects[1]);
+        _ = _impact.MtpProjects.Add(Projects[1]);
         await StartAndWaitForStartupRunAsync();
 
         var run = await _orchestrator.RequestRunAsync();
@@ -98,7 +102,10 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         TestRunRecord? terminal = null;
         _state.StateChanged += () =>
         {
-            if (_state.CurrentRun is null) terminal = _state.LastRun;
+            if (_state.CurrentRun is null)
+            {
+                terminal = _state.LastRun;
+            }
         };
         _runner.DuringRun = () =>
         {
@@ -121,11 +128,14 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         TestRunRecord? terminal = null;
         _state.StateChanged += () =>
         {
-            if (_state.CurrentRun is null) terminal = _state.LastRun;
+            if (_state.CurrentRun is null)
+            {
+                terminal = _state.LastRun;
+            }
         };
         _runner.DuringRun = () => throw new InvalidOperationException("runner fault");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => _orchestrator.RequestRunAsync());
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(() => _orchestrator.RequestRunAsync());
 
         Assert.Equal(TestRunStatus.Faulted, terminal!.Status);
         Assert.Equal(SourceFingerprinter.Compute(_root), terminal.SourceAfter);
@@ -220,7 +230,7 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     {
         await StartAndWaitForStartupRunAsync();
         _state.TestFilter = "FullyQualifiedName~A";
-        _runner.ProjectsWithoutResults.Add(Projects[1]);
+        _ = _runner.ProjectsWithoutResults.Add(Projects[1]);
 
         var run = await _orchestrator.RequestRunAsync();
 
@@ -258,7 +268,7 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     public async Task ProjectWithoutResults_MarksRunIncomplete()
     {
         await StartAndWaitForStartupRunAsync();
-        _runner.ProjectsWithoutResults.Add(Projects[1]);
+        _ = _runner.ProjectsWithoutResults.Add(Projects[1]);
 
         var run = await _orchestrator.RequestRunAsync();
 
@@ -271,7 +281,7 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     public async Task CrashedProject_MarksRunIncomplete()
     {
         await StartAndWaitForStartupRunAsync();
-        _runner.CrashedProjects.Add(Projects[0]);
+        _ = _runner.CrashedProjects.Add(Projects[0]);
 
         var run = await _orchestrator.RequestRunAsync();
 
@@ -301,7 +311,10 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         TestRunRecord? terminal = null;
         _state.StateChanged += () =>
         {
-            if (_state.CurrentRun is null) terminal = _state.LastRun;
+            if (_state.CurrentRun is null)
+            {
+                terminal = _state.LastRun;
+            }
         };
 
         var run = await _orchestrator.RequestRunAsync();
@@ -391,7 +404,9 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
                     TimeSpan.FromMilliseconds(1), null, null, null, null),
             };
             if (DuplicateFirstTest && all.Count == 0)
+            {
                 tests.Add(tests[0]);
+            }
 
             var suite = new TestSuite(name, tests, DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(1));
             all.Add(suite);

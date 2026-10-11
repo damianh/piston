@@ -16,7 +16,9 @@ public sealed class PipeSecurityHelperTests
     public void CreateCurrentUserOnly_OnNonWindows_ReturnsNull()
     {
         if (OperatingSystem.IsWindows())
+        {
             return; // Skip on Windows — tested by Windows-specific tests below
+        }
 
         var result = PipeSecurityHelper.CreateCurrentUserOnly();
 
@@ -28,7 +30,9 @@ public sealed class PipeSecurityHelperTests
     public void CreateCurrentUserOnly_OnWindows_ReturnsNonNull()
     {
         if (!OperatingSystem.IsWindows())
+        {
             return; // Skip on non-Windows
+        }
 
         var result = PipeSecurityHelper.CreateCurrentUserOnly();
 
@@ -40,10 +44,12 @@ public sealed class PipeSecurityHelperTests
     public void CreateCurrentUserOnly_OnWindows_ContainsCurrentUserAllowRule()
     {
         if (!OperatingSystem.IsWindows())
+        {
             return; // Skip on non-Windows
+        }
 
         var currentUser = WindowsIdentity.GetCurrent().User!;
-        var security    = PipeSecurityHelper.CreateCurrentUserOnly();
+        var security = PipeSecurityHelper.CreateCurrentUserOnly();
 
         Assert.NotNull(security);
 
@@ -63,10 +69,12 @@ public sealed class PipeSecurityHelperTests
     public void CreateCurrentUserOnly_OnWindows_OnlyCurrentUserHasAccess()
     {
         if (!OperatingSystem.IsWindows())
+        {
             return; // Skip on non-Windows
+        }
 
         var currentUser = WindowsIdentity.GetCurrent().User!;
-        var security    = PipeSecurityHelper.CreateCurrentUserOnly();
+        var security = PipeSecurityHelper.CreateCurrentUserOnly();
 
         Assert.NotNull(security);
 
@@ -74,7 +82,7 @@ public sealed class PipeSecurityHelperTests
         var rules = security.GetAccessRules(includeExplicit: true, includeInherited: false, targetType: typeof(SecurityIdentifier));
         var allowRules = rules.Cast<PipeAccessRule>().Where(r => r.AccessControlType == AccessControlType.Allow).ToList();
 
-        Assert.Single(allowRules);
+        _ = Assert.Single(allowRules);
         Assert.Equal(currentUser, allowRules[0].IdentityReference);
     }
 }

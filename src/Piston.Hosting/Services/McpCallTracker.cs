@@ -33,7 +33,9 @@ public sealed class McpCallTracker(IActivityEventSink sink, string? solutionPath
             _buffer[_head] = entry;
             _head = (_head + 1) % RingBufferCapacity;
             if (_count < RingBufferCapacity)
+            {
                 _count++;
+            }
         }
 
         _sink.Emit(ActivityEventFactory.McpToolCall(_solutionPath, toolName, paramsSummary, resultSummary, durationMs, succeeded));
@@ -47,13 +49,17 @@ public sealed class McpCallTracker(IActivityEventSink sink, string? solutionPath
         lock (_lock)
         {
             if (_count == 0)
+            {
                 return [];
+            }
 
             var result = new McpToolCallData[_count];
             var start = _count < RingBufferCapacity ? 0 : _head;
 
             for (var i = 0; i < _count; i++)
+            {
                 result[i] = _buffer[(start + i) % RingBufferCapacity];
+            }
 
             return result;
         }

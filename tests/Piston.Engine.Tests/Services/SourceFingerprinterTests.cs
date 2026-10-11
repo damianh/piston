@@ -14,7 +14,7 @@ public sealed class SourceFingerprinterTests : IDisposable
     public SourceFingerprinterTests()
     {
         _root = Path.Combine(_parent, "repo");
-        Directory.CreateDirectory(Path.Combine(_root, "src"));
+        _ = Directory.CreateDirectory(Path.Combine(_root, "src"));
         File.WriteAllText(Path.Combine(_root, "App.slnx"), "<Solution />");
         File.WriteAllText(Path.Combine(_root, "src", "Code.cs"), "class Code { }");
     }
@@ -27,7 +27,7 @@ public sealed class SourceFingerprinterTests : IDisposable
     private void Write(string relative, string content)
     {
         var path = Path.Combine(_root, relative);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, content);
     }
 
@@ -48,7 +48,7 @@ public sealed class SourceFingerprinterTests : IDisposable
     {
         // Pins the algorithm so the independent measurements-harness implementation stays compatible.
         var dir = Path.Combine(_parent, "vector");
-        Directory.CreateDirectory(Path.Combine(dir, "src"));
+        _ = Directory.CreateDirectory(Path.Combine(dir, "src"));
         File.WriteAllText(Path.Combine(dir, "a.txt"), "A");
         File.WriteAllText(Path.Combine(dir, "src", "b.cs"), "B");
 
@@ -62,7 +62,7 @@ public sealed class SourceFingerprinterTests : IDisposable
     public void Compute_EmbeddedNulsCannotImpersonateFileBoundaries()
     {
         var dir = Path.Combine(_parent, "nul-vector");
-        Directory.CreateDirectory(dir);
+        _ = Directory.CreateDirectory(dir);
         File.WriteAllText(Path.Combine(dir, "a"), "X\0b\0Y");
         var single = SourceFingerprinter.Compute(dir);
         File.WriteAllText(Path.Combine(dir, "a"), "X");

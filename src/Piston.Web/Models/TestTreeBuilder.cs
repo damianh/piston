@@ -57,7 +57,11 @@ public static class TestTreeBuilder
         foreach (var suite in suites)
         {
             var visibleTests = GetVisibleTests(suite.Tests, matcher, viewState);
-            if (visibleTests.Count == 0) continue;
+            if (visibleTests.Count == 0)
+            {
+                continue;
+            }
+
             anyVisible = true;
 
             var suiteNode = new TestNode
@@ -126,7 +130,9 @@ public static class TestTreeBuilder
         }
 
         if (!anyVisible)
+        {
             roots.Add(new TestNode { Label = "No tests match current filters", Kind = TestNodeKind.Group, GroupKey = "" });
+        }
     }
 
     private static void BuildByStatus(
@@ -160,9 +166,16 @@ public static class TestTreeBuilder
 
         foreach (var (label, status, show) in groups)
         {
-            if (!show) continue;
+            if (!show)
+            {
+                continue;
+            }
+
             var grouped = allTests.Where(x => x.Test.Status == status).ToList();
-            if (grouped.Count == 0) continue;
+            if (grouped.Count == 0)
+            {
+                continue;
+            }
 
             var groupNode = new TestNode
             {
@@ -229,7 +242,10 @@ public static class TestTreeBuilder
         ViewState viewState,
         DateTimeOffset? lastFileChangeTime)
     {
-        if (viewState.PinnedTestFqns.Count == 0) return;
+        if (viewState.PinnedTestFqns.Count == 0)
+        {
+            return;
+        }
 
         var pinnedTests = suites
             .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
@@ -237,7 +253,10 @@ public static class TestTreeBuilder
             .OrderBy(x => x.Test.DisplayName)
             .ToList();
 
-        if (pinnedTests.Count == 0) return;
+        if (pinnedTests.Count == 0)
+        {
+            return;
+        }
 
         var pinnedRoot = new TestNode
         {
@@ -289,7 +308,10 @@ public static class TestTreeBuilder
     {
         IEnumerable<TestResultDto> filtered = tests;
         if (matcher is not null)
+        {
             filtered = filtered.Where(t => matcher(t.FullyQualifiedName));
+        }
+
         filtered = filtered.Where(t => IsStatusVisible(t.Status, viewState));
         return filtered.ToList();
     }
@@ -297,11 +319,11 @@ public static class TestTreeBuilder
     private static bool IsStatusVisible(TestStatusDto status, ViewState viewState) =>
         status switch
         {
-            TestStatusDto.Passed  => viewState.ShowPassed,
-            TestStatusDto.Failed  => viewState.ShowFailed,
+            TestStatusDto.Passed => viewState.ShowPassed,
+            TestStatusDto.Failed => viewState.ShowFailed,
             TestStatusDto.Skipped => viewState.ShowSkipped,
-            TestStatusDto.NotRun  => viewState.ShowNotRun,
-            _                     => true,
+            TestStatusDto.NotRun => viewState.ShowNotRun,
+            _ => true,
         };
 
     private static bool IsStale(TestSuiteDto suite, DateTimeOffset? lastFileChangeTime) =>
@@ -327,7 +349,10 @@ public static class TestTreeBuilder
 
     private static Func<string, bool>? BuildMatcher(string? filter)
     {
-        if (string.IsNullOrWhiteSpace(filter)) return null;
+        if (string.IsNullOrWhiteSpace(filter))
+        {
+            return null;
+        }
 
         try
         {

@@ -180,7 +180,7 @@ public sealed class BuildServiceOutputParsingTests
                 """);
             await File.WriteAllTextAsync(Path.Combine(dir.FullName, "Program.cs"), "Console.WriteLine(\"hi\");");
 
-            await RunDotnetAsync("restore", dir.FullName);
+            _ = await RunDotnetAsync("restore", dir.FullName);
 
             var sut = new BuildService();
             var result = await sut.BuildAsync(csproj, null, CancellationToken.None);
@@ -212,7 +212,7 @@ public sealed class BuildServiceOutputParsingTests
                 """);
             await File.WriteAllTextAsync(Path.Combine(dir.FullName, "Program.cs"), "Console.WriteLine(\"hi\");");
 
-            await RunDotnetAsync("restore", dir.FullName);
+            _ = await RunDotnetAsync("restore", dir.FullName);
 
             var sut = new BuildService();
             var result = await sut.BuildAsync(
@@ -259,8 +259,8 @@ public sealed class BuildServiceOutputParsingTests
                 </Project>
                 """);
             await File.WriteAllTextAsync(Path.Combine(goodDir.FullName, "Program.cs"), "Console.WriteLine(\"good\");");
-            await RunDotnetAsync("restore", goodDir.FullName);
-            await RunDotnetAsync("build --no-restore", goodDir.FullName);
+            _ = await RunDotnetAsync("restore", goodDir.FullName);
+            _ = await RunDotnetAsync("build --no-restore", goodDir.FullName);
 
             var badCsproj = Path.Combine(badDir.FullName, "Bad.csproj");
             await File.WriteAllTextAsync(badCsproj, """
@@ -274,7 +274,7 @@ public sealed class BuildServiceOutputParsingTests
                 </Project>
                 """);
             await File.WriteAllTextAsync(Path.Combine(badDir.FullName, "Program.cs"), "this is not valid;");
-            await RunDotnetAsync("restore", badDir.FullName);
+            _ = await RunDotnetAsync("restore", badDir.FullName);
 
             var sut = new BuildService();
             var result = await sut.BuildAsync(

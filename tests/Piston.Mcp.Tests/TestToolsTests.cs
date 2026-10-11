@@ -53,7 +53,7 @@ public sealed class TestToolsTests
 
         try
         {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(
                 () => run.WaitAsync(TimeSpan.FromSeconds(2)));
             Assert.True(engine.ForceRunCalled);
         }

@@ -17,10 +17,7 @@ public sealed class NamedPipeServerTransport : IAsyncDisposable
     private readonly string _pipeName;
     private NamedPipeServerStream? _pipe;
 
-    public NamedPipeServerTransport(string pipeName)
-    {
-        _pipeName = pipeName;
-    }
+    public NamedPipeServerTransport(string pipeName) => _pipeName = pipeName;
 
     /// <summary>
     /// Waits for one client to connect, then returns the connected stream.
@@ -42,7 +39,9 @@ public sealed class NamedPipeServerTransport : IAsyncDisposable
     private NamedPipeServerStream CreateServerStream()
     {
         if (OperatingSystem.IsWindows())
+        {
             return CreateServerStreamWindows();
+        }
 
         return new NamedPipeServerStream(
             _pipeName,

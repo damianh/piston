@@ -1,7 +1,6 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
-using System.IO.Pipelines;
 using System.Text;
 using Piston.Protocol.JsonRpc;
 using Xunit;
@@ -17,15 +16,15 @@ public sealed class MessageFramerTests
     [Fact]
     public async Task WriteAndRead_SingleMessage_RoundTrips()
     {
-        var stream  = new MemoryStream();
+        var stream = new MemoryStream();
         var message = Utf8("{\"hello\":\"world\"}");
 
         await MessageFramer.WriteMessageAsync(stream, message, CancellationToken.None);
-        stream.Seek(0, SeekOrigin.Begin);
+        _ = stream.Seek(0, SeekOrigin.Begin);
 
         var result = await MessageFramer.ReadMessageAsync(stream, CancellationToken.None);
 
-        Assert.NotNull(result);
+        _ = Assert.NotNull(result);
         Assert.Equal(message, result!.Value.ToArray());
     }
 
@@ -34,7 +33,7 @@ public sealed class MessageFramerTests
     [Fact]
     public async Task WriteAndRead_ThreeMessages_OrderPreserved()
     {
-        var stream   = new MemoryStream();
+        var stream = new MemoryStream();
         var messages = new[]
         {
             Utf8("{\"seq\":1}"),
@@ -43,14 +42,16 @@ public sealed class MessageFramerTests
         };
 
         foreach (var m in messages)
+        {
             await MessageFramer.WriteMessageAsync(stream, m, CancellationToken.None);
+        }
 
-        stream.Seek(0, SeekOrigin.Begin);
+        _ = stream.Seek(0, SeekOrigin.Begin);
 
         for (var i = 0; i < 3; i++)
         {
             var result = await MessageFramer.ReadMessageAsync(stream, CancellationToken.None);
-            Assert.NotNull(result);
+            _ = Assert.NotNull(result);
             Assert.Equal(messages[i], result!.Value.ToArray());
         }
     }
@@ -74,14 +75,14 @@ public sealed class MessageFramerTests
         // 128 KB of JSON payload
         var payload = new string('x', 128 * 1024);
         var message = Utf8($"{{\"data\":\"{payload}\"}}");
-        var stream  = new MemoryStream();
+        var stream = new MemoryStream();
 
         await MessageFramer.WriteMessageAsync(stream, message, CancellationToken.None);
-        stream.Seek(0, SeekOrigin.Begin);
+        _ = stream.Seek(0, SeekOrigin.Begin);
 
         var result = await MessageFramer.ReadMessageAsync(stream, CancellationToken.None);
 
-        Assert.NotNull(result);
+        _ = Assert.NotNull(result);
         Assert.Equal(message, result!.Value.ToArray());
     }
 
@@ -91,14 +92,14 @@ public sealed class MessageFramerTests
     public async Task WriteAndRead_Unicode_Preserved()
     {
         var message = Utf8("{\"text\":\"日本語テスト 🎉\"}");
-        var stream  = new MemoryStream();
+        var stream = new MemoryStream();
 
         await MessageFramer.WriteMessageAsync(stream, message, CancellationToken.None);
-        stream.Seek(0, SeekOrigin.Begin);
+        _ = stream.Seek(0, SeekOrigin.Begin);
 
         var result = await MessageFramer.ReadMessageAsync(stream, CancellationToken.None);
 
-        Assert.NotNull(result);
+        _ = Assert.NotNull(result);
         Assert.Equal(message, result!.Value.ToArray());
     }
 
@@ -108,12 +109,12 @@ public sealed class MessageFramerTests
     public async Task ReadMessage_ExceedsMaxSize_Throws()
     {
         // Write a message that exceeds the tiny limit
-        var stream  = new MemoryStream();
+        var stream = new MemoryStream();
         var message = Utf8(new string('a', 200));
         await MessageFramer.WriteMessageAsync(stream, message, CancellationToken.None);
-        stream.Seek(0, SeekOrigin.Begin);
+        _ = stream.Seek(0, SeekOrigin.Begin);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(
             () => MessageFramer.ReadMessageAsync(stream, CancellationToken.None, maxMessageSize: 100));
     }
 
@@ -122,7 +123,7 @@ public sealed class MessageFramerTests
     [Fact]
     public async Task ConcurrentWriteRead_PipeStream_RoundTrips()
     {
-        var pipe   = new System.IO.Pipelines.Pipe();
+        var pipe = new System.IO.Pipelines.Pipe();
         var reader = pipe.Reader.AsStream();
         var writer = pipe.Writer.AsStream();
 
@@ -134,7 +135,9 @@ public sealed class MessageFramerTests
         var writeTask = Task.Run(async () =>
         {
             foreach (var m in messages)
+            {
                 await MessageFramer.WriteMessageAsync(writer, m, CancellationToken.None);
+            }
         });
 
         // Read concurrently
@@ -142,7 +145,7 @@ public sealed class MessageFramerTests
         for (var i = 0; i < messages.Length; i++)
         {
             var result = await MessageFramer.ReadMessageAsync(reader, CancellationToken.None);
-            Assert.NotNull(result);
+            _ = Assert.NotNull(result);
             received.Add(result!.Value.ToArray());
         }
 
@@ -150,6 +153,8 @@ public sealed class MessageFramerTests
 
         Assert.Equal(messages.Length, received.Count);
         for (var i = 0; i < messages.Length; i++)
+        {
             Assert.Equal(messages[i], received[i]);
+        }
     }
 }

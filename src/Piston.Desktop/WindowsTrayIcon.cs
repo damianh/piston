@@ -41,7 +41,7 @@ public sealed class WindowsTrayIcon : IDisposable
     {
         _thread = new Thread(() => Run(tooltip)) { IsBackground = true, Name = "piston-tray" };
         _thread.Start();
-        _ready.Wait(TimeSpan.FromSeconds(5));
+        _ = _ready.Wait(TimeSpan.FromSeconds(5));
     }
 
     private void Run(string tooltip)
@@ -55,7 +55,7 @@ public sealed class WindowsTrayIcon : IDisposable
             hInstance = hInstance,
             lpszClassName = "PistonTrayWndClass",
         };
-        RegisterClass(ref wc);
+        _ = RegisterClass(ref wc);
 
         _hwnd = CreateWindowEx(0, wc.lpszClassName, "PistonTray", 0, 0, 0, 0, 0,
             IntPtr.Zero, IntPtr.Zero, hInstance, IntPtr.Zero);
@@ -63,7 +63,9 @@ public sealed class WindowsTrayIcon : IDisposable
         // Use the executable's own icon; fall back to the generic application icon.
         _hicon = ExtractIcon(hInstance, Environment.ProcessPath ?? string.Empty, 0);
         if (_hicon == IntPtr.Zero)
+        {
             _hicon = LoadIcon(IntPtr.Zero, new IntPtr(32512) /* IDI_APPLICATION */);
+        }
 
         var data = new NotifyIconData
         {
@@ -75,14 +77,14 @@ public sealed class WindowsTrayIcon : IDisposable
             hIcon = _hicon,
             szTip = tooltip,
         };
-        Shell_NotifyIcon(0 /* NIM_ADD */, ref data);
+        _ = Shell_NotifyIcon(0 /* NIM_ADD */, ref data);
 
         _ready.Set();
 
         while (GetMessage(out var msg, IntPtr.Zero, 0, 0) > 0)
         {
-            TranslateMessage(ref msg);
-            DispatchMessage(ref msg);
+            _ = TranslateMessage(ref msg);
+            _ = DispatchMessage(ref msg);
         }
 
         var removeData = new NotifyIconData
@@ -91,7 +93,7 @@ public sealed class WindowsTrayIcon : IDisposable
             hWnd = _hwnd,
             uID = 1,
         };
-        Shell_NotifyIcon(2 /* NIM_DELETE */, ref removeData);
+        _ = Shell_NotifyIcon(2 /* NIM_DELETE */, ref removeData);
     }
 
     private IntPtr WndProc(IntPtr hwnd, uint msg, IntPtr wParam, IntPtr lParam)
@@ -101,7 +103,10 @@ public sealed class WindowsTrayIcon : IDisposable
             case WmTrayCallback:
                 var mouseMsg = (int)(lParam.ToInt64() & 0xFFFF);
                 if (mouseMsg is WmRButtonUp or WmLButtonUp)
+                {
                     ShowMenu(hwnd);
+                }
+
                 return IntPtr.Zero;
 
             case WmCommand:
@@ -130,32 +135,40 @@ public sealed class WindowsTrayIcon : IDisposable
     private void ShowMenu(IntPtr hwnd)
     {
         var menu = CreatePopupMenu();
-        AppendMenu(menu, 0, CmdOpen, "Open Dashboard");
+        _ = AppendMenu(menu, 0, CmdOpen, "Open Dashboard");
 
         var autostartFlags = (IsAutostartEnabled?.Invoke() ?? false) ? 0x8u /* MF_CHECKED */ : 0u;
-        AppendMenu(menu, autostartFlags, CmdAutostart, "Start on login");
+        _ = AppendMenu(menu, autostartFlags, CmdAutostart, "Start on login");
 
-        AppendMenu(menu, 0x800 /* MF_SEPARATOR */, 0, null);
-        AppendMenu(menu, 0, CmdQuit, "Quit Piston");
+        _ = AppendMenu(menu, 0x800 /* MF_SEPARATOR */, 0, null);
+        _ = AppendMenu(menu, 0, CmdQuit, "Quit Piston");
 
-        GetCursorPos(out var pt);
-        SetForegroundWindow(hwnd); // required so the menu dismisses on outside click
-        TrackPopupMenu(menu, 0, pt.X, pt.Y, 0, hwnd, IntPtr.Zero);
-        DestroyMenu(menu);
+        _ = GetCursorPos(out var pt);
+        _ = SetForegroundWindow(hwnd); // required so the menu dismisses on outside click
+        _ = TrackPopupMenu(menu, 0, pt.X, pt.Y, 0, hwnd, IntPtr.Zero);
+        _ = DestroyMenu(menu);
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            return;
+        }
+
         _disposed = true;
 
         if (_hwnd != IntPtr.Zero)
-            PostMessage(_hwnd, WmDestroy, IntPtr.Zero, IntPtr.Zero);
+        {
+            _ = PostMessage(_hwnd, WmDestroy, IntPtr.Zero, IntPtr.Zero);
+        }
 
-        _thread.Join(TimeSpan.FromSeconds(2));
+        _ = _thread.Join(TimeSpan.FromSeconds(2));
 
         if (_hicon != IntPtr.Zero)
-            DestroyIcon(_hicon);
+        {
+            _ = DestroyIcon(_hicon);
+        }
 
         _ready.Dispose();
     }

@@ -29,7 +29,7 @@ public sealed class CompositeTestExecutionStrategyTests
         await cts.CancelAsync();
 
         var request = new ProjectTestRequest("mtp-project.csproj", null, false);
-        var result  = await composite.ExecuteAsync(request, onProgress: null, cts.Token);
+        var result = await composite.ExecuteAsync(request, onProgress: null, cts.Token);
 
         // Should have been routed to MTP strategy (returns empty on cancellation)
         Assert.NotNull(result);
@@ -47,7 +47,7 @@ public sealed class CompositeTestExecutionStrategyTests
         await cts.CancelAsync();
 
         var request = new ProjectTestRequest("vstest-project.csproj", null, false);
-        var result  = await composite.ExecuteAsync(request, onProgress: null, cts.Token);
+        var result = await composite.ExecuteAsync(request, onProgress: null, cts.Token);
 
         Assert.NotNull(result);
         Assert.Empty(result.Suites);
@@ -58,17 +58,17 @@ public sealed class CompositeTestExecutionStrategyTests
     {
         // The MTP output path delegate receives the project path
         string? seenProjectPath = null;
-        var mtpStrategy    = new MtpTestExecutionStrategy(
+        var mtpStrategy = new MtpTestExecutionStrategy(
             p => { seenProjectPath = p; return null; },
             Path.GetTempPath()); // return null so it falls through to VSTest
         var vsTestStrategy = new ProcessTestExecutionStrategy(new TrxResultParser());
-        var composite      = new CompositeTestExecutionStrategy(mtpStrategy, vsTestStrategy);
+        var composite = new CompositeTestExecutionStrategy(mtpStrategy, vsTestStrategy);
 
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
 
         var request = new ProjectTestRequest("target.csproj", null, false);
-        await composite.ExecuteAsync(request, onProgress: null, cts.Token);
+        _ = await composite.ExecuteAsync(request, onProgress: null, cts.Token);
 
         Assert.Equal("target.csproj", seenProjectPath);
     }
@@ -77,7 +77,7 @@ public sealed class CompositeTestExecutionStrategyTests
 
     private static CompositeTestExecutionStrategy BuildComposite(string? mtpOutputPath)
     {
-        var mtpStrategy    = new MtpTestExecutionStrategy(_ => mtpOutputPath, Path.GetTempPath());
+        var mtpStrategy = new MtpTestExecutionStrategy(_ => mtpOutputPath, Path.GetTempPath());
         var vsTestStrategy = new ProcessTestExecutionStrategy(new TrxResultParser());
         return new CompositeTestExecutionStrategy(mtpStrategy, vsTestStrategy);
     }

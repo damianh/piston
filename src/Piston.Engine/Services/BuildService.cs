@@ -27,7 +27,9 @@ public sealed class BuildService : IBuildService
         CancellationToken ct)
     {
         if (projectPaths is null || projectPaths.Count == 0)
+        {
             return await RunBuildAsync($"build \"{solutionPath}\"", ct).ConfigureAwait(false);
+        }
 
         var targets = projectPaths
             .Select(Path.GetFullPath)
@@ -39,7 +41,9 @@ public sealed class BuildService : IBuildService
         // their ProjectReferences, so referenced libraries are refreshed in test outputs.
         var solution = SolutionFilterBuilder.ReadSolution(solutionPath);
         if (solution is null)
+        {
             return await BuildProjectsIndividuallyAsync(targets, ct).ConfigureAwait(false);
+        }
 
         var members = targets.Where(solution.Value.Projects.Contains).ToList();
         var outside = targets.Where(p => !solution.Value.Projects.Contains(p)).ToList();
@@ -61,7 +65,9 @@ public sealed class BuildService : IBuildService
         // Projects outside the solution (e.g. reached only via ProjectReference) cannot be
         // listed in a solution filter, so build them directly.
         if (outside.Count > 0 && !ct.IsCancellationRequested)
+        {
             results.Add(await BuildProjectsIndividuallyAsync(outside, ct).ConfigureAwait(false));
+        }
 
         return Aggregate(results, ct.IsCancellationRequested);
     }
@@ -74,7 +80,9 @@ public sealed class BuildService : IBuildService
         foreach (var projectPath in projectPaths)
         {
             if (ct.IsCancellationRequested)
+            {
                 break;
+            }
 
             results.Add(await RunBuildAsync(
                 $"build \"{projectPath}\" --no-restore",
@@ -115,20 +123,30 @@ public sealed class BuildService : IBuildService
 
         process.OutputDataReceived += (_, e) =>
         {
-            if (e.Data is null) return;
+            if (e.Data is null)
+            {
+                return;
+            }
+
             if (ErrorPattern.IsMatch(e.Data))
+            {
                 errors.Add(e.Data.Trim());
+            }
             else if (WarningPattern.IsMatch(e.Data))
+            {
                 warnings.Add(e.Data.Trim());
+            }
         };
 
         process.ErrorDataReceived += (_, e) =>
         {
             if (e.Data is not null)
+            {
                 errors.Add(e.Data.Trim());
+            }
         };
 
-        process.Start();
+        _ = process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 

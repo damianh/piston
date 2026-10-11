@@ -51,7 +51,10 @@ internal sealed class CoberturaParser : ICoberturaParser
         foreach (var classEl in root.Descendants("class"))
         {
             var filename = classEl.Attribute("filename")?.Value;
-            if (string.IsNullOrEmpty(filename)) continue;
+            if (string.IsNullOrEmpty(filename))
+            {
+                continue;
+            }
 
             var absolutePath = ResolveFilePath(filename, sources);
 
@@ -64,14 +67,16 @@ internal sealed class CoberturaParser : ICoberturaParser
             foreach (var lineEl in classEl.Elements("lines").Elements("line"))
             {
                 var numberStr = lineEl.Attribute("number")?.Value;
-                var hitsStr   = lineEl.Attribute("hits")?.Value;
+                var hitsStr = lineEl.Attribute("hits")?.Value;
 
                 if (!int.TryParse(numberStr, out var lineNumber) ||
                     !int.TryParse(hitsStr, out var hits))
+                {
                     continue;
+                }
 
                 // Accumulate hits for lines that appear in multiple methods/classes
-                lineMap.TryGetValue(lineNumber, out var existingHits);
+                _ = lineMap.TryGetValue(lineNumber, out var existingHits);
                 lineMap[lineNumber] = existingHits + hits;
             }
         }
@@ -94,19 +99,25 @@ internal sealed class CoberturaParser : ICoberturaParser
     {
         // If filename is already absolute, normalize and return it
         if (Path.IsPathRooted(filename))
+        {
             return Path.GetFullPath(filename);
+        }
 
         // Try each source directory
         foreach (var source in sources)
         {
             var candidate = Path.GetFullPath(Path.Combine(source, filename));
             if (File.Exists(candidate))
+            {
                 return candidate;
+            }
         }
 
         // Fall back: combine with first source, or return normalized relative path
         if (sources.Count > 0)
+        {
             return Path.GetFullPath(Path.Combine(sources[0], filename));
+        }
 
         return Path.GetFullPath(filename);
     }

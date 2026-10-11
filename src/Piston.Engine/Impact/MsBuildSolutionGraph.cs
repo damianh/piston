@@ -51,13 +51,15 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
             _nodeByPath[projectPath] = node;
 
             var isTest = IsTestProjectNode(node);
-            var isMtp  = IsMtpProjectNode(node);
+            var isMtp = IsMtpProjectNode(node);
 
             // Determine if this is a test project.
             // MTP v2 projects are implicitly test projects — they may lack
             // <IsTestProject>true</IsTestProject> or Microsoft.NET.Test.Sdk.
             if (isTest || isMtp)
+            {
                 _testProjects.Add(projectPath);
+            }
 
             // Determine if this is an MTP v2 project
             if (isMtp)
@@ -65,7 +67,9 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
                 _mtpProjects[projectPath] = true;
                 var targetPath = node.ProjectInstance.GetPropertyValue("TargetPath");
                 if (!string.IsNullOrEmpty(targetPath))
+                {
                     _mtpOutputPaths[projectPath] = Path.GetFullPath(targetPath);
+                }
             }
 
             log?.Write("SolutionGraph",
@@ -81,14 +85,18 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
                 foreach (var csFile in Directory.EnumerateFiles(projectDir, "*.cs", SearchOption.AllDirectories))
                 {
                     if (!IsInBinOrObj(csFile))
+                    {
                         sourceFiles.Add(Path.GetFullPath(csFile));
+                    }
                 }
             }
             _sourceFilesByProject[projectPath] = sourceFiles;
 
             // Track directory for ownership lookup
             if (!string.IsNullOrEmpty(projectDir))
+            {
                 _sortedProjectDirs.Add((projectDir, projectPath));
+            }
         }
 
         // Sort by directory length descending (longest first) so we match most-specific first
@@ -121,7 +129,9 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
     {
         var normalized = Path.GetFullPath(projectPath);
         if (!_nodeByPath.TryGetValue(normalized, out var startNode))
+        {
             return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        }
 
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         CollectDependents(startNode, result);
@@ -159,13 +169,17 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         // Check <IsTestProject>true</IsTestProject> property
         var isTestProp = node.ProjectInstance.GetPropertyValue("IsTestProject");
         if (string.Equals(isTestProp, "true", StringComparison.OrdinalIgnoreCase))
+        {
             return true;
+        }
 
         // Heuristic: references Microsoft.NET.Test.Sdk
         foreach (var item in node.ProjectInstance.GetItems("PackageReference"))
         {
             if (string.Equals(item.EvaluatedInclude, "Microsoft.NET.Test.Sdk", StringComparison.OrdinalIgnoreCase))
+            {
                 return true;
+            }
         }
 
         return false;
@@ -185,14 +199,18 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         foreach (var prop in props)
         {
             if (string.Equals(node.ProjectInstance.GetPropertyValue(prop), "true", StringComparison.OrdinalIgnoreCase))
+            {
                 return true;
+            }
         }
 
         // Heuristic: direct reference to Microsoft.Testing.Platform package
         foreach (var item in node.ProjectInstance.GetItems("PackageReference"))
         {
             if (string.Equals(item.EvaluatedInclude, "Microsoft.Testing.Platform", StringComparison.OrdinalIgnoreCase))
+            {
                 return true;
+            }
         }
 
         return false;
@@ -204,7 +222,9 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         {
             var path = Path.GetFullPath(referencing.ProjectInstance.FullPath);
             if (visited.Add(path))
+            {
                 CollectDependents(referencing, visited);
+            }
         }
     }
 

@@ -62,10 +62,14 @@ public sealed class WebSocketClientSession(WebSocket webSocket, string sessionId
                 }
 
                 if (result.MessageType == WebSocketMessageType.Close)
+                {
                     break;
+                }
 
                 if (result.MessageType != WebSocketMessageType.Text)
+                {
                     continue;
+                }
 
                 var raw = new ReadOnlyMemory<byte>(buffer, 0, totalBytes);
                 await HandleMessageAsync(raw, ct).ConfigureAwait(false);
@@ -103,7 +107,7 @@ public sealed class WebSocketClientSession(WebSocket webSocket, string sessionId
         }
         finally
         {
-            _writeLock.Release();
+            _ = _writeLock.Release();
         }
     }
 
@@ -114,7 +118,9 @@ public sealed class WebSocketClientSession(WebSocket webSocket, string sessionId
         {
             var msg = JsonRpcSerializer.DeserializeMessage(raw);
             if (msg is not JsonRpcRequest req)
+            {
                 return; // Unexpected message type — ignore
+            }
 
             request = req;
         }
@@ -159,7 +165,7 @@ public sealed class WebSocketClientSession(WebSocket webSocket, string sessionId
         }
         finally
         {
-            _writeLock.Release();
+            _ = _writeLock.Release();
         }
     }
 
@@ -177,7 +183,7 @@ public sealed class WebSocketClientSession(WebSocket webSocket, string sessionId
         }
         finally
         {
-            _writeLock.Release();
+            _ = _writeLock.Release();
         }
     }
 }

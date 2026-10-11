@@ -5,7 +5,6 @@ using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 
@@ -35,7 +34,11 @@ public sealed class EngineClientService : IAsyncDisposable
 
     public IReadOnlyList<ActivityEvent> ActivityLog
     {
-        get { lock (_activityLog) return _activityLog.ToList(); }
+        get { lock (_activityLog)
+            {
+                return _activityLog.ToList();
+            }
+        }
     }
 
     private int _requestCounter;
@@ -110,7 +113,10 @@ public sealed class EngineClientService : IAsyncDisposable
                 if (totalBytes >= buffer.Length)
                 {
                     if (buffer.Length >= MaxMessageSize)
+                    {
                         break; // discard oversized message
+                    }
+
                     var newSize = Math.Min(buffer.Length * 2, MaxMessageSize);
                     Array.Resize(ref buffer, newSize);
                 }
@@ -122,13 +128,19 @@ public sealed class EngineClientService : IAsyncDisposable
             while (!result.EndOfMessage);
 
             if (result is null || totalBytes >= MaxMessageSize)
+            {
                 continue; // skip oversized or empty messages
+            }
 
             if (result.MessageType == WebSocketMessageType.Close)
+            {
                 break;
+            }
 
             if (result.MessageType != WebSocketMessageType.Text)
+            {
                 continue;
+            }
 
             var raw = new ReadOnlyMemory<byte>(buffer, 0, totalBytes);
             HandleMessage(raw);
@@ -148,7 +160,9 @@ public sealed class EngineClientService : IAsyncDisposable
             }
 
             if (msg is not JsonRpcNotification notification)
+            {
                 return;
+            }
 
             HandleNotification(notification);
         }
@@ -161,7 +175,9 @@ public sealed class EngineClientService : IAsyncDisposable
     private void HandleResponse(JsonRpcResponse response)
     {
         if (_pendingRequests.TryRemove(response.Id, out var tcs))
-            tcs.TrySetResult(response.Result);
+        {
+            _ = tcs.TrySetResult(response.Result);
+        }
     }
 
     private void HandleNotification(JsonRpcNotification notification)
@@ -193,7 +209,10 @@ public sealed class EngineClientService : IAsyncDisposable
         lock (_activityLog)
         {
             if (_activityLog.Count >= ActivityLogCapacity)
+            {
                 _activityLog.RemoveAt(0);
+            }
+
             _activityLog.Add(evt);
         }
     }
@@ -203,7 +222,9 @@ public sealed class EngineClientService : IAsyncDisposable
     public async Task SendCommandAsync(string method, object? @params)
     {
         if (_webSocket?.State != WebSocketState.Open)
+        {
             return;
+        }
 
         var id = Interlocked.Increment(ref _requestCounter).ToString();
         var paramsNode = @params is null
@@ -229,7 +250,9 @@ public sealed class EngineClientService : IAsyncDisposable
     public async Task<JsonNode?> SendRequestAsync(string method, object? @params)
     {
         if (_webSocket?.State != WebSocketState.Open)
+        {
             return null;
+        }
 
         var id = Interlocked.Increment(ref _requestCounter).ToString();
         var paramsNode = @params is null
@@ -249,12 +272,12 @@ public sealed class EngineClientService : IAsyncDisposable
         }
         catch
         {
-            _pendingRequests.TryRemove(id, out _);
+            _ = _pendingRequests.TryRemove(id, out _);
             return null;
         }
 
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        timeoutCts.Token.Register(() => tcs.TrySetResult(null));
+        _ = timeoutCts.Token.Register(() => tcs.TrySetResult(null));
         return await tcs.Task.ConfigureAwait(false);
     }
 
@@ -262,9 +285,13 @@ public sealed class EngineClientService : IAsyncDisposable
     {
         var result = await SendRequestAsync(ProtocolMethods.McpGetCallLog).ConfigureAwait(false);
         if (result is null)
+        {
             return null;
+        }
+
         return result.Deserialize<McpCallLogResponse>(JsonRpcSerializer.Options);
-    }    public Task ForceRunAsync() => SendCommandAsync(ProtocolMethods.EngineForceRun);
+    }
+    public Task ForceRunAsync() => SendCommandAsync(ProtocolMethods.EngineForceRun);
     public Task ClearResultsAsync() => SendCommandAsync(ProtocolMethods.EngineClearResults);
     public Task SetFilterAsync(string? filter) => SendCommandAsync(ProtocolMethods.EngineSetFilter, new SetFilterCommand(filter));
 

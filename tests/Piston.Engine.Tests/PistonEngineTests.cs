@@ -2,7 +2,6 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Coverage;
-using Piston.Engine.Models;
 using Xunit;
 
 namespace Piston.Engine.Tests;

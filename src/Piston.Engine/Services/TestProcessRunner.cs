@@ -31,7 +31,7 @@ internal static class TestProcessRunner
         CancellationToken ct)
     {
         var resultsDir = Path.Combine(Path.GetTempPath(), $"piston-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(resultsDir);
+        _ = Directory.CreateDirectory(resultsDir);
 
         try
         {
@@ -40,10 +40,14 @@ internal static class TestProcessRunner
                        $"--results-directory \"{resultsDir}\"";
 
             if (collectCoverage)
+            {
                 args += " --collect \"XPlat Code Coverage\"";
+            }
 
             if (!string.IsNullOrWhiteSpace(filter))
+            {
                 args += $" --filter \"{filter}\"";
+            }
 
             var log = DiagnosticLog.Instance;
             log?.Write("VSTestRunner", $"Project: {projectPath}");
@@ -52,9 +56,9 @@ internal static class TestProcessRunner
             var psi = new ProcessStartInfo("dotnet", args)
             {
                 RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                UseShellExecute        = false,
-                CreateNoWindow         = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
             };
 
             // Live progress state: FQN → current status (starts as Running when first seen)
@@ -73,19 +77,26 @@ internal static class TestProcessRunner
 
             process.OutputDataReceived += (_, e) =>
             {
-                if (e.Data is null) return;
+                if (e.Data is null)
+                {
+                    return;
+                }
+
                 var m = ResultLineRegex.Match(e.Data);
-                if (!m.Success) return;
+                if (!m.Success)
+                {
+                    return;
+                }
 
                 var outcomeStr = m.Groups[1].Value;
-                var fqn        = m.Groups[2].Value.Trim();
+                var fqn = m.Groups[2].Value.Trim();
 
                 var status = outcomeStr.ToLowerInvariant() switch
                 {
-                    "passed"  => TestStatus.Passed,
-                    "failed"  => TestStatus.Failed,
+                    "passed" => TestStatus.Passed,
+                    "failed" => TestStatus.Failed,
                     "skipped" => TestStatus.Skipped,
-                    _         => TestStatus.NotRun,
+                    _ => TestStatus.NotRun,
                 };
 
                 // Use last segment of FQN as display name
@@ -97,18 +108,26 @@ internal static class TestProcessRunner
                     liveResults[fqn] = (status, displayName);
                 }
 
-                if (onProgress is null) return;
+                if (onProgress is null)
+                {
+                    return;
+                }
 
                 var now = DateTimeOffset.UtcNow;
                 bool shouldFire;
                 lock (liveResultsLock)
                 {
                     shouldFire = (now - lastProgressFire).TotalMilliseconds >= progressThrottleMs;
-                    if (shouldFire) lastProgressFire = now;
+                    if (shouldFire)
+                    {
+                        lastProgressFire = now;
+                    }
                 }
 
                 if (shouldFire)
+                {
                     onProgress(BuildLiveSnapshot(liveResults, liveResultsLock));
+                }
             };
 
             process.ErrorDataReceived += (_, e) =>
@@ -120,7 +139,7 @@ internal static class TestProcessRunner
                 }
             };
 
-            process.Start();
+            _ = process.Start();
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
@@ -198,18 +217,21 @@ internal static class TestProcessRunner
             snapshot = [.. liveResults];
         }
 
-        if (snapshot.Count == 0) return [];
+        if (snapshot.Count == 0)
+        {
+            return [];
+        }
 
         var results = snapshot
             .Select(kvp => new TestResult(
                 FullyQualifiedName: kvp.Key,
-                DisplayName:        kvp.Value.DisplayName,
-                Status:             kvp.Value.Status,
-                Duration:           TimeSpan.Zero,
-                Output:             null,
-                ErrorMessage:       null,
-                StackTrace:         null,
-                Source:             null))
+                DisplayName: kvp.Value.DisplayName,
+                Status: kvp.Value.Status,
+                Duration: TimeSpan.Zero,
+                Output: null,
+                ErrorMessage: null,
+                StackTrace: null,
+                Source: null))
             .ToList();
 
         return [new TestSuite("…", results, DateTimeOffset.UtcNow, TimeSpan.Zero)];

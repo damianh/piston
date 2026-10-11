@@ -15,10 +15,7 @@ public sealed class FileWatcherService : IFileWatcherService
 
     public event Action<FileChangeBatch>? FileChanged;
 
-    public FileWatcherService(TimeSpan? debounceInterval = null)
-    {
-        _debounceInterval = debounceInterval ?? TimeSpan.FromMilliseconds(300);
-    }
+    public FileWatcherService(TimeSpan? debounceInterval = null) => _debounceInterval = debounceInterval ?? TimeSpan.FromMilliseconds(300);
 
     public void Start(string solutionDirectory)
     {
@@ -59,7 +56,9 @@ public sealed class FileWatcherService : IFileWatcherService
     private void OnFileSystemEvent(object sender, FileSystemEventArgs e)
     {
         if (IsExcluded(e.FullPath))
+        {
             return;
+        }
 
         ScheduleDebounce(new FileChangeEvent(e.FullPath, e.ChangeType, DateTimeOffset.UtcNow));
     }
@@ -67,7 +66,9 @@ public sealed class FileWatcherService : IFileWatcherService
     private void OnRenamed(object sender, RenamedEventArgs e)
     {
         if (IsExcluded(e.FullPath))
+        {
             return;
+        }
 
         ScheduleDebounce(new FileChangeEvent(e.FullPath, e.ChangeType, DateTimeOffset.UtcNow));
     }

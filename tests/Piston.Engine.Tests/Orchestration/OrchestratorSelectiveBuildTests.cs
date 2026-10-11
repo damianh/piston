@@ -109,11 +109,13 @@ public sealed class OrchestratorSelectiveBuildTests
 
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (state.Phase != PistonPhase.Watching && DateTime.UtcNow < deadline)
+        {
             await Task.Delay(10);
+        }
 
         Assert.Equal(PistonPhase.Watching, state.Phase);
         Assert.Equal([Lib], build.Calls[1]);
-        Assert.Single(runner.Calls); // only the initial full run executed tests
+        _ = Assert.Single(runner.Calls); // only the initial full run executed tests
     }
 
     private sealed class FixedImpactAnalyzer(ImpactAnalysisResult selective) : IImpactAnalyzer
@@ -139,7 +141,11 @@ public sealed class OrchestratorSelectiveBuildTests
 
         public Task<BuildResult> BuildAsync(string solutionPath, IReadOnlyList<string>? projectPaths, CancellationToken ct)
         {
-            lock (Calls) Calls.Add(projectPaths?.ToList());
+            lock (Calls)
+            {
+                Calls.Add(projectPaths?.ToList());
+            }
+
             _counter.Increment();
             return Task.FromResult(new BuildResult(BuildStatus.Succeeded, [], [], TimeSpan.Zero));
         }
@@ -164,7 +170,11 @@ public sealed class OrchestratorSelectiveBuildTests
             string? filter, bool collectCoverage, Action<IReadOnlyList<TestSuite>>? onProgress,
             Action<ProjectTestResult>? onProjectCompleted, CancellationToken ct)
         {
-            lock (Calls) Calls.Add(testProjectPaths?.ToList());
+            lock (Calls)
+            {
+                Calls.Add(testProjectPaths?.ToList());
+            }
+
             _counter.Increment();
             return Task.FromResult(new TestRunResult([], null, []));
         }
@@ -182,7 +192,10 @@ public sealed class OrchestratorSelectiveBuildTests
             while (Volatile.Read(ref _count) < count)
             {
                 if (DateTime.UtcNow > deadline)
+                {
                     throw new TimeoutException($"Expected {count} call(s), saw {_count}.");
+                }
+
                 await Task.Delay(10);
             }
 
