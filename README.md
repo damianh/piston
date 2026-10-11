@@ -4,7 +4,11 @@ An agent-facing continuous test backend for .NET, with a headless daemon, HTTP M
 
 Piston watches a .NET solution, selects affected test projects, builds, runs test projects with bounded concurrency, and publishes results to connected clients. It uses standard `dotnet build` and `dotnet test` in the watched checkout.
 
-**Phase 0 status:** build correctness and [surface reduction/tool packaging (#4)](https://github.com/damianh/piston/pull/4) are pending companion changes. They rebuild affected test outputs before execution and remove the Roslyn code-intelligence backend, diagnostic polling/UI, and VSCode extension. This documentation change does not ship those implementation changes. Desktop source is to be frozen; .NET tool packaging replaces the desktop installer release workflow.
+**Current structure:** the `Piston` .NET tool owns CLI commands, daemon hosting,
+and HTTP MCP tools. `Piston.Engine` is the separate MSBuild-loading and test-execution
+boundary; `Piston.Protocol` provides shared wire contracts and transports, and
+`Piston.Web` is the existing dashboard. Desktop source and its project have been
+deleted. The hub/worker split and later UI/canvas decisions remain deferred.
 
 ## Requirements
 
@@ -14,12 +18,11 @@ Piston watches a .NET solution, selects affected test projects, builds, runs tes
 
 ## Delivery
 
-The primary surface is the CLI daemon and its test APIs. Until the companion
-tool-packaging change lands, use the source commands below. Historical desktop
-trial installers are not the forward delivery path; the existing Photino desktop
-source remains for reference rather than ongoing feature development.
+The primary surface is the CLI daemon and its test APIs, distributed as a
+framework-dependent .NET tool. Desktop trial installers and source are no longer
+maintained or shipped.
 
-**After the packaging companion lands**, build and install the local .NET tool:
+Build and install the local .NET tool:
 
 ```sh
 dotnet pack src/Piston/Piston.csproj -c Release -o packages
@@ -36,7 +39,7 @@ and ASP.NET Core 10 runtime, plus the target solution's own SDK requirements.
 It bundles the web dashboard; it is not an MCP-specific package or a `dnx`
 entry point.
 
-The companion release workflow attaches a `.nupkg` to GitHub Releases rather
+The release workflow attaches a `.nupkg` to GitHub Releases rather
 than desktop installers. NuGet publication is a separate, opt-in workflow path
 requiring package ownership and credentials; these local commands do not imply
 that a package is already published on NuGet.org.
@@ -89,7 +92,7 @@ piston daemon --coverage --mcp-port 5200
 
 ## Web dashboard
 
-The daemon serves a Blazor WebAssembly dashboard (default `http://localhost:5199`) connected over WebSocket. It shows test results, build errors, engine activity, and MCP tool-call history. The Roslyn diagnostic view is removed by the Phase 0 companion change.
+The daemon serves a Blazor WebAssembly dashboard (default `http://localhost:5199`) connected over WebSocket. It shows test results, build errors, engine activity, and MCP tool-call history. The Roslyn diagnostic view has been removed.
 
 ## MCP server (AI agents)
 
@@ -103,7 +106,9 @@ With `--mcp-port` (or `mcpPort` in `.piston.json`), the daemon exposes an HTTP M
 | `set_test_filter` | Apply a test name filter. |
 | `clear_results` | Clear current test suites, last-run timestamp, coverage state, and persisted coverage in the current solution directory. A running test run may publish new results afterwards. |
 
-These are the retained Phase 0 tools. The companion surface-reduction change removes `LoadWorkspace`, `GetDiagnostics`, `SemanticSearch`, `GetAst`, `Rename`, and `NotifyFileChanged`; Piston will not own Roslyn workspace synchronization.
+These are the retained test tools. `LoadWorkspace`, `GetDiagnostics`,
+`SemanticSearch`, `GetAst`, `Rename`, and `NotifyFileChanged` have been removed;
+Piston does not own Roslyn workspace synchronization.
 
 `run_tests` awaits the specific engine request with timeout/cancellation and
 returns that run's record, rather than polling an aggregate phase or reading
@@ -159,16 +164,15 @@ Project ownership and transitive dependencies determine affected test projects. 
 
 Coverage associations persist in `.piston/piston.db`; test-result history and the project graph do not. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The current MTP runner does not request or return coverage reports. Fine-grained attribution and selection correctness are future experiments.
 
-### Pending selective-build correction
+### Selective builds
 
-The build-correctness companion builds the union of affected production and
+Piston builds the union of affected production and
 test projects with one temporary solution-filter build, allowing restore and
 MSBuild dependency scheduling before no-build test execution. It preserves
 `.sln`/`.slnx` solution context and `.slnf` membership. Unsupported/unreadable
 solution paths or non-member targets fall back to sequential per-project builds
 with `--no-restore`; a selective run with no affected tests builds only. Full
-runs still build the original solution. This is pending implementation, not a
-change made by this documentation PR.
+runs still build the original solution.
 
 ## Configuration file
 
@@ -209,6 +213,13 @@ no implemented `.piston/config.json` or user-global config hierarchy.
 
 ## Building from source
 
+Production code lives in four projects under `src/`: `Piston`, `Piston.Engine`,
+`Piston.Protocol`, and `Piston.Web`. Hosting and MCP are folders within `Piston`,
+not separate assemblies. The engine emits typed activity records; the tool maps
+them to protocol DTOs without making the engine depend on `Piston.Protocol`.
+`Piston.Tests` covers the tool, host, protocol, and MCP; `Piston.Engine.Tests`
+covers execution and retains the two process-isolation helper executables.
+
 ```sh
 git clone https://github.com/damianh/piston.git
 cd piston
@@ -238,8 +249,9 @@ The repo pins [roslynk](https://www.nuget.org/packages/roslynk) as a local .NET 
 
 ## Proposed direction
 
-Fine-grained coverage, a measurement harness, Copilot canvas/harness integrations,
-and a per-user hub with isolated worktree workers are future work, not existing
-features. Aspire is one possible generic integration-test example, not a
+Fine-grained coverage, Copilot canvas/harness integrations, and a per-user hub
+with isolated worktree workers remain deferred. The separate `measurements/`
+harness does not establish a measured Piston improvement; a matched comparison
+campaign remains future work. Aspire is one possible generic integration-test example, not a
 specialized backend. See [ARCHITECTURE.md](ARCHITECTURE.md) for implementation
 details and limitations.

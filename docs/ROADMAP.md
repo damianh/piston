@@ -16,6 +16,22 @@ This document describes **proposed work**, not currently available functionality
 README and ARCHITECTURE describe the implementation. Later phases are conditional
 on evidence from the measurement gates.
 
+### Current project structure
+
+The production solution now has four projects: `Piston` (the .NET tool, CLI,
+daemon hosting, and HTTP MCP tools), `Piston.Engine` (MSBuild loading and test
+execution), `Piston.Protocol` (shared wire contracts/transports), and
+`Piston.Web` (the existing Blazor dashboard). Hosting and MCP source are folders
+in the tool project. Engine activity contracts belong to Engine and are mapped
+to wire DTOs by the host; Engine does not reference Protocol.
+
+Desktop source and its project have been deleted, rather than retained frozen.
+The existing .NET tool release flow remains. `Piston.Tests` combines tool/host,
+protocol, and MCP tests; Engine tests retain both process-isolation helpers.
+This is a project-structure refactor only: hub/worker decomposition and the
+later UI/canvas decision remain deferred. It adds no scheduling changes,
+comparison campaign, or performance claims.
+
 ## Product boundaries
 
 - **Memory:** distinguish newly observed failures from baseline failures and
@@ -84,8 +100,9 @@ not a reservation or confirmation of ownership.
   file-lock behavior before relying on side-by-side launch paths.
 - Ship harness integration assets with the tool. Installation should preserve
   user configuration and make changes explicit.
-- Freeze desktop development and replace desktop-installer release automation
-  with tool packaging. Retain the desktop source until a later decision.
+- Tool packaging has replaced desktop-installer release automation.
+  Desktop source has been deleted following the project-structure decision;
+  do not revive its installer workflow.
 
 The tool requires an appropriate .NET runtime/SDK installation. Building a target
 repository may require additional SDK versions pinned by that repository.

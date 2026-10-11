@@ -2,16 +2,12 @@
   <Folder Name="/src/">
     <Project Path="src/Piston.Protocol/Piston.Protocol.csproj" />
     <Project Path="src/Piston.Engine/Piston.Engine.csproj" />
-    <Project Path="src/Piston.Hosting/Piston.Hosting.csproj" />
     <Project Path="src/Piston/Piston.csproj" />
-    <Project Path="src/Piston.Desktop/Piston.Desktop.csproj" />
     <Project Path="src/Piston.Web/Piston.Web.csproj" />
-    <Project Path="src/Piston.Mcp/Piston.Mcp.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Piston.Engine.Tests/Piston.Engine.Tests.csproj" />
-    <Project Path="tests/Piston.Protocol.Tests/Piston.Protocol.Tests.csproj" />
-    <Project Path="tests/Piston.Mcp.Tests/Piston.Mcp.Tests.csproj" />
+    <Project Path="tests/Piston.Tests/Piston.Tests.csproj" />
     <Project Path="tests/Piston.TestProcessHost/Piston.TestProcessHost.csproj" />
     <Project Path="tests/Piston.ExecutionLeaseHolder/Piston.ExecutionLeaseHolder.csproj" />
   </Folder>

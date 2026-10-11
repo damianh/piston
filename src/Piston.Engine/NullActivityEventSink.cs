@@ -1,7 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
-using Piston.Protocol.Messages;
+using Piston.Engine.Models;
 
 namespace Piston.Engine;
 
@@ -10,5 +10,5 @@ internal sealed class NullActivityEventSink : IActivityEventSink
 {
     public static readonly NullActivityEventSink Instance = new();
 
-    public void Emit(ActivityEvent activity) { }
+    public void Emit(EngineActivityEvent activity) { }
 }
