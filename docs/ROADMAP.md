@@ -181,6 +181,8 @@ user coordinate through OS file locks in a per-user directory:
   Crashed owners are recovered automatically.
 - Each build/test run reserves its test-process parallelism in CPU slots, plus optional
   `execution.memoryMb`, against `budget.json` (`cpuSlots`, `memoryMb`; default: logical processors).
+  Recommended updates write complete JSON to a temporary file in the same directory, then
+  atomically rename it over `budget.json` without deleting the old file first.
 - Runs are admitted strictly FIFO. Waiting runs are visible as `Queued` with queue position and
   budget usage in `get_test_run`, `get_test_results` and the state snapshot.
 - Leases are released on completion, cancellation, faults, exit and crash.

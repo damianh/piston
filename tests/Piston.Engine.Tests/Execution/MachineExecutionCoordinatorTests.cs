@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Collections.Concurrent;
+using System.Text.Json;
 using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Xunit;
@@ -26,7 +27,19 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
     }
 
-    private void SetBudget(string json) => File.WriteAllText(_directory.BudgetPath, json);
+    private void SetBudget(string json)
+    {
+        var temporaryPath = _directory.BudgetPath + $".{Guid.NewGuid():N}.tmp";
+        try
+        {
+            File.WriteAllText(temporaryPath, json);
+            File.Move(temporaryPath, _directory.BudgetPath, overwrite: true);
+        }
+        finally
+        {
+            File.Delete(temporaryPath);
+        }
+    }
 
     private MachineExecutionCoordinator Coordinator(int cpu, int? memoryMb = null)
     {
@@ -346,6 +359,79 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
 
         _ = await Assert.ThrowsAsync<ExecutionCoordinationException>(() => queued.WaitAsync(TimeSpan.FromSeconds(15)));
         Assert.Equal(0, EntryCount(_directory.QueueDirectory));
+    }
+
+    [Fact]
+    public void LoadBudget_TransientEmptyThenPartialWrite_RetriesUntilComplete()
+    {
+        File.WriteAllText(_directory.BudgetPath, "");
+        var retries = 0;
+
+        var budget = ExecutionBudget.Load(_directory.BudgetPath, delay =>
+        {
+            Assert.Equal(TimeSpan.FromMilliseconds(20), delay);
+            retries++;
+            File.WriteAllText(_directory.BudgetPath,
+                retries == 1 ? """{ "cpuSlots": """ : """{ "cpuSlots": 2, "memoryMb": 1024 }""");
+        });
+
+        Assert.Equal(2, retries);
+        Assert.Equal(new ExecutionBudget(2, 1024, _directory.BudgetPath), budget);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("""{ "cpuSlots": """)]
+    [InlineData("not json")]
+    public void LoadBudget_PersistentlyInvalidJson_FailsAfterBoundedRetries(string json)
+    {
+        SetBudget(json);
+        var totalDelay = TimeSpan.Zero;
+        var retries = 0;
+
+        var ex = Assert.Throws<ExecutionCoordinationException>(() =>
+            ExecutionBudget.Load(_directory.BudgetPath, delay =>
+            {
+                totalDelay += delay;
+                retries++;
+            }));
+
+        Assert.Equal(5, retries);
+        Assert.Equal(TimeSpan.FromMilliseconds(100), totalDelay);
+        Assert.StartsWith($"Invalid machine execution budget '{_directory.BudgetPath}': ", ex.Message, StringComparison.Ordinal);
+        _ = Assert.IsAssignableFrom<JsonException>(ex.InnerException);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void LoadBudget_SharingViolation_RetriesButDoesNotDefault(bool releaseOnRetry)
+    {
+        SetBudget("""{ "cpuSlots": 2 }""");
+        using var writer = new FileStream(_directory.BudgetPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        var retries = 0;
+        void Delay(TimeSpan delay)
+        {
+            Assert.Equal(TimeSpan.FromMilliseconds(20), delay);
+            retries++;
+            if (releaseOnRetry)
+            {
+                writer.Dispose();
+            }
+        }
+
+        if (releaseOnRetry)
+        {
+            Assert.Equal(new ExecutionBudget(2, null, _directory.BudgetPath), ExecutionBudget.Load(_directory.BudgetPath, Delay));
+            Assert.Equal(1, retries);
+        }
+        else
+        {
+            var ex = Assert.Throws<ExecutionCoordinationException>(() => ExecutionBudget.Load(_directory.BudgetPath, Delay));
+            Assert.Equal(5, retries);
+            Assert.StartsWith($"Invalid machine execution budget '{_directory.BudgetPath}': ", ex.Message, StringComparison.Ordinal);
+            _ = Assert.IsType<IOException>(ex.InnerException);
+        }
     }
 
     [Fact]

@@ -186,6 +186,9 @@ Each daemon gets its own new `PISTON_EXECUTION_DIRECTORY` (`piston-execution`
 inside the trial artifacts, with no `budget.json`), so machine-wide admission
 never shares a queue or budget with the operator's own daemons or with other
 trials; the engine's default budget (one CPU slot per logical CPU) applies.
+For operator-managed budgets outside these trials, update `budget.json` by writing
+complete JSON to a temporary file in the same directory, then atomically renaming
+it over the existing file without deleting the old file first; avoid in-place edits.
 Cross-daemon admission and scheduling are therefore **not** exercised. Each
 accepted run's admission record is retained, and `piston_admission_isolated` is
 true only when it was admitted alone against that default budget with the

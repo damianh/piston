@@ -21,30 +21,39 @@ public sealed record ExecutionBudget(int CpuSlots, int? MemoryMb, string Source)
     public static ExecutionBudget Default => new(Environment.ProcessorCount, null, DefaultSource);
 
     /// <summary>Loads <c>budget.json</c>; a missing file yields <see cref="Default"/>, an invalid file throws.</summary>
-    public static ExecutionBudget Load(string path)
-    {
-        string text;
-        try
-        {
-            text = File.ReadAllText(path);
-        }
-        catch (FileNotFoundException)
-        {
-            return Default;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            throw Invalid(path, ex.Message, ex);
-        }
+    public static ExecutionBudget Load(string path) => Load(path, Thread.Sleep);
 
+    internal static ExecutionBudget Load(string path, Action<TimeSpan> delay)
+    {
         JsonDocument document;
-        try
+        for (var attempt = 0; ; attempt++)
         {
-            document = JsonDocument.Parse(text);
-        }
-        catch (JsonException ex)
-        {
-            throw Invalid(path, ex.Message, ex);
+            try
+            {
+                // Allow atomic replacement while this read handle is open, including on Windows.
+                using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                using var reader = new StreamReader(stream);
+                document = JsonDocument.Parse(reader.ReadToEnd());
+                break;
+            }
+            catch (FileNotFoundException)
+            {
+                return Default;
+            }
+            catch (Exception ex) when (ex is IOException or JsonException)
+            {
+                if (attempt == 5)
+                {
+                    throw Invalid(path, ex.Message, ex);
+                }
+
+                // Truncate-and-write editors can expose empty/partial JSON or briefly deny sharing.
+                delay(TimeSpan.FromMilliseconds(20));
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                throw Invalid(path, ex.Message, ex);
+            }
         }
 
         using (document)
