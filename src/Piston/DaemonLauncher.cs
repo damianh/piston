@@ -34,9 +34,9 @@ internal static class DaemonLauncher
             return;
         }
 
-        SpawnDaemon(solutionPath, pipeName, webPort, configurationDirectory);
+        using var daemon = SpawnDaemon(solutionPath, pipeName, webPort, configurationDirectory);
 
-        await WaitForPipeAsync(pipeName, ct);
+        await WaitForPipeAsync(pipeName, daemon, ct);
     }
 
     private static async Task<bool> IsPipeAvailableAsync(string pipeName, CancellationToken ct)
@@ -55,7 +55,7 @@ internal static class DaemonLauncher
         }
     }
 
-    private static void SpawnDaemon(string solutionPath, string pipeName, int webPort, string configurationDirectory)
+    private static Process SpawnDaemon(string solutionPath, string pipeName, int webPort, string configurationDirectory)
     {
         var pistonExe = Environment.ProcessPath
             ?? Process.GetCurrentProcess().MainModule?.FileName
@@ -68,10 +68,9 @@ internal static class DaemonLauncher
             throw new InvalidOperationException("Failed to spawn piston daemon process.");
         }
 
-        // Detach — we don't own the daemon lifecycle
-        process.Dispose();
-
+        // The daemon is not owned by this process; the handle is only used to detect an early exit.
         Console.Error.WriteLine($"[piston] Started daemon (pipe: {pipeName})");
+        return process;
     }
 
     internal static ProcessStartInfo CreateStartInfo(
@@ -109,7 +108,7 @@ internal static class DaemonLauncher
         return psi;
     }
 
-    private static async Task WaitForPipeAsync(string pipeName, CancellationToken ct)
+    private static async Task WaitForPipeAsync(string pipeName, Process daemon, CancellationToken ct)
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(SpawnTimeout);
@@ -124,6 +123,13 @@ internal static class DaemonLauncher
             {
                 Console.Error.WriteLine("[piston] Daemon ready.");
                 return;
+            }
+
+            // E.g. the worktree is owned by another daemon; its error was written to the shared stderr.
+            if (daemon.HasExited)
+            {
+                throw new InvalidOperationException(
+                    $"Piston daemon exited during startup with code {daemon.ExitCode}; see the error above.");
             }
         }
 

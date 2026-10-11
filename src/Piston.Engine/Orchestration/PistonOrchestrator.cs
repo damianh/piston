@@ -2,13 +2,14 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Coverage;
+using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
 using Piston.Protocol.Messages;
 
 namespace Piston.Engine.Orchestration;
 
-public sealed class PistonOrchestrator : IPistonOrchestrator
+public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 {
     private readonly IFileWatcherService _fileWatcher;
     private readonly IBuildService _buildService;
@@ -19,8 +20,18 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     private readonly ICoverageProcessor? _coverageProcessor;
     private readonly bool _coverageEnabled;
     private readonly IActivityEventSink _activitySink;
+    private readonly IExecutionAdmission _admission;
 
     private CancellationTokenSource? _cts;
+    private volatile bool _stopping;
+    private readonly object _lifecycleLock = new();
+    private int _activePipelines;
+    private TaskCompletionSource? _pipelinesDrained;
+    private Task? _disposeTask;
+    private bool _disposed;
+
+    // Queue position of a run superseded while queued for machine admission; guarded by _runLock.
+    private long? _inheritedQueueSequence;
     private string? _solutionPath;
     private Task? _graphInitTask;
     private readonly SemaphoreSlim _runLock = new(1, 1);
@@ -68,6 +79,22 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         ICoverageProcessor? coverageProcessor,
         bool coverageEnabled,
         IActivityEventSink activitySink)
+        : this(fileWatcher, buildService, testRunner, impactAnalyzer, state,
+               coverageStore, coverageProcessor, coverageEnabled, activitySink, UnboundedExecutionAdmission.Instance)
+    {
+    }
+
+    internal PistonOrchestrator(
+        IFileWatcherService fileWatcher,
+        IBuildService buildService,
+        ITestRunnerService testRunner,
+        IImpactAnalyzer impactAnalyzer,
+        PistonState state,
+        ICoverageStore? coverageStore,
+        ICoverageProcessor? coverageProcessor,
+        bool coverageEnabled,
+        IActivityEventSink activitySink,
+        IExecutionAdmission admission)
     {
         _fileWatcher = fileWatcher;
         _buildService = buildService;
@@ -78,6 +105,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         _coverageProcessor = coverageProcessor;
         _coverageEnabled = coverageEnabled;
         _activitySink = activitySink;
+        _admission = admission;
 
         _fileWatcher.FileChanged += OnFileChanged;
     }
@@ -184,8 +212,12 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
     public void Stop()
     {
+        _stopping = true;
         _fileWatcher.Stop();
-        _cts?.Cancel();
+        lock (_lifecycleLock)
+        {
+            _cts?.Cancel();
+        }
 
         _state.Phase = PistonPhase.Idle;
         _state.NotifyChanged();
@@ -206,16 +238,58 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         _ = TriggerRunAsync(_solutionPath, batch, TestRunTrigger.FileChange);
     }
 
-    private async Task<TestRunRecord> TriggerRunAsync(string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger)
+    private Task<TestRunRecord> TriggerRunAsync(string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger)
+    {
+        CancellationTokenSource cts;
+        lock (_lifecycleLock)
+        {
+            if (_disposed)
+            {
+                return Task.FromResult(CompleteRun(CreateRunRecord(trigger), TestRunStatus.Cancelled, "Engine is shutting down."));
+            }
+
+            if (_activePipelines++ == 0)
+            {
+                _pipelinesDrained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
+            cts = new CancellationTokenSource();
+            var oldCts = _cts;
+            _cts = cts;
+            oldCts?.Cancel();
+        }
+        return RunTrackedAsync(solutionPath, batch, trigger, cts);
+    }
+
+    private async Task<TestRunRecord> RunTrackedAsync(
+        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, CancellationTokenSource cts)
+    {
+        try
+        {
+            return await RunPipelineAsync(solutionPath, batch, trigger, cts).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_lifecycleLock)
+            {
+                if (ReferenceEquals(_cts, cts))
+                {
+                    _cts = null;
+                }
+
+                cts.Dispose();
+                if (--_activePipelines == 0)
+                {
+                    _pipelinesDrained!.SetResult();
+                }
+            }
+        }
+    }
+
+    private async Task<TestRunRecord> RunPipelineAsync(
+        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, CancellationTokenSource newCts)
     {
         var run = CreateRunRecord(trigger);
-
-        // Issue a new CTS, cancelling whatever was running before
-        var oldCts = _cts;
-        var newCts = new CancellationTokenSource();
-        _cts = newCts;
-        oldCts?.Cancel();
-        oldCts?.Dispose();
 
         // Serialize: only one pipeline runs at a time
         try
@@ -224,7 +298,47 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         }
         catch (OperationCanceledException)
         {
-            return CompleteRun(run, TestRunStatus.Cancelled, "Superseded by a newer run before it started.");
+            return CompleteRun(run, TestRunStatus.Cancelled, _stopping
+                ? "Engine stopped before the run started."
+                : "Superseded by a newer run before it started.");
+        }
+
+        // Machine-wide admission is distinct from the per-daemon run lock: the lock serializes this
+        // daemon's runs, admission shares the machine budget with other daemons and worktrees.
+        IExecutionLease lease;
+        var inheritedSequence = _inheritedQueueSequence;
+        _inheritedQueueSequence = null;
+        try
+        {
+            lease = await _admission.AdmitAsync(
+                run.RunId,
+                status =>
+                {
+                    run = run with { Status = TestRunStatus.Queued, Admission = status };
+                    PublishActiveRun(run);
+                },
+                inheritedSequence,
+                newCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex)
+        {
+            // Keep the queue position for the run that superseded this one, unless the engine is stopping.
+            if (!_stopping)
+            {
+                _inheritedQueueSequence = ex is ExecutionAdmissionCancelledException { QueueSequence: { } seq } ? seq : inheritedSequence;
+            }
+
+            _ = _runLock.Release();
+            return CompleteRun(run, TestRunStatus.Cancelled,
+                _stopping
+                    ? "Engine stopped while waiting for machine-wide execution admission."
+                    : "Superseded by a newer run while waiting for machine-wide execution admission.");
+        }
+        catch (Exception ex)
+        {
+            _ = _runLock.Release();
+            _ = CompleteRun(run, TestRunStatus.Faulted, $"Execution admission failed: {ex.GetType().Name}: {ex.Message}");
+            throw;
         }
 
         var solutionDir = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? solutionPath;
@@ -232,6 +346,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         run = run with
         {
             Status = TestRunStatus.Running,
+            Admission = lease.Status,
             StartedAt = DateTimeOffset.UtcNow,
             SourceBefore = SourceFingerprinter.TryCompute(solutionDir),
         };
@@ -631,7 +746,14 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         }
         finally
         {
-            _ = _runLock.Release();
+            try
+            {
+                lease.Dispose();
+            }
+            finally
+            {
+                _ = _runLock.Release();
+            }
         }
     }
 
@@ -927,12 +1049,35 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             .ToList();
     }
 
-    public void Dispose()
+    public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
+
+    public ValueTask DisposeAsync()
+    {
+        lock (_lifecycleLock)
+        {
+            if (_disposeTask is not null)
+            {
+                return new ValueTask(_disposeTask);
+            }
+
+            _disposed = true;
+            _stopping = true;
+            _cts?.Cancel();
+            _disposeTask = DisposeCoreAsync(_activePipelines == 0 ? Task.CompletedTask : _pipelinesDrained!.Task);
+            return new ValueTask(_disposeTask);
+        }
+    }
+
+    private async Task DisposeCoreAsync(Task drained)
     {
         _fileWatcher.FileChanged -= OnFileChanged;
         _fileWatcher.Dispose();
-        _cts?.Cancel();
-        _cts?.Dispose();
+        await drained.ConfigureAwait(false);
+        if (_graphInitTask is { } graphInit)
+        {
+            await graphInit.ConfigureAwait(false);
+        }
+
         _runLock.Dispose();
         _coverageLock.Dispose();
     }

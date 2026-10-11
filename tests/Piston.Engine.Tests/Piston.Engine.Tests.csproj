@@ -15,6 +15,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\Piston.Engine\Piston.Engine.csproj" />
     <ProjectReference Include="..\Piston.TestProcessHost\Piston.TestProcessHost.csproj" />
+    <ProjectReference Include="..\Piston.ExecutionLeaseHolder\Piston.ExecutionLeaseHolder.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -22,6 +23,8 @@
     <None Include="Coverage\Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\Piston.TestProcessHost\bin\$(Configuration)\$(TargetFramework)\Piston.TestProcessHost.runtimeconfig.json"
           Link="Piston.TestProcessHost.runtimeconfig.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\Piston.ExecutionLeaseHolder\bin\$(Configuration)\$(TargetFramework)\Piston.ExecutionLeaseHolder.runtimeconfig.json"
+          Link="Piston.ExecutionLeaseHolder.runtimeconfig.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

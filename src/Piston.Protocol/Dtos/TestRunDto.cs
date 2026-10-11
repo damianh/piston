@@ -7,6 +7,26 @@ namespace Piston.Protocol.Dtos;
 public sealed record SourceFingerprintDto(string Algorithm, string Value, int FileCount);
 
 /// <summary>
+/// Machine-wide execution admission of a run, shared by Piston daemons of the same user.
+/// CPU and memory figures are admission reservations, not measured usage.
+/// </summary>
+public sealed record TestRunAdmissionDto(
+    string State,
+    int ReservedCpuSlots,
+    int? ReservedMemoryMb,
+    int BudgetCpuSlots,
+    int? BudgetMemoryMb,
+    string BudgetSource,
+    int QueuedAhead,
+    int QueueLength,
+    int OtherAdmittedRuns,
+    int CpuSlotsInUse,
+    long MemoryMbInUse,
+    DateTimeOffset QueuedAt,
+    DateTimeOffset? AdmittedAt
+);
+
+/// <summary>
 /// Provenance metadata for a single test run. Enum-like fields are strings so new values can be
 /// added without breaking older clients. Per-test results are available through the MCP
 /// <c>GetTestRun</c> tool; suites in snapshots carry <see cref="TestSuiteDto.RunId"/>.
@@ -36,5 +56,6 @@ public sealed record TestRunDto(
     int Passed,
     int Failed,
     int Skipped,
-    int DuplicateTestCount
+    int DuplicateTestCount,
+    TestRunAdmissionDto? Admission = null
 );

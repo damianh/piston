@@ -60,4 +60,17 @@ public sealed class PistonConfig
     /// Stored as a string to avoid a type dependency on <c>Piston.Engine</c>.
     /// </summary>
     public string? TestExecutionMode { get; set; }
+
+    /// <summary>Machine-wide execution admission settings for this daemon.</summary>
+    public PistonExecutionConfig? Execution { get; set; }
+}
+
+/// <summary>The <c>execution</c> section of <c>.piston.json</c>.</summary>
+public sealed class PistonExecutionConfig
+{
+    /// <summary>
+    /// Memory in MiB each run reserves from the machine execution budget. Must be positive.
+    /// Required when the machine budget limits memory. It is an admission reservation, not a cap.
+    /// </summary>
+    public int? MemoryMb { get; set; }
 }

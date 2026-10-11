@@ -62,6 +62,11 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         _ = sb.AppendLine($"Passed: {state.TotalPassed}, Failed: {state.TotalFailed}, Skipped: {state.TotalSkipped}");
         _ = sb.AppendLine($"Tests: {state.CompletedTests}/{state.TotalExpectedTests}");
         _ = sb.AppendLine($"Latest {DescribeRun(state.LastRun, includeCounts: false)}");
+        if (state.CurrentRun is { } active)
+        {
+            _ = sb.AppendLine($"Active {DescribeRun(active, includeCounts: false)}");
+        }
+
         _ = sb.AppendLine("Note: these aggregate results may combine several runs; use GetTestRun for run-bound provenance.");
 
         foreach (var suite in state.TestSuites)
@@ -93,7 +98,8 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
     [McpServerTool, Description(
         "Get provenance and per-test results for exactly one test run as JSON (schema piston.test-run/v1): " +
         "run ID, status, full/selective scope, filters, freshness, source fingerprints captured before and after the run, " +
-        "build/runner context, and every test's fully-qualified name and status. " +
+        "build/runner context, machine-wide execution admission (queue position and CPU/memory reservations), " +
+        "and every test's fully-qualified name and status. " +
         "Pass a run ID, \"latest\" or empty for the most recent finished run, or \"active\" for the run in progress. " +
         "A result is trustworthy for a full-scope oracle only when isCurrentFullResult is true and sourceAfter matches the expected source.")]
     public string GetTestRun(string runId = "")
@@ -139,6 +145,11 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         var text = $"Run: {run.RunId} | Status: {run.Status} | Scope: {run.Scope?.ToString() ?? "Unknown"} | " +
                    $"Filtered: {(run.IsFiltered ? "yes" : "no")} | Freshness: {run.Freshness} | " +
                    $"Source: {source}";
+        if (run.Admission is { } admission)
+        {
+            text += " | " + DescribeAdmission(admission);
+        }
+
         if (includeCounts)
         {
             var tests = run.Tests.ToList();
@@ -147,6 +158,19 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
                     $"Skipped: {tests.Count(t => t.Status == TestStatus.Skipped)})";
         }
         return text;
+    }
+
+    internal static string DescribeAdmission(TestRunAdmission a)
+    {
+        var memory = a.BudgetMemoryMb is { } budgetMb
+            ? $", memory {a.MemoryMbInUse}+{a.ReservedMemoryMb ?? 0}/{budgetMb} MiB"
+            : a.ReservedMemoryMb is { } reservedMb
+                ? $", memory {a.MemoryMbInUse}+{reservedMb} MiB (unbudgeted)"
+                : "";
+        var queue = a.State == TestRunAdmissionState.Queued
+            ? $"Queued ({a.QueuedAhead} ahead, {a.QueueLength} waiting)"
+            : "Admitted";
+        return $"Admission: {queue}; machine budget CPU slots {a.CpuSlotsInUse}+{a.ReservedCpuSlots}/{a.BudgetCpuSlots}{memory} ({a.BudgetSource})";
     }
 
     [McpServerTool, Description("Set a test filter to narrow which tests are run. Pass empty string to clear.")]

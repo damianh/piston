@@ -39,6 +39,7 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(FileCoverageDto))]
 [JsonSerializable(typeof(ProjectRunStatusDto))]
 [JsonSerializable(typeof(TestRunDto))]
+[JsonSerializable(typeof(TestRunAdmissionDto))]
 [JsonSerializable(typeof(SourceFingerprintDto))]
 
 // ── Message records ───────────────────────────────────────────────────────

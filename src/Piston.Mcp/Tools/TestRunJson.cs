@@ -64,6 +64,7 @@ public static class TestRunJson
                 })
                 .ToArray()),
             ["runnerError"] = run.RunnerError,
+            ["admission"] = Admission(run.Admission),
             ["summary"] = new JsonObject
             {
                 ["total"] = tests.Count,
@@ -84,6 +85,25 @@ public static class TestRunJson
             ["algorithm"] = fp.Algorithm,
             ["value"] = fp.Value,
             ["fileCount"] = fp.FileCount,
+        };
+
+    private static JsonObject? Admission(TestRunAdmission? a) => a is null
+        ? null
+        : new JsonObject
+        {
+            ["state"] = a.State.ToString(),
+            ["reservedCpuSlots"] = a.ReservedCpuSlots,
+            ["reservedMemoryMb"] = a.ReservedMemoryMb,
+            ["budgetCpuSlots"] = a.BudgetCpuSlots,
+            ["budgetMemoryMb"] = a.BudgetMemoryMb,
+            ["budgetSource"] = a.BudgetSource,
+            ["queuedAhead"] = a.QueuedAhead,
+            ["queueLength"] = a.QueueLength,
+            ["otherAdmittedRuns"] = a.OtherAdmittedRuns,
+            ["cpuSlotsInUse"] = a.CpuSlotsInUse,
+            ["memoryMbInUse"] = a.MemoryMbInUse,
+            ["queuedAt"] = a.QueuedAt.ToString("O"),
+            ["admittedAt"] = a.AdmittedAt?.ToString("O"),
         };
 
     private static JsonObject? Context(TestRunContext? c) => c is null

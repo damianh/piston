@@ -105,6 +105,25 @@ public sealed class PistonJsonContextTests
     }
 
     [Fact]
+    public void StateSnapshotNotification_ActiveRunAdmission_Roundtrip_AndIsOmittedWhenAbsent()
+    {
+        var admission = new TestRunAdmissionDto("Queued", 2, null, 4, null, "default", 1, 2, 2, 4, 0,
+            DateTimeOffset.UnixEpoch, null);
+        var run = new TestRunDto(
+            "run-2", "engine-1", 4, "Forced", "Queued", null, null, false, false, "Unknown", null, false,
+            DateTimeOffset.UnixEpoch, null, null, null, null, false, null, new List<string>(), 0, 0, 0, 0, 0, admission);
+
+        var json = JsonSerializer.Serialize(BuildSnapshot() with { ActiveRun = run }, JsonRpcSerializer.Options);
+        var result = JsonSerializer.Deserialize<StateSnapshotNotification>(json, JsonRpcSerializer.Options);
+
+        Assert.Contains("\"admission\":{\"state\":\"Queued\"", json);
+        Assert.Equal(admission, result?.ActiveRun?.Admission);
+
+        var withoutAdmission = JsonSerializer.Serialize(run with { Admission = null }, JsonRpcSerializer.Options);
+        Assert.DoesNotContain("\"admission\"", withoutAdmission);
+    }
+
+    [Fact]
     public void StateSnapshotNotification_WithoutRunProvenance_DeserializesFromLegacyJson()
     {
         var json = JsonSerializer.Serialize(BuildSnapshot(), JsonRpcSerializer.Options);

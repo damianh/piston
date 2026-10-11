@@ -4,6 +4,7 @@
 using System.CommandLine;
 using Piston;
 using Piston.Engine;
+using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Hosting;
 using Piston.Hosting.Configuration;
@@ -225,7 +226,16 @@ static async Task RunWebAsync(FileInfo? solutionArg, string? cliPipeName, int we
     var configurationDirectory = solutionArg is null
         ? Directory.GetCurrentDirectory()
         : Path.GetDirectoryName(solutionPath)!;
-    await DaemonLauncher.EnsureRunningAsync(solutionPath, pipeName, webPort, configurationDirectory, cts.Token);
+    try
+    {
+        await DaemonLauncher.EnsureRunningAsync(solutionPath, pipeName, webPort, configurationDirectory, cts.Token);
+    }
+    catch (Exception ex) when (ex is InvalidOperationException or TimeoutException)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        Environment.Exit(1);
+        return;
+    }
 
     var webUrl = $"http://localhost:{webPort}";
     Console.Error.WriteLine($"[piston] Opening browser: {webUrl}");
@@ -259,9 +269,11 @@ static async Task RunDaemonAsync(
 {
     string solutionPath;
     PistonConfig config;
+    PistonOptions options;
     try
     {
         (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
+        options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
     }
     catch (InvalidOperationException ex)
     {
@@ -269,8 +281,6 @@ static async Task RunDaemonAsync(
         Environment.Exit(1);
         return;
     }
-
-    var options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
 
     if (!HostHelpers.DotnetSdkAvailable())
     {
@@ -298,7 +308,17 @@ static async Task RunDaemonAsync(
         McpPort = mcpPort,
     });
 
-    await host.StartAsync(cts.Token);
+    try
+    {
+        await host.StartAsync(cts.Token);
+    }
+    catch (ExecutionCoordinationException ex)
+    {
+        // Worktree already owned, or machine-wide execution coordination unusable: never run unowned.
+        Console.Error.WriteLine($"error: {ex.Message}");
+        Environment.Exit(1);
+        return;
+    }
 
     // Clients (e.g. DaemonLauncher) read this line from stdout to discover the pipe.
     Console.WriteLine($"PIPE:{pipeName}");
@@ -318,9 +338,11 @@ static async Task RunDaemonStdioAsync(
 {
     string solutionPath;
     PistonConfig config;
+    PistonOptions options;
     try
     {
         (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
+        options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
     }
     catch (InvalidOperationException ex)
     {
@@ -328,8 +350,6 @@ static async Task RunDaemonStdioAsync(
         Environment.Exit(1);
         return;
     }
-
-    var options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
 
     if (!HostHelpers.DotnetSdkAvailable())
     {
@@ -345,10 +365,20 @@ static async Task RunDaemonStdioAsync(
         cts.Cancel();
     };
 
-    using var engine = new PistonEngine(options);
-
-    Console.Error.WriteLine($"[piston] Starting engine for: {solutionPath}");
-    await engine.StartAsync(solutionPath);
+    PistonEngine engine;
+    try
+    {
+        engine = new PistonEngine(options);
+        Console.Error.WriteLine($"[piston] Starting engine for: {solutionPath}");
+        await engine.StartAsync(solutionPath);
+    }
+    catch (ExecutionCoordinationException ex)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        Environment.Exit(1);
+        return;
+    }
+    using var engineScope = engine;
     Console.Error.WriteLine("[piston] Listening on stdio.");
 
     // NOTE: Do NOT write PIPE: line — stdout is reserved for JSON-RPC in stdio mode.

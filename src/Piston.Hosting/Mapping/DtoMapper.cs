@@ -102,8 +102,25 @@ public static class DtoMapper
             Passed: tests.Count(t => t.Status == TestStatus.Passed),
             Failed: tests.Count(t => t.Status == TestStatus.Failed),
             Skipped: tests.Count(t => t.Status == TestStatus.Skipped),
-            DuplicateTestCount: run.DuplicateTestIds.Count);
+            DuplicateTestCount: run.DuplicateTestIds.Count,
+            Admission: run.Admission?.ToDto());
     }
+
+    public static TestRunAdmissionDto ToDto(this TestRunAdmission admission) =>
+        new(
+            State: admission.State.ToString(),
+            ReservedCpuSlots: admission.ReservedCpuSlots,
+            ReservedMemoryMb: admission.ReservedMemoryMb,
+            BudgetCpuSlots: admission.BudgetCpuSlots,
+            BudgetMemoryMb: admission.BudgetMemoryMb,
+            BudgetSource: admission.BudgetSource,
+            QueuedAhead: admission.QueuedAhead,
+            QueueLength: admission.QueueLength,
+            OtherAdmittedRuns: admission.OtherAdmittedRuns,
+            CpuSlotsInUse: admission.CpuSlotsInUse,
+            MemoryMbInUse: admission.MemoryMbInUse,
+            QueuedAt: admission.QueuedAt,
+            AdmittedAt: admission.AdmittedAt);
 
     public static BuildResultDto ToDto(this BuildResult result) =>
         new(
