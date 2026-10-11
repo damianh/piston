@@ -17,8 +17,14 @@ internal sealed class LeaseHolderProcess : IDisposable
         _process = process;
         _process.OutputDataReceived += (_, e) =>
         {
-            if (e.Data is null) _lines.CompleteAdding();
-            else _lines.Add(e.Data);
+            if (e.Data is null)
+            {
+                _lines.CompleteAdding();
+            }
+            else
+            {
+                _lines.Add(e.Data);
+            }
         };
         _process.BeginOutputReadLine();
         _process.BeginErrorReadLine();
@@ -37,9 +43,16 @@ internal sealed class LeaseHolderProcess : IDisposable
             CreateNoWindow = true,
         };
         startInfo.ArgumentList.Add(typeof(ExecutionLeaseHolder.Program).Assembly.Location);
-        foreach (var arg in args) startInfo.ArgumentList.Add(arg);
+        foreach (var arg in args)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
+
         foreach (var (key, value) in environment ?? new Dictionary<string, string>())
+        {
             startInfo.Environment[key] = value;
+        }
+
         return new LeaseHolderProcess(Process.Start(startInfo)!);
     }
 
@@ -53,15 +66,24 @@ internal sealed class LeaseHolderProcess : IDisposable
         {
             var remaining = deadline - DateTime.UtcNow;
             if (remaining <= TimeSpan.Zero || !_lines.TryTake(out var line, remaining))
+            {
                 throw new TimeoutException($"Lease holder did not print any of: {string.Join(", ", prefixes)}.");
+            }
+
             if (prefixes.Any(p => line.StartsWith(p, StringComparison.Ordinal)))
+            {
                 return line;
+            }
         }
     }
 
     public int WaitForExit()
     {
-        if (!_process.WaitForExit(30_000)) throw new TimeoutException("Lease holder did not exit.");
+        if (!_process.WaitForExit(30_000))
+        {
+            throw new TimeoutException("Lease holder did not exit.");
+        }
+
         return _process.ExitCode;
     }
 
@@ -69,14 +91,17 @@ internal sealed class LeaseHolderProcess : IDisposable
     public void Kill()
     {
         _process.Kill();
-        _process.WaitForExit(30_000);
+        _ = _process.WaitForExit(30_000);
     }
 
     public void Dispose()
     {
         try
         {
-            if (!_process.HasExited) Kill();
+            if (!_process.HasExited)
+            {
+                Kill();
+            }
         }
         catch (InvalidOperationException)
         {

@@ -13,7 +13,7 @@ public sealed class WorktreeOwnershipTests : IDisposable
 
     public WorktreeOwnershipTests()
     {
-        Directory.CreateDirectory(_root);
+        _ = Directory.CreateDirectory(_root);
         _directory = new ExecutionCoordinationDirectory(Path.Combine(_root, "coordination"));
         _directory.EnsureReady();
     }
@@ -26,17 +26,22 @@ public sealed class WorktreeOwnershipTests : IDisposable
     private string CreateWorktree(string name, bool gitFile = false)
     {
         var dir = Path.Combine(_root, name);
-        Directory.CreateDirectory(dir);
+        _ = Directory.CreateDirectory(dir);
         if (gitFile)
+        {
             File.WriteAllText(Path.Combine(dir, ".git"), "gitdir: /elsewhere/.git/worktrees/" + name);
+        }
         else
-            Directory.CreateDirectory(Path.Combine(dir, ".git"));
+        {
+            _ = Directory.CreateDirectory(Path.Combine(dir, ".git"));
+        }
+
         return dir;
     }
 
     private static string CreateSolution(string dir, string name = "App.slnx")
     {
-        Directory.CreateDirectory(dir);
+        _ = Directory.CreateDirectory(dir);
         var path = Path.Combine(dir, name);
         File.WriteAllText(path, "<Solution />");
         return path;
@@ -75,12 +80,15 @@ public sealed class WorktreeOwnershipTests : IDisposable
     [Fact]
     public void Identity_ResolvesSymbolicLinks()
     {
-        if (OperatingSystem.IsWindows()) return; // Creating symlinks requires privileges on Windows.
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating symlinks requires privileges on Windows.
+        }
 
         var worktree = CreateWorktree("real");
         var solution = CreateSolution(Path.Combine(worktree, "src"));
         var link = Path.Combine(_root, "link");
-        Directory.CreateSymbolicLink(link, worktree);
+        _ = Directory.CreateSymbolicLink(link, worktree);
 
         var viaLink = WorktreeIdentity.FromSolutionPath(Path.Combine(link, "src", "App.slnx"));
 

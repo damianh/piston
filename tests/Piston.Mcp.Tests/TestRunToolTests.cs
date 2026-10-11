@@ -158,7 +158,8 @@ public sealed class TestRunToolTests
     {
         var engine = new StubEngine();
         engine.State.CurrentRun = Run("queued-run", 4, status: TestRunStatus.Queued, freshness: ResultFreshness.Unknown)
-            with { StartedAt = null, Admission = QueuedAdmission() };
+            with
+        { StartedAt = null, Admission = QueuedAdmission() };
         var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
 
         using var doc = JsonDocument.Parse(tools.GetTestRun("active"));

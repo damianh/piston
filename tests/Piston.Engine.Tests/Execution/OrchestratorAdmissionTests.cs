@@ -4,7 +4,6 @@
 using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
-using Piston.Engine.Services;
 using Piston.Engine.Tests.Orchestration;
 using Xunit;
 
@@ -24,7 +23,7 @@ public sealed class OrchestratorAdmissionTests : IDisposable
 
     public OrchestratorAdmissionTests()
     {
-        Directory.CreateDirectory(Path.Combine(_root, "solution"));
+        _ = Directory.CreateDirectory(Path.Combine(_root, "solution"));
         File.WriteAllText(SolutionPath, "<Solution />");
         _directory = new ExecutionCoordinationDirectory(Path.Combine(_root, "coordination"));
         _directory.EnsureReady();
@@ -41,7 +40,7 @@ public sealed class OrchestratorAdmissionTests : IDisposable
     private MachineExecutionCoordinator NewCoordinator()
     {
         var coordinator = new MachineExecutionCoordinator(_directory, new ExecutionReservation(1, null), TimeSpan.FromMilliseconds(10));
-        coordinator.Initialize();
+        _ = coordinator.Initialize();
         return coordinator;
     }
 
@@ -56,7 +55,11 @@ public sealed class OrchestratorAdmissionTests : IDisposable
         var deadline = DateTime.UtcNow.AddSeconds(15);
         while (!condition())
         {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException(because);
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new TimeoutException(because);
+            }
+
             await Task.Delay(10);
         }
     }
@@ -87,7 +90,7 @@ public sealed class OrchestratorAdmissionTests : IDisposable
         var run = _state.LastRun!;
         Assert.Equal(TestRunStatus.Completed, run.Status);
         Assert.Equal(TestRunAdmissionState.Admitted, run.Admission!.State);
-        Assert.NotNull(run.Admission.AdmittedAt);
+        _ = Assert.NotNull(run.Admission.AdmittedAt);
         Assert.True(run.StartedAt >= run.Admission.AdmittedAt);
         Assert.Equal(0, Entries(_directory.LeasesDirectory));
         Assert.Equal(0, Entries(_directory.QueueDirectory));
@@ -113,7 +116,7 @@ public sealed class OrchestratorAdmissionTests : IDisposable
         await WaitForAsync(() => _state.LastRun is not null, "startup run did not finish");
         _runner.DuringRun = () => throw new InvalidOperationException("runner fault");
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() => _orchestrator.RequestRunAsync());
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(() => _orchestrator.RequestRunAsync());
 
         Assert.Equal(TestRunStatus.Faulted, _state.LastRun!.Status);
         Assert.Equal(0, Entries(_directory.LeasesDirectory));

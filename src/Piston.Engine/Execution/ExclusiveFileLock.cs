@@ -42,7 +42,11 @@ internal static class ExclusiveFileLock
         while (true)
         {
             var stream = TryAcquire(path, FileMode.OpenOrCreate);
-            if (stream is not null) return stream;
+            if (stream is not null)
+            {
+                return stream;
+            }
+
             await Task.Delay(TimeSpan.FromMilliseconds(5), ct).ConfigureAwait(false);
         }
     }
@@ -65,20 +69,33 @@ internal static class ExclusiveFileLock
             return true;
         }
 
-        if (stream is null) return false;
+        if (stream is null)
+        {
+            return false;
+        }
+
         using (stream)
         {
             if (!OperatingSystem.IsWindows())
+            {
                 File.Delete(path);
+            }
         }
         return true;
     }
 
     internal static bool IsContention(IOException ex)
     {
-        if (ex is FileNotFoundException or DirectoryNotFoundException) return false;
+        if (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+
         if (OperatingSystem.IsWindows())
+        {
             return (ex.HResult & 0xFFFF) is WindowsSharingViolation or WindowsLockViolation;
+        }
+
         var expected = OperatingSystem.IsMacOS() || OperatingSystem.IsFreeBSD() ? BsdEWouldBlock : LinuxEWouldBlock;
         return ex.HResult == expected;
     }

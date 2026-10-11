@@ -3,6 +3,7 @@
 
 using Piston.Engine.Coverage;
 using Piston.Engine.Execution;
+using Piston.Engine.Models;
 using Xunit;
 
 namespace Piston.Engine.Tests;

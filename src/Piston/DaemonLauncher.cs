@@ -127,8 +127,10 @@ internal static class DaemonLauncher
 
             // E.g. the worktree is owned by another daemon; its error was written to the shared stderr.
             if (daemon.HasExited)
+            {
                 throw new InvalidOperationException(
                     $"Piston daemon exited during startup with code {daemon.ExitCode}; see the error above.");
+            }
         }
 
         throw new TimeoutException(

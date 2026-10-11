@@ -160,7 +160,9 @@ public sealed class PistonEngine : IEngine
     public async Task StartAsync(string solutionPath)
     {
         if (_ownership is not null)
+        {
             throw new InvalidOperationException("The engine has already been started.");
+        }
 
         var budget = _executionCoordinator.Initialize();
         _ownership = WorktreeOwnership.Acquire(_executionCoordinator.Directory, solutionPath);

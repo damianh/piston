@@ -57,7 +57,11 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
         while (remaining.Count > 0)
         {
             var segment = remaining.Dequeue();
-            if (segment == ".") continue;
+            if (segment == ".")
+            {
+                continue;
+            }
+
             if (segment == "..")
             {
                 current = Path.GetDirectoryName(current) ?? current;
@@ -69,7 +73,10 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
             if (info.Exists && info.LinkTarget is { } target)
             {
                 if (++depth > MaxLinkDepth)
+                {
                     throw new ExecutionCoordinationException($"Too many symbolic links resolving '{path}'.");
+                }
+
                 var absolute = Path.IsPathFullyQualified(target) ? target : Path.Combine(current, target);
                 var targetRoot = Path.GetPathRoot(absolute)!;
                 var rest = remaining.ToArray();

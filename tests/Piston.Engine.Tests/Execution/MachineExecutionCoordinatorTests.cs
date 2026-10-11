@@ -31,7 +31,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
     private MachineExecutionCoordinator Coordinator(int cpu, int? memoryMb = null)
     {
         var coordinator = new MachineExecutionCoordinator(_directory, new ExecutionReservation(cpu, memoryMb), Poll);
-        coordinator.Initialize();
+        _ = coordinator.Initialize();
         return coordinator;
     }
 
@@ -52,7 +52,11 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
         var deadline = DateTime.UtcNow.AddSeconds(15);
         while (!condition())
         {
-            if (DateTime.UtcNow > deadline) throw new TimeoutException(because);
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new TimeoutException(because);
+            }
+
             await Task.Delay(10);
         }
     }
@@ -73,7 +77,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
         Assert.Equal((2, 512, 4, 2048), (status.ReservedCpuSlots, status.ReservedMemoryMb!.Value, status.BudgetCpuSlots, status.BudgetMemoryMb!.Value));
         Assert.Equal(_directory.BudgetPath, status.BudgetSource);
         Assert.Equal((0, 0, 0, 0L), (status.QueuedAhead, status.OtherAdmittedRuns, status.CpuSlotsInUse, status.MemoryMbInUse));
-        Assert.NotNull(status.AdmittedAt);
+        _ = Assert.NotNull(status.AdmittedAt);
         Assert.Equal(1, EntryCount(_directory.LeasesDirectory));
         Assert.Equal(0, EntryCount(_directory.QueueDirectory));
 
@@ -162,7 +166,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
             InterlockedMax(ref maxRunning, now);
             InterlockedMax(ref maxReported, lease.Status!.CpuSlotsInUse + 1);
             await Task.Delay(5 + index % 4 * 5);
-            Interlocked.Decrement(ref running);
+            _ = Interlocked.Decrement(ref running);
         }
 
         await Task.WhenAll(Enumerable.Range(0, 16).Select(i => Task.Run(() => RunOnce(i)))).WaitAsync(TimeSpan.FromSeconds(60));
@@ -192,7 +196,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
         cts.Cancel();
 
         var ex = await Assert.ThrowsAsync<ExecutionAdmissionCancelledException>(() => queued);
-        Assert.NotNull(ex.QueueSequence);
+        _ = Assert.NotNull(ex.QueueSequence);
         Assert.Equal(0, EntryCount(_directory.QueueDirectory));
     }
 
@@ -316,7 +320,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
 
         SetBudget("""{ "cpuSlots": "lots" }""");
 
-        await Assert.ThrowsAsync<ExecutionCoordinationException>(() => queued.WaitAsync(TimeSpan.FromSeconds(15)));
+        _ = await Assert.ThrowsAsync<ExecutionCoordinationException>(() => queued.WaitAsync(TimeSpan.FromSeconds(15)));
         Assert.Equal(0, EntryCount(_directory.QueueDirectory));
     }
 
@@ -341,7 +345,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
         SetBudget("""{ "cpuSlots": 2 }""");
         var coordinator = new MachineExecutionCoordinator(_directory, new ExecutionReservation(3, null), Poll);
 
-        Assert.Throws<ExecutionCoordinationException>(() => coordinator.Initialize());
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Admit(coordinator));
+        _ = Assert.Throws<ExecutionCoordinationException>(() => coordinator.Initialize());
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(() => Admit(coordinator));
     }
 }

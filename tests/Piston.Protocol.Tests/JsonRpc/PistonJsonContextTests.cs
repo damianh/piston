@@ -113,7 +113,7 @@ public sealed class PistonJsonContextTests
             "run-2", "engine-1", 4, "Forced", "Queued", null, null, false, false, "Unknown", null, false,
             DateTimeOffset.UnixEpoch, null, null, null, null, false, null, new List<string>(), 0, 0, 0, 0, 0, admission);
 
-        var json   = JsonSerializer.Serialize(BuildSnapshot() with { ActiveRun = run }, JsonRpcSerializer.Options);
+        var json = JsonSerializer.Serialize(BuildSnapshot() with { ActiveRun = run }, JsonRpcSerializer.Options);
         var result = JsonSerializer.Deserialize<StateSnapshotNotification>(json, JsonRpcSerializer.Options);
 
         Assert.Contains("\"admission\":{\"state\":\"Queued\"", json);

@@ -53,9 +53,14 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
         string runId, Action<TestRunAdmission> onStatus, long? inheritedSequence, CancellationToken ct)
     {
         if (!_initialized)
+        {
             throw new InvalidOperationException($"{nameof(MachineExecutionCoordinator)} must be initialized before admitting runs.");
+        }
+
         if (runId.Contains('_') || runId.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
             throw new ArgumentException($"Run id '{runId}' cannot be encoded in a queue entry name.", nameof(runId));
+        }
 
         long sequence;
         FileStream ticket;
@@ -64,7 +69,7 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
         {
             using (await AcquireGlobalLockAsync(ct).ConfigureAwait(false))
             {
-                LoadValidatedBudget();
+                _ = LoadValidatedBudget();
                 var (tickets, leases) = ScanLiveEntries();
                 sequence = inheritedSequence ?? NextSequence(tickets, leases);
                 ticketName = EntryName(sequence, runId) + TicketExtension;
@@ -194,13 +199,19 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
         {
             foreach (var path in System.IO.Directory.EnumerateFiles(directory))
             {
-                if (ExclusiveFileLock.TryRemoveUnheld(path)) continue;
+                if (ExclusiveFileLock.TryRemoveUnheld(path))
+                {
+                    continue;
+                }
 
                 var name = Path.GetFileName(path);
                 if (!name.EndsWith(extension, StringComparison.Ordinal) || Entry.TryParse(name, out var entry) is false)
+                {
                     throw new ExecutionCoordinationException(
                         $"Unrecognised held entry '{path}' in the execution coordination directory; another " +
                         "Piston version or process may be using it. Use a separate PISTON_EXECUTION_DIRECTORY.");
+                }
+
                 live.Add(entry);
             }
         }

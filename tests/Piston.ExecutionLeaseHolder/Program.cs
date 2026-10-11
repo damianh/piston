@@ -26,7 +26,10 @@ public static class Program
                 case "own":
                     directory.EnsureReady();
                     using (WorktreeOwnership.Acquire(directory, args[2]))
+                    {
                         await ReadyAndWaitAsync();
+                    }
+
                     return 0;
 
                 case "admit":
@@ -35,7 +38,7 @@ public static class Program
                         directory,
                         new ExecutionReservation(int.Parse(args[2], System.Globalization.CultureInfo.InvariantCulture), memory == 0 ? null : memory),
                         TimeSpan.FromMilliseconds(20));
-                    coordinator.Initialize();
+                    _ = coordinator.Initialize();
                     using (await coordinator.AdmitAsync(
                         Guid.NewGuid().ToString("N"),
                         status => Console.Out.WriteLine($"QUEUED {status.QueuedAhead}"),
@@ -68,6 +71,6 @@ public static class Program
         Console.Out.WriteLine("READY");
         Console.Out.Flush();
         // Runs until killed, or until stdin closes for a graceful release.
-        await Console.In.ReadToEndAsync();
+        _ = await Console.In.ReadToEndAsync();
     }
 }

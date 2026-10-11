@@ -47,7 +47,9 @@ public sealed class WorktreeOwnership : IDisposable
         }
 
         if (stream is null)
+        {
             throw new WorktreeOwnershipConflictException(worktree, TryReadInfo(infoPath));
+        }
 
         var owner = new ExecutionOwnerInfo(Environment.ProcessId, Path.GetFullPath(solutionPath), worktree.RootPath, DateTimeOffset.UtcNow);
         try
@@ -66,7 +68,11 @@ public sealed class WorktreeOwnership : IDisposable
 
     public void Dispose()
     {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
         try
         {
             // Delete before unlocking so it never removes the next owner's details.

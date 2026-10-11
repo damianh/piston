@@ -19,8 +19,11 @@ public sealed class ExecutionCoordinationDirectory
     public ExecutionCoordinationDirectory(string baseDirectory)
     {
         if (!Path.IsPathFullyQualified(baseDirectory))
+        {
             throw new ExecutionCoordinationException(
                 $"The execution coordination directory must be an absolute path; got '{baseDirectory}'.");
+        }
+
         BaseDirectory = Path.GetFullPath(baseDirectory);
         StateDirectory = Path.Combine(BaseDirectory, FormatVersion);
     }
@@ -54,16 +57,22 @@ public sealed class ExecutionCoordinationDirectory
         if (!string.IsNullOrEmpty(configured))
         {
             if (!Path.IsPathFullyQualified(configured))
+            {
                 throw new ExecutionCoordinationException(
                     $"{EnvironmentVariable} must be an absolute path; got '{configured}'.");
+            }
+
             return new ExecutionCoordinationDirectory(configured);
         }
 
         var local = getLocalApplicationData();
         if (string.IsNullOrEmpty(local))
+        {
             throw new ExecutionCoordinationException(
                 "Cannot determine the per-user local application data folder for machine-wide execution " +
                 $"coordination. Set {EnvironmentVariable} to an absolute path.");
+        }
+
         return new ExecutionCoordinationDirectory(Path.Combine(local, "Piston", "execution"));
     }
 
@@ -78,9 +87,13 @@ public sealed class ExecutionCoordinationDirectory
             foreach (var dir in new[] { BaseDirectory, StateDirectory, OwnersDirectory, QueueDirectory, LeasesDirectory })
             {
                 if (OperatingSystem.IsWindows())
-                    Directory.CreateDirectory(dir);
+                {
+                    _ = Directory.CreateDirectory(dir);
+                }
                 else
-                    Directory.CreateDirectory(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                {
+                    _ = Directory.CreateDirectory(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                }
             }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -101,10 +114,12 @@ public sealed class ExecutionCoordinationDirectory
                 ?? throw new ExecutionCoordinationException($"Could not lock new probe file '{probePath}'.");
             using var second = ExclusiveFileLock.TryAcquire(probePath, FileMode.Open);
             if (second is not null)
+            {
                 throw new ExecutionCoordinationException(
                     $"Exclusive file locks are not enforced in '{StateDirectory}', so worktree ownership and the " +
                     "machine execution budget cannot be guaranteed. Unset DOTNET_SYSTEM_IO_DISABLEFILELOCKING " +
                     $"(and the System.IO.DisableFileLocking switch) or set {EnvironmentVariable} to a local filesystem.");
+            }
         }
         catch (IOException ex)
         {

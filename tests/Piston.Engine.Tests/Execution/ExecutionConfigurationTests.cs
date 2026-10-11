@@ -79,32 +79,20 @@ public sealed class ExecutionConfigurationTests : IDisposable
     }
 
     [Fact]
-    public void Reservation_LargerThanMemoryBudget_IsRejected()
-    {
-        Assert.Throws<ExecutionCoordinationException>(
+    public void Reservation_LargerThanMemoryBudget_IsRejected() => _ = Assert.Throws<ExecutionCoordinationException>(
             () => new ExecutionReservation(1, 2048).EnsureAdmissible(new ExecutionBudget(4, 1024, "test")));
-    }
 
     [Theory]
     [InlineData(0)]
     [InlineData(-3)]
-    public void Reservation_NonPositive_IsRejected(int memory)
-    {
-        Assert.Throws<ExecutionCoordinationException>(
+    public void Reservation_NonPositive_IsRejected(int memory) => _ = Assert.Throws<ExecutionCoordinationException>(
             () => new ExecutionReservation(1, memory).EnsureAdmissible(new ExecutionBudget(4, null, "test")));
-    }
 
     [Fact]
-    public void Reservation_WithMemory_IsAdmissible_WhenMemoryIsNotBudgeted()
-    {
-        new ExecutionReservation(4, 512).EnsureAdmissible(new ExecutionBudget(4, null, "test"));
-    }
+    public void Reservation_WithMemory_IsAdmissible_WhenMemoryIsNotBudgeted() => new ExecutionReservation(4, 512).EnsureAdmissible(new ExecutionBudget(4, null, "test"));
 
     [Fact]
-    public void Directory_RelativePath_IsRejected()
-    {
-        Assert.Throws<ExecutionCoordinationException>(() => new ExecutionCoordinationDirectory("relative/dir"));
-    }
+    public void Directory_RelativePath_IsRejected() => _ = Assert.Throws<ExecutionCoordinationException>(() => new ExecutionCoordinationDirectory("relative/dir"));
 
     [Fact]
     public void ResolveDefault_UsesAbsoluteEnvironmentOverride()
@@ -161,7 +149,10 @@ public sealed class ExecutionConfigurationTests : IDisposable
     public void EnsureReady_FailsExplicitly_WhenFileLockingIsDisabled()
     {
         // Windows sharing modes cannot be disabled by this switch; it only affects Unix advisory locks.
-        if (OperatingSystem.IsWindows()) return;
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
 
         var dir = Path.Combine(_root, "coordination");
         using var probe = LeaseHolderProcess.Start(

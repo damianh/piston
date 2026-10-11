@@ -26,7 +26,11 @@ public sealed record ExecutionBudget(int CpuSlots, int? MemoryMb, string Source)
         string text;
         try
         {
-            if (!File.Exists(path)) return Default;
+            if (!File.Exists(path))
+            {
+                return Default;
+            }
+
             text = File.ReadAllText(path);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
@@ -47,18 +51,26 @@ public sealed record ExecutionBudget(int CpuSlots, int? MemoryMb, string Source)
         using (document)
         {
             if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
                 throw Invalid(path, "the root must be a JSON object.");
+            }
 
             int? cpuSlots = null;
             int? memoryMb = null;
             foreach (var property in document.RootElement.EnumerateObject())
             {
                 if (property.Name.Equals("cpuSlots", StringComparison.OrdinalIgnoreCase))
+                {
                     cpuSlots = PositiveInt(path, property);
+                }
                 else if (property.Name.Equals("memoryMb", StringComparison.OrdinalIgnoreCase))
+                {
                     memoryMb = PositiveInt(path, property);
+                }
                 else
+                {
                     throw Invalid(path, $"unknown property '{property.Name}'. Supported: cpuSlots, memoryMb.");
+                }
             }
 
             return new ExecutionBudget(cpuSlots ?? Environment.ProcessorCount, memoryMb, path);
@@ -93,26 +105,38 @@ public sealed record ExecutionReservation(int CpuSlots, int? MemoryMb)
     public void EnsureAdmissible(ExecutionBudget budget)
     {
         if (CpuSlots <= 0)
+        {
             throw new ExecutionCoordinationException($"The CPU slot reservation must be positive; got {CpuSlots}.");
+        }
+
         if (MemoryMb is <= 0)
+        {
             throw new ExecutionCoordinationException($"The memory reservation must be positive; got {MemoryMb}.");
+        }
 
         if (CpuSlots > budget.CpuSlots)
+        {
             throw new ExecutionCoordinationException(
                 $"This daemon reserves {CpuSlots} CPU slot(s) per run (its test-process parallelism), but the machine " +
                 $"execution budget ({budget.Source}) allows {budget.CpuSlots}; it could never be admitted. " +
                 "Lower 'parallelism' or raise 'cpuSlots' in the budget.");
+        }
 
         if (budget.MemoryMb is { } memoryBudget)
         {
             if (MemoryMb is null)
+            {
                 throw new ExecutionCoordinationException(
                     $"The machine execution budget ({budget.Source}) limits memory to {memoryBudget} MiB, but this " +
                     "daemon declares no memory reservation. Set 'execution.memoryMb' in .piston.json.");
+            }
+
             if (MemoryMb > memoryBudget)
+            {
                 throw new ExecutionCoordinationException(
                     $"This daemon reserves {MemoryMb} MiB per run, but the machine execution budget ({budget.Source}) " +
                     $"allows {memoryBudget} MiB; it could never be admitted.");
+            }
         }
     }
 }
