@@ -118,7 +118,8 @@ Every run, including startup and file-change runs, gets a record in the
 
 - a unique `runId` and a sequence number;
 - the trigger (`Startup`, `Forced` or `FileChange`);
-- the status: `Completed`, `Incomplete`, `BuildFailed`, `Cancelled` or `Faulted`;
+- the status: `Completed`, `Incomplete`, `BuildFailed`, `Cancelled` or `Faulted` (`Queued` or `Running` while active);
+- for runs that went through machine-wide admission, an `admission` object (see below);
 - the scope (`Full` or `Selective`), `isFiltered` and the effective filter;
 - the run context: solution, test projects, build targets, configuration, SDK, runtime and OS;
 - per-project outcomes, duplicate test IDs, and every test's fully qualified name and status.
@@ -133,6 +134,22 @@ Limits:
 - The fingerprint does not cover sources outside the solution directory, installed SDKs, the NuGet cache, or merged user/machine NuGet configuration.
 - The SDK version is recorded from `dotnet --version` run in the daemon's working directory.
 - `context.workingDirectory` is the build/SDK-probe directory. `context.testWorkingDirectories` records each test target's actual directory: the solution directory for MTP, the daemon directory for VSTest.
+
+### Worktree ownership and machine execution budget
+
+Daemons for the same OS user coordinate through a per-user directory: `$PISTON_EXECUTION_DIRECTORY` if set (must be absolute), otherwise `Piston/execution` under the local application-data folder (`~/.local/share/Piston/execution` on Linux). It must be on a local filesystem. At startup the daemon checks that file locks are enforced there. If they are not (for example `DOTNET_SYSTEM_IO_DISABLEFILELOCKING` is set), the daemon refuses to start.
+
+- **One owner per worktree.** A daemon takes an exclusive lock for its solution's worktree: the nearest ancestor that contains `.git`, after resolving symlinks, or the solution directory if there is none. A second daemon for any solution in the same worktree exits with an error that names the owner's PID, solution and start time. The OS releases the lock when the owner exits or crashes, so a stale owner never blocks a restart.
+- **Machine-wide budget.** Before building, each run (startup, forced or file-change) asks for admission. It reserves the daemon's test-process parallelism as CPU slots, plus `execution.memoryMb` if configured. Runs are admitted in strict FIFO order, only while the sum of admitted reservations fits the budget. The budget is read from `budget.json` in that directory on every admission check:
+
+  ```json
+  { "cpuSlots": 8, "memoryMb": 16384 }
+  ```
+
+  Without the file, the budget is the logical processor count with no memory limit. Unknown properties, non-positive values, or a reservation that could never fit fail explicitly: at daemon startup, or as a `Faulted` run if the file changes while a run waits. If the budget limits memory, every daemon must set `execution.memoryMb`.
+- **Visible queueing.** A waiting run is published as the active run with status `Queued` and an `admission` object: `state` (`Queued`/`Admitted`), `queuedAhead`, `queueLength`, `otherAdmittedRuns`, `cpuSlotsInUse`, `memoryMbInUse`, the reservation, the budget and its source, `queuedAt` and `admittedAt`. It appears in `get_test_run` (`active` or by ID), in the `Active Run:` line of `get_test_results`, and in `ActiveRun`/`LastRun` of the protocol state snapshot. A run superseded while queued ends `Cancelled` without starting, and its replacement keeps the queue position. Leases and tickets are released when a run ends, is cancelled or faults, or when the daemon exits or crashes.
+
+Limits: this is admission control by reservation. Piston does not cap the actual CPU or memory of builds or test processes (no cgroups or job objects). A hung but live daemon keeps its lease. Child processes orphaned by a crashed daemon are no longer counted. Daemons of different OS users do not share a budget. Solution loading at startup is not admitted. Owner `.lock` files are left in place on purpose. Behavior is tested on Linux. The Windows and macOS lock semantics are implemented but not yet validated there.
 
 ## Coverage and impact selection
 
@@ -186,6 +203,7 @@ no implemented `.piston/config.json` or user-global config hierarchy.
 | `stdio` | `bool` | Use stdin/stdout JSON-RPC transport. |
 | `mcpPort` | `int` | Enable the MCP server on this port. |
 | `testExecutionMode` | `string` | `"Auto"` and `"Process"` currently both route between MTP and VSTest. `"InProcess"` is not implemented and throws at startup. |
+| `execution.memoryMb` | `int` | Memory in MiB each run reserves from the machine execution budget (see [Worktree ownership and machine execution budget](#worktree-ownership-and-machine-execution-budget)). Must be positive; required when the budget sets `memoryMb`. A reservation, not a cap. |
 
 ## Building from source
 

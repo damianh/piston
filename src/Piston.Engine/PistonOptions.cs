@@ -64,5 +64,17 @@ public sealed class PistonOptions
     /// Selects the test execution backend. Default is <see cref="TestExecutionMode.Auto"/>.
     /// </summary>
     public TestExecutionMode TestExecutionMode { get; init; } = TestExecutionMode.Auto;
+
+    /// <summary>
+    /// Memory in MiB each run reserves from the machine execution budget. Null reserves no memory;
+    /// required when the machine budget limits memory. This is an admission reservation, not a cap.
+    /// </summary>
+    public int? ExecutionMemoryReservationMb { get; init; }
+
+    /// <summary>
+    /// Absolute path of the machine-wide execution coordination directory shared by daemons.
+    /// Null uses <c>PISTON_EXECUTION_DIRECTORY</c> or the per-user default.
+    /// </summary>
+    public string? ExecutionCoordinationDirectory { get; init; }
 }
 

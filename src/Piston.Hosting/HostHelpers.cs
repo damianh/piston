@@ -133,6 +133,13 @@ public static class HostHelpers
             testExecutionMode = parsedMode;
         }
 
+        var memoryReservationMb = config.Execution?.MemoryMb;
+        if (memoryReservationMb is <= 0)
+        {
+            throw new InvalidOperationException(
+                $"Invalid 'execution.memoryMb' in .piston.json: must be a positive number of MiB; got {memoryReservationMb}.");
+        }
+
         return new PistonOptions
         {
             SolutionPath = solutionPath,
@@ -142,6 +149,7 @@ public static class HostHelpers
             ProcessPoolSize = processPoolSize,
             ProcessRecycleAfter = processRecycleAfter,
             TestExecutionMode = testExecutionMode,
+            ExecutionMemoryReservationMb = memoryReservationMb,
         };
     }
 

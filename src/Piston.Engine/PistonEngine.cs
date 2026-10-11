@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Coverage;
+using Piston.Engine.Execution;
 using Piston.Engine.Impact;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
@@ -19,6 +20,8 @@ public sealed class PistonEngine : IEngine
     private readonly DiagnosticLog _diagnosticLog;
     private readonly IActivityEventSink _activitySink;
     private readonly string _solutionDirectory;
+    private readonly MachineExecutionCoordinator _executionCoordinator;
+    private WorktreeOwnership? _ownership;
 
     public PistonEngine(PistonOptions options)
         : this(options, NullActivityEventSink.Instance)
@@ -85,6 +88,14 @@ public sealed class PistonEngine : IEngine
             : Math.Max(1, Environment.ProcessorCount / 2);
         _pool = new TestProcessPool(effectivePoolSize, options.ProcessRecycleAfter, strategy);
 
+        // Each admitted run reserves this daemon's test-process parallelism from the machine budget.
+        var coordinationDirectory = options.ExecutionCoordinationDirectory is { } configuredDirectory
+            ? new ExecutionCoordinationDirectory(configuredDirectory)
+            : ExecutionCoordinationDirectory.ResolveDefault();
+        _executionCoordinator = new MachineExecutionCoordinator(
+            coordinationDirectory,
+            new ExecutionReservation(effectivePoolSize, options.ExecutionMemoryReservationMb));
+
         var testRunner = new TestRunnerService(strategy, _pool);
 
         _orchestrator = new PistonOrchestrator(
@@ -96,7 +107,8 @@ public sealed class PistonEngine : IEngine
             _coverageStore,
             coverageProcessor,
             options.CoverageEnabled,
-            activitySink);
+            activitySink,
+            _executionCoordinator);
 
         var sdkVersion = new Lazy<string?>(ProbeSdkVersion);
         _orchestrator.SdkVersionProvider = () => sdkVersion.Value;
@@ -135,9 +147,40 @@ public sealed class PistonEngine : IEngine
 
     public PistonState State => _state;
 
+    /// <summary>Worktree ownership held by this engine; null before <see cref="StartAsync"/>.</summary>
+    public WorktreeOwnership? Ownership => _ownership;
+
+    /// <summary>
+    /// Acquires exclusive ownership of the solution's worktree and validates the machine execution
+    /// budget, then starts watching and runs the initial build/test.
+    /// </summary>
+    /// <exception cref="ExecutionCoordinationException">
+    /// Another live daemon owns the worktree, or machine-wide coordination is unavailable or misconfigured.
+    /// </exception>
     public async Task StartAsync(string solutionPath)
     {
-        await _orchestrator.StartAsync(solutionPath).ConfigureAwait(false);
+        if (_ownership is not null)
+            throw new InvalidOperationException("The engine has already been started.");
+
+        var budget = _executionCoordinator.Initialize();
+        _ownership = WorktreeOwnership.Acquire(_executionCoordinator.Directory, solutionPath);
+        _diagnosticLog.Write("Engine",
+            $"Worktree ownership: {_ownership.Worktree.RootPath} (key {_ownership.Worktree.Key}); " +
+            $"execution directory: {_executionCoordinator.Directory.BaseDirectory}; " +
+            $"budget: {budget.CpuSlots} CPU slot(s), memory {budget.MemoryMb?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "not budgeted"} ({budget.Source}); " +
+            $"reservation: {_executionCoordinator.Reservation.CpuSlots} CPU slot(s), memory {_executionCoordinator.Reservation.MemoryMb?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}");
+
+        try
+        {
+            await _orchestrator.StartAsync(solutionPath).ConfigureAwait(false);
+        }
+        catch
+        {
+            _ownership.Dispose();
+            _ownership = null;
+            throw;
+        }
+
         _activitySink.Emit(ActivityEventFactory.SolutionLoaded(solutionPath, 0));
     }
 
@@ -160,6 +203,8 @@ public sealed class PistonEngine : IEngine
         _orchestrator.Dispose();
         _coverageStore?.Dispose();
         _pool.Dispose();
+        // Released after the orchestrator so no run executes without ownership.
+        _ownership?.Dispose();
         _diagnosticLog.Dispose();
     }
 }

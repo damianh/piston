@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Coverage;
+using Piston.Engine.Execution;
 using Xunit;
 
 namespace Piston.Engine.Tests;
@@ -64,6 +65,51 @@ public sealed class PistonEngineTests : IDisposable
         engine.ClearResults();
 
         Assert.False(File.Exists(Path.Combine(_root, ".piston", "piston.db")));
+    }
+
+    [Fact]
+    public async Task StartAsync_RefusesAWorktreeOwnedByAnotherEngine_WithoutStarting()
+    {
+        var coordination = Path.Combine(_root, "coordination");
+        var solution = Path.Combine(_root, "Test.slnx");
+        File.WriteAllText(solution, "<Solution />");
+        var directory = new ExecutionCoordinationDirectory(coordination);
+        directory.EnsureReady();
+        using var owner = WorktreeOwnership.Acquire(directory, solution);
+        using var engine = new PistonEngine(new PistonOptions
+        {
+            SolutionPath = solution,
+            ExecutionCoordinationDirectory = coordination,
+        });
+
+        var ex = await Assert.ThrowsAsync<WorktreeOwnershipConflictException>(() => engine.StartAsync(solution));
+
+        Assert.Equal(Environment.ProcessId, ex.Owner?.ProcessId);
+        Assert.Null(engine.Ownership);
+        Assert.Equal(PistonPhase.Idle, engine.State.Phase);
+    }
+
+    [Theory]
+    [InlineData("{ \"cpuSlots\": 0 }", 1)]
+    [InlineData("{ \"cpuSlots\": 2 }", 3)]
+    public async Task StartAsync_FailsExplicitly_ForInvalidOrUnsatisfiableBudget_AndHoldsNoOwnership(string budget, int poolSize)
+    {
+        var coordination = new ExecutionCoordinationDirectory(Path.Combine(_root, "coordination"));
+        coordination.EnsureReady();
+        File.WriteAllText(coordination.BudgetPath, budget);
+        var solution = Path.Combine(_root, "Test.slnx");
+        using var engine = new PistonEngine(new PistonOptions
+        {
+            SolutionPath = solution,
+            ProcessPoolSize = poolSize,
+            ExecutionCoordinationDirectory = coordination.BaseDirectory,
+        });
+
+        var ex = await Assert.ThrowsAsync<ExecutionCoordinationException>(() => engine.StartAsync(solution));
+
+        Assert.Contains(coordination.BudgetPath, ex.Message, StringComparison.Ordinal);
+        Assert.Null(engine.Ownership);
+        using var free = WorktreeOwnership.Acquire(coordination, solution);
     }
 
     public void Dispose() => Directory.Delete(_root, recursive: true);

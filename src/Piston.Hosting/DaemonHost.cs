@@ -52,9 +52,33 @@ public sealed class DaemonHost : IAsyncDisposable
     }
 
     /// <summary>Starts all daemon components without blocking.</summary>
+    /// <remarks>
+    /// On failure, components already started are stopped so the engine releases its worktree
+    /// ownership even when the hosting process (e.g. the desktop shell) keeps running.
+    /// </remarks>
     public async Task StartAsync(CancellationToken ct)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
+        try
+        {
+            await StartCoreAsync(ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            try
+            {
+                await StopAsync().ConfigureAwait(false);
+            }
+            catch (Exception stopEx)
+            {
+                _log($"[piston] Cleanup after failed start also failed: {stopEx.Message}");
+            }
+            throw;
+        }
+    }
+
+    private async Task StartCoreAsync(CancellationToken ct)
+    {
 
         // Use a proxy sink so the router (created after engine) can receive activity events.
         var activityProxy = new ActivityEventSinkProxy();

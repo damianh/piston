@@ -158,9 +158,22 @@ full/selective/filtered scope, terminal status, and `Current`/`Stale` freshness 
 `get_test_run`). A harness oracle that validates this has landed too
 (`measurements/Runner/PistonOracle.cs`), with an opt-in end-to-end smoke.
 
+Machine-wide execution ownership and admission budgeting have landed too. Daemons of one OS
+user coordinate through OS file locks in a per-user directory:
+- One daemon owns each canonical worktree. A conflicting daemon fails at startup, naming the owner.
+  Crashed owners are recovered automatically.
+- Each build/test run reserves its test-process parallelism in CPU slots, plus optional
+  `execution.memoryMb`, against `budget.json` (`cpuSlots`, `memoryMb`; default: logical processors).
+- Runs are admitted strictly FIFO. Waiting runs are visible as `Queued` with queue position and
+  budget usage in `get_test_run`, `get_test_results` and the state snapshot.
+- Leases are released on completion, cancellation, faults, exit and crash.
+- Invalid budgets, unsatisfiable reservations and unenforced file locking fail explicitly.
+
+This is admission by reservation, not OS-level CPU/memory capping. A hung but live daemon keeps
+its lease. Only Linux is validated so far. See the README and `ARCHITECTURE.md` for the exact
+behavior and limits.
+
 Still to do in 1a:
-- execution ownership across worktrees;
-- resource budgets;
 - the Piston trial condition in the harness;
 - matched comparison samples.
 

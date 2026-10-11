@@ -135,6 +135,27 @@ public sealed class HostHelpersTests : IDisposable
             () => HostHelpers.ResolveSolutionPath(new FileInfo(wrongPath), _root)).Message);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void NonPositiveExecutionMemoryIsRejected(int memoryMb)
+    {
+        var config = new Piston.Hosting.Configuration.PistonConfig { Execution = new() { MemoryMb = memoryMb } };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config));
+
+        Assert.Contains("execution.memoryMb", ex.Message);
+    }
+
+    [Fact]
+    public void ExecutionMemoryIsPassedToTheEngine()
+    {
+        var configured = new Piston.Hosting.Configuration.PistonConfig { Execution = new() { MemoryMb = 2048 } };
+
+        Assert.Equal(2048, HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, configured).ExecutionMemoryReservationMb);
+        Assert.Null(HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, new()).ExecutionMemoryReservationMb);
+    }
+
     private string WriteSolution(string relativePath)
     {
         var path = Path.Combine(_root, relativePath);

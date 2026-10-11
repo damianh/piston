@@ -95,6 +95,9 @@ the analyzer recognizes solution-file changes, the watcher's filters do not
 currently include `.sln`, `.slnx`, or `.slnf`.
 
 A new trigger cancels the preceding pipeline, and a semaphore serializes runs.
+Each run then waits for machine-wide admission (see
+[Worktree ownership and machine execution budget](#worktree-ownership-and-machine-execution-budget))
+before building.
 Build/test subprocesses are terminated on cancellation. This is not a guarantee
 that partial or previously displayed results reflect the newest source. Selective
 runs retain results from untouched suites, so consumers must distinguish current
@@ -196,6 +199,64 @@ warning after a configured number of runs; it does not recycle persistent hosts.
 There is no per-test or per-class process-isolation option. Test-framework
 parallelism inside each process is separate from Piston's project concurrency.
 
+## Worktree ownership and machine execution budget
+
+`src/Piston.Engine/Execution` coordinates daemon processes of one OS user through
+OS file locks in a per-user directory (`ExecutionCoordinationDirectory`):
+`$PISTON_EXECUTION_DIRECTORY` (absolute), or `Piston/execution` under
+LocalApplicationData. State lives in `v1/` (`owners/`, `queue/`, `leases/`,
+`admission.lock`); the operator-editable `budget.json` sits beside it. On Unix,
+.NET implements `FileShare.None` with `flock(LOCK_EX|LOCK_NB)` per open file
+description. On Windows it uses share modes. Either way the OS drops the lock
+when the process exits or is killed, which is how stale owners are recovered. No
+PID liveness checks or heartbeats are involved. `EnsureReady` creates the
+directories (mode 0700 on Unix) and opens a probe file twice. If the second open
+does not conflict (`DOTNET_SYSTEM_IO_DISABLEFILELOCKING`), it throws instead of
+continuing without enforcement.
+
+**Ownership** is separate from the orchestrator's per-daemon run semaphore.
+`PistonEngine.StartAsync` validates the budget, then takes
+`WorktreeOwnership`. That is an exclusive lock on
+`owners/<sha256(canonical worktree)>.lock`, plus a JSON sidecar with PID, solution,
+worktree and acquisition time used in conflict messages. The canonical worktree is
+the solution path with symlinks resolved, walked up to the first `.git` directory
+or file. Without one, it is the solution directory. The path is case-folded on
+Windows and macOS. A conflict raises `WorktreeOwnershipConflictException`. The CLI
+prints it and exits 1, and the launcher reports the daemon's early exit instead of
+waiting for its pipe. The lock is released on engine dispose, or by the OS on crash.
+Lock files are never deleted, so a deleted-and-recreated file can never let two
+holders coexist.
+
+**Admission** (`MachineExecutionCoordinator`, behind the internal
+`IExecutionAdmission`) runs inside `TriggerRunAsync`, after the per-daemon run lock
+and before the build. Each run's reservation is the daemon's effective
+`TestProcessPool` size in CPU slots plus optional `execution.memoryMb`. Under the
+global `admission.lock` the coordinator:
+
+1. creates a ticket `queue/<seq>_<cpu>_<mem>_<pid>_<runId>.ticket`, held open
+   exclusively. `seq` is UTC ticks, made monotonic past the highest existing entry.
+2. on each 100 ms poll, re-reads and validates `budget.json`.
+3. deletes entries whose lock is no longer held (crashed processes).
+4. sums held leases and admits strictly FIFO: only the head ticket, and only if it
+   fits. Larger runs are never starved by smaller ones behind them.
+
+On admission it creates `leases/<…>.lease` and releases the ticket. Queue status
+changes are published as the active `TestRunRecord` with `Status = Queued` and a
+`TestRunAdmission`. The admitted status is kept on the record and mapped to
+`TestRunAdmissionDto`, MCP `get_test_run` JSON and `get_test_results` text.
+
+The lease is disposed in the pipeline's `finally` (completion, cancellation, fault)
+before the run lock is released. Cancellation while queued removes the ticket.
+When a newer trigger supersedes a queued run, the replacement reuses its sequence
+and keeps its place. Stop/dispose does not. Admission errors (invalid budget,
+unrecognised held entries, IO) fault the run with an explicit reason.
+
+Limits: budgets are admission reservations, not OS resource caps. Liveness
+means "process alive", so a hung daemon keeps its lease. Orphaned children of a
+crashed daemon are not counted. Coordination is per OS user and needs a local
+filesystem. Graph loading at startup is not admitted. Tests cover Linux; the
+Windows and macOS code paths are not yet validated on those platforms.
+
 ## Coverage and persistence
 
 Coverage is opt-in. The VSTest path requests `XPlat Code Coverage`, so the target
@@ -267,8 +328,8 @@ record becomes `LastRun` and is kept in a bounded in-memory `RecentRuns` list. E
 
 `run_tests` returns the new run ID. `get_test_run` serializes a record as
 `piston.test-run/v1`. The protocol `StateSnapshotNotification` carries optional
-`LastRun`/`ActiveRun` (`TestRunDto`, counts only), and `TestSuiteDto` carries an
-optional `RunId`; older clients can ignore all three.
+`LastRun`/`ActiveRun` (`TestRunDto`, counts only, plus an optional `Admission`), and
+`TestSuiteDto` carries an optional `RunId`; older clients can ignore all of them.
 
 `set_test_filter` changes the active filter but does not itself run tests.
 `clear_results` clears in-memory suites, the last-run timestamp, coverage state,

@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Coverage;
+using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
 using Piston.Protocol.Messages;
@@ -19,8 +20,13 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     private readonly ICoverageProcessor? _coverageProcessor;
     private readonly bool _coverageEnabled;
     private readonly IActivityEventSink _activitySink;
+    private readonly IExecutionAdmission _admission;
 
     private CancellationTokenSource? _cts;
+    private volatile bool _stopping;
+
+    // Queue position of a run superseded while queued for machine admission; guarded by _runLock.
+    private long? _inheritedQueueSequence;
     private string? _solutionPath;
     private Task? _graphInitTask;
     private readonly SemaphoreSlim _runLock = new(1, 1);
@@ -68,6 +74,22 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         ICoverageProcessor? coverageProcessor,
         bool coverageEnabled,
         IActivityEventSink activitySink)
+        : this(fileWatcher, buildService, testRunner, impactAnalyzer, state,
+               coverageStore, coverageProcessor, coverageEnabled, activitySink, UnboundedExecutionAdmission.Instance)
+    {
+    }
+
+    internal PistonOrchestrator(
+        IFileWatcherService fileWatcher,
+        IBuildService buildService,
+        ITestRunnerService testRunner,
+        IImpactAnalyzer impactAnalyzer,
+        PistonState state,
+        ICoverageStore? coverageStore,
+        ICoverageProcessor? coverageProcessor,
+        bool coverageEnabled,
+        IActivityEventSink activitySink,
+        IExecutionAdmission admission)
     {
         _fileWatcher = fileWatcher;
         _buildService = buildService;
@@ -78,6 +100,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         _coverageProcessor = coverageProcessor;
         _coverageEnabled = coverageEnabled;
         _activitySink = activitySink;
+        _admission = admission;
 
         _fileWatcher.FileChanged += OnFileChanged;
     }
@@ -184,6 +207,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
     public void Stop()
     {
+        _stopping = true;
         _fileWatcher.Stop();
         _cts?.Cancel();
 
@@ -227,11 +251,48 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             return CompleteRun(run, TestRunStatus.Cancelled, "Superseded by a newer run before it started.");
         }
 
+        // Machine-wide admission is distinct from the per-daemon run lock: the lock serializes this
+        // daemon's runs, admission shares the machine budget with other daemons and worktrees.
+        IExecutionLease lease;
+        var inheritedSequence = _inheritedQueueSequence;
+        _inheritedQueueSequence = null;
+        try
+        {
+            lease = await _admission.AdmitAsync(
+                run.RunId,
+                status =>
+                {
+                    run = run with { Status = TestRunStatus.Queued, Admission = status };
+                    PublishActiveRun(run);
+                },
+                inheritedSequence,
+                newCts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex)
+        {
+            // Keep the queue position for the run that superseded this one, unless the engine is stopping.
+            if (!_stopping)
+            {
+                _inheritedQueueSequence = ex is ExecutionAdmissionCancelledException { QueueSequence: { } seq } ? seq : inheritedSequence;
+            }
+
+            _ = _runLock.Release();
+            return CompleteRun(run, TestRunStatus.Cancelled,
+                "Superseded by a newer run while waiting for machine-wide execution admission.");
+        }
+        catch (Exception ex)
+        {
+            _ = _runLock.Release();
+            _ = CompleteRun(run, TestRunStatus.Faulted, $"Execution admission failed: {ex.GetType().Name}: {ex.Message}");
+            throw;
+        }
+
         var solutionDir = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? solutionPath;
         var changeGenerationAtStart = Interlocked.Read(ref _fileChangeGeneration);
         run = run with
         {
             Status = TestRunStatus.Running,
+            Admission = lease.Status,
             StartedAt = DateTimeOffset.UtcNow,
             SourceBefore = SourceFingerprinter.TryCompute(solutionDir),
         };
@@ -631,6 +692,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         }
         finally
         {
+            lease.Dispose();
             _ = _runLock.Release();
         }
     }
@@ -929,6 +991,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
 
     public void Dispose()
     {
+        _stopping = true;
         _fileWatcher.FileChanged -= OnFileChanged;
         _fileWatcher.Dispose();
         _cts?.Cancel();
