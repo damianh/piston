@@ -67,7 +67,7 @@ public sealed class ClientSession(Stream stream, string sessionId, ICommandDispa
         }
         finally
         {
-            _writeLock.Release();
+            _ = _writeLock.Release();
         }
     }
 
@@ -124,7 +124,7 @@ public sealed class ClientSession(Stream stream, string sessionId, ICommandDispa
         }
         finally
         {
-            _writeLock.Release();
+            _ = _writeLock.Release();
         }
     }
 
@@ -141,7 +141,7 @@ public sealed class ClientSession(Stream stream, string sessionId, ICommandDispa
         }
         finally
         {
-            _writeLock.Release();
+            _ = _writeLock.Release();
         }
     }
 }

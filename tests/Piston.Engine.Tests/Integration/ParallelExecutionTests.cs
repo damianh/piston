@@ -31,23 +31,23 @@ public sealed class ParallelExecutionTests : IAsyncLifetime
     {
         _root = Directory.CreateTempSubdirectory("piston-parallel-").FullName;
 
-        _alphaTestsDir  = Directory.CreateDirectory(Path.Combine(_root, "Alpha.Tests")).FullName;
-        _betaTestsDir   = Directory.CreateDirectory(Path.Combine(_root, "Beta.Tests")).FullName;
-        _gammaTestsDir  = Directory.CreateDirectory(Path.Combine(_root, "Gamma.Tests")).FullName;
+        _alphaTestsDir = Directory.CreateDirectory(Path.Combine(_root, "Alpha.Tests")).FullName;
+        _betaTestsDir = Directory.CreateDirectory(Path.Combine(_root, "Beta.Tests")).FullName;
+        _gammaTestsDir = Directory.CreateDirectory(Path.Combine(_root, "Gamma.Tests")).FullName;
 
         _alphaTestsCsproj = Path.Combine(_alphaTestsDir, "Alpha.Tests.csproj");
-        _betaTestsCsproj  = Path.Combine(_betaTestsDir,  "Beta.Tests.csproj");
+        _betaTestsCsproj = Path.Combine(_betaTestsDir, "Beta.Tests.csproj");
         _gammaTestsCsproj = Path.Combine(_gammaTestsDir, "Gamma.Tests.csproj");
 
         await WriteTestProject(_alphaTestsCsproj, _alphaTestsDir, "Alpha", passCount: 2);
-        await WriteTestProject(_betaTestsCsproj,  _betaTestsDir,  "Beta",  passCount: 3);
+        await WriteTestProject(_betaTestsCsproj, _betaTestsDir, "Beta", passCount: 3);
         await WriteTestProject(_gammaTestsCsproj, _gammaTestsDir, "Gamma", passCount: 1);
 
         // Restore and build all projects
         foreach (var dir in new[] { _alphaTestsDir, _betaTestsDir, _gammaTestsDir })
         {
-            await RunDotnetAsync("restore", dir);
-            await RunDotnetAsync("build --no-restore", dir);
+            _ = await RunDotnetAsync("restore", dir);
+            _ = await RunDotnetAsync("build --no-restore", dir);
         }
     }
 
@@ -93,7 +93,7 @@ public sealed class ParallelExecutionTests : IAsyncLifetime
 
         var projectPaths = new[] { _alphaTestsCsproj, _betaTestsCsproj, _gammaTestsCsproj }.ToList();
 
-        await sut.RunTestsAsync(
+        _ = await sut.RunTestsAsync(
             solutionPath: _root,
             testProjectPaths: projectPaths,
             filter: null,
@@ -137,12 +137,12 @@ public sealed class ParallelExecutionTests : IAsyncLifetime
             CancellationToken.None);
 
         // Both should return the same total test count
-        var seqTests  = sequentialResult.Suites.SelectMany(s => s.Tests).ToList();
+        var seqTests = sequentialResult.Suites.SelectMany(s => s.Tests).ToList();
         var poolTests = poolResult.Suites.SelectMany(s => s.Tests).ToList();
         Assert.Equal(seqTests.Count, poolTests.Count);
 
         // All tests should pass in both
-        Assert.All(seqTests,  t => Assert.Equal(TestStatus.Passed, t.Status));
+        Assert.All(seqTests, t => Assert.Equal(TestStatus.Passed, t.Status));
         Assert.All(poolTests, t => Assert.Equal(TestStatus.Passed, t.Status));
     }
 
@@ -202,12 +202,15 @@ public sealed class ParallelExecutionTests : IAsyncLifetime
             """);
 
         var sb = new System.Text.StringBuilder();
-        sb.AppendLine("using Xunit;");
-        sb.AppendLine($"namespace {namespaceName}.Tests;");
-        sb.AppendLine("public class Tests {");
+        _ = sb.AppendLine("using Xunit;");
+        _ = sb.AppendLine($"namespace {namespaceName}.Tests;");
+        _ = sb.AppendLine("public class Tests {");
         for (var i = 1; i <= passCount; i++)
-            sb.AppendLine($"    [Fact] public void Passes{i}() => Assert.True(true);");
-        sb.AppendLine("}");
+        {
+            _ = sb.AppendLine($"    [Fact] public void Passes{i}() => Assert.True(true);");
+        }
+
+        _ = sb.AppendLine("}");
 
         await File.WriteAllTextAsync(Path.Combine(dir, "Tests.cs"), sb.ToString());
     }

@@ -15,12 +15,12 @@ public static class JsonRpcSerializer
 {
     public static readonly JsonSerializerOptions Options = new()
     {
-        PropertyNamingPolicy        = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition      = JsonIgnoreCondition.WhenWritingNull,
-        NumberHandling              = JsonNumberHandling.AllowReadingFromString,
-        Converters                  = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
-        WriteIndented               = false,
-        TypeInfoResolver            = PistonJsonContext.Default,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        NumberHandling = JsonNumberHandling.AllowReadingFromString,
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        WriteIndented = false,
+        TypeInfoResolver = PistonJsonContext.Default,
     };
 
     // ── Serialization ─────────────────────────────────────────────────────────
@@ -30,9 +30,9 @@ public static class JsonRpcSerializer
         var envelope = new RequestEnvelope
         {
             JsonRpc = request.JsonRpc,
-            Id      = request.Id,
-            Method  = request.Method,
-            Params  = request.Params,
+            Id = request.Id,
+            Method = request.Method,
+            Params = request.Params,
         };
         return new ReadOnlyMemory<byte>(
             JsonSerializer.SerializeToUtf8Bytes(envelope, PistonJsonContext.Default.RequestEnvelope));
@@ -43,13 +43,13 @@ public static class JsonRpcSerializer
         var envelope = new ResponseEnvelope
         {
             JsonRpc = response.JsonRpc,
-            Id      = response.Id,
-            Result  = response.Result,
-            Error   = response.Error is null ? null : new ErrorEnvelope
+            Id = response.Id,
+            Result = response.Result,
+            Error = response.Error is null ? null : new ErrorEnvelope
             {
-                Code    = response.Error.Code,
+                Code = response.Error.Code,
                 Message = response.Error.Message,
-                Data    = response.Error.Data,
+                Data = response.Error.Data,
             },
         };
         return new ReadOnlyMemory<byte>(
@@ -61,8 +61,8 @@ public static class JsonRpcSerializer
         var envelope = new NotificationEnvelope
         {
             JsonRpc = notification.JsonRpc,
-            Method  = notification.Method,
-            Params  = notification.Params,
+            Method = notification.Method,
+            Params = notification.Params,
         };
         return new ReadOnlyMemory<byte>(
             JsonSerializer.SerializeToUtf8Bytes(envelope, PistonJsonContext.Default.NotificationEnvelope));
@@ -79,23 +79,31 @@ public static class JsonRpcSerializer
         using var doc = JsonDocument.Parse(data);
         var root = doc.RootElement;
 
-        var hasId     = root.TryGetProperty("id", out _);
+        var hasId = root.TryGetProperty("id", out _);
         var hasMethod = root.TryGetProperty("method", out _);
         var hasResult = root.TryGetProperty("result", out _);
-        var hasError  = root.TryGetProperty("error", out _);
+        var hasError = root.TryGetProperty("error", out _);
 
         if (hasMethod && hasId)
+        {
             return DeserializeRequest(data);
+        }
 
         if (hasResult || hasError)
+        {
             return DeserializeResponse(data);
+        }
 
         // A response that has id but neither method, result, nor error (e.g. null result, no error)
         if (hasId && !hasMethod)
+        {
             return DeserializeResponse(data);
+        }
 
         if (hasMethod && !hasId)
+        {
             return DeserializeNotification(data);
+        }
 
         throw new JsonException("Cannot determine JSON-RPC message type: missing 'method' or 'result'/'error' fields.");
     }
@@ -114,7 +122,9 @@ public static class JsonRpcSerializer
 
         JsonRpcError? error = null;
         if (envelope.Error is not null)
+        {
             error = new JsonRpcError(envelope.Error.Code, envelope.Error.Message ?? string.Empty, envelope.Error.Data);
+        }
 
         return new JsonRpcResponse(envelope.Id!, envelope.Result, error);
     }
@@ -132,7 +142,9 @@ public static class JsonRpcSerializer
     public static T? DeserializeParams<T>(JsonNode? paramsNode)
     {
         if (paramsNode is null)
+        {
             return default;
+        }
 
         return paramsNode.Deserialize<T>(Options);
     }
@@ -142,30 +154,30 @@ public static class JsonRpcSerializer
 
 internal sealed class RequestEnvelope
 {
-    public string?    JsonRpc { get; set; }
-    public string?    Id      { get; set; }
-    public string?    Method  { get; set; }
-    public JsonNode?  Params  { get; set; }
+    public string? JsonRpc { get; set; }
+    public string? Id { get; set; }
+    public string? Method { get; set; }
+    public JsonNode? Params { get; set; }
 }
 
 internal sealed class ResponseEnvelope
 {
-    public string?         JsonRpc { get; set; }
-    public string?         Id      { get; set; }
-    public JsonNode?       Result  { get; set; }
-    public ErrorEnvelope?  Error   { get; set; }
+    public string? JsonRpc { get; set; }
+    public string? Id { get; set; }
+    public JsonNode? Result { get; set; }
+    public ErrorEnvelope? Error { get; set; }
 }
 
 internal sealed class NotificationEnvelope
 {
-    public string?   JsonRpc { get; set; }
-    public string?   Method  { get; set; }
-    public JsonNode? Params  { get; set; }
+    public string? JsonRpc { get; set; }
+    public string? Method { get; set; }
+    public JsonNode? Params { get; set; }
 }
 
 internal sealed class ErrorEnvelope
 {
-    public int       Code    { get; set; }
-    public string?   Message { get; set; }
-    public JsonNode? Data    { get; set; }
+    public int Code { get; set; }
+    public string? Message { get; set; }
+    public JsonNode? Data { get; set; }
 }

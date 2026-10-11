@@ -155,20 +155,20 @@ public sealed class SelectiveBuildCorrectnessTests : IAsyncLifetime
             case "slnx":
                 return slnx;
             case "slnf":
-            {
-                var slnf = Path.Combine(_root, "Filtered.slnf");
-                await File.WriteAllTextAsync(slnf, """
+                {
+                    var slnf = Path.Combine(_root, "Filtered.slnf");
+                    await File.WriteAllTextAsync(slnf, """
                     {"solution":{"path":"All.slnx","projects":[
                       "Lib\\Lib.csproj","Lib.Tests\\Lib.Tests.csproj",
                       "Other\\Other.csproj","Other.Tests\\Other.Tests.csproj"]}}
                     """);
-                return slnf;
-            }
+                    return slnf;
+                }
             default:
-            {
-                File.Delete(slnx);
-                var sln = Path.Combine(_root, "All.sln");
-                await File.WriteAllTextAsync(sln, """
+                {
+                    File.Delete(slnx);
+                    var sln = Path.Combine(_root, "All.sln");
+                    await File.WriteAllTextAsync(sln, """
 
                     Microsoft Visual Studio Solution File, Format Version 12.00
                     # Visual Studio Version 17
@@ -196,8 +196,8 @@ public sealed class SelectiveBuildCorrectnessTests : IAsyncLifetime
                     	EndGlobalSection
                     EndGlobal
                     """);
-                return sln;
-            }
+                    return sln;
+                }
         }
     }
 
@@ -233,10 +233,14 @@ public sealed class SelectiveBuildCorrectnessTests : IAsyncLifetime
         while (DateTime.UtcNow < deadline)
         {
             if (state.Phase == PistonPhase.Error && !ReferenceEquals(state.LastBuild, previousBuild))
+            {
                 Assert.Fail("Build failed: " + string.Join(Environment.NewLine, state.LastBuild!.Errors));
+            }
 
             if (state.Phase == PistonPhase.Watching && state.LastRunTime != previousRun)
+            {
                 return;
+            }
 
             await Task.Delay(100);
         }
@@ -261,7 +265,11 @@ public sealed class SelectiveBuildCorrectnessTests : IAsyncLifetime
 
         public Task<BuildResult> BuildAsync(string solutionPath, IReadOnlyList<string>? projectPaths, CancellationToken ct)
         {
-            lock (Calls) Calls.Add(projectPaths);
+            lock (Calls)
+            {
+                Calls.Add(projectPaths);
+            }
+
             return inner.BuildAsync(solutionPath, projectPaths, ct);
         }
     }

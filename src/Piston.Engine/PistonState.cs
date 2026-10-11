@@ -102,7 +102,11 @@ public sealed class PistonState
     public TestRunRecord? FindRun(string runId)
     {
         var current = CurrentRun;
-        if (current?.RunId == runId) return current;
+        if (current?.RunId == runId)
+        {
+            return current;
+        }
+
         return RecentRuns.FirstOrDefault(r => r.RunId == runId);
     }
 

@@ -25,13 +25,13 @@ public sealed class MtpDetectionTests : IAsyncLifetime
 
         _root = Directory.CreateTempSubdirectory("piston-mtp-detection-").FullName;
 
-        var mtpDir    = Directory.CreateDirectory(Path.Combine(_root, "MtpProject")).FullName;
+        var mtpDir = Directory.CreateDirectory(Path.Combine(_root, "MtpProject")).FullName;
         var vsTestDir = Directory.CreateDirectory(Path.Combine(_root, "VsTestProject")).FullName;
-        var libDir    = Directory.CreateDirectory(Path.Combine(_root, "Lib")).FullName;
+        var libDir = Directory.CreateDirectory(Path.Combine(_root, "Lib")).FullName;
 
-        _mtpCsproj    = Path.Combine(mtpDir, "MtpProject.csproj");
+        _mtpCsproj = Path.Combine(mtpDir, "MtpProject.csproj");
         _vsTestCsproj = Path.Combine(vsTestDir, "VsTestProject.csproj");
-        _libCsproj    = Path.Combine(libDir, "Lib.csproj");
+        _libCsproj = Path.Combine(libDir, "Lib.csproj");
 
         // Lib: plain class library, not a test project
         await File.WriteAllTextAsync(_libCsproj, """
@@ -183,7 +183,7 @@ public sealed class MtpDetectionTests : IAsyncLifetime
     private static string BuildMtpCsproj(string? property, string? packageRef = null)
     {
         var propBlock = property is not null ? $"    {property}" : string.Empty;
-        var pkgBlock  = packageRef is not null
+        var pkgBlock = packageRef is not null
             ? $"""
               <ItemGroup>
                 <PackageReference Include="{packageRef}" Version="1.0.0" />

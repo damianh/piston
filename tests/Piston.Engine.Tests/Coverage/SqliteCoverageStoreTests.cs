@@ -19,8 +19,8 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
     public async Task InitializeAsync()
     {
         _tempDir = Directory.CreateTempSubdirectory("piston-coverage-store-test-").FullName;
-        _dbDir   = _tempDir; // InitializeAsync creates .piston/ inside this dir
-        _sut     = new SqliteCoverageStore();
+        _dbDir = _tempDir; // InitializeAsync creates .piston/ inside this dir
+        _sut = new SqliteCoverageStore();
         await _sut.InitializeAsync(_dbDir);
     }
 
@@ -119,7 +119,7 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
 
         var tests = _sut.GetTestsCoveringFile(filePath);
 
-        Assert.Single(tests);
+        _ = Assert.Single(tests);
         Assert.Equal("Lib.Tests.LibTests.Method1", tests[0]);
     }
 
@@ -134,7 +134,7 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
 
         var tests = _sut.GetTestsCoveringLines(filePath, 5, 6);
 
-        Assert.Single(tests);
+        _ = Assert.Single(tests);
         Assert.Equal("Lib.Tests.LibTests.Method1", tests[0]);
     }
 
@@ -165,10 +165,7 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
     }
 
     [Fact]
-    public void HasCoverageData_WhenNoCoverageExists_ReturnsFalse()
-    {
-        Assert.False(_sut.HasCoverageData("/repo/src/NoSuchFile.cs"));
-    }
+    public void HasCoverageData_WhenNoCoverageExists_ReturnsFalse() => Assert.False(_sut.HasCoverageData("/repo/src/NoSuchFile.cs"));
 
     [Fact]
     public async Task MarkFileStale_ExcludesFromQueryResults()
@@ -180,7 +177,7 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
         await _sut.StoreCoverageAsync(runId, map);
         await _sut.MarkFileStaleAsync(filePath);
 
-        var tests  = _sut.GetTestsCoveringFile(filePath);
+        var tests = _sut.GetTestsCoveringFile(filePath);
         var hasData = _sut.HasCoverageData(filePath);
 
         Assert.Empty(tests);
@@ -206,14 +203,14 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
         await _sut.StoreCoverageAsync(run2, MakeMap(testFqn, filePath, 5, 6));
 
         var tests = _sut.GetTestsCoveringFile(filePath);
-        Assert.Single(tests);
+        _ = Assert.Single(tests);
         Assert.Equal(testFqn, tests[0]);
     }
 
     [Fact]
     public async Task StoreCoverage_MultipleTests_ReturnsAllDistinct()
     {
-        var runId    = _sut.CreateRunId();
+        var runId = _sut.CreateRunId();
         var filePath = "/repo/src/Lib/Code.cs";
 
         var map = new Dictionary<string, IReadOnlyList<TestLineCoverage>>
@@ -236,9 +233,9 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
     [Fact]
     public async Task StoreCoverage_DifferentFiles_QueriesIsolated()
     {
-        var runId  = _sut.CreateRunId();
-        var file1  = "/repo/src/Lib/File1.cs";
-        var file2  = "/repo/src/Lib/File2.cs";
+        var runId = _sut.CreateRunId();
+        var file1 = "/repo/src/Lib/File1.cs";
+        var file2 = "/repo/src/Lib/File2.cs";
 
         var map = new Dictionary<string, IReadOnlyList<TestLineCoverage>>
         {
@@ -251,10 +248,10 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
         var file1Tests = _sut.GetTestsCoveringFile(file1);
         var file2Tests = _sut.GetTestsCoveringFile(file2);
 
-        Assert.Single(file1Tests);
+        _ = Assert.Single(file1Tests);
         Assert.Equal("Lib.Tests.Test1", file1Tests[0]);
 
-        Assert.Single(file2Tests);
+        _ = Assert.Single(file2Tests);
         Assert.Equal("Lib.Tests.Test2", file2Tests[0]);
     }
 
@@ -290,7 +287,7 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
         var line10Tests = _sut.GetTestsCoveringLines(filePath, 10, 10);
 
         Assert.Empty(linesRange);
-        Assert.Single(line10Tests);
+        _ = Assert.Single(line10Tests);
     }
 
     [Fact]

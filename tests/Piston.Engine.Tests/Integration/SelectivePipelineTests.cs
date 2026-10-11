@@ -122,7 +122,7 @@ public sealed class SelectivePipelineTests : IAsyncLifetime
             </Solution>
             """);
 
-        await RunDotnetAsync("restore", _root);
+        _ = await RunDotnetAsync("restore", _root);
     }
 
     public Task DisposeAsync()

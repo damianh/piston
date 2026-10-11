@@ -70,9 +70,9 @@ public sealed class ImpactAnalyzerTests : IDisposable
             },
             fileToProject: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                [_libCode]    = _libCsproj,
+                [_libCode] = _libCsproj,
                 [_appProgram] = _appCsproj,
-                [_testsFile]  = _testsCsproj,
+                [_testsFile] = _testsCsproj,
             }
         );
 
@@ -253,10 +253,10 @@ public sealed class ImpactAnalyzerTests : IDisposable
     public async Task Tier3_WhenCoverageDataExistsForAllChangedFiles_ResultContainsAffectedTestFqns()
     {
         var coverageStore = new StubCoverageStore();
-        var libCodeFull   = Path.GetFullPath(_libCode);
+        var libCodeFull = Path.GetFullPath(_libCode);
 
         // Pre-configure coverage store to indicate libCode is covered by Test1
-        coverageStore.FilesWithCoverage.Add(libCodeFull);
+        _ = coverageStore.FilesWithCoverage.Add(libCodeFull);
         coverageStore.TestsCoveringFile[libCodeFull] = ["Lib.Tests.LibTests.Test1"];
 
         var analyzer = new ImpactAnalyzer(_factory, coverageStore);
@@ -273,10 +273,10 @@ public sealed class ImpactAnalyzerTests : IDisposable
     public async Task Tier3_WhenOneCoverageFileMissing_FallsBackToNullFqns()
     {
         var coverageStore = new StubCoverageStore();
-        var libCodeFull   = Path.GetFullPath(_libCode);
+        var libCodeFull = Path.GetFullPath(_libCode);
 
         // Only libCode has coverage; appProgram does NOT
-        coverageStore.FilesWithCoverage.Add(libCodeFull);
+        _ = coverageStore.FilesWithCoverage.Add(libCodeFull);
         coverageStore.TestsCoveringFile[libCodeFull] = ["Lib.Tests.Test1"];
         // _appProgram is NOT in FilesWithCoverage
 
@@ -309,15 +309,15 @@ public sealed class ImpactAnalyzerTests : IDisposable
     public async Task Tier3_StaleMarkingCalledForChangedCsFiles()
     {
         var coverageStore = new StubCoverageStore();
-        var libCodeFull   = Path.GetFullPath(_libCode);
+        var libCodeFull = Path.GetFullPath(_libCode);
 
-        coverageStore.FilesWithCoverage.Add(libCodeFull);
+        _ = coverageStore.FilesWithCoverage.Add(libCodeFull);
         coverageStore.TestsCoveringFile[libCodeFull] = ["Lib.Tests.Test1"];
 
         var analyzer = new ImpactAnalyzer(_factory, coverageStore);
         await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
 
-        analyzer.Analyze([Change(_libCode)]);
+        _ = analyzer.Analyze([Change(_libCode)]);
 
         // Allow any pending async MarkFileStaleAsync to complete
         await Task.Delay(50);
@@ -329,10 +329,10 @@ public sealed class ImpactAnalyzerTests : IDisposable
     public async Task Tier3_WhenCoverageReturnsEmptyFqns_FallsBackToTier2()
     {
         var coverageStore = new StubCoverageStore();
-        var libCodeFull   = Path.GetFullPath(_libCode);
+        var libCodeFull = Path.GetFullPath(_libCode);
 
         // File has coverage data but no tests listed
-        coverageStore.FilesWithCoverage.Add(libCodeFull);
+        _ = coverageStore.FilesWithCoverage.Add(libCodeFull);
         coverageStore.TestsCoveringFile[libCodeFull] = [];
 
         var analyzer = new ImpactAnalyzer(_factory, coverageStore);

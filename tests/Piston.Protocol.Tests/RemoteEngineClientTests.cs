@@ -1,13 +1,9 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
-using System.Text.Json.Nodes;
 using Piston.Engine;
-using Piston.Engine.Models;
 using Piston.Hosting;
 using Piston.Hosting.Protocol;
-using Piston.Protocol.JsonRpc;
-using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
 using Xunit;
 
@@ -21,9 +17,9 @@ public sealed class RemoteEngineClientTests
     private static (NamedPipeListener listener, ProtocolRouter router, StubEngine engine)
         CreateServer(string pipeName)
     {
-        var engine   = new StubEngine();
+        var engine = new StubEngine();
         var listener = new NamedPipeListener(pipeName);
-        var router   = new ProtocolRouter(engine, listener);
+        var router = new ProtocolRouter(engine, listener);
         return (listener, router, engine);
     }
 
@@ -88,7 +84,7 @@ public sealed class RemoteEngineClientTests
 
         _ = Task.Run(() => router.RunAsync(cts.Token), cts.Token);
 
-        var client           = new RemoteEngineClient(pipeName);
+        var client = new RemoteEngineClient(pipeName);
         var stateChangeFired = 0;
         client.StateChanged += _ => Interlocked.Increment(ref stateChangeFired);
 
@@ -256,9 +252,9 @@ public sealed class RemoteEngineClientTests
             () => stateSequence.Contains(ConnectionState.Connected),
             TimeSpan.FromSeconds(15));
 
-        Assert.Contains(ConnectionState.Disconnected,  stateSequence);
-        Assert.Contains(ConnectionState.Reconnecting,  stateSequence);
-        Assert.Contains(ConnectionState.Connected,     stateSequence);
+        Assert.Contains(ConnectionState.Disconnected, stateSequence);
+        Assert.Contains(ConnectionState.Reconnecting, stateSequence);
+        Assert.Contains(ConnectionState.Connected, stateSequence);
 
         await cts.CancelAsync();
         await client.DisposeAsync();
@@ -292,7 +288,7 @@ public sealed class RemoteEngineClientTests
             TimeSpan.FromSeconds(5));
 
         // Attempting to send a command while not connected should throw
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(
             () => client.ForceRunAsync());
 
         await cts.CancelAsync();
@@ -304,7 +300,11 @@ public sealed class RemoteEngineClientTests
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
-            if (condition()) return;
+            if (condition())
+            {
+                return;
+            }
+
             await Task.Delay(50);
         }
         Assert.Fail("Condition was not met within timeout.");

@@ -14,11 +14,11 @@ namespace Piston.Mcp.Tools;
 [McpServerToolType]
 public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
 {
-    [McpServerTool, Description("Force a full test run of the loaded solution. Returns a results summary plus the run ID, status, scope, freshness and source fingerprint; use GetTestRun with the run ID for per-test provenance.")]
-    public async Task<string> RunTests(CancellationToken ct)
+    [McpServerTool(Name = "run_tests"), Description("Force a full test run of the loaded solution. Returns a results summary plus the run ID, status, scope, freshness and source fingerprint; use GetTestRun with the run ID for per-test provenance.")]
+    public async Task<string> RunTestsAsync(CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
-        string result = string.Empty;
+        var result = string.Empty;
         var succeeded = true;
         try
         {
@@ -34,7 +34,9 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
                      $"Suites: {state.TestSuites.Count}" +
                      Environment.NewLine + DescribeRun(run, includeCounts: true);
             if (run is not null)
+            {
                 result += Environment.NewLine + $"Use GetTestRun(\"{run.RunId}\") for per-test results bound to this run.";
+            }
         }
         catch
         {
@@ -44,7 +46,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         finally
         {
             sw.Stop();
-            recorder.Record(nameof(RunTests), null, succeeded ? result! : null, sw.Elapsed.TotalMilliseconds, succeeded);
+            recorder.Record("RunTests", null, succeeded ? result! : null, sw.Elapsed.TotalMilliseconds, succeeded);
         }
 
         return result;
@@ -56,23 +58,29 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         var sw = Stopwatch.StartNew();
         var state = engine.State;
         var sb = new StringBuilder();
-        sb.AppendLine($"Phase: {state.Phase}");
-        sb.AppendLine($"Passed: {state.TotalPassed}, Failed: {state.TotalFailed}, Skipped: {state.TotalSkipped}");
-        sb.AppendLine($"Tests: {state.CompletedTests}/{state.TotalExpectedTests}");
-        sb.AppendLine($"Latest {DescribeRun(state.LastRun, includeCounts: false)}");
-        sb.AppendLine("Note: these aggregate results may combine several runs; use GetTestRun for run-bound provenance.");
+        _ = sb.AppendLine($"Phase: {state.Phase}");
+        _ = sb.AppendLine($"Passed: {state.TotalPassed}, Failed: {state.TotalFailed}, Skipped: {state.TotalSkipped}");
+        _ = sb.AppendLine($"Tests: {state.CompletedTests}/{state.TotalExpectedTests}");
+        _ = sb.AppendLine($"Latest {DescribeRun(state.LastRun, includeCounts: false)}");
+        _ = sb.AppendLine("Note: these aggregate results may combine several runs; use GetTestRun for run-bound provenance.");
 
         foreach (var suite in state.TestSuites)
         {
-            sb.AppendLine($"\nSuite: {suite.Name}" + (suite.RunId is null ? "" : $" (run {suite.RunId})"));
+            _ = sb.AppendLine($"\nSuite: {suite.Name}" + (suite.RunId is null ? "" : $" (run {suite.RunId})"));
             foreach (var test in suite.Tests)
             {
-                sb.Append($"  [{test.Status}] {test.DisplayName}");
+                _ = sb.Append($"  [{test.Status}] {test.DisplayName}");
                 if (test.Duration.TotalMilliseconds > 0)
-                    sb.Append($" ({test.Duration.TotalMilliseconds:F0}ms)");
+                {
+                    _ = sb.Append($" ({test.Duration.TotalMilliseconds:F0}ms)");
+                }
+
                 if (test.ErrorMessage is not null)
-                    sb.Append($" - {test.ErrorMessage}");
-                sb.AppendLine();
+                {
+                    _ = sb.Append($" - {test.ErrorMessage}");
+                }
+
+                _ = sb.AppendLine();
             }
         }
 
@@ -121,7 +129,11 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
 
     private static string DescribeRun(TestRunRecord? run, bool includeCounts)
     {
-        if (run is null) return "Run: (none)";
+        if (run is null)
+        {
+            return "Run: (none)";
+        }
+
         var fp = run.SourceAfter ?? run.SourceBefore;
         var source = fp is null ? "unknown" : $"{fp.Algorithm}:{fp.Value}";
         var text = $"Run: {run.RunId} | Status: {run.Status} | Scope: {run.Scope?.ToString() ?? "Unknown"} | " +

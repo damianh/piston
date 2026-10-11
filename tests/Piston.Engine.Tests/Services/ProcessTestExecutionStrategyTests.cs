@@ -27,7 +27,7 @@ public sealed class ProcessTestExecutionStrategyTests
         var strategy = new ProcessTestExecutionStrategy(new TrxResultParser());
 
         var request = new ProjectTestRequest("nonexistent.csproj", null, false);
-        var result  = await strategy.ExecuteAsync(request, onProgress: null, CancellationToken.None);
+        var result = await strategy.ExecuteAsync(request, onProgress: null, CancellationToken.None);
 
         // The result may have no suites and may have a runner error or no error;
         // the key invariant is that no exception is thrown.
@@ -44,7 +44,7 @@ public sealed class ProcessTestExecutionStrategyTests
         await cts.CancelAsync();
 
         var request = new ProjectTestRequest("any.csproj", null, false);
-        var result  = await strategy.ExecuteAsync(request, onProgress: null, cts.Token);
+        var result = await strategy.ExecuteAsync(request, onProgress: null, cts.Token);
 
         Assert.NotNull(result);
         Assert.Empty(result.Suites);

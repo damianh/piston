@@ -3,6 +3,7 @@
 
 using System.ComponentModel;
 using System.Reflection;
+using ModelContextProtocol.Server;
 using Piston.Engine;
 using Piston.Engine.Models;
 using Piston.Mcp.Tools;
@@ -13,6 +14,16 @@ namespace Piston.Mcp.Tests;
 public sealed class TestToolsTests
 {
     private static readonly IMcpCallRecorder NullRecorder = NullMcpCallRecorder.Instance;
+
+    [Fact]
+    public void RunTestsToolMetadataPreservesWireName()
+    {
+        var tools = new TestTools(new StubEngine(), NullRecorder);
+        var method = typeof(TestTools).GetMethod(nameof(TestTools.RunTestsAsync))!;
+        var tool = McpServerTool.Create(method, tools);
+
+        Assert.Equal("run_tests", tool.ProtocolTool.Name);
+    }
 
     [Theory]
     [InlineData(PistonPhase.Idle)]
@@ -33,7 +44,7 @@ public sealed class TestToolsTests
         ];
 
         var tools = new TestTools(engine, NullRecorder);
-        var result = await tools.RunTests(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+        var result = await tools.RunTestsAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
 
         Assert.True(engine.ForceRunCalled);
         Assert.Contains($"Phase: {completedPhase}", result);
@@ -48,12 +59,12 @@ public sealed class TestToolsTests
         var engine = new StubEngine { ForceRunCompletion = completion.Task };
         var tools = new TestTools(engine, NullRecorder);
         using var cts = new CancellationTokenSource();
-        var run = tools.RunTests(cts.Token);
+        var run = tools.RunTestsAsync(cts.Token);
         cts.Cancel();
 
         try
         {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(
                 () => run.WaitAsync(TimeSpan.FromSeconds(2)));
             Assert.True(engine.ForceRunCalled);
         }

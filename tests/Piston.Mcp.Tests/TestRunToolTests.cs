@@ -16,24 +16,24 @@ public sealed class TestRunToolTests
 
     private static TestRunRecord Run(string id, long sequence, TestRunStatus status = TestRunStatus.Completed,
         TestRunScope scope = TestRunScope.Full, string? filter = null, ResultFreshness freshness = ResultFreshness.Current) => new()
-    {
-        RunId = id,
-        EngineInstanceId = "engine",
-        Sequence = sequence,
-        Trigger = TestRunTrigger.Forced,
-        Status = status,
-        Scope = scope,
-        Freshness = freshness,
-        RequestedAt = DateTimeOffset.UnixEpoch,
-        StartedAt = DateTimeOffset.UnixEpoch,
-        CompletedAt = DateTimeOffset.UnixEpoch,
-        SourceBefore = Source,
-        SourceAfter = Source,
-        Context = new TestRunContext("/w/App.slnx", ["/w/T/T.csproj"], null, filter, filter, null, false,
+        {
+            RunId = id,
+            EngineInstanceId = "engine",
+            Sequence = sequence,
+            Trigger = TestRunTrigger.Forced,
+            Status = status,
+            Scope = scope,
+            Freshness = freshness,
+            RequestedAt = DateTimeOffset.UnixEpoch,
+            StartedAt = DateTimeOffset.UnixEpoch,
+            CompletedAt = DateTimeOffset.UnixEpoch,
+            SourceBefore = Source,
+            SourceAfter = Source,
+            Context = new TestRunContext("/w/App.slnx", ["/w/T/T.csproj"], null, filter, filter, null, false,
             "Debug", "10.0.401", ".NET 10", "Linux", "/daemon",
             new Dictionary<string, string> { ["/w/T/T.csproj"] = "/w" }),
-        Projects = [new TestRunProjectOutcome("/w/T/T.csproj", ProjectRunStatus.Completed, 2)],
-        Suites =
+            Projects = [new TestRunProjectOutcome("/w/T/T.csproj", ProjectRunStatus.Completed, 2)],
+            Suites =
         [
             new TestSuite("T",
             [
@@ -41,7 +41,7 @@ public sealed class TestRunToolTests
                 new TestResult("Ns.A.First", "First", TestStatus.Passed, TimeSpan.FromMilliseconds(1), null, null, null, null),
             ], DateTimeOffset.UnixEpoch, TimeSpan.FromMilliseconds(3)) { RunId = id },
         ],
-    };
+        };
 
     [Fact]
     public async Task RunTestsReportsTheRequestedRunsProvenance()
@@ -49,7 +49,7 @@ public sealed class TestRunToolTests
         var engine = new StubEngine { NextRun = Run("run-1", 2) };
         var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
 
-        var result = await tools.RunTests(CancellationToken.None);
+        var result = await tools.RunTestsAsync(CancellationToken.None);
 
         Assert.Contains("Run: run-1 | Status: Completed | Scope: Full | Filtered: no | Freshness: Current", result);
         Assert.Contains($"Source: piston-source-v2:{Source.Value}", result);
@@ -131,7 +131,7 @@ public sealed class TestRunToolTests
 
         var ex = Assert.Throws<McpException>(() => tools.GetTestRun("missing"));
         Assert.Contains("missing", ex.Message);
-        Assert.Throws<McpException>(() => tools.GetTestRun(""));
+        _ = Assert.Throws<McpException>(() => tools.GetTestRun(""));
     }
 
     [Fact]

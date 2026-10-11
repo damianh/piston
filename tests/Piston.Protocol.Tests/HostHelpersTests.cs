@@ -30,8 +30,8 @@ public sealed class HostHelpersTests : IDisposable
     [InlineData(true)]
     public void ConfiguredSolutionWinsOverDiscoveryAndKeepsItsConfig(bool absolute)
     {
-        WriteSolution("Other.slnx");
-        WriteSolution("Another.sln");
+        _ = WriteSolution("Other.slnx");
+        _ = WriteSolution("Another.sln");
         var configuredPath = WriteSolution(Path.Combine("nested", "Configured.slnx"));
         WriteConfig(absolute ? configuredPath : Path.GetRelativePath(_root, configuredPath));
         File.WriteAllText(Path.Combine(_root, "nested", ".piston.json"), """{"pipeName":"wrong-config"}""");
@@ -55,7 +55,7 @@ public sealed class HostHelpersTests : IDisposable
     [Fact]
     public void MissingConfiguredSolutionReportsConfigAndPathInsteadOfDiscovering()
     {
-        WriteSolution("Discovered.slnx");
+        _ = WriteSolution("Discovered.slnx");
         WriteConfig("nested/Missing.slnx");
 
         var error = Assert.Throws<InvalidOperationException>(() => HostHelpers.ResolveSolutionPath(null, _root));
@@ -70,7 +70,7 @@ public sealed class HostHelpersTests : IDisposable
     [InlineData("Wrong.csproj")]
     public void InvalidConfiguredSolutionReportsConfig(string value)
     {
-        WriteSolution("Wrong.csproj");
+        _ = WriteSolution("Wrong.csproj");
         WriteConfig(value);
 
         var error = Assert.Throws<InvalidOperationException>(() => HostHelpers.ResolveSolutionPath(null, _root));
@@ -81,7 +81,7 @@ public sealed class HostHelpersTests : IDisposable
     [Fact]
     public void MalformedConfigReportsErrorRatherThanIgnoringSolution()
     {
-        WriteSolution("Discovered.slnx");
+        _ = WriteSolution("Discovered.slnx");
         File.WriteAllText(Path.Combine(_root, ".piston.json"), "{ malformed");
 
         var error = Assert.Throws<InvalidOperationException>(() => HostHelpers.ResolveSolutionPath(null, _root));
@@ -117,8 +117,8 @@ public sealed class HostHelpersTests : IDisposable
     {
         Assert.Contains("No .sln", Assert.Throws<InvalidOperationException>(
             () => HostHelpers.ResolveSolutionPath(null, _root)).Message);
-        WriteSolution("First.slnx");
-        WriteSolution("Second.sln");
+        _ = WriteSolution("First.slnx");
+        _ = WriteSolution("Second.sln");
         Assert.Contains("Multiple solution files", Assert.Throws<InvalidOperationException>(
             () => HostHelpers.ResolveSolutionPath(null, _root)).Message);
     }
@@ -127,7 +127,7 @@ public sealed class HostHelpersTests : IDisposable
     public void InvalidExplicitArgumentDoesNotFallBackToConfig()
     {
         WriteConfig("Configured.slnx");
-        WriteSolution("Configured.slnx");
+        _ = WriteSolution("Configured.slnx");
         Assert.Contains("Solution file not found", Assert.Throws<InvalidOperationException>(
             () => HostHelpers.ResolveSolutionPath(new FileInfo(Path.Combine(_root, "Missing.slnx")), _root)).Message);
         var wrongPath = WriteSolution("Wrong.csproj");
@@ -138,7 +138,7 @@ public sealed class HostHelpersTests : IDisposable
     private string WriteSolution(string relativePath)
     {
         var path = Path.Combine(_root, relativePath);
-        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, "");
         return path;
     }

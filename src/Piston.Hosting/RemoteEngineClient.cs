@@ -41,7 +41,9 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
         get
         {
             lock (_snapshotLock)
+            {
                 return _currentSnapshot;
+            }
         }
     }
 
@@ -50,21 +52,23 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
         get
         {
             lock (_stateLock)
+            {
                 return _connectionState;
+            }
         }
     }
 
     /// <summary>Connects to the headless controller and starts the background receive loop.</summary>
     public async Task ConnectAsync(CancellationToken ct)
     {
-        _transport   = new NamedPipeClientTransport(pipeName);
+        _transport = new NamedPipeClientTransport(pipeName);
         await _transport.ConnectAsync(ct).ConfigureAwait(false);
 
         SetConnectionState(ConnectionState.Connected);
 
         // Use a standalone CTS — not linked to the connect-time token — so that the
         // receive loop lifetime is independent of the token used during connection setup.
-        _receiveCts  = new CancellationTokenSource();
+        _receiveCts = new CancellationTokenSource();
         _receiveLoop = Task.Run(() => ReceiveLoopAsync(_receiveCts.Token));
     }
 
@@ -98,7 +102,11 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
     {
         lock (_stateLock)
         {
-            if (_disposed) return;
+            if (_disposed)
+            {
+                return;
+            }
+
             _disposed = true;
         }
 
@@ -108,7 +116,9 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
             try
             {
                 if (_receiveLoop is not null)
+                {
                     await _receiveLoop.ConfigureAwait(false);
+                }
             }
             catch (OperationCanceledException) { }
             catch (Exception) { }
@@ -117,7 +127,9 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
         }
 
         if (_transport is not null)
+        {
             await _transport.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
@@ -125,12 +137,14 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
     private async Task SendCommandAsync(string method, JsonNode? @params)
     {
         if (ConnectionState != ConnectionState.Connected)
+        {
             throw new InvalidOperationException("Not connected to the headless controller.");
+        }
 
-        var id      = Interlocked.Increment(ref _requestCounter).ToString();
+        var id = Interlocked.Increment(ref _requestCounter).ToString();
         var request = new JsonRpcRequest(id, method, @params);
-        var bytes   = JsonRpcSerializer.Serialize(request);
-        var tcs     = new TaskCompletionSource<JsonRpcResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var bytes = JsonRpcSerializer.Serialize(request);
+        var tcs = new TaskCompletionSource<JsonRpcResponse>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         _pending[id] = tcs;
 
@@ -139,16 +153,18 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
             await _transport!.SendAsync(bytes, CancellationToken.None).ConfigureAwait(false);
 
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            cts.Token.Register(() => tcs.TrySetCanceled());
+            _ = cts.Token.Register(() => tcs.TrySetCanceled());
 
             var response = await tcs.Task.ConfigureAwait(false);
 
             if (response.Error is not null)
+            {
                 throw new InvalidOperationException($"JSON-RPC error {response.Error.Code}: {response.Error.Message}");
+            }
         }
         finally
         {
-            _pending.TryRemove(id, out _);
+            _ = _pending.TryRemove(id, out _);
         }
     }
 
@@ -180,16 +196,24 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
         {
             // Cancel all pending requests
             foreach (var tcs in _pending.Values)
-                tcs.TrySetException(new IOException("Connection to headless controller was lost."));
+            {
+                _ = tcs.TrySetException(new IOException("Connection to headless controller was lost."));
+            }
+
             _pending.Clear();
         }
 
         // Start reconnection if not disposed
         bool isDisposed;
-        lock (_stateLock) isDisposed = _disposed;
+        lock (_stateLock)
+        {
+            isDisposed = _disposed;
+        }
 
         if (!isDisposed && !ct.IsCancellationRequested)
+        {
             await ReconnectLoopAsync(ct).ConfigureAwait(false);
+        }
     }
 
     private async Task ReconnectLoopAsync(CancellationToken ct)
@@ -212,8 +236,15 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
         while (!ct.IsCancellationRequested)
         {
             bool isDisposed;
-            lock (_stateLock) isDisposed = _disposed;
-            if (isDisposed) return;
+            lock (_stateLock)
+            {
+                isDisposed = _disposed;
+            }
+
+            if (isDisposed)
+            {
+                return;
+            }
 
             try
             {
@@ -261,7 +292,9 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
     private void SetConnectionState(ConnectionState state)
     {
         lock (_stateLock)
+        {
             _connectionState = state;
+        }
 
         ConnectionStateChanged?.Invoke(state);
     }
@@ -281,7 +314,10 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
             if (msg is JsonRpcResponse response)
             {
                 if (_pending.TryGetValue(response.Id, out var tcs))
-                    tcs.TrySetResult(response);
+                {
+                    _ = tcs.TrySetResult(response);
+                }
+
                 return;
             }
         }
@@ -296,32 +332,51 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
         switch (notification.Method)
         {
             case ProtocolMethods.EngineStateSnapshot:
-            {
-                var snapshot = JsonRpcSerializer.DeserializeParams<StateSnapshotNotification>(notification.Params);
-                if (snapshot is null) return;
-                lock (_snapshotLock)
-                    _currentSnapshot = snapshot;
-                StateChanged?.Invoke(snapshot);
-                break;
-            }
+                {
+                    var snapshot = JsonRpcSerializer.DeserializeParams<StateSnapshotNotification>(notification.Params);
+                    if (snapshot is null)
+                    {
+                        return;
+                    }
+
+                    lock (_snapshotLock)
+                    {
+                        _currentSnapshot = snapshot;
+                    }
+
+                    StateChanged?.Invoke(snapshot);
+                    break;
+                }
             case ProtocolMethods.EnginePhaseChanged:
-            {
-                var n = JsonRpcSerializer.DeserializeParams<PhaseChangedNotification>(notification.Params);
-                if (n is not null) PhaseChanged?.Invoke(n);
-                break;
-            }
+                {
+                    var n = JsonRpcSerializer.DeserializeParams<PhaseChangedNotification>(notification.Params);
+                    if (n is not null)
+                    {
+                        PhaseChanged?.Invoke(n);
+                    }
+
+                    break;
+                }
             case ProtocolMethods.TestsProgress:
-            {
-                var n = JsonRpcSerializer.DeserializeParams<TestProgressNotification>(notification.Params);
-                if (n is not null) TestProgressChanged?.Invoke(n);
-                break;
-            }
+                {
+                    var n = JsonRpcSerializer.DeserializeParams<TestProgressNotification>(notification.Params);
+                    if (n is not null)
+                    {
+                        TestProgressChanged?.Invoke(n);
+                    }
+
+                    break;
+                }
             case ProtocolMethods.BuildError:
-            {
-                var n = JsonRpcSerializer.DeserializeParams<BuildErrorNotification>(notification.Params);
-                if (n is not null) BuildError?.Invoke(n);
-                break;
-            }
+                {
+                    var n = JsonRpcSerializer.DeserializeParams<BuildErrorNotification>(notification.Params);
+                    if (n is not null)
+                    {
+                        BuildError?.Invoke(n);
+                    }
+
+                    break;
+                }
         }
     }
 }

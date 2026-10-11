@@ -1,7 +1,6 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
-using System.IO.Pipes;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Transports;
 using Xunit;
@@ -18,12 +17,12 @@ public sealed class NamedPipeTransportTests
     [Fact]
     public async Task ClientConnects_ServerAccepts_Successfully()
     {
-        var pipeName  = UniquePipeName();
-        var server    = new NamedPipeServerTransport(pipeName);
-        var client    = new NamedPipeClientTransport(pipeName);
-        var cts       = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var pipeName = UniquePipeName();
+        var server = new NamedPipeServerTransport(pipeName);
+        var client = new NamedPipeClientTransport(pipeName);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
-        var acceptTask   = server.AcceptClientAsync(cts.Token);
+        var acceptTask = server.AcceptClientAsync(cts.Token);
         await client.ConnectAsync(cts.Token);
         var serverStream = await acceptTask;
 
@@ -40,24 +39,24 @@ public sealed class NamedPipeTransportTests
     public async Task ClientSends_ServerReceives()
     {
         var pipeName = UniquePipeName();
-        var server   = new NamedPipeServerTransport(pipeName);
-        var client   = new NamedPipeClientTransport(pipeName);
-        var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var server = new NamedPipeServerTransport(pipeName);
+        var client = new NamedPipeClientTransport(pipeName);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
-        var acceptTask   = server.AcceptClientAsync(cts.Token);
+        var acceptTask = server.AcceptClientAsync(cts.Token);
         await client.ConnectAsync(cts.Token);
         var serverStream = await acceptTask;
 
         var message = System.Text.Encoding.UTF8.GetBytes("{\"test\":1}");
 
         // Named pipes on Windows require concurrent reader and writer — run both in parallel.
-        var sendTask    = client.SendAsync(message, cts.Token);
+        var sendTask = client.SendAsync(message, cts.Token);
         var receiveTask = MessageFramer.ReadMessageAsync(serverStream, cts.Token);
         await Task.WhenAll(sendTask, receiveTask);
 
         var received = await receiveTask;
 
-        Assert.NotNull(received);
+        _ = Assert.NotNull(received);
         Assert.Equal(message, received!.Value.ToArray());
 
         serverStream.Dispose();
@@ -71,18 +70,18 @@ public sealed class NamedPipeTransportTests
     public async Task ServerSends_ClientReceives()
     {
         var pipeName = UniquePipeName();
-        var server   = new NamedPipeServerTransport(pipeName);
-        var client   = new NamedPipeClientTransport(pipeName);
-        var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var server = new NamedPipeServerTransport(pipeName);
+        var client = new NamedPipeClientTransport(pipeName);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
-        var acceptTask   = server.AcceptClientAsync(cts.Token);
+        var acceptTask = server.AcceptClientAsync(cts.Token);
         await client.ConnectAsync(cts.Token);
         var serverStream = await acceptTask;
 
         var message = System.Text.Encoding.UTF8.GetBytes("{\"notification\":\"hello\"}");
 
         // Named pipes on Windows require concurrent reader and writer — run both in parallel.
-        var writeTask   = MessageFramer.WriteMessageAsync(serverStream, message, cts.Token);
+        var writeTask = MessageFramer.WriteMessageAsync(serverStream, message, cts.Token);
         var receiveTask = client.ReceiveAsync(cts.Token);
         await Task.WhenAll(writeTask, receiveTask);
 
@@ -100,11 +99,11 @@ public sealed class NamedPipeTransportTests
     public async Task ClientDisconnects_ServerReadReturnsNull()
     {
         var pipeName = UniquePipeName();
-        var server   = new NamedPipeServerTransport(pipeName);
-        var client   = new NamedPipeClientTransport(pipeName);
-        var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var server = new NamedPipeServerTransport(pipeName);
+        var client = new NamedPipeClientTransport(pipeName);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
-        var acceptTask   = server.AcceptClientAsync(cts.Token);
+        var acceptTask = server.AcceptClientAsync(cts.Token);
         await client.ConnectAsync(cts.Token);
         var serverStream = await acceptTask;
 
@@ -124,9 +123,9 @@ public sealed class NamedPipeTransportTests
     public async Task ConnectAsync_NoServer_ThrowsException()
     {
         var client = new NamedPipeClientTransport("piston-nonexistent-pipe-xyz");
-        var cts    = new CancellationTokenSource(TimeSpan.FromSeconds(1));
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(1));
 
-        await Assert.ThrowsAnyAsync<Exception>(
+        _ = await Assert.ThrowsAnyAsync<Exception>(
             () => client.ConnectAsync(cts.Token));
 
         await client.DisposeAsync();
@@ -139,7 +138,7 @@ public sealed class NamedPipeTransportTests
     {
         var pipeName = UniquePipeName();
         var listener = new NamedPipeListener(pipeName);
-        var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         var streams = new List<Stream>();
 
@@ -150,7 +149,9 @@ public sealed class NamedPipeTransportTests
             {
                 streams.Add(stream);
                 if (streams.Count == 2)
+                {
                     break;
+                }
             }
         });
 
@@ -166,7 +167,11 @@ public sealed class NamedPipeTransportTests
         Assert.Equal(2, streams.Count);
         Assert.NotSame(streams[0], streams[1]);
 
-        foreach (var s in streams) s.Dispose();
+        foreach (var s in streams)
+        {
+            s.Dispose();
+        }
+
         await client1.DisposeAsync();
         await client2.DisposeAsync();
         await listener.DisposeAsync();
@@ -206,14 +211,16 @@ public sealed class NamedPipeTransportTests
     public async Task AclHardenedPipe_SameUserClient_ConnectsSuccessfully()
     {
         if (!OperatingSystem.IsWindows())
+        {
             return; // ACL hardening is Windows-only; non-Windows relies on filesystem permissions
+        }
 
         var pipeName = UniquePipeName();
-        var server   = new NamedPipeServerTransport(pipeName);
-        var client   = new NamedPipeClientTransport(pipeName);
-        var cts      = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var server = new NamedPipeServerTransport(pipeName);
+        var client = new NamedPipeClientTransport(pipeName);
+        var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
-        var acceptTask   = server.AcceptClientAsync(cts.Token);
+        var acceptTask = server.AcceptClientAsync(cts.Token);
         await client.ConnectAsync(cts.Token);
         var serverStream = await acceptTask;
 

@@ -37,7 +37,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
     public async Task InitializeAsync(string solutionDirectory)
     {
         var pistonDir = Path.Combine(solutionDirectory, ".piston");
-        Directory.CreateDirectory(pistonDir);
+        _ = Directory.CreateDirectory(pistonDir);
 
         var dbPath = Path.Combine(pistonDir, "piston.db");
         _connection = new SqliteConnection($"Data Source={dbPath}");
@@ -46,7 +46,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
         // Enable WAL mode for concurrent read performance
         using var walCmd = _connection.CreateCommand();
         walCmd.CommandText = "PRAGMA journal_mode=WAL;";
-        await walCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        _ = await walCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
 
         // Create tables
         using var createCmd = _connection.CreateCommand();
@@ -76,7 +76,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
             CREATE INDEX IF NOT EXISTS idx_coverage_map_run
                 ON coverage_map (run_id);
             """;
-        await createCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        _ = await createCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
 
         // Seed the run counter from the current max run_id
         using var maxRunCmd = _connection.CreateCommand();
@@ -91,7 +91,9 @@ internal sealed class SqliteCoverageStore : ICoverageStore
     {
         var dbPath = Path.Combine(solutionDirectory, ".piston", "piston.db");
         if (!File.Exists(dbPath))
+        {
             return;
+        }
 
         using var connection = new SqliteConnection(new SqliteConnectionStringBuilder
         {
@@ -103,7 +105,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = "DELETE FROM coverage_map; DELETE FROM coverage_summary;";
-        command.ExecuteNonQuery();
+        _ = command.ExecuteNonQuery();
         transaction.Commit();
     }
 
@@ -125,17 +127,17 @@ internal sealed class SqliteCoverageStore : ICoverageStore
                     ($run_id, $test_fqn, $file_path, $line_number, $hit_count, 0);
                 """;
 
-            var pRunId      = insertCmd.CreateParameter(); pRunId.ParameterName = "$run_id";
-            var pTestFqn    = insertCmd.CreateParameter(); pTestFqn.ParameterName = "$test_fqn";
-            var pFilePath   = insertCmd.CreateParameter(); pFilePath.ParameterName = "$file_path";
+            var pRunId = insertCmd.CreateParameter(); pRunId.ParameterName = "$run_id";
+            var pTestFqn = insertCmd.CreateParameter(); pTestFqn.ParameterName = "$test_fqn";
+            var pFilePath = insertCmd.CreateParameter(); pFilePath.ParameterName = "$file_path";
             var pLineNumber = insertCmd.CreateParameter(); pLineNumber.ParameterName = "$line_number";
-            var pHitCount   = insertCmd.CreateParameter(); pHitCount.ParameterName = "$hit_count";
+            var pHitCount = insertCmd.CreateParameter(); pHitCount.ParameterName = "$hit_count";
 
-            insertCmd.Parameters.Add(pRunId);
-            insertCmd.Parameters.Add(pTestFqn);
-            insertCmd.Parameters.Add(pFilePath);
-            insertCmd.Parameters.Add(pLineNumber);
-            insertCmd.Parameters.Add(pHitCount);
+            _ = insertCmd.Parameters.Add(pRunId);
+            _ = insertCmd.Parameters.Add(pTestFqn);
+            _ = insertCmd.Parameters.Add(pFilePath);
+            _ = insertCmd.Parameters.Add(pLineNumber);
+            _ = insertCmd.Parameters.Add(pHitCount);
 
             // Delete old entries for these files before inserting fresh data
             var affectedFiles = testCoverageMap.Values
@@ -147,12 +149,12 @@ internal sealed class SqliteCoverageStore : ICoverageStore
             deleteCmd.Transaction = transaction;
             deleteCmd.CommandText = "DELETE FROM coverage_map WHERE file_path = $file_path;";
             var pDeleteFile = deleteCmd.CreateParameter(); pDeleteFile.ParameterName = "$file_path";
-            deleteCmd.Parameters.Add(pDeleteFile);
+            _ = deleteCmd.Parameters.Add(pDeleteFile);
 
             foreach (var filePath in affectedFiles)
             {
                 pDeleteFile.Value = filePath;
-                await deleteCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                _ = await deleteCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
 
             // Insert new entries
@@ -162,10 +164,10 @@ internal sealed class SqliteCoverageStore : ICoverageStore
                 pTestFqn.Value = testFqn;
                 foreach (var line in lines)
                 {
-                    pFilePath.Value   = line.FilePath;
+                    pFilePath.Value = line.FilePath;
                     pLineNumber.Value = line.LineNumber;
-                    pHitCount.Value   = line.HitCount;
-                    await insertCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                    pHitCount.Value = line.HitCount;
+                    _ = await insertCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
                 }
             }
 
@@ -176,21 +178,21 @@ internal sealed class SqliteCoverageStore : ICoverageStore
                 INSERT OR REPLACE INTO coverage_summary (file_path, last_run_id, last_updated)
                 VALUES ($file_path, $run_id, $now);
                 """;
-            var pSummaryFile   = summaryCmd.CreateParameter(); pSummaryFile.ParameterName = "$file_path";
-            var pSummaryRunId  = summaryCmd.CreateParameter(); pSummaryRunId.ParameterName = "$run_id";
-            var pSummaryNow    = summaryCmd.CreateParameter(); pSummaryNow.ParameterName = "$now";
+            var pSummaryFile = summaryCmd.CreateParameter(); pSummaryFile.ParameterName = "$file_path";
+            var pSummaryRunId = summaryCmd.CreateParameter(); pSummaryRunId.ParameterName = "$run_id";
+            var pSummaryNow = summaryCmd.CreateParameter(); pSummaryNow.ParameterName = "$now";
 
-            summaryCmd.Parameters.Add(pSummaryFile);
-            summaryCmd.Parameters.Add(pSummaryRunId);
-            summaryCmd.Parameters.Add(pSummaryNow);
+            _ = summaryCmd.Parameters.Add(pSummaryFile);
+            _ = summaryCmd.Parameters.Add(pSummaryRunId);
+            _ = summaryCmd.Parameters.Add(pSummaryNow);
 
             pSummaryRunId.Value = runId;
-            pSummaryNow.Value   = DateTimeOffset.UtcNow.ToString("O");
+            pSummaryNow.Value = DateTimeOffset.UtcNow.ToString("O");
 
             foreach (var filePath in affectedFiles)
             {
                 pSummaryFile.Value = filePath;
-                await summaryCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                _ = await summaryCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
 
             await transaction.CommitAsync().ConfigureAwait(false);
@@ -213,12 +215,14 @@ internal sealed class SqliteCoverageStore : ICoverageStore
             WHERE file_path = $file_path
               AND is_stale = 0;
             """;
-        cmd.Parameters.AddWithValue("$file_path", filePath);
+        _ = cmd.Parameters.AddWithValue("$file_path", filePath);
 
         var results = new List<string>();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
+        {
             results.Add(reader.GetString(0));
+        }
 
         return results;
     }
@@ -235,14 +239,16 @@ internal sealed class SqliteCoverageStore : ICoverageStore
               AND line_number BETWEEN $start AND $end
               AND is_stale = 0;
             """;
-        cmd.Parameters.AddWithValue("$file_path", filePath);
-        cmd.Parameters.AddWithValue("$start", startLine);
-        cmd.Parameters.AddWithValue("$end", endLine);
+        _ = cmd.Parameters.AddWithValue("$file_path", filePath);
+        _ = cmd.Parameters.AddWithValue("$start", startLine);
+        _ = cmd.Parameters.AddWithValue("$end", endLine);
 
         var results = new List<string>();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
+        {
             results.Add(reader.GetString(0));
+        }
 
         return results;
     }
@@ -259,7 +265,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
               AND is_stale = 0
             LIMIT 1;
             """;
-        cmd.Parameters.AddWithValue("$file_path", filePath);
+        _ = cmd.Parameters.AddWithValue("$file_path", filePath);
         var result = cmd.ExecuteScalar();
         return result is long count && count > 0;
     }
@@ -274,8 +280,8 @@ internal sealed class SqliteCoverageStore : ICoverageStore
             SET is_stale = 1
             WHERE file_path = $file_path;
             """;
-        cmd.Parameters.AddWithValue("$file_path", filePath);
-        await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        _ = cmd.Parameters.AddWithValue("$file_path", filePath);
+        _ = await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
     }
 
     public void Dispose()
@@ -287,7 +293,9 @@ internal sealed class SqliteCoverageStore : ICoverageStore
     private void EnsureInitialized()
     {
         if (_connection is null)
+        {
             throw new InvalidOperationException(
                 $"{nameof(SqliteCoverageStore)} has not been initialized. Call {nameof(InitializeAsync)} first.");
+        }
     }
 }

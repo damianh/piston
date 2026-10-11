@@ -15,14 +15,11 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
     private string? _solutionPath;
     private bool _rebuildScheduled;
 
-    public ImpactAnalyzer(Func<string, ISolutionGraph> graphFactory)
-    {
-        _graphFactory = graphFactory;
-    }
+    public ImpactAnalyzer(Func<string, ISolutionGraph> graphFactory) => _graphFactory = graphFactory;
 
     public ImpactAnalyzer(Func<string, ISolutionGraph> graphFactory, ICoverageStore? coverageStore)
     {
-        _graphFactory  = graphFactory;
+        _graphFactory = graphFactory;
         _coverageStore = coverageStore;
     }
 
@@ -52,7 +49,9 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
 
         // If graph is not available, fall back to full run
         if (_graph is null)
+        {
             return FullRunResult();
+        }
 
         // Check for solution/project file changes that require graph rebuild
         var hasSolutionChange = changes.Any(c =>
@@ -88,10 +87,12 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
             {
                 requiresGraphRebuild = true;
                 var projectPath = Path.GetFullPath(change.FilePath);
-                affectedProjects.Add(projectPath);
+                _ = affectedProjects.Add(projectPath);
 
                 foreach (var dep in graph.GetTransitiveDependents(projectPath))
-                    affectedProjects.Add(dep);
+                {
+                    _ = affectedProjects.Add(dep);
+                }
 
                 continue;
             }
@@ -108,27 +109,35 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
             if (graph.IsTestProject(owningProject))
             {
                 // A test file change: rebuild and run only that test project
-                affectedTestProjects.Add(owningProject);
+                _ = affectedTestProjects.Add(owningProject);
             }
             else
             {
-                affectedProjects.Add(owningProject);
+                _ = affectedProjects.Add(owningProject);
                 foreach (var dep in graph.GetTransitiveDependents(owningProject))
-                    affectedProjects.Add(dep);
+                {
+                    _ = affectedProjects.Add(dep);
+                }
             }
         }
 
         if (hasUnknownFile)
+        {
             return FullRunResult();
+        }
 
         if (affectedProjects.Count == 0 && affectedTestProjects.Count == 0)
+        {
             return FullRunResult();
+        }
 
         // From affected projects (non-test), find test projects that depend on them
         foreach (var proj in affectedProjects.ToList())
         {
             if (graph.IsTestProject(proj))
-                affectedTestProjects.Add(proj);
+            {
+                _ = affectedTestProjects.Add(proj);
+            }
         }
 
         // Non-test affected projects (build targets)
@@ -152,7 +161,7 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
 
             if (csChanges.Count > 0)
             {
-                var tier3Fqns    = new HashSet<string>(StringComparer.Ordinal);
+                var tier3Fqns = new HashSet<string>(StringComparer.Ordinal);
                 var allHaveCoverage = true;
 
                 foreach (var change in csChanges)
@@ -169,7 +178,9 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
                     {
                         var tests = _coverageStore.GetTestsCoveringFile(normalizedPath);
                         foreach (var t in tests)
-                            tier3Fqns.Add(t);
+                        {
+                            _ = tier3Fqns.Add(t);
+                        }
 
                         // Mark stale after reading: prevents the next run from using
                         // this coverage until it has been refreshed by a new test run
@@ -233,7 +244,9 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
             {
                 var csproj = Directory.EnumerateFiles(dir, "*.csproj").FirstOrDefault();
                 if (csproj is not null)
+                {
                     return Path.GetFullPath(csproj);
+                }
             }
             catch
             {

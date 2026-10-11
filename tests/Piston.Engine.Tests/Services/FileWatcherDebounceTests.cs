@@ -37,7 +37,7 @@ public sealed class FileWatcherDebounceTests
             // Wait for debounce to settle (debounce interval + buffer)
             await Task.Delay(debounce + TimeSpan.FromMilliseconds(150));
 
-            Assert.Single(fired);
+            _ = Assert.Single(fired);
         }
         finally
         {
@@ -70,7 +70,7 @@ public sealed class FileWatcherDebounceTests
             // Wait for debounce to settle
             await Task.Delay(debounce + TimeSpan.FromMilliseconds(200));
 
-            Assert.Single(batches);
+            _ = Assert.Single(batches);
             var batch = batches[0];
             var paths = batch.Changes.Select(c => Path.GetFileName(c.FilePath)).ToList();
             Assert.Contains("Alpha.cs", paths);
@@ -109,11 +109,11 @@ public sealed class FileWatcherDebounceTests
             // Wait for debounce to settle
             await Task.Delay(debounce + TimeSpan.FromMilliseconds(200));
 
-            Assert.Single(batches);
+            _ = Assert.Single(batches);
             var batch = batches[0];
             // Same file path → only one entry
             var paths = batch.Changes.Select(c => c.FilePath).ToList();
-            Assert.Single(paths);
+            _ = Assert.Single(paths);
             Assert.EndsWith("Repeated.cs", paths[0], StringComparison.OrdinalIgnoreCase);
         }
         finally

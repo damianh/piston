@@ -30,7 +30,9 @@ public static class HostHelpers
         {
             var configPath = Path.Combine(cwd, ".piston.json");
             if (string.IsNullOrWhiteSpace(config.Solution))
+            {
                 throw new InvalidOperationException($"The 'solution' field in '{configPath}' must not be empty.");
+            }
 
             try
             {
@@ -64,11 +66,15 @@ public static class HostHelpers
     private static string ValidateSolutionPath(string path)
     {
         if (!File.Exists(path))
+        {
             throw new InvalidOperationException($"Solution file not found: {path}");
+        }
 
         var ext = Path.GetExtension(path).ToLowerInvariant();
         if (ext is not ".sln" and not ".slnx" and not ".slnf")
+        {
             throw new InvalidOperationException($"Expected a .sln, .slnx, or .slnf file, got: {Path.GetFileName(path)}");
+        }
 
         return path;
     }
@@ -77,7 +83,9 @@ public static class HostHelpers
     {
         var configPath = Path.Combine(solutionDir, ".piston.json");
         if (!File.Exists(configPath))
+        {
             return new PistonConfig();
+        }
 
         try
         {
@@ -127,13 +135,13 @@ public static class HostHelpers
 
         return new PistonOptions
         {
-            SolutionPath        = solutionPath,
-            DebounceInterval    = TimeSpan.FromMilliseconds(debounceMs),
-            TestFilter          = filter,
-            CoverageEnabled     = coverageEnabled,
-            ProcessPoolSize     = processPoolSize,
+            SolutionPath = solutionPath,
+            DebounceInterval = TimeSpan.FromMilliseconds(debounceMs),
+            TestFilter = filter,
+            CoverageEnabled = coverageEnabled,
+            ProcessPoolSize = processPoolSize,
             ProcessRecycleAfter = processRecycleAfter,
-            TestExecutionMode   = testExecutionMode,
+            TestExecutionMode = testExecutionMode,
         };
     }
 
@@ -144,11 +152,11 @@ public static class HostHelpers
             var psi = new System.Diagnostics.ProcessStartInfo("dotnet", "--version")
             {
                 RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                UseShellExecute        = false,
+                RedirectStandardError = true,
+                UseShellExecute = false,
             };
             using var p = System.Diagnostics.Process.Start(psi);
-            p?.WaitForExit(3_000);
+            _ = (p?.WaitForExit(3_000));
             return p?.ExitCode == 0;
         }
         catch

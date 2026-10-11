@@ -35,7 +35,11 @@ public sealed class TestProcessPool : ITestProcessPool
         int recycleAfter,
         Func<ProjectTestRequest, Action<IReadOnlyList<Engine.Models.TestSuite>>?, CancellationToken, Task<ProjectTestResult>> runDelegate)
     {
-        if (poolSize < 1) throw new ArgumentOutOfRangeException(nameof(poolSize), "Pool size must be at least 1.");
+        if (poolSize < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(poolSize), "Pool size must be at least 1.");
+        }
+
         PoolSize = poolSize;
         _recycleAfter = recycleAfter;
         _semaphore = new SemaphoreSlim(poolSize, poolSize);
@@ -62,7 +66,7 @@ public sealed class TestProcessPool : ITestProcessPool
             return new ProjectTestResult(request.ProjectPath, [], null, [], Crashed: false);
         }
 
-        Interlocked.Increment(ref _activeCount);
+        _ = Interlocked.Increment(ref _activeCount);
         var runCount = Interlocked.Increment(ref _totalRunCount);
 
         if (runCount > 0 && runCount % _recycleAfter == 0)
@@ -88,8 +92,8 @@ public sealed class TestProcessPool : ITestProcessPool
         }
         finally
         {
-            Interlocked.Decrement(ref _activeCount);
-            _semaphore.Release();
+            _ = Interlocked.Decrement(ref _activeCount);
+            _ = _semaphore.Release();
         }
     }
 
@@ -99,11 +103,11 @@ public sealed class TestProcessPool : ITestProcessPool
         Action<ProjectTestResult>? onProjectCompleted,
         CancellationToken ct)
     {
-        var tasks = requests.Select(req => RunAndReport(req, onProjectCompleted, ct)).ToList();
+        var tasks = requests.Select(req => RunAndReportAsync(req, onProjectCompleted, ct)).ToList();
         return await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
-    private async Task<ProjectTestResult> RunAndReport(
+    private async Task<ProjectTestResult> RunAndReportAsync(
         ProjectTestRequest request,
         Action<ProjectTestResult>? onProjectCompleted,
         CancellationToken ct)
@@ -116,7 +120,11 @@ public sealed class TestProcessPool : ITestProcessPool
     /// <inheritdoc/>
     public void Dispose()
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            return;
+        }
+
         _disposed = true;
         _semaphore.Dispose();
     }

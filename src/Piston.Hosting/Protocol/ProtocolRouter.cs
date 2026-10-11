@@ -36,7 +36,10 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
     {
         var dispatcher = new EngineCommandDispatcher(engine);
         if (_mcpCallTracker is not null)
+        {
             dispatcher.SetMcpCallTracker(_mcpCallTracker);
+        }
+
         return dispatcher;
     }
 
@@ -51,9 +54,9 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
         {
             await foreach (var stream in listener.AcceptClientsAsync(ct).ConfigureAwait(false))
             {
-                var sessionId  = $"pipe-{Interlocked.Increment(ref _sessionCounter)}";
+                var sessionId = $"pipe-{Interlocked.Increment(ref _sessionCounter)}";
                 var dispatcher = CreateDispatcher();
-                var session    = new ClientSession(stream, sessionId, dispatcher);
+                var session = new ClientSession(stream, sessionId, dispatcher);
 
                 _pipeSessions[sessionId] = session;
 
@@ -65,7 +68,7 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
                 }
                 catch
                 {
-                    _pipeSessions.TryRemove(sessionId, out _);
+                    _ = _pipeSessions.TryRemove(sessionId, out _);
                     continue;
                 }
 
@@ -78,7 +81,7 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
                     }
                     finally
                     {
-                        _pipeSessions.TryRemove(sessionId, out _);
+                        _ = _pipeSessions.TryRemove(sessionId, out _);
                     }
                 }, ct);
             }
@@ -95,9 +98,9 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
     /// </summary>
     public async Task AddWebSocketSessionAsync(WebSocket webSocket, CancellationToken ct)
     {
-        var sessionId  = $"ws-{Interlocked.Increment(ref _sessionCounter)}";
+        var sessionId = $"ws-{Interlocked.Increment(ref _sessionCounter)}";
         var dispatcher = CreateDispatcher();
-        var session    = new WebSocketClientSession(webSocket, sessionId, dispatcher);
+        var session = new WebSocketClientSession(webSocket, sessionId, dispatcher);
 
         _wsSessions[sessionId] = session;
 
@@ -108,7 +111,7 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
         }
         catch
         {
-            _wsSessions.TryRemove(sessionId, out _);
+            _ = _wsSessions.TryRemove(sessionId, out _);
             return;
         }
 
@@ -118,7 +121,7 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
         }
         finally
         {
-            _wsSessions.TryRemove(sessionId, out _);
+            _ = _wsSessions.TryRemove(sessionId, out _);
         }
     }
 
@@ -158,7 +161,9 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
                 .ContinueWith(t =>
                 {
                     if (t.IsFaulted)
-                        _pipeSessions.TryRemove(id, out _);
+                    {
+                        _ = _pipeSessions.TryRemove(id, out _);
+                    }
                 }, TaskScheduler.Default);
         }
 
@@ -168,16 +173,15 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
                 .ContinueWith(t =>
                 {
                     if (t.IsFaulted)
-                        _wsSessions.TryRemove(id, out _);
+                    {
+                        _ = _wsSessions.TryRemove(id, out _);
+                    }
                 }, TaskScheduler.Default);
         }
     }
 
     /// <inheritdoc />
-    public void Emit(ActivityEvent activity)
-    {
-        BroadcastNotification(ToNotification(ProtocolMethods.ActivityEvent, activity));
-    }
+    public void Emit(ActivityEvent activity) => BroadcastNotification(ToNotification(ProtocolMethods.ActivityEvent, activity));
 
     private JsonRpcNotification BuildStateSnapshot()
     {

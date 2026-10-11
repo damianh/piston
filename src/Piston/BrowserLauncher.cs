@@ -4,7 +4,7 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 
-namespace Piston.Cli;
+namespace Piston;
 
 /// <summary>
 /// Cross-platform utility to open a URL in the default browser.
@@ -17,15 +17,15 @@ internal static class BrowserLauncher
         {
             if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
-                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+                _ = Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
             }
             else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             {
-                Process.Start("open", url);
+                _ = Process.Start("open", url);
             }
             else
             {
-                Process.Start("xdg-open", url);
+                _ = Process.Start("xdg-open", url);
             }
         }
         catch (Exception ex)

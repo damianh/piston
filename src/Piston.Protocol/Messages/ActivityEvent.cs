@@ -16,12 +16,12 @@ public sealed record ActivityEvent(
 /// <summary>Discriminator constants for <see cref="ActivityEvent.Type"/>.</summary>
 public static class ActivityEventTypes
 {
-    public const string SolutionLoaded        = "solution.loaded";
-    public const string FileChangesDetected   = "file.changes";
-    public const string BuildCompleted        = "build.completed";
-    public const string TestRunCompleted      = "tests.completed";
-    public const string McpToolCall           = "mcp.toolCall";
-    public const string Reconnect             = "reconnect";
+    public const string SolutionLoaded = "solution.loaded";
+    public const string FileChangesDetected = "file.changes";
+    public const string BuildCompleted = "build.completed";
+    public const string TestRunCompleted = "tests.completed";
+    public const string McpToolCall = "mcp.toolCall";
+    public const string Reconnect = "reconnect";
 }
 
 // ── Concrete event data records (serialized into ActivityEvent.Data) ──────

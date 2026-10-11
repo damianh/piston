@@ -1,8 +1,6 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
-using System.Collections.Generic;
-using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 using Piston.Protocol.Dtos;
@@ -15,11 +13,11 @@ namespace Piston.Protocol.JsonRpc;
 /// Replaces reflection-based serialization to eliminate JIT overhead on first use.
 /// </summary>
 [JsonSourceGenerationOptions(
-    PropertyNamingPolicy              = JsonKnownNamingPolicy.CamelCase,
-    DefaultIgnoreCondition            = JsonIgnoreCondition.WhenWritingNull,
-    NumberHandling                    = JsonNumberHandling.AllowReadingFromString,
-    WriteIndented                     = false,
-    UseStringEnumConverter            = true)]
+    PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
+    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    NumberHandling = JsonNumberHandling.AllowReadingFromString,
+    WriteIndented = false,
+    UseStringEnumConverter = true)]
 
 // ── Envelope types (internal, promoted from private nested in Task 1) ─────
 [JsonSerializable(typeof(RequestEnvelope))]

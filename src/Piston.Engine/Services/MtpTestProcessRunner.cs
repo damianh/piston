@@ -34,7 +34,9 @@ internal static class MtpTestProcessRunner
         var args = $"test --project \"{projectPath}\" --no-build --output Detailed";
 
         if (!string.IsNullOrWhiteSpace(filter))
+        {
             args += $" --filter \"{filter}\"";
+        }
 
         var log = DiagnosticLog.Instance;
         log?.Write("MtpRunner", $"Project: {projectPath}");
@@ -43,17 +45,17 @@ internal static class MtpTestProcessRunner
 
         var psi = new ProcessStartInfo("dotnet", args)
         {
-            WorkingDirectory       = solutionDirectory,
+            WorkingDirectory = solutionDirectory,
             RedirectStandardOutput = true,
-            RedirectStandardError  = true,
-            UseShellExecute        = false,
-            CreateNoWindow         = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
         };
 
-        var parser          = new MtpStdoutParser();
-        var liveResults     = new Dictionary<string, (TestStatus Status, string DisplayName, TimeSpan Duration, string? ErrorMessage, string? StackTrace, string? Source)>(StringComparer.Ordinal);
+        var parser = new MtpStdoutParser();
+        var liveResults = new Dictionary<string, (TestStatus Status, string DisplayName, TimeSpan Duration, string? ErrorMessage, string? StackTrace, string? Source)>(StringComparer.Ordinal);
         var liveResultsLock = new object();
-        var stderrLines     = new System.Collections.Concurrent.ConcurrentBag<string>();
+        var stderrLines = new System.Collections.Concurrent.ConcurrentBag<string>();
 
         var lastProgressFire = DateTimeOffset.MinValue;
         const int progressThrottleMs = 150;
@@ -62,7 +64,10 @@ internal static class MtpTestProcessRunner
 
         process.OutputDataReceived += (_, e) =>
         {
-            if (e.Data is null) return;
+            if (e.Data is null)
+            {
+                return;
+            }
 
             log?.Write("MtpRunner:stdout", e.Data);
 
@@ -72,7 +77,10 @@ internal static class MtpTestProcessRunner
                 parsed = parser.ProcessLine(e.Data);
             }
 
-            if (parsed is null) return;
+            if (parsed is null)
+            {
+                return;
+            }
 
             RecordResult(parsed, liveResults, liveResultsLock);
             FireThrottledProgress(onProgress, liveResults, liveResultsLock,
@@ -88,7 +96,7 @@ internal static class MtpTestProcessRunner
             }
         };
 
-        process.Start();
+        _ = process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
@@ -112,7 +120,9 @@ internal static class MtpTestProcessRunner
             last = parser.Flush();
         }
         if (last is not null)
+        {
             RecordResult(last, liveResults, liveResultsLock);
+        }
 
         // Fire final progress update
         onProgress?.Invoke(BuildLiveSnapshot(liveResults, liveResultsLock));
@@ -142,7 +152,7 @@ internal static class MtpTestProcessRunner
         Dictionary<string, (TestStatus Status, string DisplayName, TimeSpan Duration, string? ErrorMessage, string? StackTrace, string? Source)> liveResults,
         object lockObj)
     {
-        var dot         = parsed.FullyQualifiedName.LastIndexOf('.');
+        var dot = parsed.FullyQualifiedName.LastIndexOf('.');
         var displayName = dot >= 0 ? parsed.FullyQualifiedName[(dot + 1)..] : parsed.FullyQualifiedName;
 
         lock (lockObj)
@@ -164,18 +174,26 @@ internal static class MtpTestProcessRunner
         ref DateTimeOffset lastFire,
         int throttleMs)
     {
-        if (onProgress is null) return;
+        if (onProgress is null)
+        {
+            return;
+        }
 
         var now = DateTimeOffset.UtcNow;
         bool shouldFire;
         lock (lockObj)
         {
             shouldFire = (now - lastFire).TotalMilliseconds >= throttleMs;
-            if (shouldFire) lastFire = now;
+            if (shouldFire)
+            {
+                lastFire = now;
+            }
         }
 
         if (shouldFire)
+        {
             onProgress(BuildLiveSnapshot(liveResults, lockObj));
+        }
     }
 
     private static IReadOnlyList<TestSuite> BuildLiveSnapshot(
@@ -188,18 +206,21 @@ internal static class MtpTestProcessRunner
             snapshot = [.. liveResults];
         }
 
-        if (snapshot.Count == 0) return [];
+        if (snapshot.Count == 0)
+        {
+            return [];
+        }
 
         var results = snapshot
             .Select(kvp => new TestResult(
                 FullyQualifiedName: kvp.Key,
-                DisplayName:        kvp.Value.DisplayName,
-                Status:             kvp.Value.Status,
-                Duration:           kvp.Value.Duration,
-                Output:             null,
-                ErrorMessage:       kvp.Value.ErrorMessage,
-                StackTrace:         kvp.Value.StackTrace,
-                Source:             kvp.Value.Source))
+                DisplayName: kvp.Value.DisplayName,
+                Status: kvp.Value.Status,
+                Duration: kvp.Value.Duration,
+                Output: null,
+                ErrorMessage: kvp.Value.ErrorMessage,
+                StackTrace: kvp.Value.StackTrace,
+                Source: kvp.Value.Source))
             .ToList();
 
         return [new TestSuite("…", results, DateTimeOffset.UtcNow, TimeSpan.Zero)];
@@ -215,7 +236,10 @@ internal static class MtpTestProcessRunner
             snapshot = [.. liveResults];
         }
 
-        if (snapshot.Count == 0) return [];
+        if (snapshot.Count == 0)
+        {
+            return [];
+        }
 
         // Group by namespace (prefix before last dot in FQN)
         var byNamespace = snapshot
@@ -233,13 +257,13 @@ internal static class MtpTestProcessRunner
             var tests = group
                 .Select(kvp => new TestResult(
                     FullyQualifiedName: kvp.Key,
-                    DisplayName:        kvp.Value.DisplayName,
-                    Status:             kvp.Value.Status,
-                    Duration:           kvp.Value.Duration,
-                    Output:             null,
-                    ErrorMessage:       kvp.Value.ErrorMessage,
-                    StackTrace:         kvp.Value.StackTrace,
-                    Source:             kvp.Value.Source))
+                    DisplayName: kvp.Value.DisplayName,
+                    Status: kvp.Value.Status,
+                    Duration: kvp.Value.Duration,
+                    Output: null,
+                    ErrorMessage: kvp.Value.ErrorMessage,
+                    StackTrace: kvp.Value.StackTrace,
+                    Source: kvp.Value.Source))
                 .ToList();
 
             var totalDuration = TimeSpan.FromTicks(tests.Sum(t => t.Duration.Ticks));

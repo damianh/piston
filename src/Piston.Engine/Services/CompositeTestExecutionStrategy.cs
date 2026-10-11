@@ -23,7 +23,7 @@ internal sealed class CompositeTestExecutionStrategy : ITestExecutionStrategy
         MtpTestExecutionStrategy mtpStrategy,
         ProcessTestExecutionStrategy vsTestStrategy)
     {
-        _mtpStrategy    = mtpStrategy;
+        _mtpStrategy = mtpStrategy;
         _vsTestStrategy = vsTestStrategy;
     }
 

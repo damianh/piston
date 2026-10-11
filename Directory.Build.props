@@ -4,7 +4,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>preview</LangVersion>
-    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <TreatWarningsAsErrors Condition="'$(Configuration)' == 'Release'">true</TreatWarningsAsErrors>
     <BlazorWebAssemblyOmitDebugProxyOutput Condition="'$(Configuration)' == 'Release'">true</BlazorWebAssemblyOmitDebugProxyOutput>
   </PropertyGroup>
 </Project>

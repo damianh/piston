@@ -37,14 +37,11 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
     public Task<ProjectTestResult> ExecuteAsync(
         ProjectTestRequest request,
         Action<IReadOnlyList<TestSuite>>? onProgress,
-        CancellationToken ct)
-    {
-        return MtpTestProcessRunner.RunAsync(
+        CancellationToken ct) => MtpTestProcessRunner.RunAsync(
             request.ProjectPath,
             _solutionDirectory,
             request.Filter,
             request.CollectCoverage,
             onProgress,
             ct);
-    }
 }

@@ -99,7 +99,7 @@ public sealed class MsBuildSolutionGraphTests : IAsyncLifetime
             """);
 
         // Restore NuGet packages so MSBuild evaluation works
-        await RunDotnetAsync("restore", _root);
+        _ = await RunDotnetAsync("restore", _root);
     }
 
     public Task DisposeAsync()
@@ -124,7 +124,7 @@ public sealed class MsBuildSolutionGraphTests : IAsyncLifetime
     {
         var sut = new MsBuildSolutionGraph(_slnPath);
 
-        Assert.Single(sut.TestProjectPaths);
+        _ = Assert.Single(sut.TestProjectPaths);
         Assert.Contains(sut.TestProjectPaths, p => p.EndsWith("App.Tests.csproj", StringComparison.OrdinalIgnoreCase));
     }
 

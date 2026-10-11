@@ -48,8 +48,8 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
             """);
 
         // Restore + build first so RunTestsAsync can use --no-build
-        await RunDotnetAsync("restore", _projectDir);
-        await RunDotnetAsync("build --no-restore", _projectDir);
+        _ = await RunDotnetAsync("restore", _projectDir);
+        _ = await RunDotnetAsync("build --no-restore", _projectDir);
     }
 
     public Task DisposeAsync()

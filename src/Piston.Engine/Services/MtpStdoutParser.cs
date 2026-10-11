@@ -61,16 +61,19 @@ internal sealed class MtpStdoutParser
             // A new test result header — flush the previous one first
             var completed = FlushPending();
 
-            _pendingFqn      = statusMatch.Groups[2].Value.Trim();
-            _pendingStatus   = ParseStatus(statusMatch.Groups[1].Value);
+            _pendingFqn = statusMatch.Groups[2].Value.Trim();
+            _pendingStatus = ParseStatus(statusMatch.Groups[1].Value);
             _pendingDuration = ParseDuration(statusMatch.Groups[3].Value);
-            _pendingSource   = null;
+            _pendingSource = null;
             _pendingExtraLines.Clear();
 
             return completed;
         }
 
-        if (_pendingFqn is null) return null; // Haven't seen a test header yet
+        if (_pendingFqn is null)
+        {
+            return null; // Haven't seen a test header yet
+        }
 
         var sourceMatch = SourceLineRegex.Match(line);
         if (sourceMatch.Success)
@@ -81,7 +84,9 @@ internal sealed class MtpStdoutParser
 
         // Any other non-blank indented line after a "failed" header is error/stack info
         if (_pendingStatus == TestStatus.Failed && !string.IsNullOrWhiteSpace(line))
+        {
             _pendingExtraLines.Add(line.Trim());
+        }
 
         return null;
     }
@@ -95,36 +100,43 @@ internal sealed class MtpStdoutParser
 
     private MtpParsedResult? FlushPending()
     {
-        if (_pendingFqn is null) return null;
+        if (_pendingFqn is null)
+        {
+            return null;
+        }
 
         string? errorMessage = null;
-        string? stackTrace   = null;
+        string? stackTrace = null;
 
         if (_pendingExtraLines.Count > 0)
         {
             // Split extra lines into stack trace (lines starting with "at ") and error message
-            var stackLines  = new List<string>();
-            var errorLines  = new List<string>();
+            var stackLines = new List<string>();
+            var errorLines = new List<string>();
 
             foreach (var extraLine in _pendingExtraLines)
             {
                 if (StackTraceLineRegex.IsMatch(extraLine))
+                {
                     stackLines.Add(extraLine);
+                }
                 else
+                {
                     errorLines.Add(extraLine);
+                }
             }
 
             errorMessage = errorLines.Count > 0 ? string.Join(Environment.NewLine, errorLines) : null;
-            stackTrace   = stackLines.Count > 0 ? string.Join(Environment.NewLine, stackLines) : null;
+            stackTrace = stackLines.Count > 0 ? string.Join(Environment.NewLine, stackLines) : null;
         }
 
         var result = new MtpParsedResult(
             FullyQualifiedName: _pendingFqn,
-            Status:             _pendingStatus,
-            Duration:           _pendingDuration,
-            Source:             _pendingSource,
-            ErrorMessage:       errorMessage,
-            StackTrace:         stackTrace);
+            Status: _pendingStatus,
+            Duration: _pendingDuration,
+            Source: _pendingSource,
+            ErrorMessage: errorMessage,
+            StackTrace: stackTrace);
 
         _pendingFqn = null;
         _pendingExtraLines.Clear();
@@ -135,10 +147,10 @@ internal sealed class MtpStdoutParser
     private static TestStatus ParseStatus(string value) =>
         value.ToLowerInvariant() switch
         {
-            "passed"  => TestStatus.Passed,
-            "failed"  => TestStatus.Failed,
+            "passed" => TestStatus.Passed,
+            "failed" => TestStatus.Failed,
             "skipped" => TestStatus.Skipped,
-            _         => TestStatus.NotRun,
+            _ => TestStatus.NotRun,
         };
 
     /// <summary>
@@ -151,14 +163,18 @@ internal sealed class MtpStdoutParser
 
         // "< 1ms" or "< 1 ms" → treat as sub-millisecond
         if (trimmed.StartsWith('<'))
+        {
             return TimeSpan.FromMilliseconds(0.5);
+        }
 
         if (trimmed.EndsWith("ms", StringComparison.OrdinalIgnoreCase))
         {
             var num = trimmed[..^2].Trim();
             if (double.TryParse(num, System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var ms))
+            {
                 return TimeSpan.FromMilliseconds(ms);
+            }
         }
 
         if (trimmed.EndsWith('s') && !trimmed.EndsWith("ms", StringComparison.OrdinalIgnoreCase))
@@ -166,7 +182,9 @@ internal sealed class MtpStdoutParser
             var num = trimmed[..^1].Trim();
             if (double.TryParse(num, System.Globalization.NumberStyles.Float,
                     System.Globalization.CultureInfo.InvariantCulture, out var sec))
+            {
                 return TimeSpan.FromSeconds(sec);
+            }
         }
 
         return TimeSpan.Zero;

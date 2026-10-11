@@ -28,7 +28,7 @@ internal sealed class DiagnosticLog : IDisposable
     internal static DiagnosticLog Initialize(string solutionDirectory)
     {
         var pistonDir = Path.Combine(solutionDirectory, ".piston");
-        Directory.CreateDirectory(pistonDir);
+        _ = Directory.CreateDirectory(pistonDir);
 
         var logPath = Path.Combine(pistonDir, "diagnostics.log");
         var log = new DiagnosticLog();
@@ -52,7 +52,10 @@ internal sealed class DiagnosticLog : IDisposable
     /// </summary>
     internal void Write(string category, string message)
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            return;
+        }
 
         try
         {
@@ -69,7 +72,11 @@ internal sealed class DiagnosticLog : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
+        if (_disposed)
+        {
+            return;
+        }
+
         _disposed = true;
 
         lock (_lock)
@@ -79,6 +86,8 @@ internal sealed class DiagnosticLog : IDisposable
         }
 
         if (Instance == this)
+        {
             Instance = null;
+        }
     }
 }

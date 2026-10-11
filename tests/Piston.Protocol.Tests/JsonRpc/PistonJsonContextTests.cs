@@ -20,11 +20,11 @@ public sealed class PistonJsonContextTests
     // Reference options without TypeInfoResolver for comparison
     private static readonly JsonSerializerOptions ReflectionOptions = new()
     {
-        PropertyNamingPolicy       = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition     = JsonIgnoreCondition.WhenWritingNull,
-        NumberHandling             = JsonNumberHandling.AllowReadingFromString,
-        Converters                 = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
-        WriteIndented              = false,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        NumberHandling = JsonNumberHandling.AllowReadingFromString,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+        WriteIndented = false,
     };
 
     // ── StateSnapshotNotification (most complex type) ─────────────────────────
@@ -33,14 +33,14 @@ public sealed class PistonJsonContextTests
     public void StateSnapshotNotification_Roundtrip_FieldsMatch()
     {
         var snapshot = BuildSnapshot();
-        var bytes    = JsonSerializer.SerializeToUtf8Bytes(snapshot, JsonRpcSerializer.Options);
-        var result   = JsonSerializer.Deserialize<StateSnapshotNotification>(bytes, JsonRpcSerializer.Options);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(snapshot, JsonRpcSerializer.Options);
+        var result = JsonSerializer.Deserialize<StateSnapshotNotification>(bytes, JsonRpcSerializer.Options);
 
         Assert.NotNull(result);
         Assert.Equal(PistonPhaseDto.Testing, result.Phase);
-        Assert.Single(result.Suites);
+        _ = Assert.Single(result.Suites);
         Assert.Equal("MyTest.Suite", result.Suites[0].Name);
-        Assert.Single(result.Suites[0].Tests);
+        _ = Assert.Single(result.Suites[0].Tests);
         Assert.Equal("Passed", result.Suites[0].Tests[0].Status.ToString().ToLower() == "passed" ? "Passed" : result.Suites[0].Tests[0].Status.ToString());
         Assert.Equal(1, result.TotalExpectedTests);
         Assert.Equal(1, result.CompletedTests);
@@ -52,7 +52,7 @@ public sealed class PistonJsonContextTests
     public void StateSnapshotNotification_WireFormat_CamelCaseKeys()
     {
         var snapshot = BuildSnapshot();
-        var json     = JsonSerializer.Serialize(snapshot, JsonRpcSerializer.Options);
+        var json = JsonSerializer.Serialize(snapshot, JsonRpcSerializer.Options);
 
         Assert.Contains("\"phase\":", json);
         Assert.Contains("\"suites\":", json);
@@ -65,7 +65,7 @@ public sealed class PistonJsonContextTests
     public void StateSnapshotNotification_WireFormat_EnumAsString()
     {
         var snapshot = BuildSnapshot();
-        var json     = JsonSerializer.Serialize(snapshot, JsonRpcSerializer.Options);
+        var json = JsonSerializer.Serialize(snapshot, JsonRpcSerializer.Options);
 
         Assert.Contains("\"testing\"", json);     // PistonPhaseDto.Testing as camelCase string
         Assert.Contains("\"passed\"", json);       // TestStatusDto.Passed as camelCase string
@@ -76,7 +76,7 @@ public sealed class PistonJsonContextTests
     public void StateSnapshotNotification_WireFormat_NullOmission()
     {
         var snapshot = BuildSnapshot() with { SolutionPath = null, LastBuild = null };
-        var json     = JsonSerializer.Serialize(snapshot, JsonRpcSerializer.Options);
+        var json = JsonSerializer.Serialize(snapshot, JsonRpcSerializer.Options);
 
         Assert.DoesNotContain("\"solutionPath\"", json);
         Assert.DoesNotContain("\"lastBuild\"", json);
@@ -92,7 +92,7 @@ public sealed class PistonJsonContextTests
             fingerprint, fingerprint, false, null, new List<string> { "/w/T.csproj" }, 2, 1, 1, 0, 0);
         var snapshot = BuildSnapshot() with { LastRun = run };
 
-        var json   = JsonSerializer.Serialize(snapshot, JsonRpcSerializer.Options);
+        var json = JsonSerializer.Serialize(snapshot, JsonRpcSerializer.Options);
         var result = JsonSerializer.Deserialize<StateSnapshotNotification>(json, JsonRpcSerializer.Options);
 
         Assert.Contains("\"lastRun\":", json);
@@ -109,8 +109,8 @@ public sealed class PistonJsonContextTests
     {
         var json = JsonSerializer.Serialize(BuildSnapshot(), JsonRpcSerializer.Options);
         var node = JsonNode.Parse(json)!.AsObject();
-        node.Remove("lastRun");
-        node.Remove("activeRun");
+        _ = node.Remove("lastRun");
+        _ = node.Remove("activeRun");
 
         var result = JsonSerializer.Deserialize<StateSnapshotNotification>(node.ToJsonString(), JsonRpcSerializer.Options);
 
@@ -133,7 +133,7 @@ public sealed class PistonJsonContextTests
             DateTimeOffset.UtcNow,
             15.0);
 
-        var bytes  = JsonSerializer.SerializeToUtf8Bytes(suite, JsonRpcSerializer.Options);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(suite, JsonRpcSerializer.Options);
         var result = JsonSerializer.Deserialize<TestSuiteDto>(bytes, JsonRpcSerializer.Options);
 
         Assert.NotNull(result);
@@ -156,15 +156,15 @@ public sealed class PistonJsonContextTests
                 new(3, -1, "notCoverable"),
             });
 
-        var bytes  = JsonSerializer.SerializeToUtf8Bytes(notification, JsonRpcSerializer.Options);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(notification, JsonRpcSerializer.Options);
         var result = JsonSerializer.Deserialize<FileCoverageUpdatedNotification>(bytes, JsonRpcSerializer.Options);
 
         Assert.NotNull(result);
         Assert.Equal("/src/Foo.cs", result.FilePath);
         Assert.Equal(3, result.Lines.Count);
-        Assert.Equal(3,    result.Lines[0].HitCount);
-        Assert.Equal(0,    result.Lines[1].HitCount);
-        Assert.Equal(-1,   result.Lines[2].HitCount);
+        Assert.Equal(3, result.Lines[0].HitCount);
+        Assert.Equal(0, result.Lines[1].HitCount);
+        Assert.Equal(-1, result.Lines[2].HitCount);
         Assert.Equal("notCoverable", result.Lines[2].Status);
     }
 
@@ -177,14 +177,14 @@ public sealed class PistonJsonContextTests
             new List<string> { "Warning CS0612" },
             123.4);
 
-        var bytes  = JsonSerializer.SerializeToUtf8Bytes(build, JsonRpcSerializer.Options);
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(build, JsonRpcSerializer.Options);
         var result = JsonSerializer.Deserialize<BuildResultDto>(bytes, JsonRpcSerializer.Options);
 
         Assert.NotNull(result);
         Assert.Equal(BuildStatusDto.Failed, result.Status);
         Assert.Equal(2, result.Errors.Count);
         Assert.Equal("Error CS0001", result.Errors[0]);
-        Assert.Single(result.Warnings);
+        _ = Assert.Single(result.Warnings);
         Assert.Equal(BuildStatusDto.Failed, result.Status);
     }
 
@@ -194,28 +194,28 @@ public sealed class PistonJsonContextTests
     public void RequestEnvelope_WithComplexParamsNode_Roundtrip()
     {
         var paramsNode = JsonNode.Parse("{\"solutionPath\":\"/repo/foo.slnx\",\"extra\":{\"nested\":42}}");
-        var request    = new JsonRpcRequest("id-1", "engine/start", paramsNode);
-        var bytes      = JsonRpcSerializer.Serialize(request);
-        var result     = JsonRpcSerializer.DeserializeRequest(bytes);
+        var request = new JsonRpcRequest("id-1", "engine/start", paramsNode);
+        var bytes = JsonRpcSerializer.Serialize(request);
+        var result = JsonRpcSerializer.DeserializeRequest(bytes);
 
-        Assert.Equal("id-1",           result.Id);
-        Assert.Equal("engine/start",   result.Method);
+        Assert.Equal("id-1", result.Id);
+        Assert.Equal("engine/start", result.Method);
         Assert.NotNull(result.Params);
         Assert.Equal("/repo/foo.slnx", result.Params!["solutionPath"]!.GetValue<string>());
-        Assert.Equal(42,               result.Params["extra"]!["nested"]!.GetValue<int>());
+        Assert.Equal(42, result.Params["extra"]!["nested"]!.GetValue<int>());
     }
 
     [Fact]
     public void ResponseEnvelope_WithResultNode_Roundtrip()
     {
         var resultNode = JsonNode.Parse("{\"filePath\":\"/src/Foo.cs\",\"lines\":[]}");
-        var response   = new JsonRpcResponse("id-2", resultNode, null);
-        var bytes      = JsonRpcSerializer.Serialize(response);
-        var result     = JsonRpcSerializer.DeserializeResponse(bytes);
+        var response = new JsonRpcResponse("id-2", resultNode, null);
+        var bytes = JsonRpcSerializer.Serialize(response);
+        var result = JsonRpcSerializer.DeserializeResponse(bytes);
 
-        Assert.Equal("id-2",          result.Id);
+        Assert.Equal("id-2", result.Id);
         Assert.NotNull(result.Result);
-        Assert.Equal("/src/Foo.cs",   result.Result!["filePath"]!.GetValue<string>());
+        Assert.Equal("/src/Foo.cs", result.Result!["filePath"]!.GetValue<string>());
         Assert.Null(result.Error);
     }
 
@@ -223,8 +223,8 @@ public sealed class PistonJsonContextTests
     public void NotificationEnvelope_WithNullParams_Roundtrip()
     {
         var notification = new JsonRpcNotification("engine/forceRun", null);
-        var bytes        = JsonRpcSerializer.Serialize(notification);
-        var result       = JsonRpcSerializer.DeserializeNotification(bytes);
+        var bytes = JsonRpcSerializer.Serialize(notification);
+        var result = JsonRpcSerializer.DeserializeNotification(bytes);
 
         Assert.Equal("engine/forceRun", result.Method);
         Assert.Null(result.Params);
@@ -235,9 +235,9 @@ public sealed class PistonJsonContextTests
     [Fact]
     public void WireFormatParity_StateSnapshotNotification_MatchesReflection()
     {
-        var snapshot      = BuildSnapshot();
+        var snapshot = BuildSnapshot();
         var sourceGenJson = JsonSerializer.Serialize(snapshot, JsonRpcSerializer.Options);
-        var reflectJson   = JsonSerializer.Serialize(snapshot, ReflectionOptions);
+        var reflectJson = JsonSerializer.Serialize(snapshot, ReflectionOptions);
 
         Assert.Equal(reflectJson, sourceGenJson);
     }
@@ -255,7 +255,7 @@ public sealed class PistonJsonContextTests
             10.0);
 
         var sourceGenJson = JsonSerializer.Serialize(suite, JsonRpcSerializer.Options);
-        var reflectJson   = JsonSerializer.Serialize(suite, ReflectionOptions);
+        var reflectJson = JsonSerializer.Serialize(suite, ReflectionOptions);
 
         Assert.Equal(reflectJson, sourceGenJson);
     }
@@ -268,7 +268,7 @@ public sealed class PistonJsonContextTests
             new List<CoverageLineDto> { new(5, 2, "covered") });
 
         var sourceGenJson = JsonSerializer.Serialize(notification, JsonRpcSerializer.Options);
-        var reflectJson   = JsonSerializer.Serialize(notification, ReflectionOptions);
+        var reflectJson = JsonSerializer.Serialize(notification, ReflectionOptions);
 
         Assert.Equal(reflectJson, sourceGenJson);
     }
@@ -279,8 +279,8 @@ public sealed class PistonJsonContextTests
     public void StartCommandParams_Roundtrip_CamelCase()
     {
         var @params = new StartCommandParams("/solution/path.slnx");
-        var json    = JsonSerializer.Serialize(@params, JsonRpcSerializer.Options);
-        var result  = JsonSerializer.Deserialize<StartCommandParams>(json, JsonRpcSerializer.Options);
+        var json = JsonSerializer.Serialize(@params, JsonRpcSerializer.Options);
+        var result = JsonSerializer.Deserialize<StartCommandParams>(json, JsonRpcSerializer.Options);
 
         Assert.Contains("\"solutionPath\"", json);
         Assert.NotNull(result);
@@ -291,7 +291,7 @@ public sealed class PistonJsonContextTests
     public void SetFilterCommandParams_NullFilter_NullOmitted()
     {
         var @params = new SetFilterCommandParams(null);
-        var json    = JsonSerializer.Serialize(@params, JsonRpcSerializer.Options);
+        var json = JsonSerializer.Serialize(@params, JsonRpcSerializer.Options);
 
         Assert.DoesNotContain("\"filter\"", json);
     }
@@ -300,8 +300,8 @@ public sealed class PistonJsonContextTests
 
     private static StateSnapshotNotification BuildSnapshot() =>
         new(
-            Phase:                    PistonPhaseDto.Testing,
-            Suites:                   new List<TestSuiteDto>
+            Phase: PistonPhaseDto.Testing,
+            Suites: new List<TestSuiteDto>
             {
                 new("MyTest.Suite",
                     new List<TestResultDto>
@@ -311,30 +311,30 @@ public sealed class PistonJsonContextTests
                     DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
                     12.0),
             },
-            InProgressSuites:         new List<TestSuiteDto>(),
-            LastBuild:                new BuildResultDto(
+            InProgressSuites: new List<TestSuiteDto>(),
+            LastBuild: new BuildResultDto(
                                           BuildStatusDto.Succeeded,
                                           new List<string>(),
                                           new List<string>(),
                                           55.0),
-            LastRunTime:              DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
-            LastBuildDurationMs:      55.0,
-            LastTestDurationMs:       12.0,
-            LastTestRunnerError:      null,
-            TotalExpectedTests:       1,
-            CompletedTests:           1,
+            LastRunTime: DateTimeOffset.Parse("2026-01-01T00:00:00Z"),
+            LastBuildDurationMs: 55.0,
+            LastTestDurationMs: 12.0,
+            LastTestRunnerError: null,
+            TotalExpectedTests: 1,
+            CompletedTests: 1,
             VerifiedSinceChangeCount: 3,
-            LastFileChangeTime:       null,
-            SolutionPath:             "/repo/solution.slnx",
-            AffectedProjects:         new List<string> { "proj1" },
-            AffectedTestProjects:     new List<string> { "proj1.Tests" },
-            LastChangedFiles:         new List<string> { "src/Foo.cs" },
-            CoverageEnabled:          false,
-            HasCoverageData:          false,
-            CoverageImpactDetail:     null,
-            TotalTestProjects:        1,
-            CompletedTestProjects:    1,
-            ProjectStatuses:          new Dictionary<string, ProjectRunStatusDto>
+            LastFileChangeTime: null,
+            SolutionPath: "/repo/solution.slnx",
+            AffectedProjects: new List<string> { "proj1" },
+            AffectedTestProjects: new List<string> { "proj1.Tests" },
+            LastChangedFiles: new List<string> { "src/Foo.cs" },
+            CoverageEnabled: false,
+            HasCoverageData: false,
+            CoverageImpactDetail: null,
+            TotalTestProjects: 1,
+            CompletedTestProjects: 1,
+            ProjectStatuses: new Dictionary<string, ProjectRunStatusDto>
             {
                 ["proj1"] = ProjectRunStatusDto.Completed,
             }

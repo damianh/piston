@@ -45,34 +45,34 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                 return null;
 
             case ProtocolMethods.EngineSetFilter:
-            {
-                var cmd = JsonRpcSerializer.DeserializeParams<SetFilterCommand>(@params);
-                var filter = cmd?.Filter;
-                ValidateFilter(filter);
-                _engine.SetFilter(filter);
-                return null;
-            }
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<SetFilterCommand>(@params);
+                    var filter = cmd?.Filter;
+                    ValidateFilter(filter);
+                    _engine.SetFilter(filter);
+                    return null;
+                }
 
             case ProtocolMethods.EngineClearResults:
                 _engine.ClearResults();
                 return null;
 
             case ProtocolMethods.CoverageGetForFile:
-            {
-                var cmd = JsonRpcSerializer.DeserializeParams<GetFileCoverageCommand>(@params);
-                var filePath = cmd?.FilePath ?? string.Empty;
-                var result = new FileCoverageDto(filePath, Array.Empty<CoverageLineDto>());
-                return JsonNode.Parse(
-                    System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
-            }
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<GetFileCoverageCommand>(@params);
+                    var filePath = cmd?.FilePath ?? string.Empty;
+                    var result = new FileCoverageDto(filePath, Array.Empty<CoverageLineDto>());
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
 
             case ProtocolMethods.McpGetCallLog:
-            {
-                var calls = _mcpCallTracker?.GetCallLog() ?? [];
-                var response = new McpCallLogResponse(calls);
-                return JsonNode.Parse(
-                    System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
-            }
+                {
+                    var calls = _mcpCallTracker?.GetCallLog() ?? [];
+                    var response = new McpCallLogResponse(calls);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
+                }
 
             default:
                 throw new JsonRpcException(
@@ -84,7 +84,9 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
     private static void ValidateFilter(string? filter)
     {
         if (filter is null)
+        {
             return;
+        }
 
         foreach (var ch in ForbiddenFilterChars)
         {

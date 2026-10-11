@@ -74,7 +74,9 @@ public sealed class UpdateService : IDisposable
         {
             var update = await _manager.CheckForUpdatesAsync();
             if (update is null)
+            {
                 return;
+            }
 
             _log($"[update] downloading {update.TargetFullRelease.Version}");
             await _manager.DownloadUpdatesAsync(update, null, _cts.Token);
@@ -94,7 +96,9 @@ public sealed class UpdateService : IDisposable
     public void ApplyPendingOnExit()
     {
         if (_pendingUpdate is null)
+        {
             return;
+        }
 
         try
         {
