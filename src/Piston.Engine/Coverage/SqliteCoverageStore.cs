@@ -8,6 +8,7 @@ namespace Piston.Engine.Coverage;
 /// <summary>
 /// SQLite-backed implementation of <see cref="ICoverageStore"/>.
 /// Uses WAL journal mode for concurrent read performance.
+/// Connections are not pooled so disposal releases the database's file handles.
 /// </summary>
 /// <remarks>
 /// Schema:
@@ -40,7 +41,11 @@ internal sealed class SqliteCoverageStore : ICoverageStore
         Directory.CreateDirectory(pistonDir);
 
         var dbPath = Path.Combine(pistonDir, "piston.db");
-        _connection = new SqliteConnection($"Data Source={dbPath}");
+        _connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = dbPath,
+            Pooling = false,
+        }.ToString());
         await _connection.OpenAsync().ConfigureAwait(false);
 
         // Enable WAL mode for concurrent read performance
@@ -97,6 +102,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
         {
             DataSource = dbPath,
             Mode = SqliteOpenMode.ReadWrite,
+            Pooling = false,
         }.ToString());
         connection.Open();
         using var transaction = connection.BeginTransaction();
