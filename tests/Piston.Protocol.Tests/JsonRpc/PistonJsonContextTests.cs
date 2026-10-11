@@ -82,7 +82,7 @@ public sealed class PistonJsonContextTests
     [Fact]
     public void StateSnapshotNotification_RunProvenance_Roundtrip()
     {
-        var fingerprint = new SourceFingerprintDto("piston-source-v1", new string('a', 64), 12);
+        var fingerprint = new SourceFingerprintDto("piston-source-v2", new string('a', 64), 12);
         var run = new TestRunDto(
             "run-1", "engine-1", 3, "Forced", "Completed", null, "Full", false, true, "Current", null, true,
             DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch,

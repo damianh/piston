@@ -150,7 +150,7 @@ full-scope oracle. Piston now exposes per-run provenance through `get_test_run`.
 - it is `Completed`;
 - it is unfiltered `Full` scope;
 - it is `Current`, with no source change observed;
-- its before and after `piston-source-v1` fingerprints equal the fingerprint the harness computed for the edited workspace;
+- its before and after `piston-source-v2` fingerprints equal the fingerprint the harness computed for the edited workspace;
 - it reports exactly the expected unique test identities and statuses.
 
 It rejects summary-only, missing, extra, duplicate or mismatched identities.

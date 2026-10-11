@@ -226,7 +226,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
         };
         PublishActiveRun(run);
 
-        TestRunRecord Finish(TestRunStatus status, string? reason, bool computeAfter = false) =>
+        TestRunRecord Finish(TestRunStatus status, string? reason, bool computeAfter = true) =>
             CompleteRun(run, status, reason, solutionDir, changeGenerationAtStart, computeAfter);
 
         try
@@ -321,7 +321,12 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
                     SdkVersion: SafeSdkVersion(),
                     Runtime: System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
                     OperatingSystem: System.Runtime.InteropServices.RuntimeInformation.OSDescription,
-                    WorkingDirectory: Environment.CurrentDirectory),
+                    WorkingDirectory: Environment.CurrentDirectory,
+                    TestWorkingDirectories: (testTargets ?? [Path.GetFullPath(solutionPath)])
+                        .ToDictionary(
+                            path => path,
+                            path => _impactAnalyzer.GetMtpOutputPath(path) is not null ? solutionDir : Environment.CurrentDirectory,
+                            StringComparer.Ordinal)),
             };
             PublishActiveRun(run);
 
@@ -626,6 +631,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
     {
         lock (_runRecordsLock)
             _state.CurrentRun = run;
+        _state.NotifyChanged();
     }
 
     /// <summary>
@@ -680,6 +686,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator
             _state.RecentRuns = recent;
         }
 
+        _state.NotifyChanged();
         return finished;
     }
 

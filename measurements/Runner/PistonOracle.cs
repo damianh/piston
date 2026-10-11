@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
@@ -7,12 +8,12 @@ using System.Text.Json.Nodes;
 namespace Piston.Measurements;
 
 /// <summary>
-/// Independent re-implementation of Piston's <c>piston-source-v1</c> source-input fingerprint.
+/// Independent re-implementation of Piston's <c>piston-source-v2</c> source-input fingerprint.
 /// Deliberately does not reference the Piston engine so the harness can check Piston's claim.
 /// </summary>
 public static class PistonSourceFingerprint
 {
-    public const string Algorithm = "piston-source-v1";
+    public const string Algorithm = "piston-source-v2";
 
     private static readonly string[] Excluded = ["bin", "obj", "TestResults", ".git", ".vs", ".idea", ".piston", "node_modules"];
     private static readonly string[] Ancestors =
@@ -46,11 +47,17 @@ public static class PistonSourceFingerprint
 
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hash.AppendData(Encoding.UTF8.GetBytes(Algorithm + "\0"));
+        Span<byte> length = stackalloc byte[8];
         foreach (var input in inputs.OrderBy(input => input.Name.Replace('/', '\0'), StringComparer.Ordinal))
         {
-            hash.AppendData(Encoding.UTF8.GetBytes(input.Name + "\0"));
-            hash.AppendData(File.ReadAllBytes(input.Path));
-            hash.AppendData([0]);
+            var name = Encoding.UTF8.GetBytes(input.Name);
+            var content = File.ReadAllBytes(input.Path);
+            BinaryPrimitives.WriteUInt64BigEndian(length, (ulong)name.Length);
+            hash.AppendData(length);
+            hash.AppendData(name);
+            BinaryPrimitives.WriteUInt64BigEndian(length, (ulong)content.Length);
+            hash.AppendData(length);
+            hash.AppendData(content);
         }
         return Convert.ToHexStringLower(hash.GetHashAndReset());
     }
@@ -74,7 +81,7 @@ public static class PistonRunOracle
         JsonObject run;
         try
         {
-            run = JsonNode.Parse(runJson)?.AsObject() ?? throw Reject("run document is empty");
+            run = JsonNode.Parse(runJson) as JsonObject ?? throw Reject("run document must be a JSON object");
         }
         catch (JsonException ex)
         {
@@ -89,8 +96,9 @@ public static class PistonRunOracle
         Require(Text(run, "status") == "Completed",
             $"run status is {Text(run, "status")} ({Text(run, "statusReason")})");
         Require(Text(run, "scope") == "Full", $"run scope is {Text(run, "scope") ?? "unknown"}, not Full");
-        Require(!Bool(run, "isFiltered") && run["context"]?["effectiveFilter"] is null,
-            "run was filtered: " + run["context"]?["effectiveFilter"]);
+        var context = run["context"] as JsonObject ?? throw Reject("run context is missing or not an object");
+        Require(!Bool(run, "isFiltered") && context["effectiveFilter"] is null,
+            "run was filtered: " + context["effectiveFilter"]);
         Require(Bool(run, "isFullScope"), "run is not full scope");
         Require(Text(run, "freshness") == "Current",
             $"run freshness is {Text(run, "freshness")} ({Text(run, "freshnessReason")})");
@@ -112,9 +120,10 @@ public static class PistonRunOracle
         var observed = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var test in tests)
         {
-            var name = test?["fullyQualifiedName"]?.GetValue<string>();
+            var result = test as JsonObject ?? throw Reject("test result must be a JSON object");
+            var name = Text(result, "fullyQualifiedName");
             Require(!string.IsNullOrWhiteSpace(name), "test identity is missing");
-            var outcome = test!["status"]?.GetValue<string>() switch
+            var outcome = Text(result, "status") switch
             {
                 "Passed" => "Passed",
                 "Failed" => "Failed",

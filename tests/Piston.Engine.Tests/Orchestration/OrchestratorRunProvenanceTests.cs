@@ -18,6 +18,7 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     private readonly StubFileWatcherService _watcher = new();
     private readonly ProvenanceBuildService _build = new();
     private readonly ProvenanceTestRunner _runner = new();
+    private readonly ProvenanceImpactAnalyzer _impact = new(Projects);
     private readonly PistonOrchestrator _orchestrator;
 
     public OrchestratorRunProvenanceTests()
@@ -25,7 +26,7 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         Directory.CreateDirectory(_root);
         File.WriteAllText(Path.Combine(_root, "App.slnx"), "<Solution />");
         File.WriteAllText(Path.Combine(_root, "Code.cs"), "class Code { }");
-        _orchestrator = new PistonOrchestrator(_watcher, _build, _runner, new ProvenanceImpactAnalyzer(Projects), _state);
+        _orchestrator = new PistonOrchestrator(_watcher, _build, _runner, _impact, _state);
     }
 
     private string SolutionPath => Path.Combine(_root, "App.slnx");
@@ -50,6 +51,82 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
             if (DateTime.UtcNow > deadline) throw new TimeoutException("Condition was not met.");
             await Task.Delay(10);
         }
+    }
+
+    [Fact]
+    public async Task ActiveRunPublication_NotifiesBeforeGraphInitializationCompletes()
+    {
+        var releaseGraph = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _impact.Initialization = releaseGraph.Task;
+        TestRunRecord? notified = null;
+        _state.StateChanged += () => notified = _state.CurrentRun;
+        try
+        {
+            await _orchestrator.StartAsync(SolutionPath);
+            Assert.NotNull(notified);
+            Assert.Equal(TestRunStatus.Running, notified.Status);
+            Assert.Null(notified.Context);
+            Assert.Null(_state.LastRun);
+        }
+        finally
+        {
+            releaseGraph.TrySetResult();
+            await WaitForAsync(() => _state.LastRun is not null);
+        }
+    }
+
+    [Fact]
+    public async Task RunContext_RecordsBuildAndMixedRunnerWorkingDirectories()
+    {
+        _impact.MtpProjects.Add(Projects[1]);
+        await StartAndWaitForStartupRunAsync();
+
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(Environment.CurrentDirectory, run!.Context!.WorkingDirectory);
+        Assert.Equal(Environment.CurrentDirectory, run.Context.TestWorkingDirectories![Projects[0]]);
+        Assert.Equal(_root, run.Context.TestWorkingDirectories[Projects[1]]);
+    }
+
+    [Fact]
+    public async Task CancelledRun_CapturesPostRunFingerprintAndNotifiesTerminalState()
+    {
+        await StartAndWaitForStartupRunAsync();
+        TestRunRecord? terminal = null;
+        _state.StateChanged += () =>
+        {
+            if (_state.CurrentRun is null) terminal = _state.LastRun;
+        };
+        _runner.DuringRun = () =>
+        {
+            File.WriteAllText(Path.Combine(_root, "Code.cs"), "class Changed { }");
+            throw new OperationCanceledException();
+        };
+
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(TestRunStatus.Cancelled, run!.Status);
+        Assert.Equal(ResultFreshness.Stale, run.Freshness);
+        Assert.Equal(SourceFingerprinter.Compute(_root), run.SourceAfter);
+        Assert.Same(run, terminal);
+    }
+
+    [Fact]
+    public async Task FaultedRun_CapturesPostRunFingerprintAndNotifiesTerminalState()
+    {
+        await StartAndWaitForStartupRunAsync();
+        TestRunRecord? terminal = null;
+        _state.StateChanged += () =>
+        {
+            if (_state.CurrentRun is null) terminal = _state.LastRun;
+        };
+        _runner.DuringRun = () => throw new InvalidOperationException("runner fault");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => _orchestrator.RequestRunAsync());
+
+        Assert.Equal(TestRunStatus.Faulted, terminal!.Status);
+        Assert.Equal(SourceFingerprinter.Compute(_root), terminal.SourceAfter);
+        Assert.False(terminal.IsCurrentFullResult);
     }
 
     [Fact]
@@ -218,18 +295,27 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     {
         await StartAndWaitForStartupRunAsync();
         _build.Fail = true;
+        TestRunRecord? terminal = null;
+        _state.StateChanged += () =>
+        {
+            if (_state.CurrentRun is null) terminal = _state.LastRun;
+        };
 
         var run = await _orchestrator.RequestRunAsync();
 
         Assert.Equal(TestRunStatus.BuildFailed, run!.Status);
         Assert.Empty(run.Tests);
         Assert.False(run.IsCurrentFullResult);
+        Assert.Same(run, terminal);
+        Assert.Equal(SourceFingerprinter.Compute(_root), run.SourceAfter);
     }
 }
 
 internal sealed class ProvenanceImpactAnalyzer(IReadOnlyList<string> testProjects) : IImpactAnalyzer
 {
-    public Task InitializeAsync(string solutionPath, CancellationToken ct) => Task.CompletedTask;
+    public Task Initialization { get; set; } = Task.CompletedTask;
+    public HashSet<string> MtpProjects { get; } = [];
+    public Task InitializeAsync(string solutionPath, CancellationToken ct) => Initialization;
 
     public ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes) =>
         new([testProjects[0]], [testProjects[0]], RequiresGraphRebuild: false, IsFullRun: false);
@@ -239,8 +325,8 @@ internal sealed class ProvenanceImpactAnalyzer(IReadOnlyList<string> testProject
 
     public void InvalidateGraph() { }
     public IReadOnlyList<string> GetAllTestProjectPaths() => testProjects;
-    public bool IsMtpProject(string projectPath) => false;
-    public string? GetMtpOutputPath(string projectPath) => null;
+    public bool IsMtpProject(string projectPath) => MtpProjects.Contains(projectPath);
+    public string? GetMtpOutputPath(string projectPath) => IsMtpProject(projectPath) ? projectPath + ".dll" : null;
 }
 
 internal sealed class ProvenanceBuildService : IBuildService

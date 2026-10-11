@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using Piston.Engine.Models;
@@ -5,7 +6,7 @@ using Piston.Engine.Models;
 namespace Piston.Engine.Services;
 
 /// <summary>
-/// Computes the deterministic <c>piston-source-v1</c> source-input fingerprint.
+/// Computes the deterministic <c>piston-source-v2</c> source-input fingerprint.
 /// <para>
 /// Inputs: every file under the solution directory, excluding any path with a component named
 /// <c>bin</c>, <c>obj</c>, <c>TestResults</c>, <c>.git</c>, <c>.vs</c>, <c>.idea</c>, <c>.piston</c>
@@ -15,16 +16,17 @@ namespace Piston.Engine.Services;
 /// nearest ancestor occurrence.
 /// </para>
 /// <para>
-/// Digest: SHA-256 over the UTF-8 tag <c>piston-source-v1</c> followed by a NUL byte, then for each
+/// Digest: SHA-256 over the UTF-8 tag <c>piston-source-v2</c> followed by a NUL byte, then for each
 /// input (ordered ordinally by its '/'-separated relative path with '/' mapped to NUL) the UTF-8
-/// relative path, NUL, file bytes, NUL. Ancestor paths are relative (e.g. <c>../global.json</c>).
+/// relative path and file bytes, each prefixed by its unsigned 64-bit big-endian byte length.
+/// Ancestor paths are relative (e.g. <c>../global.json</c>).
 /// </para>
 /// Project sources outside the solution directory, SDK/workload installs and the NuGet package cache
 /// are not included; the run context records the SDK separately.
 /// </summary>
 public static class SourceFingerprinter
 {
-    public const string Algorithm = "piston-source-v1";
+    public const string Algorithm = "piston-source-v2";
 
     private static readonly HashSet<string> ExcludedComponents = new(StringComparer.Ordinal)
     {
@@ -70,12 +72,17 @@ public static class SourceFingerprinter
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         hash.AppendData(Encoding.UTF8.GetBytes(Algorithm));
         hash.AppendData([0]);
+        Span<byte> length = stackalloc byte[sizeof(ulong)];
         foreach (var (relative, path) in inputs)
         {
-            hash.AppendData(Encoding.UTF8.GetBytes(relative));
-            hash.AppendData([0]);
-            hash.AppendData(File.ReadAllBytes(path));
-            hash.AppendData([0]);
+            var name = Encoding.UTF8.GetBytes(relative);
+            var content = File.ReadAllBytes(path);
+            BinaryPrimitives.WriteUInt64BigEndian(length, (ulong)name.Length);
+            hash.AppendData(length);
+            hash.AppendData(name);
+            BinaryPrimitives.WriteUInt64BigEndian(length, (ulong)content.Length);
+            hash.AppendData(length);
+            hash.AppendData(content);
         }
 
         return new SourceFingerprint(Algorithm, Convert.ToHexStringLower(hash.GetHashAndReset()), inputs.Count);

@@ -51,9 +51,21 @@ public sealed class SourceFingerprinterTests : IDisposable
 
         var fp = SourceFingerprinter.Compute(dir);
 
-        var expected = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes("piston-source-v1\0a.txt\0A\0src/b.cs\0B\0")));
+        const string expected = "47a023661287f6ce3402c175f1b8adf87ecde9245e70d0dda884a87b0e3ee16a";
         Assert.Equal(expected, fp.Value);
+    }
+
+    [Fact]
+    public void Compute_EmbeddedNulsCannotImpersonateFileBoundaries()
+    {
+        var dir = Path.Combine(_parent, "nul-vector");
+        Directory.CreateDirectory(dir);
+        File.WriteAllText(Path.Combine(dir, "a"), "X\0b\0Y");
+        var single = SourceFingerprinter.Compute(dir);
+        File.WriteAllText(Path.Combine(dir, "a"), "X");
+        File.WriteAllText(Path.Combine(dir, "b"), "Y");
+
+        Assert.NotEqual(single.Value, SourceFingerprinter.Compute(dir).Value);
     }
 
     [Fact]

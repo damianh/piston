@@ -1,6 +1,6 @@
 namespace Piston.Protocol.Dtos;
 
-/// <summary>Source-input fingerprint captured for a run (see <c>piston-source-v1</c>).</summary>
+/// <summary>Source-input fingerprint captured for a run (see <c>piston-source-v2</c>).</summary>
 public sealed record SourceFingerprintDto(string Algorithm, string Value, int FileCount);
 
 /// <summary>

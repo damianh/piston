@@ -9,7 +9,7 @@ namespace Piston.Mcp.Tests;
 
 public sealed class TestRunToolTests
 {
-    private static readonly SourceFingerprint Source = new("piston-source-v1", new string('a', 64), 3);
+    private static readonly SourceFingerprint Source = new("piston-source-v2", new string('a', 64), 3);
 
     private static TestRunRecord Run(string id, long sequence, TestRunStatus status = TestRunStatus.Completed,
         TestRunScope scope = TestRunScope.Full, string? filter = null, ResultFreshness freshness = ResultFreshness.Current) => new()
@@ -27,7 +27,8 @@ public sealed class TestRunToolTests
         SourceBefore = Source,
         SourceAfter = Source,
         Context = new TestRunContext("/w/App.slnx", ["/w/T/T.csproj"], null, filter, filter, null, false,
-            "Debug", "10.0.401", ".NET 10", "Linux", "/w"),
+            "Debug", "10.0.401", ".NET 10", "Linux", "/daemon",
+            new Dictionary<string, string> { ["/w/T/T.csproj"] = "/w" }),
         Projects = [new TestRunProjectOutcome("/w/T/T.csproj", ProjectRunStatus.Completed, 2)],
         Suites =
         [
@@ -48,7 +49,7 @@ public sealed class TestRunToolTests
         var result = await tools.RunTests(CancellationToken.None);
 
         Assert.Contains("Run: run-1 | Status: Completed | Scope: Full | Filtered: no | Freshness: Current", result);
-        Assert.Contains($"Source: piston-source-v1:{Source.Value}", result);
+        Assert.Contains($"Source: piston-source-v2:{Source.Value}", result);
         Assert.Contains("Run tests: 2 (Passed: 1, Failed: 1, Skipped: 0)", result);
         Assert.Contains("GetTestRun(\"run-1\")", result);
     }
@@ -73,6 +74,9 @@ public sealed class TestRunToolTests
         Assert.True(root.GetProperty("isCurrentFullResult").GetBoolean());
         Assert.Equal(Source.Value, root.GetProperty("sourceAfter").GetProperty("value").GetString());
         Assert.Equal("10.0.401", root.GetProperty("context").GetProperty("sdkVersion").GetString());
+        Assert.Equal("/daemon", root.GetProperty("context").GetProperty("workingDirectory").GetString());
+        Assert.Equal("/w", root.GetProperty("context").GetProperty("testWorkingDirectories")
+            .GetProperty("/w/T/T.csproj").GetString());
         var tests = root.GetProperty("tests").EnumerateArray()
             .Select(t => (t.GetProperty("fullyQualifiedName").GetString(), t.GetProperty("status").GetString()))
             .ToList();

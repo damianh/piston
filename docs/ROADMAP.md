@@ -153,7 +153,7 @@ proof-of-value step (1a). The broader hub and memory work (1b) proceeds only if
   representative repository before drawing conclusions.
 
 **Status:** generation-bound result provenance has landed (run IDs, the
-`piston-source-v1` fingerprint before and after each run, run context, explicit
+`piston-source-v2` fingerprint before and after each started run, run context, explicit
 full/selective/filtered scope, terminal status, and `Current`/`Stale` freshness via
 `get_test_run`). A harness oracle that validates this has landed too
 (`measurements/Runner/PistonOracle.cs`), with an opt-in end-to-end smoke.

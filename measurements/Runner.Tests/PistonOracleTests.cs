@@ -1,8 +1,6 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using Piston.Measurements;
@@ -33,8 +31,8 @@ public sealed class PistonOracleTests
         ["freshness"] = "Current",
         ["isCurrentFullResult"] = true,
         ["sourceChangeObserved"] = false,
-        ["sourceBefore"] = new JsonObject { ["algorithm"] = "piston-source-v1", ["value"] = Source },
-        ["sourceAfter"] = new JsonObject { ["algorithm"] = "piston-source-v1", ["value"] = Source },
+        ["sourceBefore"] = new JsonObject { ["algorithm"] = PistonSourceFingerprint.Algorithm, ["value"] = Source },
+        ["sourceAfter"] = new JsonObject { ["algorithm"] = PistonSourceFingerprint.Algorithm, ["value"] = Source },
         ["context"] = new JsonObject { ["effectiveFilter"] = null },
         ["summary"] = new JsonObject { ["total"] = 3, ["passed"] = 1, ["failed"] = 1, ["skipped"] = 1 },
         ["duplicateTestIds"] = new JsonArray(),
@@ -202,6 +200,27 @@ public sealed class PistonOracleTests
     public void RejectsNonJson() =>
         Assert.Throws<InvalidDataException>(() => PistonRunOracle.Validate("Phase: Watching, Passed: 3", "run-2", Source, Expected));
 
+    [Theory]
+    [InlineData("[]")]
+    [InlineData("null")]
+    [InlineData("\"run\"")]
+    [InlineData("42")]
+    [InlineData("true")]
+    public void RejectsNonObjectJsonRoots(string json) =>
+        Assert.Throws<InvalidDataException>(() => PistonRunOracle.Validate(json, "run-2", Source, Expected));
+
+    [Theory]
+    [InlineData("context", "[]")]
+    [InlineData("tests", "[42]")]
+    [InlineData("tests", "[{\"fullyQualifiedName\":42,\"status\":\"Passed\"}]")]
+    [InlineData("tests", "[{\"fullyQualifiedName\":\"Ns.A.First\",\"status\":42}]")]
+    public void RejectsMalformedNestedShapes(string field, string json)
+    {
+        var run = ValidRun();
+        run[field] = JsonNode.Parse(json);
+        Rejected(run, "Piston run rejected:");
+    }
+
     [Fact]
     public void FingerprintMatchesPinnedVectorShared_WithEngine()
     {
@@ -216,9 +235,22 @@ public sealed class PistonOracleTests
         Directory.CreateDirectory(Path.Combine(root, ".piston"));
         File.WriteAllText(Path.Combine(root, ".piston", "piston.db"), "D");
 
-        var expected = Convert.ToHexStringLower(SHA256.HashData(
-            Encoding.UTF8.GetBytes("piston-source-v1\0a.txt\0A\0src/b.cs\0B\0")));
+        const string expected = "47a023661287f6ce3402c175f1b8adf87ecde9245e70d0dda884a87b0e3ee16a";
         Assert.Equal(expected, PistonSourceFingerprint.Compute(root));
+    }
+
+    [Fact]
+    public void FingerprintEmbeddedNulsCannotImpersonateFileBoundaries()
+    {
+        using var temp = new TemporaryDirectory();
+        var root = Path.Combine(temp.Path, "nul-vector");
+        Directory.CreateDirectory(root);
+        File.WriteAllText(Path.Combine(root, "a"), "X\0b\0Y");
+        var single = PistonSourceFingerprint.Compute(root);
+        File.WriteAllText(Path.Combine(root, "a"), "X");
+        File.WriteAllText(Path.Combine(root, "b"), "Y");
+
+        Assert.NotEqual(single, PistonSourceFingerprint.Compute(root));
     }
 
     [Fact]

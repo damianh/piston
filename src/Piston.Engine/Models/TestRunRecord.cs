@@ -62,7 +62,7 @@ public enum ResultFreshness
 }
 
 /// <summary>Deterministic content fingerprint of the source inputs a run executed against.</summary>
-/// <param name="Algorithm">Fingerprint algorithm identifier, e.g. <c>piston-source-v1</c>.</param>
+/// <param name="Algorithm">Fingerprint algorithm identifier, e.g. <c>piston-source-v2</c>.</param>
 /// <param name="Value">Lower-case hex SHA-256 digest.</param>
 /// <param name="FileCount">Number of files included.</param>
 public sealed record SourceFingerprint(string Algorithm, string Value, int FileCount);
@@ -79,7 +79,8 @@ public sealed record SourceFingerprint(string Algorithm, string Value, int FileC
 /// <param name="SdkVersion">Output of <c>dotnet --version</c> in the daemon's working directory, when available.</param>
 /// <param name="Runtime">Runtime hosting the Piston engine.</param>
 /// <param name="OperatingSystem">Host operating system description.</param>
-/// <param name="WorkingDirectory">Working directory of the build/test processes (determines <c>global.json</c> resolution).</param>
+/// <param name="WorkingDirectory">Working directory of the build process and SDK version probe.</param>
+/// <param name="TestWorkingDirectories">Working directory per test target: solution directory for MTP, daemon directory for VSTest.</param>
 public sealed record TestRunContext(
     string SolutionPath,
     IReadOnlyList<string>? TestProjects,
@@ -92,7 +93,8 @@ public sealed record TestRunContext(
     string? SdkVersion,
     string Runtime,
     string OperatingSystem,
-    string WorkingDirectory);
+    string WorkingDirectory,
+    IReadOnlyDictionary<string, string>? TestWorkingDirectories = null);
 
 /// <summary>Outcome of one selected test project within a run.</summary>
 public sealed record TestRunProjectOutcome(string ProjectPath, ProjectRunStatus Status, int TestCount);

@@ -99,6 +99,9 @@ public static class TestRunJson
             ["runtime"] = c.Runtime,
             ["operatingSystem"] = c.OperatingSystem,
             ["workingDirectory"] = c.WorkingDirectory,
+            ["testWorkingDirectories"] = c.TestWorkingDirectories is null ? null
+                : new JsonObject(c.TestWorkingDirectories.Select(pair =>
+                    new KeyValuePair<string, JsonNode?>(pair.Key, JsonValue.Create(pair.Value)))),
         };
 
     private static JsonArray? Strings(IReadOnlyList<string>? values) => values is null
