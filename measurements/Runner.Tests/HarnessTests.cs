@@ -119,7 +119,8 @@ public sealed class HarnessTests
                     {
                         Workload = "unit",
                         Scenario = "repair",
-                        BatchId = batch,
+                        PairId = batch,
+                        BatchId = batch + "-" + condition,
                         Condition = condition,
                         Correct = true,
                         EditToCorrectResultMs = condition == "dotnet" ? 100 : 70

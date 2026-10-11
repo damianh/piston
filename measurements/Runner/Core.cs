@@ -181,6 +181,10 @@ public static class Evidence
         return (sorted[(sorted.Length - 1) / 2] + sorted[sorted.Length / 2]) / 2;
     }
 
+    /// <summary>
+    /// Batch-level paired changes. Each pair holds one batch per condition; the batch mean is the
+    /// unit of analysis, so dependent concurrent trials are never treated as independent samples.
+    /// </summary>
     public static Dictionary<string, object?> PairedChanges(IEnumerable<Trial> records, string candidate, int seed = 0)
     {
         var rows = records.ToArray();
@@ -190,17 +194,21 @@ public static class Evidence
             throw new InvalidDataException("Correctness failures disqualify paired benefit calculation");
         if (rows.Any(row => row.EditToCorrectResultMs is not double value || value <= 0 || !double.IsFinite(value)))
             throw new InvalidDataException("Positive finite latency required");
-        var changes = new List<(double Absolute, double Relative)>();
-        foreach (var batch in rows.GroupBy(row => row.BatchId))
+        if (rows.Any(row => row.PairId is null))
+            throw new InvalidDataException("Every paired trial needs a pair identity");
+        var changes = new List<(string Pair, double Baseline, double Compared, double Absolute, double Relative)>();
+        foreach (var pair in rows.GroupBy(row => row.PairId!).OrderBy(group => group.Key, StringComparer.Ordinal))
         {
-            var conditions = batch.GroupBy(row => row.Condition).ToDictionary(group => group.Key, group => group.ToArray());
+            var conditions = pair.GroupBy(row => row.Condition).ToDictionary(group => group.Key, group => group.ToArray());
             if (conditions.Count != 2 || !conditions.ContainsKey("dotnet") || !conditions.ContainsKey(candidate))
-                throw new InvalidDataException("Each batch needs both matched conditions");
+                throw new InvalidDataException("Each pair needs both matched conditions");
             if (conditions["dotnet"].Length != conditions[candidate].Length)
                 throw new InvalidDataException("Concurrency differs between paired conditions");
+            if (conditions.Values.Any(batch => batch.Select(row => row.BatchId).Distinct().Count() != 1))
+                throw new InvalidDataException("Each condition must contribute exactly one batch per pair");
             var baseline = conditions["dotnet"].Average(row => row.EditToCorrectResultMs!.Value);
             var compared = conditions[candidate].Average(row => row.EditToCorrectResultMs!.Value);
-            changes.Add((baseline - compared, (baseline - compared) / baseline));
+            changes.Add((pair.Key, baseline, compared, baseline - compared, (baseline - compared) / baseline));
         }
         var relative = changes.Select(change => change.Relative).ToArray();
         double[]? interval = null;
@@ -215,6 +223,15 @@ public static class Evidence
         return new()
         {
             ["paired_batches"] = changes.Count,
+            ["unit_of_analysis"] = "pair of condition batch means",
+            ["per_pair"] = changes.Select(change => new Dictionary<string, object?>
+            {
+                ["pair_id"] = change.Pair,
+                ["dotnet_batch_mean_ms"] = change.Baseline,
+                [candidate + "_batch_mean_ms"] = change.Compared,
+                ["absolute_ms"] = change.Absolute,
+                ["relative"] = change.Relative
+            }).ToArray(),
             ["median_absolute_ms"] = Median(changes.Select(change => change.Absolute)),
             ["median_relative"] = Median(relative),
             ["bootstrap_95_percent_interval"] = interval,
@@ -223,7 +240,8 @@ public static class Evidence
         };
     }
 
-    public static Dictionary<string, object?> Summarize(IEnumerable<Trial> records)
+    public static Dictionary<string, object?> Summarize(IEnumerable<Trial> records,
+        string reason = "Single-condition instrumentation only; no paired campaign or real-agent comparison")
     {
         var groups = records.GroupBy(row => (row.Condition, row.Workload, row.Scenario)).Select(group =>
         {
@@ -253,7 +271,7 @@ public static class Evidence
             ["groups"] = groups,
             ["paired_improvement"] = null,
             ["uncertainty"] = null,
-            ["reason"] = "Single-condition instrumentation only; no paired campaign or real-agent comparison"
+            ["reason"] = reason
         };
     }
 }
@@ -307,17 +325,17 @@ public sealed class FixtureManifest
 
 public sealed record Options(string Workload, string Scenario, string Output, int Concurrency = 1,
     int Repetitions = 1, double Timeout = 180, bool ApproveCampaign = false, bool ApproveContainers = false,
-    string Condition = "dotnet", string? PistonDaemonDll = null)
+    string Condition = "dotnet", string? PistonDaemonDll = null, bool Paired = false, int? Seed = null)
 {
     public static Options Parse(string[] args)
     {
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
         var flags = new HashSet<string>(StringComparer.Ordinal);
         var names = new[] { "--workload", "--scenario", "--output", "--concurrency", "--repetitions", "--timeout",
-            "--condition", "--piston-daemon-dll" };
+            "--condition", "--piston-daemon-dll", "--seed" };
         for (var i = 0; i < args.Length; i++)
         {
-            if (args[i] is "--approve-campaign" or "--approve-containers")
+            if (args[i] is "--approve-campaign" or "--approve-containers" or "--paired")
             {
                 if (!flags.Add(args[i])) throw new ArgumentException("Duplicate option: " + args[i]);
             }
@@ -329,6 +347,11 @@ public sealed record Options(string Workload, string Scenario, string Output, in
         }
         if (!values.TryGetValue("--output", out var output) || string.IsNullOrWhiteSpace(output))
             throw new ArgumentException("--output is required");
+        var paired = flags.Contains("--paired");
+        if (paired && values.ContainsKey("--condition"))
+            throw new ArgumentException("--paired runs both dotnet and piston; do not combine it with --condition");
+        if (!paired && values.ContainsKey("--seed"))
+            throw new ArgumentException("--seed requires --paired");
         return new(values.GetValueOrDefault("--workload", "unit"),
             values.GetValueOrDefault("--scenario", "baseline"), Path.TrimEndingDirectorySeparator(Path.GetFullPath(output)),
             int.Parse(values.GetValueOrDefault("--concurrency", "1"), CultureInfo.InvariantCulture),
@@ -336,7 +359,8 @@ public sealed record Options(string Workload, string Scenario, string Output, in
             double.Parse(values.GetValueOrDefault("--timeout", "180"), CultureInfo.InvariantCulture),
             flags.Contains("--approve-campaign"), flags.Contains("--approve-containers"),
             values.GetValueOrDefault("--condition", "dotnet"),
-            values.TryGetValue("--piston-daemon-dll", out var daemon) ? Path.GetFullPath(daemon) : null);
+            values.TryGetValue("--piston-daemon-dll", out var daemon) ? Path.GetFullPath(daemon) : null,
+            paired, values.TryGetValue("--seed", out var seed) ? int.Parse(seed, CultureInfo.InvariantCulture) : null);
     }
 
     public Workload Validate(FixtureManifest manifest)
@@ -351,7 +375,14 @@ public sealed record Options(string Workload, string Scenario, string Output, in
             throw new ArgumentException("Repeated/concurrent runs require explicit --approve-campaign");
         if (Condition is not ("dotnet" or "piston"))
             throw new ArgumentException("Condition must be dotnet or piston");
-        if (Condition == "piston")
+        if (Seed is < 0) throw new ArgumentException("--seed must be non-negative");
+        if (Paired && Condition != "dotnet")
+            throw new ArgumentException("--paired selects both conditions itself");
+        if (Paired && Workload == "integration")
+            throw new ArgumentException("Paired PostgreSQL/Piston comparison is blocked: no Piston integration condition exists");
+        if (Paired && workload.Scenarios[Scenario].Diagnostic is not null)
+            throw new ArgumentException("Paired compile-diagnostic comparison is blocked: no Piston compile-diagnostic oracle exists");
+        if (Condition == "piston" || Paired)
         {
             if (Workload != "unit" || workload.Scenarios[Scenario].Diagnostic is not null)
                 throw new ArgumentException("Piston supports only unit full-test-scope scenarios; integration and compile diagnostics are blocked");
@@ -360,7 +391,7 @@ public sealed record Options(string Workload, string Scenario, string Output, in
                 throw new ArgumentException("Piston requires --piston-daemon-dll pointing to a prebuilt daemon DLL");
         }
         else if (PistonDaemonDll is not null)
-            throw new ArgumentException("--piston-daemon-dll requires --condition piston");
+            throw new ArgumentException("--piston-daemon-dll requires --condition piston or --paired");
         if (Workload == "integration")
         {
             if (!ApproveContainers)

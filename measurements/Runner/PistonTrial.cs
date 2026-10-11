@@ -10,6 +10,16 @@ namespace Piston.Measurements;
 public sealed record PistonExecution(string RunId, string RunJson, double ElapsedMs,
     int DaemonPid, double CpuSecondsObservedLowerBound, long PeakRssBytesSampled);
 
+/// <summary>
+/// Daemon launch policy. <see cref="ExecutionDirectory"/> isolates machine-wide admission from the
+/// operator's own daemons and from other trials; it starts empty, so the engine's default budget applies.
+/// </summary>
+public sealed record PistonLaunch(string DaemonDll, string Workspace, string Solution, string Artifacts,
+    int Parallelism, string ExecutionDirectory)
+{
+    public const string ExecutionDirectoryVariable = "PISTON_EXECUTION_DIRECTORY";
+}
+
 public interface IPistonTrial : IAsyncDisposable
 {
     Task Prepare(string fingerprint, IReadOnlyDictionary<string, string> expected, CancellationToken cancellationToken);
@@ -27,8 +37,12 @@ public sealed class PistonTrial : IPistonTrial
     private readonly Task logs;
     private string? startupId;
 
-    public PistonTrial(string dll, string workspace, string solution, string artifacts)
+    public PistonTrial(PistonLaunch launch)
     {
+        var (dll, workspace, solution, artifacts) = (launch.DaemonDll, launch.Workspace, launch.Solution, launch.Artifacts);
+        if (launch.Parallelism < 1) throw new ArgumentException("Piston parallelism must be positive");
+        if (!Path.IsPathFullyQualified(launch.ExecutionDirectory) || Directory.Exists(launch.ExecutionDirectory))
+            throw new ArgumentException("Piston execution directory must be a new absolute path");
         this.artifacts = artifacts;
         this.solution = solution;
         var mcpPort = FreePort();
@@ -38,7 +52,7 @@ public sealed class PistonTrial : IPistonTrial
             "--mcp-port", mcpPort.ToString(CultureInfo.InvariantCulture),
             "--web-port", webPort.ToString(CultureInfo.InvariantCulture),
             "--pipe-name", "piston-measurement-" + Guid.NewGuid().ToString("N"),
-            "--config-directory", Path.Combine(artifacts, "piston-config"), "--parallelism", "1"];
+            "--config-directory", Path.Combine(artifacts, "piston-config"), "--parallelism", launch.Parallelism.ToString(CultureInfo.InvariantCulture)];
         var info = new ProcessStartInfo(command[0])
         {
             WorkingDirectory = workspace, UseShellExecute = false,
@@ -46,10 +60,13 @@ public sealed class PistonTrial : IPistonTrial
         };
         foreach (var argument in command.Skip(1)) info.ArgumentList.Add(argument);
         info.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
+        info.Environment[PistonLaunch.ExecutionDirectoryVariable] = launch.ExecutionDirectory;
         Evidence.WriteJson(Path.Combine(artifacts, "piston-launch.json"), new
         {
             command, daemon_assembly_sha256 = Evidence.Digest(File.ReadAllBytes(dll)),
-            policy = "prebuilt isolated daemon; project parallelism 1; watching enabled"
+            execution_directory = launch.ExecutionDirectory,
+            policy = $"prebuilt isolated daemon; test-process parallelism {launch.Parallelism}; watching enabled; " +
+                "per-trial admission directory with no budget.json (engine default budget)"
         });
         daemon = new Process { StartInfo = info };
         log = new StreamWriter(Path.Combine(artifacts, "piston-daemon.log")) { AutoFlush = true };

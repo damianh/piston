@@ -179,8 +179,17 @@ dotnet measurements/Runner/bin/Release/net10.0/Piston.Measurements.dll \
 Each trial restores and establishes the same plain-dotnet full identity/status
 baseline in its isolated copy. Repair preparation and seeded existing failures
 are unchanged. Before the edit barrier, it starts a daemon with unique local
-ports, pipe and configuration directory, sets project parallelism to 1, and
+ports, pipe and configuration directory, sets test-process parallelism to 1 (the
+single-condition default; paired mode matches it, see below), and
 validates its startup full run against that pre-edit source and expected results.
+Each daemon gets its own new `PISTON_EXECUTION_DIRECTORY` (`piston-execution`
+inside the trial artifacts, with no `budget.json`), so machine-wide admission
+never shares a queue or budget with the operator's own daemons or with other
+trials; the engine's default budget (one CPU slot per logical CPU) applies.
+Cross-daemon admission and scheduling are therefore **not** exercised. Each
+accepted run's admission record is retained, and `piston_admission_isolated` is
+true only when it was admitted alone against that default budget with the
+launched reservation.
 Daemon startup/warming is setup, not edit latency. Port reservation is best
 effort: bind/start failures invalidate the attempt rather than retrying it.
 
@@ -227,16 +236,70 @@ existing failure, all 409 identities, and daemon cleanup. Both smokes are opt-in
 through `PISTON_DAEMON_DLL`; ordinary self-tests launch no daemon.
 These are still missing:
 
-- paired, repeated campaigns;
-- the PostgreSQL workload;
-- a Piston compile-diagnostic trial condition;
+- an executed paired campaign (the paired mode below exists but no repeated
+  campaign or pilot has been approved or run);
+- the PostgreSQL workload for Piston (and so any PostgreSQL pairing);
+- a Piston compile-diagnostic trial condition (and so any compile-error pairing);
 - a larger repository;
 - telemetry-overhead measurement.
+
+### Paired comparison mode
+
+`--paired` runs both conditions as counterbalanced pairs on the unit fixture;
+`--repetitions N` is the number of pairs and `--concurrency` the trials per
+condition batch. It reuses the unchanged dotnet and Piston trial paths and
+`PistonRunOracle`. A single pair at concurrency 1 is a bounded correctness smoke;
+more pairs or concurrency are a campaign and still require `--approve-campaign`
+(and operator approval):
+
+```sh
+dotnet measurements/Runner/bin/Release/net10.0/Piston.Measurements.dll \
+  --paired --seed 42 --scenario regression \
+  --piston-daemon-dll "$PWD/src/Piston/bin/Debug/net10.0/Piston.dll" \
+  --output measurements/artifacts/paired-regression-smoke
+```
+
+- `--paired` cannot be combined with `--condition`; `--seed` requires `--paired`.
+  Integration (PostgreSQL) and `compile-error` are rejected before output creation
+  rather than falling back to a single condition.
+- The order plan is fixed before any trial: balanced dotnet-first/piston-first
+  counts (an odd pair decided by the seed), shuffled with the seed. The seed is
+  operator-supplied or generated, and recorded with the full plan, pair IDs and
+  batch IDs in `manifest.json`.
+- Pairs share workload, scenario, repetition and concurrency. Condition batches
+  run sequentially and never overlap; each batch keeps its own edit barrier and
+  independent workspaces. Every trial records `pair_id` and `pair_position`.
+- Allocation: the dotnet condition keeps its default command (MSBuild node count =
+  logical CPUs). Its nominal test-process concurrency is min(baseline TRX files,
+  logical CPUs). In paired mode Piston's `--parallelism` is set to that value.
+  The match is nominal: the harness does not enforce OS-level CPU allocation.
+- Cache: both conditions restore and run a full plain-dotnet baseline in a fresh
+  copy; Piston additionally completes its validated startup run. MSBuild node
+  reuse, the compiler server, the OS page cache and NuGet caches are shared and
+  not reset, so matched cache state is **not** enforced. Counterbalancing spreads
+  carry-over between conditions without removing it.
+- `summary.json` keeps all attempted, invalid and timeout counts per condition.
+  `paired.pairs` reports each pair's batches, trial IDs and problems. A pair is
+  usable only if both batches are complete and correct. The base, baseline,
+  pre-edit and edited source hashes, baseline identity hash and expected statuses
+  must be identical. Test-process parallelism must match, oracles must be full
+  scope, and Piston admission must be isolated.
+- `paired_improvement` is computed only when **every** planned pair is usable, at
+  least two pairs exist and the run was not cancelled. No pair is dropped to
+  rescue statistics. Otherwise it is null and `statistics_withheld_reasons`
+  says why. The unit of analysis is the pair of condition batch means, with a
+  pair-resampled bootstrap using the recorded seed. Concurrent trials are never
+  treated as independent. The exit code is nonzero if any attempt is invalid or
+  any pair is unusable.
+
+Paired output is scripted-command evidence, not a real-agent result. It is not
+a G1 decision (`summary.G1` is `not evaluated`).
 
 The oracle smoke is a correctness check, not a timing sample; the harness smoke's
 trial timing is functional evidence only, not comparison-campaign evidence. No
 backend latency improvement, paired confidence interval or cognitive benefit can
-be computed from baseline-only runs. The approved local G0 campaign and its
+be computed from baseline-only runs. A single-pair paired smoke is functional evidence only and never yields
+statistics. The approved local G0 campaign and its
 scope-limited recommendation are recorded in [results/g0-local.md](results/g0-local.md).
 Those historical campaigns used the original Python runner; port-validation
 smokes are separate and do not replace or augment the campaign sample counts.

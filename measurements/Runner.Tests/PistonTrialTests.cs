@@ -142,8 +142,8 @@ public sealed class PistonTrialTests
         var options = new Options("unit", scenarioName, temp.Path, Timeout: timeout ? .05 : 5,
             Condition: "piston", PistonDaemonDll: "fake.dll");
         var row = await Trials.Run(root, options, workload, "batch", 0, new EditBarrier(1), execute: Execute,
-            startPiston: (_, workspace, solution, _) =>
-                fake = new FakePiston(solution, Path.Combine(workspace, workload.Source), expected,
+            startPiston: launch =>
+                fake = new FakePiston(launch.Solution, Path.Combine(launch.Workspace, workload.Source), expected,
                     scenario.Repair ? Evidence.ExpectedResults(baseline, workload.Scenarios["regression"].FailedSuffixes) : baseline,
                     corrupt, mutateSource, timeout, fail, cleanupFailure));
         var persisted = JsonNode.Parse(File.ReadAllText(Path.Combine(row.ArtifactDirectory, "trial.json")))!;
@@ -153,9 +153,9 @@ public sealed class PistonTrialTests
         return (row, fake!);
     }
 
-    private sealed class FakePiston(string solution, string source, Dictionary<string, string> expected,
+    internal sealed class FakePiston(string solution, string source, Dictionary<string, string> expected,
         Dictionary<string, string> preparation, Action<JsonObject>? corrupt, bool mutateSource,
-        bool timeout, bool fail, bool cleanupFailure) : IPistonTrial
+        bool timeout, bool fail, bool cleanupFailure, int parallelism = 1, double delayMs = 0) : IPistonTrial
     {
         public bool Prepared { get; private set; }
         public bool Disposed { get; private set; }
@@ -172,6 +172,7 @@ public sealed class PistonTrialTests
             Assert.Equal(PistonSourceFingerprint.ForSolution(solution), fingerprint);
             if (timeout) await Task.Delay(Timeout.Infinite, token);
             if (fail) throw new InvalidOperationException("MCP failure");
+            if (delayMs > 0) await Task.Delay(TimeSpan.FromMilliseconds(delayMs), token);
             var run = new JsonObject
             {
                 ["schema"] = PistonRunOracle.Schema, ["runId"] = "requested-run", ["status"] = "Completed",
@@ -179,6 +180,8 @@ public sealed class PistonTrialTests
                 ["freshness"] = "Current", ["isCurrentFullResult"] = true, ["sourceChangeObserved"] = false,
                 ["sourceBefore"] = new JsonObject { ["algorithm"] = PistonSourceFingerprint.Algorithm, ["value"] = fingerprint },
                 ["sourceAfter"] = new JsonObject { ["algorithm"] = PistonSourceFingerprint.Algorithm, ["value"] = fingerprint },
+                ["admission"] = new JsonObject { ["state"] = "Admitted", ["budgetSource"] = "default",
+                    ["otherAdmittedRuns"] = 0, ["queuedAhead"] = 0, ["reservedCpuSlots"] = parallelism },
                 ["context"] = new JsonObject { ["effectiveFilter"] = null,
                     ["solutionPath"] = Path.GetFullPath(solution) }, ["duplicateTestIds"] = new JsonArray(),
                 ["tests"] = new JsonArray(expected.Select(pair => (JsonNode)new JsonObject
