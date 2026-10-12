@@ -13,10 +13,22 @@ public sealed class FileWatcherService : IFileWatcherService
     private string? _solutionDirectory;
     private ITimer? _debounceTimer;
     private long _debounceGeneration;
+    private string? _monitoringError;
     private readonly Dictionary<string, FileChangeEvent> _pendingEvents = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _lock = new();
 
     public event Action<FileChangeBatch>? FileChanged;
+
+    public string? MonitoringError
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _monitoringError;
+            }
+        }
+    }
 
     public bool HasPendingChanges
     {
@@ -71,6 +83,7 @@ public sealed class FileWatcherService : IFileWatcherService
             _debounceTimer?.Dispose();
             _debounceTimer = null;
             _pendingEvents.Clear();
+            _monitoringError = null;
         }
     }
 
@@ -117,12 +130,58 @@ public sealed class FileWatcherService : IFileWatcherService
         watcher.Created += OnFileSystemEvent;
         watcher.Deleted += OnFileSystemEvent;
         watcher.Renamed += OnRenamed;
+        watcher.Error += OnWatcherError;
         _watchers.Add(watcher);
         watcher.EnableRaisingEvents = true;
     }
 
-    private bool IsFingerprintInput(string fullPath) =>
-        _solutionDirectory is { } root && SourceFingerprinter.CoversPath(root, fullPath);
+    private bool IsFingerprintInput(string fullPath)
+    {
+        if (_solutionDirectory is not { } root)
+        {
+            return false;
+        }
+
+        if (SourceFingerprinter.CoversPath(root, fullPath))
+        {
+            return true;
+        }
+
+        // Deleted or renamed ancestor inputs no longer satisfy CoversPath's existence check.
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return SourceFingerprinter.AncestorInputNames.Any(name =>
+            string.Equals(name, Path.GetFileName(fullPath), comparison))
+            && IsAncestorDirectory(root, Path.GetDirectoryName(fullPath), comparison);
+    }
+
+    private static bool IsAncestorDirectory(string root, string? candidate, StringComparison comparison)
+    {
+        for (var directory = Directory.GetParent(root); directory is not null; directory = directory.Parent)
+        {
+            if (string.Equals(directory.FullName, candidate, comparison))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void OnWatcherError(object sender, ErrorEventArgs e) => ReportMonitoringError(e.GetException());
+
+    internal void ReportMonitoringError(Exception error)
+    {
+        lock (_lock)
+        {
+            if (_solutionDirectory is not { } root)
+            {
+                return;
+            }
+
+            _monitoringError = $"Source monitoring failed: {error.GetType().Name}: {error.Message}. Restart the daemon before verifying.";
+            ScheduleDebounce(new FileChangeEvent(root, WatcherChangeTypes.All, _timeProvider.GetUtcNow()));
+        }
+    }
 
     internal void ScheduleDebounce(FileChangeEvent evt)
     {

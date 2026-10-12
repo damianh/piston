@@ -100,6 +100,10 @@ toolchain/cache exclusions. If coverage evaluation fails, `verify` reports
 `Faulted`. Use `dotnet test` explicitly for unsupported inputs; Piston does not
 silently fall back. Edits after a verification reply require a new call.
 
+A file-watcher error (including buffer overflow) makes source monitoring
+unreliable. `verify` reports `Faulted` until the daemon is restarted; matching
+before/after fingerprints cannot prove that no transient edit was missed.
+
 Only `Verdict: Passed` with `Counts as full verification: yes` means the current
 source builds and all tests pass. Every other verdict is not a pass:
 

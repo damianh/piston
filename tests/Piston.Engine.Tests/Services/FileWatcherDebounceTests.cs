@@ -238,6 +238,66 @@ public sealed class FileWatcherDebounceTests
         }
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void MonitoringError_InvalidatesChangesAndStaysLatchedUntilRestart(bool overflow)
+    {
+        var time = new TestTimeProvider();
+        var debounce = TimeSpan.FromMilliseconds(100);
+        using var sut = new FileWatcherService(debounce, time);
+        var batches = new List<FileChangeBatch>();
+        sut.FileChanged += batches.Add;
+        var directory = Directory.CreateTempSubdirectory("piston-test-");
+        try
+        {
+            sut.Start(directory.FullName);
+            sut.ReportMonitoringError(overflow
+                ? new InternalBufferOverflowException("Source events were lost.")
+                : new IOException("Monitoring stopped."));
+
+            Assert.NotNull(sut.MonitoringError);
+            Assert.Contains("Restart the daemon", sut.MonitoringError);
+            Assert.True(sut.HasPendingChanges);
+            time.Advance(debounce);
+            Assert.Equal(directory.FullName, Assert.Single(Assert.Single(batches).Changes).FilePath);
+            Assert.False(sut.HasPendingChanges);
+            Assert.NotNull(sut.MonitoringError);
+
+            sut.Start(directory.FullName);
+            Assert.Null(sut.MonitoringError);
+        }
+        finally
+        {
+            sut.Stop();
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task DeletedAncestorInput_IsWatched()
+    {
+        using var sut = new FileWatcherService(TimeSpan.FromMilliseconds(50));
+        var received = new TaskCompletionSource<FileChangeBatch>(TaskCreationOptions.RunContinuationsAsynchronously);
+        sut.FileChanged += batch => received.TrySetResult(batch);
+        var parent = Directory.CreateTempSubdirectory("piston-test-");
+        var solution = Directory.CreateDirectory(Path.Combine(parent.FullName, "solution"));
+        var input = Path.Combine(parent.FullName, "global.json");
+        try
+        {
+            await File.WriteAllTextAsync(input, "{}");
+            sut.Start(solution.FullName);
+            File.Delete(input);
+            var batch = await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Contains(batch.Changes, change => change.FilePath == input);
+        }
+        finally
+        {
+            sut.Stop();
+            parent.Delete(recursive: true);
+        }
+    }
+
     private sealed class TestTimeProvider : TimeProvider
     {
         private TimeSpan _elapsed;

@@ -57,6 +57,45 @@ public sealed class VerificationPolicyTests
         Assert.Equal(VerificationAction.Reuse, decision.Action);
     }
 
+    [Theory]
+    [InlineData(TestRunStatus.Completed)]
+    [InlineData(TestRunStatus.BuildFailed)]
+    [InlineData(TestRunStatus.Running)]
+    public void RefreshedGraph_RejectsExplicitSelectionMissingTestProjects(TestRunStatus status)
+    {
+        var run = Run(status) with
+        {
+            Context = Run().Context! with { TestProjects = ["/A.Tests.csproj"] },
+        };
+        string[] required = ["/A.Tests.csproj", "/B.Tests.csproj"];
+        var active = status == TestRunStatus.Running ? run : null;
+        var decision = VerificationPolicy.Decide(Source, active, [run], null, false, required);
+
+        Assert.Equal(VerificationAction.RequestForced, decision.Action);
+        if (run.IsTerminal)
+        {
+            var evaluation = VerificationPolicy.Evaluate(run, Source, required);
+            Assert.Equal(VerificationVerdict.Stale, evaluation.Verdict);
+            Assert.True(evaluation.Retryable);
+        }
+    }
+
+    [Fact]
+    public void RefreshedGraph_AllowsSupersetButRejectsUnknownTerminalSelection()
+    {
+        string[] required = ["/A.Tests.csproj"];
+        var run = Run() with
+        {
+            Context = Run().Context! with { TestProjects = ["/A.Tests.csproj", "/B.Tests.csproj"] },
+        };
+        Assert.Equal(VerificationAction.Reuse,
+            VerificationPolicy.Decide(Source, null, [run], null, false, required).Action);
+        Assert.Equal(VerificationAction.RequestForced,
+            VerificationPolicy.Decide(Source, null, [Run()], null, false, required).Action);
+        Assert.Equal(VerificationAction.AwaitActive,
+            VerificationPolicy.Decide(Source, Run(TestRunStatus.Queued, scope: null), [], null, false, required).Action);
+    }
+
     public static TheoryData<TestRunRecord> NonReusable => new()
     {
         Run(scope: TestRunScope.Selective),

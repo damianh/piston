@@ -234,6 +234,31 @@ public sealed class ImpactAnalyzerTests : IDisposable
     }
 
     [Fact]
+    public async Task FullRunAfterInvalidation_RebuildsGraphBeforeEnumeratingTestProjects()
+    {
+        ISolutionGraph graph = _graph;
+        var analyzer = new ImpactAnalyzer(_ => graph);
+        await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
+        analyzer.InvalidateGraph();
+        graph = new StubSolutionGraph([_appCsproj, _testsCsproj], [_appCsproj, _testsCsproj]);
+
+        Assert.True(analyzer.AnalyzeFullRun().IsFullRun);
+        Assert.Equal([_appCsproj, _testsCsproj], analyzer.GetAllTestProjectPaths());
+    }
+
+    [Fact]
+    public async Task FailedFullRunRefresh_DropsStaleGraphAndFallsBackToSolutionTarget()
+    {
+        var fail = false;
+        var analyzer = new ImpactAnalyzer(_ => fail ? throw new InvalidOperationException("bad graph") : _graph);
+        await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
+        fail = true;
+
+        Assert.True(analyzer.AnalyzeFullRun().IsFullRun);
+        Assert.Empty(analyzer.GetAllTestProjectPaths());
+    }
+
+    [Fact]
     public async Task SlnxChange_ReturnsFullRun()
     {
         var analyzer = new ImpactAnalyzer(_factory);

@@ -150,6 +150,7 @@ Limits:
 - Only the 16 most recent runs are kept, and only in memory.
 - The fingerprint does not cover sources outside the solution directory, installed SDKs, the NuGet cache, or merged user/machine NuGet configuration.
 - `verify` reevaluates project inputs and returns `NotFullScope` for user projects, imports or declared files outside the fingerprint (including excluded directories). SDK/workload files, packages and generated restore imports remain toolchain/cache exclusions. Evaluation failure is `Faulted`; neither verdict is a pass or a hidden fallback.
+- Full runs refresh the solution graph before selecting test projects. `verify` also rejects an otherwise current run if its selected projects omit a test project from the refreshed graph.
 - The SDK version is recorded from `dotnet --version` run in the daemon's working directory.
 - `context.workingDirectory` is the build/SDK-probe directory. `context.testWorkingDirectories` records each test target's actual directory: the solution directory for MTP, the daemon directory for VSTest.
 

@@ -17,12 +17,14 @@ public static class VerificationPolicy
     /// <param name="recentRuns">Terminal runs, newest first.</param>
     /// <param name="userFilter">The user test filter currently configured.</param>
     /// <param name="hasPendingSourceChanges">True when the watcher holds changes that have not triggered a run yet.</param>
+    /// <param name="requiredTestProjects">Test projects in the freshly evaluated graph, when available.</param>
     public static VerificationDecision Decide(
         SourceFingerprint? current,
         TestRunRecord? active,
         IReadOnlyList<TestRunRecord> recentRuns,
         string? userFilter,
-        bool hasPendingSourceChanges)
+        bool hasPendingSourceChanges,
+        IReadOnlyList<string>? requiredTestProjects = null)
     {
         if (!string.IsNullOrWhiteSpace(userFilter))
         {
@@ -35,6 +37,7 @@ public static class VerificationPolicy
         if (active is not null)
         {
             return IsAwaitable(active)
+                && (active.Scope is null || CoversTestProjects(active, requiredTestProjects))
                 ? new VerificationDecision(VerificationAction.AwaitActive, active)
                 : new VerificationDecision(VerificationAction.RequestForced);
         }
@@ -49,13 +52,14 @@ public static class VerificationPolicy
         var newest = recentRuns.FirstOrDefault(r =>
             r.IsFullScope && r.Freshness == ResultFreshness.Current && r.SourceAfter == current);
 
-        return newest is not null && IsReusable(newest)
+        return newest is not null && IsReusable(newest) && CoversTestProjects(newest, requiredTestProjects)
             ? new VerificationDecision(VerificationAction.Reuse, newest)
             : new VerificationDecision(VerificationAction.RequestForced);
     }
 
     /// <summary>Evaluates a terminal run against the present source fingerprint.</summary>
-    public static VerificationEvaluation Evaluate(TestRunRecord run, SourceFingerprint? current)
+    public static VerificationEvaluation Evaluate(
+        TestRunRecord run, SourceFingerprint? current, IReadOnlyList<string>? requiredTestProjects = null)
     {
         switch (run.Status)
         {
@@ -73,6 +77,12 @@ public static class VerificationPolicy
                 run.IsFiltered
                     ? $"Run was filtered ('{run.Context?.EffectiveFilter}'); it does not cover the full scope."
                     : "Run was selective; it does not cover the full scope.");
+        }
+
+        if (!CoversTestProjects(run, requiredTestProjects))
+        {
+            return new(VerificationVerdict.Stale, true,
+                "Run selection does not cover every test project in the refreshed solution graph.");
         }
 
         if (run.Freshness != ResultFreshness.Current)
@@ -126,4 +136,9 @@ public static class VerificationPolicy
     private static bool IsReusable(TestRunRecord run) =>
         run.IsCurrentFullResult
         || run.Status == TestRunStatus.BuildFailed;
+
+    private static bool CoversTestProjects(TestRunRecord run, IReadOnlyList<string>? requiredTestProjects) =>
+        requiredTestProjects is null || requiredTestProjects.Count == 0
+        || (run.Context?.TestProjects is { } selected
+            && requiredTestProjects.All(p => selected.Contains(p, StringComparer.OrdinalIgnoreCase)));
 }

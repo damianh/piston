@@ -240,17 +240,37 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 await WaitForWatcherToSettleAsync(token).ConfigureAwait(false);
 
                 var current = SourceFingerprinter.TryCompute(solutionDir);
+                if (_fileWatcher.MonitoringError is { } monitoringError)
+                {
+                    return new VerificationResult(VerificationVerdict.Faulted,
+                        $"File monitoring is unreliable: {monitoringError} Restart the daemon before verifying.",
+                        VerificationSource.None, attempts, null, current);
+                }
                 string? coverageIssue;
+                IReadOnlyList<string> requiredTestProjects;
                 try
                 {
-                    coverageIssue = await Task.Run(
-                        () => _impactAnalyzer.GetVerificationCoverageIssue(_solutionPath), CancellationToken.None)
+                    var coverage = await Task.Run(
+                        () =>
+                        {
+                            var issue = _impactAnalyzer.GetVerificationCoverageIssue(_solutionPath, out var projects);
+                            return (Issue: issue, Projects: projects);
+                        }, CancellationToken.None)
                         .WaitAsync(token).ConfigureAwait(false);
+                    coverageIssue = coverage.Issue;
+                    requiredTestProjects = coverage.Projects;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     return new VerificationResult(VerificationVerdict.Faulted,
                         $"Could not evaluate build-input coverage: {ex.GetType().Name}: {ex.Message}",
+                        VerificationSource.None, attempts, null, current);
+                }
+
+                if (_fileWatcher.MonitoringError is { } decisionMonitoringError)
+                {
+                    return new VerificationResult(VerificationVerdict.Faulted,
+                        $"File monitoring is unreliable: {decisionMonitoringError} Restart the daemon before verifying.",
                         VerificationSource.None, attempts, null, current);
                 }
 
@@ -269,7 +289,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 }
 
                 var decision = VerificationPolicy.Decide(
-                    current, active, recent, _state.TestFilter, _fileWatcher.HasPendingChanges);
+                    current, active, recent, _state.TestFilter, _fileWatcher.HasPendingChanges, requiredTestProjects);
                 if (decision.Action == VerificationAction.Final)
                 {
                     return new VerificationResult(decision.Verdict!.Value, decision.Reason,
@@ -321,7 +341,12 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 }
 
                 var after = SourceFingerprinter.TryCompute(solutionDir);
-                var evaluation = VerificationPolicy.Evaluate(run, after);
+                var evaluation = VerificationPolicy.Evaluate(run, after, requiredTestProjects);
+                if (_fileWatcher.MonitoringError is { } afterMonitoringError)
+                {
+                    evaluation = new VerificationEvaluation(VerificationVerdict.Faulted, false,
+                        $"File monitoring is unreliable: {afterMonitoringError} Restart the daemon before verifying.");
+                }
                 if (evaluation.Verdict == VerificationVerdict.Passed && _fileWatcher.HasPendingChanges)
                 {
                     evaluation = new VerificationEvaluation(VerificationVerdict.Stale, true,
@@ -358,7 +383,8 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     private async Task WaitForWatcherToSettleAsync(CancellationToken ct)
     {
         var deadline = DateTimeOffset.UtcNow + VerificationSettleTimeout;
-        while (_fileWatcher.HasPendingChanges && DateTimeOffset.UtcNow < deadline)
+        while (_fileWatcher.MonitoringError is null
+            && _fileWatcher.HasPendingChanges && DateTimeOffset.UtcNow < deadline)
         {
             await Task.Delay(25, ct).ConfigureAwait(false);
         }
