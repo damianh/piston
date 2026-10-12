@@ -195,18 +195,18 @@ internal static class VerificationInputCoverage
                             $"in '{xml.FullPath}'. Use dotnet test explicitly; verify cannot prove full verification for this solution.";
                     }
 
-                    var relativeToProject = Path.GetFullPath(expandedAssemblyFile, projectDir);
-                    inputs.Add(relativeToProject);
+                    var assemblyPath = Path.GetFullPath(expandedAssemblyFile, sourceDirectory);
+                    inputs.Add(assemblyPath);
                     var isRestoredPackageTask = packageRootPath is not null
-                        && IsUnder(relativeToProject, packageRootPath)
-                        && packageDirectories.Any(packageDirectory => IsUnder(relativeToProject, packageDirectory))
+                        && IsUnder(assemblyPath, packageRootPath)
+                        && packageDirectories.Any(packageDirectory => IsUnder(assemblyPath, packageDirectory))
                         && (IsUnder(xml.FullPath, sdkRoot)
                             || IsUnder(xml.FullPath, manifestsRoot)
                             || packageDirectories.Any(packageDirectory => IsUnder(xml.FullPath, packageDirectory)));
                     if (!isRestoredPackageTask
-                        && !IsInstalledPackInput(relativeToProject, xml.FullPath, sdkRoot, userDotnetRoot))
+                        && !IsInstalledPackInput(assemblyPath, xml.FullPath, sdkRoot, userDotnetRoot))
                     {
-                        protectedInputs.Add(relativeToProject);
+                        protectedInputs.Add(assemblyPath);
                     }
                 }
             }

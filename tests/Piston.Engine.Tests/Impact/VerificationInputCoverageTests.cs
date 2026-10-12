@@ -101,6 +101,29 @@ public sealed class VerificationInputCoverageTests : IDisposable
     }
 
     [Fact]
+    public void UsingTaskAssemblyPathIsResolvedFromImportedTargetsDirectory()
+    {
+        var solutionDirectory = Path.GetDirectoryName(_solution)!;
+        var nestedDirectory = Directory.CreateDirectory(Path.Combine(solutionDirectory, "nested")).FullName;
+        var nestedProject = Path.Combine(nestedDirectory, "Test.csproj");
+        File.WriteAllText(nestedProject, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+            </Project>
+            """);
+        File.WriteAllText(_solution, """<Solution><Project Path="nested/Test.csproj" /></Solution>""");
+        var targets = Path.Combine(solutionDirectory, "Directory.Build.targets");
+        File.WriteAllText(targets, """<Project><UsingTask TaskName="CustomTask" AssemblyFile="../build/Tasks.dll" /></Project>""");
+        var externalBuild = Directory.CreateDirectory(Path.Combine(_root, "build")).FullName;
+        File.WriteAllBytes(Path.Combine(externalBuild, "Tasks.dll"), [1, 2, 3]);
+        _ = Directory.CreateDirectory(Path.Combine(solutionDirectory, "build"));
+
+        var issue = new MsBuildSolutionGraph(_solution).VerificationCoverageIssue;
+
+        Assert.Contains(Path.Combine(externalBuild, "Tasks.dll"), issue);
+    }
+
+    [Fact]
     public void RestoredPackageTargetsAreExcludedButUserImportsUnderPackageRootAreNot()
     {
         var packageRoot = Path.Combine(_root, "packages");

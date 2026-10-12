@@ -50,14 +50,16 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
     {
         lock (_graphLock)
         {
+            var graphRefreshed = false;
             if (_solutionPath is not null && changes.Any(c =>
                 Path.GetExtension(c.FilePath).ToLowerInvariant() is
                     ".sln" or ".slnx" or ".slnf" or ".csproj" or ".props" or ".targets"))
             {
-                TryRefreshGraph(_solutionPath);
+                graphRefreshed = TryRefreshGraph(_solutionPath);
             }
 
-            return AnalyzeCore(changes);
+            var result = AnalyzeCore(changes);
+            return graphRefreshed ? result with { RequiresGraphRebuild = false } : result;
         }
     }
 
@@ -220,7 +222,7 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         {
             if (_solutionPath is not null)
             {
-                TryRefreshGraph(_solutionPath);
+                _ = TryRefreshGraph(_solutionPath);
             }
             return FullRunResult();
         }
@@ -241,15 +243,17 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         _graph = _graphFactory(solutionPath);
     }
 
-    private void TryRefreshGraph(string solutionPath)
+    private bool TryRefreshGraph(string solutionPath)
     {
         try
         {
             RefreshGraph(solutionPath);
+            return true;
         }
         catch
         {
             // Graph load failure is non-fatal for ordinary runs: use the solution target.
+            return false;
         }
     }
 

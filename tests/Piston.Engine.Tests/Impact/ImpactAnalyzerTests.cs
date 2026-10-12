@@ -165,15 +165,34 @@ public sealed class ImpactAnalyzerTests : IDisposable
     }
 
     [Fact]
-    public async Task CsprojChange_SetsRequiresGraphRebuild_AndIncludesProjectAndDependents()
+    public async Task CsprojChange_RefreshesGraphAndIncludesProjectAndDependents()
     {
         var analyzer = new ImpactAnalyzer(_factory);
         await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
 
         var result = analyzer.Analyze([Change(_libCsproj)]);
 
-        Assert.True(result.RequiresGraphRebuild);
+        Assert.False(result.RequiresGraphRebuild);
         Assert.Contains(_libCsproj, result.AffectedProjectPaths, StringComparer.OrdinalIgnoreCase);
+
+        var sourceResult = analyzer.Analyze([Change(_libCode)]);
+        Assert.False(sourceResult.IsFullRun);
+        Assert.Contains(_libCsproj, sourceResult.AffectedProjectPaths, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PropsChange_RefreshesGraphWithoutRequestingRedundantRebuild()
+    {
+        var analyzer = new ImpactAnalyzer(_factory);
+        await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
+
+        var propsPath = Path.Combine(_root, "Directory.Build.props");
+        File.WriteAllText(propsPath, "<Project />");
+        var result = analyzer.Analyze([Change(propsPath)]);
+
+        Assert.True(result.IsFullRun);
+        Assert.False(result.RequiresGraphRebuild);
+        Assert.False(analyzer.Analyze([Change(_libCode)]).IsFullRun);
     }
 
     [Fact]
