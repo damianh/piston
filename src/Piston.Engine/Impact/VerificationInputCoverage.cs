@@ -16,13 +16,22 @@ internal static class VerificationInputCoverage
         var sdkRoot = Path.GetDirectoryName(typeof(Project).Assembly.Location)!;
         var userDotnetRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dotnet");
         var manifestsRoot = Path.GetFullPath(Path.Combine(sdkRoot, "..", "..", "sdk-manifests"));
-        var installedPacksRoot = Path.GetFullPath(Path.Combine(sdkRoot, "..", "packs"));
-        foreach (var project in projects)
+        var installedPacksRoot = Path.GetFullPath(Path.Combine(sdkRoot, "..", "..", "packs"));
+        var evaluatedProjects = projects.ToList();
+        var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var generatedRuntimeConfigs = evaluatedProjects
+            .Where(project => SourceFingerprinter.CoversPath(root, project.FullPath)
+                && string.Equals(project.GetPropertyValue("GenerateRuntimeConfigurationFiles"), "true",
+                    StringComparison.OrdinalIgnoreCase))
+            .Select(project => project.GetPropertyValue("ProjectRuntimeConfigFilePath"))
+            .Where(Path.IsPathFullyQualified)
+            .Select(Path.GetFullPath)
+            .ToHashSet(pathComparer);
+        foreach (var project in evaluatedProjects)
         {
             var projectDir = Path.GetDirectoryName(project.FullPath)!;
             var packageRoot = project.GetPropertyValue("NuGetPackageRoot");
             var packsRoot = project.GetPropertyValue("NetCoreTargetingPackRoot");
-            var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
             var configuredExclusions = new[] { packageRoot, packsRoot }
                 .Where(path => !string.IsNullOrWhiteSpace(path))
                 .Select(path => Path.GetFullPath(path, projectDir))
@@ -55,7 +64,10 @@ internal static class VerificationInputCoverage
                         || IsUnder(import.ImportingElement.ContainingProject.FullPath, manifestsRoot)
                         || packageDirectories.Any(packageDirectory =>
                             IsUnder(import.ImportingElement.ContainingProject.FullPath, packageDirectory)));
-                if (!isRestoredPackageImport && !IsUnder(importedPath, sdkRoot) && !IsUnder(importedPath, manifestsRoot))
+                var isInstalledPackImport = IsInstalledPackInput(importedPath,
+                    import.ImportingElement.ContainingProject.FullPath, sdkRoot, userDotnetRoot);
+                if (!isRestoredPackageImport && !isInstalledPackImport
+                    && !IsUnder(importedPath, sdkRoot) && !IsUnder(importedPath, manifestsRoot))
                 {
                     protectedInputs.Add(importedPath);
                 }
@@ -89,19 +101,16 @@ internal static class VerificationInputCoverage
                 var pathExists = File.Exists(path);
                 var isFileInput = pathExists || item.ItemType is "Compile" or "ProjectReference";
                 var isInstalledPackInput = Path.IsPathFullyQualified(path)
-                    && IsUnder(itemOrigin, sdkRoot)
-                    && (IsUnder(path, installedPacksRoot)
-                        || IsUnder(path, Path.Combine(userDotnetRoot, "packs")));
+                    && IsInstalledPackInput(path, itemOrigin, sdkRoot, userDotnetRoot);
                 var isRestoredPackageItem = packageRootPath is not null
                     && Path.IsPathFullyQualified(path)
                     && IsUnder(path, packageRootPath)
                     && packageDirectories.Any(packageDirectory => IsUnder(path, packageDirectory))
                     && isRestoredPackageOrigin;
-                var isGeneratedOutput = pathExists
-                    && IsUnder(path, root)
-                    && Path.GetRelativePath(root, path).Split(Path.DirectorySeparatorChar)
-                        .Any(component => component is "bin" or "obj")
-                    && item.ItemType is "Content" or "None" or "EmbeddedResource";
+                // A referenced project's runtime config is an SDK-produced output, not arbitrary data under bin/obj.
+                var isGeneratedOutput = Path.IsPathFullyQualified(path)
+                    && generatedRuntimeConfigs.Contains(Path.GetFullPath(path))
+                    && item.ItemType is "Content" or "None";
                 if (pathExists && !isInstalledPackInput && !isRestoredPackageItem && !isGeneratedOutput)
                 {
                     inputs.Add(path);
@@ -194,7 +203,8 @@ internal static class VerificationInputCoverage
                         && (IsUnder(xml.FullPath, sdkRoot)
                             || IsUnder(xml.FullPath, manifestsRoot)
                             || packageDirectories.Any(packageDirectory => IsUnder(xml.FullPath, packageDirectory)));
-                    if (!isRestoredPackageTask)
+                    if (!isRestoredPackageTask
+                        && !IsInstalledPackInput(relativeToProject, xml.FullPath, sdkRoot, userDotnetRoot))
                     {
                         protectedInputs.Add(relativeToProject);
                     }
@@ -235,6 +245,18 @@ internal static class VerificationInputCoverage
         }
 
         return null;
+    }
+
+    internal static bool IsInstalledPackInput(string inputPath, string declaringPath, string sdkRoot, string userDotnetRoot)
+    {
+        var dotnetRoot = Path.GetFullPath(Path.Combine(sdkRoot, "..", ".."));
+        var installedPacks = Path.Combine(dotnetRoot, "packs");
+        var userPacks = Path.Combine(userDotnetRoot, "packs");
+        return (IsUnder(inputPath, installedPacks) || IsUnder(inputPath, userPacks))
+            && (IsUnder(declaringPath, sdkRoot)
+                || IsUnder(declaringPath, Path.Combine(dotnetRoot, "sdk-manifests"))
+                || IsUnder(declaringPath, installedPacks)
+                || IsUnder(declaringPath, userPacks));
     }
 
     private static bool IsEditorConfigRoot(string path)

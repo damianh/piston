@@ -111,6 +111,31 @@ public sealed class VerifyToolTests
     }
 
     [Fact]
+    public async Task Recorder_ReceivesMetadataWithoutFailureDetails()
+    {
+        var recorder = new CapturingRecorder();
+        var engine = new StubEngine
+        {
+            NextVerification = new(VerificationVerdict.TestsFailed, "private verification reason",
+                VerificationSource.Forced, 1,
+                Run(tests: [Test("Private.Test", TestStatus.Failed, "private assertion input")]), Source),
+        };
+
+        var result = await new TestTools(engine, recorder).VerifyAsync();
+
+        Assert.Contains("private assertion input", result);
+        Assert.Equal("Verdict: TestsFailed; source: Forced; attempts: 1", recorder.ResultSummary);
+    }
+
+    private sealed class CapturingRecorder : IMcpCallRecorder
+    {
+        public string? ResultSummary { get; private set; }
+
+        public void Record(string toolName, string? paramsSummary, string? resultSummary, double durationMs, bool succeeded) =>
+            ResultSummary = resultSummary;
+    }
+
+    [Fact]
     public async Task Incomplete_ListsFailedEmptyAndUnfinishedProjectsAndTests()
     {
         var run = Run(TestRunStatus.Incomplete, tests: [Test("A.Pending", TestStatus.NotRun)]) with

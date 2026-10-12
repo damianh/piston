@@ -53,8 +53,7 @@ public sealed partial class DogfoodSmokeTests : IDisposable
     [DogfoodSmokeFact]
     public async Task DocumentedFlow_VerifiesAndStopsCleanly()
     {
-        var mcpPort = FreePort();
-        var webPort = FreePort();
+        var (mcpPort, webPort) = FreePorts();
         File.WriteAllText(Path.Combine(_workspace, ".piston.json"),
             $$"""{ "solution": "unit/Orders.slnx", "mcpPort": {{mcpPort}} }""");
         var original = File.ReadAllText(PriceRules);
@@ -315,6 +314,15 @@ public sealed partial class DogfoodSmokeTests : IDisposable
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         return ((IPEndPoint)listener.LocalEndpoint).Port;
+    }
+
+    private static (int McpPort, int WebPort) FreePorts()
+    {
+        using var mcp = new TcpListener(IPAddress.Loopback, 0);
+        using var web = new TcpListener(IPAddress.Loopback, 0);
+        mcp.Start();
+        web.Start();
+        return (((IPEndPoint)mcp.LocalEndpoint).Port, ((IPEndPoint)web.LocalEndpoint).Port);
     }
 
     public void Dispose()

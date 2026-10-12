@@ -140,6 +140,23 @@ public sealed class VerificationInputCoverageTests : IDisposable
     }
 
     [Fact]
+    public void InstalledWorkloadImportRequiresToolchainProvenance()
+    {
+        var dotnetRoot = Path.Combine(_root, "dotnet");
+        var sdkRoot = Path.Combine(dotnetRoot, "sdk", "10.0.100");
+        var userDotnetRoot = Path.Combine(_root, "user", ".dotnet");
+        var workloadImport = Path.Combine(dotnetRoot, "packs", "Microsoft.Android.Sdk.Windows",
+            "36.1.69", "Sdk", "AutoImport.props");
+
+        Assert.True(VerificationInputCoverage.IsInstalledPackInput(workloadImport,
+            Path.Combine(sdkRoot, "Sdks", "Microsoft.NET.Sdk", "targets", "Microsoft.NET.Sdk.ImportWorkloads.props"),
+            sdkRoot, userDotnetRoot));
+        Assert.False(VerificationInputCoverage.IsInstalledPackInput(workloadImport, _project, sdkRoot, userDotnetRoot));
+        Assert.False(VerificationInputCoverage.IsInstalledPackInput(
+            Path.Combine(dotnetRoot, "sdk", "packs", "User.props"), _project, sdkRoot, userDotnetRoot));
+    }
+
+    [Fact]
     public void RepositorySolutionCoverage()
     {
         var solution = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../Piston.slnx"));
@@ -197,6 +214,47 @@ public sealed class VerificationInputCoverageTests : IDisposable
         File.WriteAllText(props, """<Project><Import Project="External.targets" /></Project>""");
 
         Assert.Contains("External.targets", new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Theory]
+    [InlineData("Content", "obj")]
+    [InlineData("None", "obj")]
+    [InlineData("EmbeddedResource", "obj")]
+    [InlineData("Content", "bin")]
+    [InlineData("None", "bin")]
+    [InlineData("EmbeddedResource", "bin")]
+    public void ExplicitDataInputInExcludedDirectoryIsNotCovered(string itemType, string excludedDirectory)
+    {
+        var directory = Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(_project)!, excludedDirectory));
+        File.WriteAllText(Path.Combine(directory.FullName, "config.json"), "{}");
+        WriteProject($"""<ItemGroup><{itemType} Include="{excludedDirectory}/config.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>""");
+
+        Assert.Contains("config.json", new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Fact]
+    public void RuntimeConfigProducedByReferencedProjectIsCovered()
+    {
+        var directory = Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(_project)!, "Host"));
+        File.WriteAllText(Path.Combine(directory.FullName, "Host.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+              </PropertyGroup>
+            </Project>
+            """);
+        var outputDirectory = Directory.CreateDirectory(Path.Combine(directory.FullName, "bin", "Debug", "net10.0"));
+        File.WriteAllText(Path.Combine(outputDirectory.FullName, "Host.runtimeconfig.json"), "{}");
+        WriteProject("""
+            <ItemGroup>
+              <ProjectReference Include="Host/Host.csproj" />
+              <None Include="Host/bin/Debug/net10.0/Host.runtimeconfig.json" CopyToOutputDirectory="PreserveNewest" />
+            </ItemGroup>
+            """);
+
+        var issue = new MsBuildSolutionGraph(_solution).VerificationCoverageIssue;
+        Assert.True(issue is null, issue);
     }
 
     [Theory]

@@ -64,13 +64,14 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
-        string? result = null;
+        string? logSummary = null;
         var succeeded = false;
         try
         {
             var timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 3600));
             var verification = await engine.VerifyAsync(timeout, ct).ConfigureAwait(false);
-            result = VerificationReport.Format(verification);
+            var result = VerificationReport.Format(verification);
+            logSummary = $"Verdict: {verification.Verdict}; source: {verification.Source}; attempts: {verification.Attempts}";
             succeeded = true;
             return result;
         }
@@ -78,7 +79,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         {
             sw.Stop();
             recorder.Record("Verify", timeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
-                result, sw.Elapsed.TotalMilliseconds, succeeded);
+                logSummary, sw.Elapsed.TotalMilliseconds, succeeded);
         }
     }
 
