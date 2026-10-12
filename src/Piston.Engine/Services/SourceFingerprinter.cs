@@ -42,6 +42,8 @@ public static class SourceFingerprinter
         "Directory.Packages.props", "NuGet.config", "nuget.config",
     ];
 
+    internal static IReadOnlyList<string> AncestorInputNames => AncestorInputs;
+
     internal static bool CoversPath(string rootDirectory, string path)
     {
         var root = Path.GetFullPath(rootDirectory);

@@ -9,7 +9,8 @@ public sealed class FileWatcherService : IFileWatcherService
 {
     private readonly TimeSpan _debounceInterval;
     private readonly TimeProvider _timeProvider;
-    private FileSystemWatcher? _watcher;
+    private readonly List<FileSystemWatcher> _watchers = [];
+    private string? _solutionDirectory;
     private ITimer? _debounceTimer;
     private long _debounceGeneration;
     private readonly Dictionary<string, FileChangeEvent> _pendingEvents = new(StringComparer.OrdinalIgnoreCase);
@@ -43,29 +44,26 @@ public sealed class FileWatcherService : IFileWatcherService
     {
         Stop();
 
-        _watcher = new FileSystemWatcher(solutionDirectory)
+        _solutionDirectory = Path.GetFullPath(solutionDirectory);
+        AddWatcher(_solutionDirectory, includeSubdirectories: true);
+
+        for (var directory = Directory.GetParent(_solutionDirectory);
+             directory is not null;
+             directory = directory.Parent)
         {
-            IncludeSubdirectories = true,
-            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.DirectoryName,
-        };
-
-        _watcher.Filters.Add("*.cs");
-        _watcher.Filters.Add("*.csproj");
-        _watcher.Filters.Add("*.props");
-        _watcher.Filters.Add("*.targets");
-
-        _watcher.Changed += OnFileSystemEvent;
-        _watcher.Created += OnFileSystemEvent;
-        _watcher.Deleted += OnFileSystemEvent;
-        _watcher.Renamed += OnRenamed;
-
-        _watcher.EnableRaisingEvents = true;
+            AddWatcher(directory.FullName, includeSubdirectories: false, filters: SourceFingerprinter.AncestorInputNames);
+        }
     }
 
     public void Stop()
     {
-        _watcher?.Dispose();
-        _watcher = null;
+        foreach (var watcher in _watchers)
+        {
+            watcher.Dispose();
+        }
+
+        _watchers.Clear();
+        _solutionDirectory = null;
 
         lock (_lock)
         {
@@ -78,7 +76,7 @@ public sealed class FileWatcherService : IFileWatcherService
 
     private void OnFileSystemEvent(object sender, FileSystemEventArgs e)
     {
-        if (IsExcluded(e.FullPath))
+        if (!IsFingerprintInput(e.FullPath))
         {
             return;
         }
@@ -88,22 +86,43 @@ public sealed class FileWatcherService : IFileWatcherService
 
     private void OnRenamed(object sender, RenamedEventArgs e)
     {
-        if (IsExcluded(e.FullPath))
+        if (!IsFingerprintInput(e.FullPath) && !IsFingerprintInput(e.OldFullPath))
         {
             return;
         }
 
-        ScheduleDebounce(new FileChangeEvent(e.FullPath, e.ChangeType, _timeProvider.GetUtcNow()));
+        var path = IsFingerprintInput(e.FullPath) ? e.FullPath : e.OldFullPath;
+        ScheduleDebounce(new FileChangeEvent(path, e.ChangeType, _timeProvider.GetUtcNow()));
     }
 
-    private static bool IsExcluded(string fullPath)
+    private void AddWatcher(string directory, bool includeSubdirectories, IEnumerable<string>? filters = null)
     {
-        var normalized = fullPath.Replace('\\', '/');
-        return normalized.Contains("/bin/")
-            || normalized.Contains("/obj/")
-            || normalized.Contains("/.git/")
-            || normalized.Contains("/node_modules/");
+        var watcher = new FileSystemWatcher(directory)
+        {
+            Filter = "*",
+            IncludeSubdirectories = includeSubdirectories,
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.DirectoryName,
+        };
+
+        if (filters is not null)
+        {
+            watcher.Filters.Clear();
+            foreach (var filter in filters)
+            {
+                watcher.Filters.Add(filter);
+            }
+        }
+
+        watcher.Changed += OnFileSystemEvent;
+        watcher.Created += OnFileSystemEvent;
+        watcher.Deleted += OnFileSystemEvent;
+        watcher.Renamed += OnRenamed;
+        _watchers.Add(watcher);
+        watcher.EnableRaisingEvents = true;
     }
+
+    private bool IsFingerprintInput(string fullPath) =>
+        _solutionDirectory is { } root && SourceFingerprinter.CoversPath(root, fullPath);
 
     internal void ScheduleDebounce(FileChangeEvent evt)
     {

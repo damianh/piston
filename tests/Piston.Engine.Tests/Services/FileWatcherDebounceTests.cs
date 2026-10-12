@@ -164,12 +164,11 @@ public sealed class FileWatcherDebounceTests
         {
             sut.Start(dir.FullName);
 
-            // Write to excluded directories
-            var binDir = Directory.CreateDirectory(Path.Combine(dir.FullName, "bin"));
-            var objDir = Directory.CreateDirectory(Path.Combine(dir.FullName, "obj"));
-
-            await File.WriteAllTextAsync(Path.Combine(binDir.FullName, "output.cs"), "// bin file");
-            await File.WriteAllTextAsync(Path.Combine(objDir.FullName, "output.cs"), "// obj file");
+            foreach (var excluded in new[] { "bin", "obj", "TestResults", ".git", ".vs", ".idea", ".piston", "node_modules" })
+            {
+                var excludedDir = Directory.CreateDirectory(Path.Combine(dir.FullName, excluded));
+                await File.WriteAllTextAsync(Path.Combine(excludedDir.FullName, "output.cs"), "// generated");
+            }
 
             await Task.Delay(debounce + TimeSpan.FromMilliseconds(100));
 
@@ -183,7 +182,7 @@ public sealed class FileWatcherDebounceTests
     }
 
     [Fact]
-    public async Task NonWatchedExtension_DoesNotFireEvent()
+    public async Task FingerprintedFilesWithAnyExtension_AreWatched()
     {
         var debounce = TimeSpan.FromMilliseconds(50);
         using var sut = new FileWatcherService(debounce);
@@ -201,12 +200,41 @@ public sealed class FileWatcherDebounceTests
 
             await Task.Delay(debounce + TimeSpan.FromMilliseconds(100));
 
-            Assert.Empty(fired);
+            var changes = fired.SelectMany(batch => batch.Changes).Select(change => Path.GetFileName(change.FilePath)).ToArray();
+            Assert.Contains("readme.txt", changes);
+            Assert.Contains("data.json", changes);
         }
         finally
         {
             sut.Stop();
             dir.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task FingerprintedAncestorInput_IsWatched()
+    {
+        var debounce = TimeSpan.FromMilliseconds(50);
+        using var sut = new FileWatcherService(debounce);
+
+        var received = new TaskCompletionSource<FileChangeBatch>(TaskCreationOptions.RunContinuationsAsynchronously);
+        sut.FileChanged += batch => received.TrySetResult(batch);
+
+        var parent = Directory.CreateTempSubdirectory("piston-test-");
+        var solution = Directory.CreateDirectory(Path.Combine(parent.FullName, "solution"));
+        try
+        {
+            sut.Start(solution.FullName);
+            var inputPath = Path.Combine(parent.FullName, "global.json");
+            await File.WriteAllTextAsync(inputPath, "{}");
+
+            var batch = await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Contains(batch.Changes, change => change.FilePath == inputPath);
+        }
+        finally
+        {
+            sut.Stop();
+            parent.Delete(recursive: true);
         }
     }
 
