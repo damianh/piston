@@ -85,6 +85,26 @@ public sealed class OrchestratorVerifyTests : IDisposable
     }
 
     [Fact]
+    public async Task ExternalInputRemovedWithoutFingerprintChange_DoesNotReuseStartupRun()
+    {
+        // The startup run built while an external input (e.g. an ancestor .editorconfig) existed.
+        _impact.VerificationCoverage = () => "Ancestor .editorconfig is outside the source fingerprint.";
+        await StartAsync();
+        var startup = _state.LastRun!;
+        Assert.False(startup.InputCoverageVerified);
+
+        // The external input is deleted: the fingerprint is unchanged but coverage now succeeds.
+        _impact.VerificationCoverage = () => null;
+        var result = await _orchestrator.VerifyAsync(Timeout, CancellationToken.None);
+
+        Assert.Equal(VerificationVerdict.Passed, result.Verdict);
+        Assert.Equal(VerificationSource.Forced, result.Source);
+        Assert.NotEqual(startup.RunId, result.Run!.RunId);
+        Assert.Equal(startup.SourceAfter, result.Run.SourceAfter);
+        Assert.True(result.Run.InputCoverageVerified);
+    }
+
+    [Fact]
     public async Task EditBetweenReuseDecisionAndReturn_RechecksFingerprint()
     {
         await StartAsync();
@@ -147,7 +167,8 @@ public sealed class OrchestratorVerifyTests : IDisposable
         Assert.Equal(VerificationVerdict.NotFullScope, result.Verdict);
         Assert.Equal(1, result.Attempts);
         Assert.Null(result.Run);
-        Assert.Equal(2, coverageChecks);
+        // Verification re-evaluates once; the watcher-triggered full run may also capture its own coverage.
+        Assert.True(coverageChecks >= 2, $"coverage checks: {coverageChecks}");
     }
 
     [Fact]

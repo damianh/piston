@@ -186,6 +186,12 @@ public sealed record TestRunRecord
 
     public TestRunContext? Context { get; init; }
 
+    /// <summary>
+    /// True when, before this run built, every evaluated build input was inside the source fingerprint.
+    /// Only such runs can be bound to a later fingerprint, because inputs outside it can change unseen.
+    /// </summary>
+    public bool InputCoverageVerified { get; init; }
+
     /// <summary>Build output from this run only; null if its build did not return a result.</summary>
     public BuildResult? Build { get; init; }
 

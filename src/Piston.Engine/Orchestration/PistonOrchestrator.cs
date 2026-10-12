@@ -677,6 +677,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                             path => _impactAnalyzer.GetMtpOutputPath(path) is not null ? solutionDir : Environment.CurrentDirectory,
                             StringComparer.Ordinal)),
             };
+            if (run.IsFullScope)
+            {
+                run = run with { InputCoverageVerified = IsInputCoverageVerified(solutionPath) };
+            }
+
             PublishActiveRun(run);
 
             if (ct.IsCancellationRequested)
@@ -984,6 +989,21 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     }
 
     // ── Run provenance ────────────────────────────────────────────────────────
+
+    // Captured per run so a later verification never binds a result to inputs it cannot see.
+    private bool IsInputCoverageVerified(string solutionPath)
+    {
+        try
+        {
+            return _impactAnalyzer.GetVerificationCoverageIssue(solutionPath) is null;
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            DiagnosticLog.Instance?.Write("Orchestrator",
+                $"Build-input coverage evaluation failed: {ex.GetType().Name}: {ex.Message}");
+            return false;
+        }
+    }
 
     private TestRunRecord CreateRunRecord(TestRunTrigger trigger) => new()
     {

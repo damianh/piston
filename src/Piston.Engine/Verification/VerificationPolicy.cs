@@ -48,11 +48,13 @@ public static class VerificationPolicy
         }
 
         // Only the newest full-scope result for this exact source is considered, so an older pass
-        // never hides a newer failure for the same source.
+        // never hides a newer failure for the same source. Present coverage says nothing about inputs
+        // outside the fingerprint when the candidate ran, so the run must carry its own coverage.
         var newest = recentRuns.FirstOrDefault(r =>
             r.IsFullScope && r.Freshness == ResultFreshness.Current && r.SourceAfter == current);
 
-        return newest is not null && IsReusable(newest) && CoversTestProjects(newest, requiredTestProjects)
+        return newest is not null && newest.InputCoverageVerified && IsReusable(newest)
+            && CoversTestProjects(newest, requiredTestProjects)
             ? new VerificationDecision(VerificationAction.Reuse, newest)
             : new VerificationDecision(VerificationAction.RequestForced);
     }
@@ -99,6 +101,12 @@ public static class VerificationPolicy
         if (run.SourceAfter != current)
         {
             return new(VerificationVerdict.Stale, true, "Source changed after the run finished.");
+        }
+
+        if (!run.InputCoverageVerified)
+        {
+            return new(VerificationVerdict.Stale, true,
+                "Build-input coverage was not established when the run started; inputs outside the source fingerprint may have differed.");
         }
 
         switch (run.Status)

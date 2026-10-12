@@ -362,4 +362,34 @@ public sealed class FileWatcherDebounceTests
         time.Advance(debounce);
         Assert.False(sut.HasPendingChanges);
     }
+
+    [Fact]
+    public void HasPendingChanges_RemainsTrueUntilFileChangedHandlerReturns()
+    {
+        var debounce = TimeSpan.FromMilliseconds(100);
+        var time = new TestTimeProvider();
+        using var sut = new FileWatcherService(debounce, time);
+        bool? pendingDuringDispatch = null;
+        sut.FileChanged += _ => pendingDuringDispatch = sut.HasPendingChanges;
+
+        sut.ScheduleDebounce(new("Test.cs", WatcherChangeTypes.Changed, time.GetUtcNow()));
+        time.Advance(debounce);
+
+        Assert.True(pendingDuringDispatch);
+        Assert.False(sut.HasPendingChanges);
+    }
+
+    [Fact]
+    public void HasPendingChanges_ClearsWhenFileChangedHandlerThrows()
+    {
+        var debounce = TimeSpan.FromMilliseconds(100);
+        var time = new TestTimeProvider();
+        using var sut = new FileWatcherService(debounce, time);
+        sut.FileChanged += _ => throw new InvalidOperationException("handler failed");
+
+        sut.ScheduleDebounce(new("Test.cs", WatcherChangeTypes.Changed, time.GetUtcNow()));
+        _ = Record.Exception(() => time.Advance(debounce));
+
+        Assert.False(sut.HasPendingChanges);
+    }
 }

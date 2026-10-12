@@ -14,6 +14,9 @@ public sealed class FileWatcherService : IFileWatcherService
     private ITimer? _debounceTimer;
     private long _debounceGeneration;
     private string? _monitoringError;
+
+    // Batches removed from _pendingEvents whose FileChanged handlers have not yet returned.
+    private int _inFlightDispatches;
     private readonly Dictionary<string, FileChangeEvent> _pendingEvents = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _lock = new();
 
@@ -36,7 +39,7 @@ public sealed class FileWatcherService : IFileWatcherService
         {
             lock (_lock)
             {
-                return _pendingEvents.Count > 0;
+                return _pendingEvents.Count > 0 || _inFlightDispatches > 0;
             }
         }
     }
@@ -217,11 +220,22 @@ public sealed class FileWatcherService : IFileWatcherService
             var timestamp = changes.Max(e => e.Timestamp);
             batch = new FileChangeBatch(changes, timestamp);
             _pendingEvents.Clear();
+            _inFlightDispatches++;
             _debounceTimer?.Dispose();
             _debounceTimer = null;
         }
 
-        FileChanged?.Invoke(batch);
+        try
+        {
+            FileChanged?.Invoke(batch);
+        }
+        finally
+        {
+            lock (_lock)
+            {
+                _inFlightDispatches--;
+            }
+        }
     }
 
     public void Dispose() => Stop();

@@ -21,7 +21,8 @@ public sealed class VerificationPolicyTests
         TestRunTrigger trigger = TestRunTrigger.Forced,
         bool failing = false,
         bool duplicate = false,
-        string runId = "run-1") => new()
+        string runId = "run-1",
+        bool coverageVerified = true) => new()
         {
             RunId = runId,
             EngineInstanceId = "engine",
@@ -32,6 +33,7 @@ public sealed class VerificationPolicyTests
             Freshness = freshness,
             RequestedAt = DateTimeOffset.UtcNow,
             SourceAfter = after ?? Source,
+            InputCoverageVerified = coverageVerified,
             Context = new TestRunContext("/s.slnx", null, null, filter, filter, null, false, "Debug", null, "rt", "os", "/"),
             Suites =
             [
@@ -48,6 +50,23 @@ public sealed class VerificationPolicyTests
         var decision = VerificationPolicy.Decide(Source, null, [run], null, false);
         Assert.Equal(VerificationAction.Reuse, decision.Action);
         Assert.Same(run, decision.Run);
+    }
+
+    [Theory]
+    [InlineData(TestRunStatus.Completed)]
+    [InlineData(TestRunStatus.BuildFailed)]
+    public void Decide_DoesNotReuseRunWithoutItsOwnInputCoverage(TestRunStatus status)
+    {
+        var decision = VerificationPolicy.Decide(Source, null, [Run(status, coverageVerified: false)], null, false);
+        Assert.Equal(VerificationAction.RequestForced, decision.Action);
+    }
+
+    [Fact]
+    public void Evaluate_RunWithoutItsOwnInputCoverageIsRetryableStale()
+    {
+        var evaluation = VerificationPolicy.Evaluate(Run(coverageVerified: false), Source);
+        Assert.Equal(VerificationVerdict.Stale, evaluation.Verdict);
+        Assert.True(evaluation.Retryable);
     }
 
     [Fact]
