@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Collections.Concurrent;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Piston.Protocol;
 using Piston.Protocol.JsonRpc;
@@ -134,7 +135,21 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    private async Task SendCommandAsync(string method, JsonNode? @params)
+    private async Task SendCommandAsync(string method, JsonNode? @params) =>
+        _ = await RequestAsync(method, @params).ConfigureAwait(false);
+
+    /// <summary>Describes the connected daemon process.</summary>
+    public async Task<DaemonInfoResponse?> GetDaemonInfoAsync()
+    {
+        var result = await RequestAsync(ProtocolMethods.DaemonInfo, null).ConfigureAwait(false);
+        return result?.Deserialize<DaemonInfoResponse>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>Asks the daemon to stop its engine and exit.</summary>
+    public Task ShutdownDaemonAsync() =>
+        SendCommandAsync(ProtocolMethods.DaemonShutdown, null);
+
+    private async Task<JsonNode?> RequestAsync(string method, JsonNode? @params)
     {
         if (ConnectionState != ConnectionState.Connected)
         {
@@ -161,6 +176,8 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
             {
                 throw new InvalidOperationException($"JSON-RPC error {response.Error.Code}: {response.Error.Message}");
             }
+
+            return response.Result;
         }
         finally
         {

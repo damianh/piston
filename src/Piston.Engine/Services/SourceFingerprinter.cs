@@ -42,6 +42,41 @@ public static class SourceFingerprinter
         "Directory.Packages.props", "NuGet.config", "nuget.config",
     ];
 
+    internal static IReadOnlyList<string> AncestorInputNames => AncestorInputs;
+
+    internal static bool CoversPath(string rootDirectory, string path)
+    {
+        var root = Path.GetFullPath(rootDirectory);
+        var fullPath = Path.GetFullPath(path);
+        var relative = Path.GetRelativePath(root, fullPath);
+        if (!Path.IsPathRooted(relative) && relative != ".."
+            && !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+        {
+            return !relative.Split(Path.DirectorySeparatorChar).Any(ExcludedComponents.Contains);
+        }
+
+        foreach (var name in AncestorInputs)
+        {
+            for (var dir = new DirectoryInfo(root); dir is not null; dir = dir.Parent)
+            {
+                var candidate = Path.Combine(dir.FullName, name);
+                if (!File.Exists(candidate))
+                {
+                    continue;
+                }
+
+                if (string.Equals(candidate, fullPath,
+                    OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                {
+                    return true;
+                }
+
+                break;
+            }
+        }
+
+        return false;
+    }
     public static SourceFingerprint Compute(string rootDirectory)
     {
         var root = Path.GetFullPath(rootDirectory);

@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Reflection;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -8,6 +9,7 @@ using Piston.Engine;
 using Piston.Hosting.Protocol;
 using Piston.Hosting.Services;
 using Piston.Mcp;
+using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
 
 namespace Piston.Hosting;
@@ -26,6 +28,8 @@ public sealed class DaemonHost : IAsyncDisposable
     private ProtocolRouter? _router;
     private WebApplication? _webApp;
     private WebApplication? _mcpApp;
+    private readonly TaskCompletionSource _shutdownRequested = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private DateTimeOffset _startedAt;
     private bool _disposed;
 
     public DaemonHost(DaemonHostOptions options)
@@ -39,6 +43,26 @@ public sealed class DaemonHost : IAsyncDisposable
 
     /// <summary>The web dashboard URL. Available after <see cref="StartAsync"/>.</summary>
     public string WebUrl => $"http://localhost:{_options.WebPort}";
+
+    /// <summary>The HTTP MCP endpoint URL, or null when MCP is disabled.</summary>
+    public string? McpUrl => _options.McpPort is { } port ? $"http://localhost:{port}" : null;
+
+    /// <summary>Asks <see cref="WaitForShutdownAsync"/> to return so the host can stop. Does not block.</summary>
+    public void RequestShutdown()
+    {
+        _log("[piston] Shutdown requested.");
+        _ = _shutdownRequested.TrySetResult();
+    }
+
+    /// <summary>Describes this daemon for <c>daemon/info</c>.</summary>
+    public DaemonInfoResponse GetInfo() => new(
+        Environment.ProcessId,
+        _options.SolutionPath,
+        _options.PipeName,
+        _startedAt,
+        typeof(DaemonHost).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
+        WebUrl,
+        McpUrl);
 
     /// <summary>
     /// Starts the engine, protocol router, web server, and MCP server,
@@ -79,18 +103,27 @@ public sealed class DaemonHost : IAsyncDisposable
 
     private async Task StartCoreAsync(CancellationToken ct)
     {
+        _startedAt = DateTimeOffset.UtcNow;
 
         // Use a proxy sink so the router (created after engine) can receive activity events.
         var activityProxy = new ActivityEventSinkProxy();
         _engine = new PistonEngine(_options.EngineOptions, activityProxy);
 
         _log($"[piston] Starting engine for: {_options.SolutionPath}");
-        await _engine.StartAsync(_options.SolutionPath).ConfigureAwait(false);
+        var engine = _engine;
 
+        // Endpoints start after worktree ownership is held but before watching or the startup run,
+        // so an endpoint conflict fails the daemon without starting a run.
+        await engine.StartAsync(_options.SolutionPath, () => StartEndpointsAsync(engine, activityProxy, ct))
+            .ConfigureAwait(false);
+    }
+
+    private async Task StartEndpointsAsync(PistonEngine engine, ActivityEventSinkProxy activityProxy, CancellationToken ct)
+    {
         _log($"[piston] Listening on pipe: {_options.PipeName}");
 
         var listener = new NamedPipeListener(_options.PipeName);
-        _router = new ProtocolRouter(_engine, listener);
+        _router = new ProtocolRouter(engine, listener);
 
         // Connect the activity proxy to the router so engine events are broadcast to clients
         activityProxy.SetSink(_router);
@@ -98,6 +131,7 @@ public sealed class DaemonHost : IAsyncDisposable
         // Wire MCP call tracking into the activity timeline and call log.
         var mcpCallTracker = new McpCallTracker(_router.Emit, _options.SolutionPath);
         _router.SetMcpCallTracker(mcpCallTracker);
+        _router.SetDaemonControl(new DaemonControl(GetInfo, RequestShutdown));
 
         RouterTask = _router.RunAsync(ct);
 
@@ -137,34 +171,51 @@ public sealed class DaemonHost : IAsyncDisposable
         // Fallback to index.html for Blazor SPA client-side routing
         _ = _webApp.MapFallbackToFile("index.html");
 
-        await _webApp.StartAsync(ct).ConfigureAwait(false);
+        await StartEndpointAsync(_webApp, "web dashboard", WebUrl, "--web-port", ct).ConfigureAwait(false);
         _log($"[piston] Web server (WebSocket) listening on port: {_options.WebPort}");
 
         if (_options.McpPort is not null)
         {
             // MCP always runs on its own dedicated app to avoid middleware conflicts
             var mcpBuilder = WebApplication.CreateBuilder();
-            _ = mcpBuilder.Services.AddSingleton<IEngine>(_engine);
+            _ = mcpBuilder.Services.AddSingleton<IEngine>(engine);
             _ = mcpBuilder.Services.AddPistonMcp(mcpCallTracker);
             _mcpApp = mcpBuilder.Build();
             _ = _mcpApp.MapMcp();
             _mcpApp.Urls.Add($"http://localhost:{_options.McpPort}");
 
-            await _mcpApp.StartAsync(ct).ConfigureAwait(false);
+            await StartEndpointAsync(_mcpApp, "MCP server", McpUrl!, "--mcp-port (or mcpPort in .piston.json)", ct)
+                .ConfigureAwait(false);
             _log($"[piston] MCP server listening on port: {_options.McpPort}");
+        }
+    }
+
+    private static async Task StartEndpointAsync(
+        WebApplication app, string name, string url, string option, CancellationToken ct)
+    {
+        try
+        {
+            await app.StartAsync(ct).ConfigureAwait(false);
+        }
+        catch (IOException ex)
+        {
+            throw new DaemonStartupException(
+                $"Could not start the {name} on {url}: {ex.Message} " +
+                $"Another process (possibly another Piston daemon) may be using the port; stop it or choose a different {option}.",
+                ex);
         }
     }
 
     /// <summary>Task representing the protocol router loop. Available after <see cref="StartAsync"/>.</summary>
     public Task RouterTask { get; private set; } = Task.CompletedTask;
 
-    /// <summary>Waits until cancellation is requested or the router loop ends.</summary>
+    /// <summary>Waits until cancellation or shutdown is requested, or the router loop ends.</summary>
     public async Task WaitForShutdownAsync(CancellationToken ct)
     {
         try
         {
             var cancelled = Task.Delay(Timeout.Infinite, ct);
-            _ = await Task.WhenAny(RouterTask, cancelled).ConfigureAwait(false);
+            _ = await Task.WhenAny(RouterTask, cancelled, _shutdownRequested.Task).ConfigureAwait(false);
         }
         catch (OperationCanceledException) { }
     }

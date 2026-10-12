@@ -5,6 +5,7 @@ using Piston.Engine.Coverage;
 using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
+using Piston.Engine.Verification;
 
 namespace Piston.Engine.Orchestration;
 
@@ -37,8 +38,15 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     private readonly SemaphoreSlim _coverageLock = new(1, 1);
     private readonly string _engineInstanceId = Guid.NewGuid().ToString("N");
     private readonly object _runRecordsLock = new();
+    private readonly Dictionary<string, TaskCompletionSource<TestRunRecord>> _runWaiters = new(StringComparer.Ordinal);
     private long _runSequence;
     private long _fileChangeGeneration;
+
+    /// <summary>Maximum runs reused, awaited or requested by one <see cref="VerifyAsync"/> call.</summary>
+    internal int MaxVerificationAttempts { get; set; } = 3;
+
+    /// <summary>Longest time <see cref="VerifyAsync"/> waits for debounced watcher changes to be raised.</summary>
+    internal TimeSpan VerificationSettleTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>Resolves the .NET SDK version recorded in run context; null when unknown.</summary>
     internal Func<string?>? SdkVersionProvider { get; set; }
@@ -169,6 +177,220 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         }
 
         return await TriggerRunAsync(_solutionPath, null, TestRunTrigger.Forced).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Waits for the run with <paramref name="runId"/> to reach a terminal state. Returns the retained
+    /// record immediately when already terminal, or null when the run is neither active nor retained.
+    /// </summary>
+    public async Task<TestRunRecord?> AwaitRunAsync(string runId, CancellationToken ct)
+    {
+        TaskCompletionSource<TestRunRecord>? waiter;
+        lock (_runRecordsLock)
+        {
+            var finished = _state.RecentRuns.FirstOrDefault(r => r.RunId == runId);
+            if (finished is not null)
+            {
+                return finished;
+            }
+
+            if (!_runWaiters.TryGetValue(runId, out waiter))
+            {
+                if (_state.CurrentRun?.RunId != runId)
+                {
+                    return null;
+                }
+
+                waiter = new TaskCompletionSource<TestRunRecord>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _runWaiters[runId] = waiter;
+            }
+        }
+
+        return await waiter.Task.WaitAsync(ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Produces current full verification for the present source: reuses the newest qualifying
+    /// terminal run, awaits an active full-scope run, or requests a forced full run. Retries a bounded
+    /// number of times when the source changes or the run is superseded. Never reports a result that
+    /// is not bound to the present source fingerprint as passing.
+    /// </summary>
+    /// <param name="timeout">Overall limit; on expiry the verdict is <see cref="VerificationVerdict.TimedOut"/> and any run continues.</param>
+    /// <param name="ct">Caller cancellation; throws <see cref="OperationCanceledException"/> without cancelling the run.</param>
+    public async Task<VerificationResult> VerifyAsync(TimeSpan timeout, CancellationToken ct)
+    {
+        if (_solutionPath is null)
+        {
+            return new VerificationResult(VerificationVerdict.Faulted, "Engine has not been started.",
+                VerificationSource.None, 0, null, null);
+        }
+
+        var solutionDir = Path.GetDirectoryName(Path.GetFullPath(_solutionPath)) ?? _solutionPath;
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(timeout);
+        var token = timeoutCts.Token;
+
+        var attempts = 0;
+        VerificationResult? last = null;
+        TestRunRecord? pending = null;
+        try
+        {
+            while (true)
+            {
+                await WaitForWatcherToSettleAsync(token).ConfigureAwait(false);
+
+                var current = SourceFingerprinter.TryCompute(solutionDir);
+                if (_fileWatcher.MonitoringError is { } monitoringError)
+                {
+                    return new VerificationResult(VerificationVerdict.Faulted,
+                        $"File monitoring is unreliable: {monitoringError} Restart the daemon before verifying.",
+                        VerificationSource.None, attempts, null, current);
+                }
+                string? coverageIssue;
+                IReadOnlyList<string> requiredTestProjects;
+                try
+                {
+                    var coverage = await Task.Run(
+                        () =>
+                        {
+                            var issue = _impactAnalyzer.GetVerificationCoverageIssue(_solutionPath, out var projects);
+                            return (Issue: issue, Projects: projects);
+                        }, CancellationToken.None)
+                        .WaitAsync(token).ConfigureAwait(false);
+                    coverageIssue = coverage.Issue;
+                    requiredTestProjects = coverage.Projects;
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    return new VerificationResult(VerificationVerdict.Faulted,
+                        $"Could not evaluate build-input coverage: {ex.GetType().Name}: {ex.Message}",
+                        VerificationSource.None, attempts, null, current);
+                }
+
+                if (_fileWatcher.MonitoringError is { } decisionMonitoringError)
+                {
+                    return new VerificationResult(VerificationVerdict.Faulted,
+                        $"File monitoring is unreliable: {decisionMonitoringError} Restart the daemon before verifying.",
+                        VerificationSource.None, attempts, null, current);
+                }
+
+                if (coverageIssue is not null)
+                {
+                    return new VerificationResult(VerificationVerdict.NotFullScope,
+                        coverageIssue, VerificationSource.None, attempts, null, current);
+                }
+
+                TestRunRecord? active;
+                IReadOnlyList<TestRunRecord> recent;
+                lock (_runRecordsLock)
+                {
+                    active = _state.CurrentRun;
+                    recent = _state.RecentRuns;
+                }
+
+                var decision = VerificationPolicy.Decide(
+                    current, active, recent, _state.TestFilter, _fileWatcher.HasPendingChanges, requiredTestProjects);
+                if (decision.Action == VerificationAction.Final)
+                {
+                    return new VerificationResult(decision.Verdict!.Value, decision.Reason,
+                        VerificationSource.None, attempts, null, current);
+                }
+
+                attempts++;
+                TestRunRecord? run;
+                VerificationSource source;
+                switch (decision.Action)
+                {
+                    case VerificationAction.Reuse:
+                        run = decision.Run;
+                        source = VerificationSource.Reused;
+                        break;
+                    case VerificationAction.AwaitActive:
+                        pending = decision.Run;
+                        run = await AwaitRunAsync(decision.Run!.RunId, token).ConfigureAwait(false);
+                        source = VerificationSource.AwaitedActive;
+                        break;
+                    default:
+                        source = VerificationSource.Forced;
+                        try
+                        {
+                            // Run the request off the caller so synchronous pipeline work (e.g. fingerprinting
+                            // a large tree) cannot delay the timeout.
+                            run = await Task.Run(RequestRunAsync, CancellationToken.None).WaitAsync(token).ConfigureAwait(false);
+                        }
+                        catch (Exception ex) when (ex is not OperationCanceledException)
+                        {
+                            return new VerificationResult(VerificationVerdict.Faulted,
+                                $"{ex.GetType().Name}: {ex.Message}", source, attempts, _state.LastRun, current);
+                        }
+                        break;
+                }
+
+                pending = null;
+                if (run is null)
+                {
+                    if (attempts >= MaxVerificationAttempts)
+                    {
+                        return new VerificationResult(VerificationVerdict.Stale,
+                            $"The awaited run is no longer retained. Gave up after {attempts} attempt(s); " +
+                            "no current full result exists for the present source.",
+                            source, attempts, last?.Run, current);
+                    }
+
+                    continue;
+                }
+
+                var after = SourceFingerprinter.TryCompute(solutionDir);
+                var evaluation = after != current
+                    ? new VerificationEvaluation(VerificationVerdict.Stale, true,
+                        "Source changed after build-input coverage was evaluated.")
+                    : VerificationPolicy.Evaluate(run, after, requiredTestProjects);
+                if (_fileWatcher.MonitoringError is { } afterMonitoringError)
+                {
+                    evaluation = new VerificationEvaluation(VerificationVerdict.Faulted, false,
+                        $"File monitoring is unreliable: {afterMonitoringError} Restart the daemon before verifying.");
+                }
+                if (evaluation.Verdict == VerificationVerdict.Passed && _fileWatcher.HasPendingChanges)
+                {
+                    evaluation = new VerificationEvaluation(VerificationVerdict.Stale, true,
+                        "File changes were observed while verifying the result.");
+                }
+                last = new VerificationResult(evaluation.Verdict, evaluation.Reason, source, attempts, run, after);
+                if (!evaluation.Retryable || _stopping || attempts >= MaxVerificationAttempts)
+                {
+                    if (evaluation.Retryable && !_stopping && attempts >= MaxVerificationAttempts)
+                    {
+                        // Retries exhausted: whatever the last run's own status, no current full result exists.
+                        last = last with
+                        {
+                            Verdict = VerificationVerdict.Stale,
+                            Reason = $"{evaluation.Reason} Gave up after {attempts} attempt(s); the source may still be changing.",
+                        };
+                    }
+
+                    return last;
+                }
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            var activeRun = pending ?? _state.CurrentRun;
+            return new VerificationResult(VerificationVerdict.TimedOut,
+                $"No current full result within {timeout.TotalSeconds:0.#}s" +
+                (activeRun is null ? "." : $"; run {activeRun.RunId} is still {activeRun.Status} and continues.") +
+                (last?.Reason is { } previous ? $" Previous attempt: {last.Verdict}: {previous}" : ""),
+                last?.Source ?? VerificationSource.None, attempts, activeRun ?? last?.Run, last?.SourceFingerprint);
+        }
+    }
+
+    private async Task WaitForWatcherToSettleAsync(CancellationToken ct)
+    {
+        var deadline = DateTimeOffset.UtcNow + VerificationSettleTimeout;
+        while (_fileWatcher.MonitoringError is null
+            && _fileWatcher.HasPendingChanges && DateTimeOffset.UtcNow < deadline)
+        {
+            await Task.Delay(25, ct).ConfigureAwait(false);
+        }
     }
 
     internal void ClearResults(string solutionDirectory)
@@ -838,6 +1060,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             var recent = new List<TestRunRecord>(_state.RecentRuns.Count + 1) { finished };
             recent.AddRange(_state.RecentRuns.Take(PistonState.MaxRecentRuns - 1));
             _state.RecentRuns = recent;
+
+            if (_runWaiters.Remove(finished.RunId, out var waiter))
+            {
+                _ = waiter.TrySetResult(finished);
+            }
         }
 
         _state.NotifyChanged();

@@ -11,7 +11,8 @@ namespace Piston.Protocol.Transports;
 /// <summary>
 /// Platform-aware factory for creating named pipe security descriptors.
 /// On Windows, restricts pipe access to the current user only.
-/// On non-Windows platforms, returns <see langword="null"/> (file-system permissions apply).
+/// On non-Windows platforms, returns <see langword="null"/>; the transport uses
+/// <see cref="PipeOptions.CurrentUserOnly"/> to enforce peer-user isolation.
 /// </summary>
 internal static class PipeSecurityHelper
 {

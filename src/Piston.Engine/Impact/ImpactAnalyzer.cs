@@ -13,7 +13,7 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
     private readonly ICoverageStore? _coverageStore;
     private ISolutionGraph? _graph;
     private string? _solutionPath;
-    private bool _rebuildScheduled;
+    private readonly object _graphLock = new();
 
     public ImpactAnalyzer(Func<string, ISolutionGraph> graphFactory) => _graphFactory = graphFactory;
 
@@ -23,30 +23,48 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         _coverageStore = coverageStore;
     }
 
-    public async Task InitializeAsync(string solutionPath, CancellationToken ct)
+    public async Task InitializeAsync(string solutionPath, CancellationToken ct) => await Task.Run(() =>
+                                                                                         {
+                                                                                             lock (_graphLock)
+                                                                                             {
+                                                                                                 _solutionPath = solutionPath;
+                                                                                                 RefreshGraph(solutionPath);
+                                                                                             }
+                                                                                         }, ct).ConfigureAwait(false);
+
+    // Reevaluate rather than trusting the impact graph cached before the agent's latest edit.
+    public string? GetVerificationCoverageIssue(string solutionPath) =>
+        GetVerificationCoverageIssue(solutionPath, out _);
+
+    public string? GetVerificationCoverageIssue(string solutionPath, out IReadOnlyList<string> testProjects)
     {
-        _solutionPath = solutionPath;
-        _graph = await Task.Run(() => _graphFactory(solutionPath), ct).ConfigureAwait(false);
-        _rebuildScheduled = false;
+        lock (_graphLock)
+        {
+            RefreshGraph(solutionPath);
+            testProjects = _graph!.TestProjectPaths.ToArray();
+            return _graph!.VerificationCoverageIssue;
+        }
     }
 
     public ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes)
     {
-        // If a rebuild was scheduled from a prior run, execute it now synchronously
-        // (we're already on a background analysis thread)
-        if (_rebuildScheduled && _solutionPath is not null)
+        lock (_graphLock)
         {
-            try
+            var graphRefreshed = false;
+            if (_solutionPath is not null && changes.Any(c =>
+                Path.GetExtension(c.FilePath).ToLowerInvariant() is
+                    ".sln" or ".slnx" or ".slnf" or ".csproj" or ".props" or ".targets"))
             {
-                _graph = _graphFactory(_solutionPath);
+                graphRefreshed = TryRefreshGraph(_solutionPath);
             }
-            catch
-            {
-                _graph = null;
-            }
-            _rebuildScheduled = false;
-        }
 
+            var result = AnalyzeCore(changes);
+            return graphRefreshed ? result with { RequiresGraphRebuild = false } : result;
+        }
+    }
+
+    private ImpactAnalysisResult AnalyzeCore(IReadOnlyList<FileChangeEvent> changes)
+    {
         // If graph is not available, fall back to full run
         if (_graph is null)
         {
@@ -61,7 +79,6 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
 
         if (hasSolutionChange)
         {
-            _rebuildScheduled = true;
             return FullRunResult();
         }
 
@@ -199,22 +216,70 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         return tier2Result;
     }
 
-    public ImpactAnalysisResult AnalyzeFullRun() => FullRunResult();
+    public ImpactAnalysisResult AnalyzeFullRun()
+    {
+        lock (_graphLock)
+        {
+            if (_solutionPath is not null)
+            {
+                _ = TryRefreshGraph(_solutionPath);
+            }
+            return FullRunResult();
+        }
+    }
 
     public void InvalidateGraph()
     {
-        _graph = null;
-        _rebuildScheduled = false;
+        lock (_graphLock)
+        {
+            _graph = null;
+        }
     }
 
-    public IReadOnlyList<string> GetAllTestProjectPaths() =>
-        _graph?.TestProjectPaths ?? [];
+    private void RefreshGraph(string solutionPath)
+    {
+        // A failed refresh must not leave a stale graph available for run selection.
+        _graph = null;
+        _graph = _graphFactory(solutionPath);
+    }
 
-    public bool IsMtpProject(string projectPath) =>
-        _graph?.IsMtpProject(projectPath) ?? false;
+    private bool TryRefreshGraph(string solutionPath)
+    {
+        try
+        {
+            RefreshGraph(solutionPath);
+            return true;
+        }
+        catch
+        {
+            // Graph load failure is non-fatal for ordinary runs: use the solution target.
+            return false;
+        }
+    }
 
-    public string? GetMtpOutputPath(string projectPath) =>
-        _graph?.GetMtpOutputPath(projectPath);
+    public IReadOnlyList<string> GetAllTestProjectPaths()
+    {
+        lock (_graphLock)
+        {
+            return _graph?.TestProjectPaths ?? [];
+        }
+    }
+
+    public bool IsMtpProject(string projectPath)
+    {
+        lock (_graphLock)
+        {
+            return _graph?.IsMtpProject(projectPath) ?? false;
+        }
+    }
+
+    public string? GetMtpOutputPath(string projectPath)
+    {
+        lock (_graphLock)
+        {
+            return _graph?.GetMtpOutputPath(projectPath);
+        }
+    }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

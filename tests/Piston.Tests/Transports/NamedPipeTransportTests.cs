@@ -9,6 +9,10 @@ namespace Piston.Tests.Transports;
 
 public sealed class NamedPipeTransportTests
 {
+    [Fact]
+    public void UnixServerOptionsRequireCurrentUser() =>
+        Assert.True(NamedPipeServerTransport.UnixPipeOptions.HasFlag(System.IO.Pipes.PipeOptions.CurrentUserOnly));
+
     private static string UniquePipeName() =>
         $"piston-test-{Guid.NewGuid():N}";
 

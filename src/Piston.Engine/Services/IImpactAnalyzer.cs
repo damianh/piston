@@ -14,4 +14,18 @@ public interface IImpactAnalyzer
     IReadOnlyList<string> GetAllTestProjectPaths();
     bool IsMtpProject(string projectPath);
     string? GetMtpOutputPath(string projectPath);
+
+    /// <summary>
+    /// Refreshes the graph used for run selection. Returns null only when evaluated project inputs
+    /// are covered by the source fingerprint.
+    /// </summary>
+    string? GetVerificationCoverageIssue(string solutionPath) => "Build-input coverage is unavailable.";
+
+    /// <summary>Evaluates coverage and captures the refreshed graph's test projects together.</summary>
+    string? GetVerificationCoverageIssue(string solutionPath, out IReadOnlyList<string> testProjects)
+    {
+        var issue = GetVerificationCoverageIssue(solutionPath);
+        testProjects = GetAllTestProjectPaths().ToArray();
+        return issue;
+    }
 }

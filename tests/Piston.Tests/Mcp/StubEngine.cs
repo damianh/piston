@@ -3,6 +3,7 @@
 
 using Piston.Engine;
 using Piston.Engine.Models;
+using Piston.Engine.Verification;
 
 namespace Piston.Tests.Mcp;
 
@@ -37,6 +38,17 @@ internal sealed class StubEngine : IEngine
     }
 
     public void Stop() { }
+
+    /// <summary>Result returned by <see cref="VerifyAsync"/>.</summary>
+    public VerificationResult? NextVerification { get; set; }
+
+    public TimeSpan? LastVerifyTimeout { get; private set; }
+
+    public Task<VerificationResult> VerifyAsync(TimeSpan timeout, CancellationToken ct)
+    {
+        LastVerifyTimeout = timeout;
+        return Task.FromResult(NextVerification ?? throw new InvalidOperationException("No verification configured."));
+    }
 
     public void SetFilter(string? filter)
     {

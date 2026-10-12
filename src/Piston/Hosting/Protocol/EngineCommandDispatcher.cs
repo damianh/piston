@@ -19,8 +19,15 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
 
     private readonly IEngine _engine;
     private McpCallTracker? _mcpCallTracker;
+    private DaemonControl? _daemonControl;
 
     public EngineCommandDispatcher(IEngine engine) => _engine = engine;
+
+    /// <summary>Delay before a requested shutdown starts, so the reply reaches the client first.</summary>
+    internal static TimeSpan ShutdownReplyGrace { get; set; } = TimeSpan.FromMilliseconds(100);
+
+    public void SetDaemonControl(DaemonControl control) =>
+        _daemonControl = control;
 
     public void SetMcpCallTracker(McpCallTracker tracker) =>
         _mcpCallTracker = tracker;
@@ -74,12 +81,34 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                         System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
                 }
 
+            case ProtocolMethods.DaemonInfo:
+                {
+                    var control = RequireDaemonControl(method);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(control.GetInfo(), JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.DaemonShutdown:
+                {
+                    var control = RequireDaemonControl(method);
+                    _ = Task.Run(async () =>
+                    {
+                        await Task.Delay(ShutdownReplyGrace, CancellationToken.None).ConfigureAwait(false);
+                        control.RequestShutdown();
+                    }, CancellationToken.None);
+                    return null;
+                }
+
             default:
                 throw new JsonRpcException(
                     JsonRpcErrorCodes.MethodNotFound,
                     $"Method not found: {method}");
         }
     }
+
+    private DaemonControl RequireDaemonControl(string method) =>
+        _daemonControl ?? throw new JsonRpcException(
+            JsonRpcErrorCodes.MethodNotFound, $"Method not available in this host: {method}");
 
     private static void ValidateFilter(string? filter)
     {

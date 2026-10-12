@@ -165,15 +165,34 @@ public sealed class ImpactAnalyzerTests : IDisposable
     }
 
     [Fact]
-    public async Task CsprojChange_SetsRequiresGraphRebuild_AndIncludesProjectAndDependents()
+    public async Task CsprojChange_RefreshesGraphAndIncludesProjectAndDependents()
     {
         var analyzer = new ImpactAnalyzer(_factory);
         await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
 
         var result = analyzer.Analyze([Change(_libCsproj)]);
 
-        Assert.True(result.RequiresGraphRebuild);
+        Assert.False(result.RequiresGraphRebuild);
         Assert.Contains(_libCsproj, result.AffectedProjectPaths, StringComparer.OrdinalIgnoreCase);
+
+        var sourceResult = analyzer.Analyze([Change(_libCode)]);
+        Assert.False(sourceResult.IsFullRun);
+        Assert.Contains(_libCsproj, sourceResult.AffectedProjectPaths, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task PropsChange_RefreshesGraphWithoutRequestingRedundantRebuild()
+    {
+        var analyzer = new ImpactAnalyzer(_factory);
+        await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
+
+        var propsPath = Path.Combine(_root, "Directory.Build.props");
+        File.WriteAllText(propsPath, "<Project />");
+        var result = analyzer.Analyze([Change(propsPath)]);
+
+        Assert.True(result.IsFullRun);
+        Assert.False(result.RequiresGraphRebuild);
+        Assert.False(analyzer.Analyze([Change(_libCode)]).IsFullRun);
     }
 
     [Fact]
@@ -231,6 +250,31 @@ public sealed class ImpactAnalyzerTests : IDisposable
 
         var result = analyzer.Analyze([Change(_libCode)]);
         Assert.True(result.IsFullRun);
+    }
+
+    [Fact]
+    public async Task FullRunAfterInvalidation_RebuildsGraphBeforeEnumeratingTestProjects()
+    {
+        ISolutionGraph graph = _graph;
+        var analyzer = new ImpactAnalyzer(_ => graph);
+        await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
+        analyzer.InvalidateGraph();
+        graph = new StubSolutionGraph([_appCsproj, _testsCsproj], [_appCsproj, _testsCsproj]);
+
+        Assert.True(analyzer.AnalyzeFullRun().IsFullRun);
+        Assert.Equal([_appCsproj, _testsCsproj], analyzer.GetAllTestProjectPaths());
+    }
+
+    [Fact]
+    public async Task FailedFullRunRefresh_DropsStaleGraphAndFallsBackToSolutionTarget()
+    {
+        var fail = false;
+        var analyzer = new ImpactAnalyzer(_ => fail ? throw new InvalidOperationException("bad graph") : _graph);
+        await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
+        fail = true;
+
+        Assert.True(analyzer.AnalyzeFullRun().IsFullRun);
+        Assert.Empty(analyzer.GetAllTestProjectPaths());
     }
 
     [Fact]

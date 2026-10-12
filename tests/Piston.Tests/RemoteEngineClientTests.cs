@@ -5,6 +5,7 @@ using Piston.Engine;
 using Piston.Hosting;
 using Piston.Hosting.Protocol;
 using Piston.Protocol;
+using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
 using Xunit;
 
@@ -68,6 +69,51 @@ public sealed class RemoteEngineClientTests
         await client.ForceRunAsync();
 
         Assert.True(engine.ForceRunCalled);
+
+        await cts.CancelAsync();
+        await client.DisposeAsync();
+        await router.DisposeAsync();
+    }
+
+    // ── daemon/info and daemon/shutdown ──────────────────────────────────────
+
+    [Fact]
+    public async Task DaemonControl_InfoAndShutdownReachTheHost()
+    {
+        var pipeName = UniquePipeName();
+        var (_, router, _) = CreateServer(pipeName);
+        var info = new DaemonInfoResponse(1234, "/w/App.slnx", pipeName, DateTimeOffset.UnixEpoch, "1.2.3",
+            "http://localhost:5199", "http://localhost:5200");
+        var shutdown = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        router.SetDaemonControl(new DaemonControl(() => info, () => shutdown.TrySetResult()));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        _ = Task.Run(() => router.RunAsync(cts.Token), cts.Token);
+
+        var client = new RemoteEngineClient(pipeName);
+        await client.ConnectAsync(cts.Token);
+
+        Assert.Equal(info, await client.GetDaemonInfoAsync());
+        await client.ShutdownDaemonAsync();
+        await shutdown.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        await cts.CancelAsync();
+        await client.DisposeAsync();
+        await router.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task DaemonControl_UnavailableWithoutHost()
+    {
+        var pipeName = UniquePipeName();
+        var (_, router, _) = CreateServer(pipeName);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        _ = Task.Run(() => router.RunAsync(cts.Token), cts.Token);
+
+        var client = new RemoteEngineClient(pipeName);
+        await client.ConnectAsync(cts.Token);
+
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(client.GetDaemonInfoAsync);
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(client.ShutdownDaemonAsync);
 
         await cts.CancelAsync();
         await client.DisposeAsync();

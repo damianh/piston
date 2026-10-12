@@ -50,4 +50,10 @@ public static class ProtocolMethods
 
     /// <summary>Fetch the MCP tool call log (ring buffer).</summary>
     public const string McpGetCallLog = "mcp/getCallLog";
+
+    /// <summary>Describe the daemon process: PID, solution, start time, version and endpoint URLs.</summary>
+    public const string DaemonInfo = "daemon/info";
+
+    /// <summary>Stop the engine and exit the daemon process, releasing its pipe, ports and worktree ownership.</summary>
+    public const string DaemonShutdown = "daemon/shutdown";
 }
