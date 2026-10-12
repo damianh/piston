@@ -142,6 +142,38 @@ public sealed class PistonEngineTests : IDisposable
         Assert.Equal(PistonPhase.Idle, engine.State.Phase);
     }
 
+    [Fact]
+    public async Task StartAsync_WhenBeforeRunsStartFails_StartsNoRunAndReleasesOwnership()
+    {
+        var coordination = Path.Combine(_root, "coordination");
+        var solution = Path.Combine(_root, "Test.slnx");
+        File.WriteAllText(solution, "<Solution />");
+        var directory = new ExecutionCoordinationDirectory(coordination);
+        using var engine = new PistonEngine(new PistonOptions
+        {
+            SolutionPath = solution,
+            ProcessPoolSize = 1,
+            ExecutionCoordinationDirectory = coordination,
+        });
+        var phases = new List<PistonPhase>();
+        engine.State.StateChanged += () => phases.Add(engine.State.Phase);
+        var heldOwnershipDuringCallback = false;
+
+        var ex = await Assert.ThrowsAsync<IOException>(() => engine.StartAsync(solution, () =>
+        {
+            heldOwnershipDuringCallback = engine.Ownership is not null;
+            throw new IOException("Address already in use");
+        }));
+
+        Assert.Equal("Address already in use", ex.Message);
+        Assert.True(heldOwnershipDuringCallback);
+        Assert.Empty(phases);
+        Assert.Null(engine.State.CurrentRun);
+        Assert.Null(engine.State.LastRun);
+        Assert.Null(engine.Ownership);
+        using var free = WorktreeOwnership.Acquire(directory, solution);
+    }
+
     [Theory]
     [InlineData("{ \"cpuSlots\": 0 }", 1)]
     [InlineData("{ \"cpuSlots\": 2 }", 3)]

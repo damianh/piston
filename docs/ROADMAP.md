@@ -215,12 +215,13 @@ was run for this addition. See [harness validation](../measurements/validation.m
 **Dogfood MVP (usability step, not G1 evidence).** A coding agent can use one
 Linux single-worktree daemon as its test backend through the `verify` MCP tool.
 `verify` reuses a current, full-scope, unfiltered run for the present source
-fingerprint, or awaits or forces a full run. It retries a bounded number of
-times when edits supersede that run, and never reports a non-current result as
-passing. `piston status` reports the PID and endpoints. `piston stop` waits for
-the daemon process to exit. Endpoint conflicts fail at startup with a clear
-error. There is an opt-in real-daemon smoke on the unit fixture
-(`PISTON_DOGFOOD_SMOKE=1`). See [agent usage](agent-usage.md). This adds no
+fingerprint, or awaits or forces a full run. It retries at most twice when edits
+supersede that run, then reports `Stale`; it never reports a non-current result
+as passing. `piston status` reports the PID and endpoints. `piston stop` waits for
+the daemon process to exit. Endpoints bind before the startup run, so endpoint
+conflicts fail at startup with a clear error and start no run. There is an opt-in
+real-daemon smoke on the unit fixture (`PISTON_DOGFOOD_SMOKE=1`; transcript kept
+only in `PISTON_SMOKE_EVIDENCE_DIR` if set). See [agent usage](agent-usage.md). This adds no
 measurement, harness change, hub/worker split, persistent history or performance
 claim; real dogfooding is a separate, explicit user action.
 

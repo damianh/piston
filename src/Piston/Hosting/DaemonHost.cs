@@ -110,12 +110,20 @@ public sealed class DaemonHost : IAsyncDisposable
         _engine = new PistonEngine(_options.EngineOptions, activityProxy);
 
         _log($"[piston] Starting engine for: {_options.SolutionPath}");
-        await _engine.StartAsync(_options.SolutionPath).ConfigureAwait(false);
+        var engine = _engine;
 
+        // Endpoints start after worktree ownership is held but before watching or the startup run,
+        // so an endpoint conflict fails the daemon without starting a run.
+        await engine.StartAsync(_options.SolutionPath, () => StartEndpointsAsync(engine, activityProxy, ct))
+            .ConfigureAwait(false);
+    }
+
+    private async Task StartEndpointsAsync(PistonEngine engine, ActivityEventSinkProxy activityProxy, CancellationToken ct)
+    {
         _log($"[piston] Listening on pipe: {_options.PipeName}");
 
         var listener = new NamedPipeListener(_options.PipeName);
-        _router = new ProtocolRouter(_engine, listener);
+        _router = new ProtocolRouter(engine, listener);
 
         // Connect the activity proxy to the router so engine events are broadcast to clients
         activityProxy.SetSink(_router);
@@ -170,7 +178,7 @@ public sealed class DaemonHost : IAsyncDisposable
         {
             // MCP always runs on its own dedicated app to avoid middleware conflicts
             var mcpBuilder = WebApplication.CreateBuilder();
-            _ = mcpBuilder.Services.AddSingleton<IEngine>(_engine);
+            _ = mcpBuilder.Services.AddSingleton<IEngine>(engine);
             _ = mcpBuilder.Services.AddPistonMcp(mcpCallTracker);
             _mcpApp = mcpBuilder.Build();
             _ = _mcpApp.MapMcp();

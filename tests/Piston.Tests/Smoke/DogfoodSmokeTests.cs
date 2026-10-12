@@ -29,7 +29,8 @@ public sealed class DogfoodSmokeFactAttribute : FactAttribute
 /// Bounded real-daemon smoke of the documented dogfood flow: <c>.piston.json</c> + <c>piston daemon</c>,
 /// HTTP MCP <c>verify</c> for pass / reuse / failing test / compile error / edit during run,
 /// <c>piston status</c>, startup conflicts and <c>piston stop</c>. Not a measurement.
-/// Set <c>PISTON_DOGFOOD_SMOKE_ARTIFACTS</c> to a directory to keep the transcript.
+/// Set <c>PISTON_SMOKE_EVIDENCE_DIR</c> to a durable directory of your choice to keep the transcript;
+/// otherwise nothing is written outside the temporary workspace.
 /// </summary>
 public sealed partial class DogfoodSmokeTests : IDisposable
 {
@@ -101,7 +102,7 @@ public sealed partial class DogfoodSmokeTests : IDisposable
         }
         else
         {
-            Assert.Matches("Verdict: (Stale|Cancelled)", afterEdit);
+            Assert.Contains("Verdict: Stale", afterEdit);
         }
 
         // Startup conflicts: the same worktree is refused; an occupied MCP port fails fast and visibly.
@@ -119,6 +120,8 @@ public sealed partial class DogfoodSmokeTests : IDisposable
                 "--web-port", FreePort().ToString());
             Assert.Equal(1, conflict.ExitCode);
             Assert.Contains("error: Could not start the MCP server", conflict.Output);
+            // Endpoints bind before the startup run, so the conflicting daemon never built anything.
+            Assert.Empty(Directory.EnumerateDirectories(other, "obj", SearchOption.AllDirectories));
         }
 
         // Clean teardown.
@@ -129,6 +132,9 @@ public sealed partial class DogfoodSmokeTests : IDisposable
         released.Start();
         var after = await RunPistonAsync(_workspace, "status");
         Assert.Equal(1, after.ExitCode);
+        var stopAgain = await RunPistonAsync(_workspace, "stop");
+        Assert.Equal(0, stopAgain.ExitCode);
+        Assert.Contains("No daemon running", stopAgain.Output);
     }
 
     private static async Task<McpClient> ConnectAsync(int port, Process daemon)
@@ -293,7 +299,7 @@ public sealed partial class DogfoodSmokeTests : IDisposable
             process.Dispose();
         }
 
-        if (Environment.GetEnvironmentVariable("PISTON_DOGFOOD_SMOKE_ARTIFACTS") is { Length: > 0 } artifacts)
+        if (Environment.GetEnvironmentVariable("PISTON_SMOKE_EVIDENCE_DIR") is { Length: > 0 } artifacts)
         {
             _ = Directory.CreateDirectory(artifacts);
             File.WriteAllText(Path.Combine(artifacts, $"dogfood-smoke-{DateTimeOffset.UtcNow:yyyyMMddTHHmmssZ}.log"),

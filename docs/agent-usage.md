@@ -38,7 +38,10 @@ Startup problems fail fast with `error: ...` and exit code 1. Examples:
 - another daemon already owns this worktree;
 - the MCP or web port is in use: `error: Could not start the MCP server on ...`.
 
-Piston never edits the agent's configuration. Fix the port and start again.
+Piston binds its pipe, web and MCP endpoints after taking worktree ownership but
+before it starts watching or runs the startup build, so a port conflict starts no
+build or test run. Piston never edits the agent's configuration, and it never
+picks another port. Fix the port and start again.
 
 Check and stop it from the same directory:
 
@@ -48,7 +51,8 @@ piston stop     # asks the daemon to shut down and waits for the process to exit
 ```
 
 `piston stop` exits 0 only after the daemon process has exited, so its ports are
-free.
+free. If no daemon is running it prints `No daemon running` and also exits 0;
+it exits non-zero if the daemon does not exit in time.
 
 ## 3. Connect the agent
 
@@ -81,8 +85,10 @@ whether the current code builds and every test passes. It:
    exactly that fingerprint. No build happens and the reply says `Reused: yes`;
 3. otherwise awaits an already-running full run, or requests a forced full
    build + test run;
-4. if the source changes while that run is in progress, retries against the new
-   source (bounded) instead of reporting an old result.
+4. if the source changes while that run is in progress (or the run is superseded),
+   retries against the new source, at most twice, instead of reporting an old
+   result. If the third attempt still has no current result, the verdict is
+   `Stale`. The default overall timeout is 10 minutes (`timeoutSeconds`).
 
 Only `Verdict: Passed` with `Counts as full verification: yes` means the current
 source builds and all tests pass. Every other verdict is not a pass:
@@ -93,7 +99,8 @@ source builds and all tests pass. Every other verdict is not a pass:
 | `TestsFailed` | Current full run; failing tests are listed (name + message). | Fix them; call `verify` again. |
 | `BuildFailed` | The full build of the current source failed; errors listed with ID/file/line. | Fix them; call `verify` again. |
 | `Incomplete` | A test project crashed, produced no results or reported duplicates. | Inspect `get_test_run`; treat as failure. |
-| `Stale` / `Cancelled` | The source kept changing (or the engine stopped) and no current result was reached. | Stop editing, then call `verify` again. |
+| `Stale` | The source kept changing or runs kept being superseded; no current result after 2 retries. | Stop editing, then call `verify` again. |
+| `Cancelled` | The daemon is shutting down. | Restart the daemon or fall back to `dotnet test` explicitly. |
 | `TimedOut` | No result within `timeoutSeconds`. The run may still be queued or running. | Call `verify` again (it awaits the active run) or raise the timeout. |
 | `NotFullScope` | A test filter is active on the daemon. | Clear it (`set_test_filter` with empty filter) and retry. |
 | `Faulted` | The daemon or pipeline failed. | Fall back to `dotnet test` explicitly and report it. |

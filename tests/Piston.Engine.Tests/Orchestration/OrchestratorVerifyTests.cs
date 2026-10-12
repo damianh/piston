@@ -152,6 +152,35 @@ public sealed class OrchestratorVerifyTests : IDisposable
     }
 
     [Fact]
+    public async Task ContinuousEdits_DefaultBoundIsTwoRetries()
+    {
+        await StartAsync();
+        var edits = 0;
+        _runner.DuringRun = () => File.WriteAllText(Path.Combine(_root, "Code.cs"), $"class C{edits++} {{ }}");
+        File.WriteAllText(Path.Combine(_root, "Code.cs"), "class Edited { }");
+
+        var result = await _orchestrator.VerifyAsync(Timeout, CancellationToken.None);
+
+        Assert.Equal(VerificationVerdict.Stale, result.Verdict);
+        Assert.Equal(3, result.Attempts);
+    }
+
+    [Fact]
+    public async Task CancelledOnEveryAttempt_ExhaustsAsStaleNotCancelled()
+    {
+        await StartAsync();
+        _runner.DuringRun = () => throw new OperationCanceledException();
+        File.WriteAllText(Path.Combine(_root, "Code.cs"), "class Edited { }");
+
+        var result = await _orchestrator.VerifyAsync(Timeout, CancellationToken.None);
+
+        Assert.Equal(VerificationVerdict.Stale, result.Verdict);
+        Assert.Equal(3, result.Attempts);
+        Assert.Contains("Gave up", result.Reason);
+        Assert.Equal(TestRunStatus.Cancelled, result.Run!.Status);
+    }
+
+    [Fact]
     public async Task SupersededForcedRun_IsRetried()
     {
         await StartAsync();

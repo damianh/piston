@@ -291,8 +291,10 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 {
                     if (attempts >= MaxVerificationAttempts)
                     {
-                        return last ?? new VerificationResult(VerificationVerdict.Cancelled,
-                            "The awaited run is no longer retained.", source, attempts, null, current);
+                        return new VerificationResult(VerificationVerdict.Stale,
+                            $"The awaited run is no longer retained. Gave up after {attempts} attempt(s); " +
+                            "no current full result exists for the present source.",
+                            source, attempts, last?.Run, current);
                     }
 
                     continue;
@@ -303,9 +305,14 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 last = new VerificationResult(evaluation.Verdict, evaluation.Reason, source, attempts, run, after);
                 if (!evaluation.Retryable || _stopping || attempts >= MaxVerificationAttempts)
                 {
-                    if (evaluation.Retryable && attempts >= MaxVerificationAttempts)
+                    if (evaluation.Retryable && !_stopping && attempts >= MaxVerificationAttempts)
                     {
-                        last = last with { Reason = $"{evaluation.Reason} Gave up after {attempts} attempt(s); the source may still be changing." };
+                        // Retries exhausted: whatever the last run's own status, no current full result exists.
+                        last = last with
+                        {
+                            Verdict = VerificationVerdict.Stale,
+                            Reason = $"{evaluation.Reason} Gave up after {attempts} attempt(s); the source may still be changing.",
+                        };
                     }
 
                     return last;

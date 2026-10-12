@@ -55,7 +55,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
     [McpServerTool(Name = "verify"), Description(
         "Get current full verification of the solution as it is on disk now. Reuses the latest run when it is a " +
         "completed full-scope, unfiltered result for the present source fingerprint; otherwise awaits an active " +
-        "full run or forces one, retrying a bounded number of times if the source changes during the run. " +
+        "full run or forces one, retrying at most twice if the source changes during the run (then Stale). " +
         "Only 'Verdict: Passed' counts as full verification. Other verdicts: TestsFailed, BuildFailed, Incomplete, " +
         "Stale, Cancelled, NotFullScope (a test filter is set), Faulted, TimedOut. " +
         "Prefer this over run_tests and over get_test_results, which may combine several runs.")]

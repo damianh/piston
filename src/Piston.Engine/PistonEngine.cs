@@ -156,7 +156,15 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     /// <exception cref="ExecutionCoordinationException">
     /// Another live daemon owns the worktree, or machine-wide coordination is unavailable or misconfigured.
     /// </exception>
-    public async Task StartAsync(string solutionPath)
+    public Task StartAsync(string solutionPath) => StartAsync(solutionPath, beforeRunsStart: null);
+
+    /// <summary>
+    /// Like <see cref="StartAsync(string)"/>, but invokes <paramref name="beforeRunsStart"/> after worktree
+    /// ownership is held and before file watching or the startup run begins. If the callback throws,
+    /// ownership is released, no run starts and the exception propagates.
+    /// </summary>
+    /// <remarks>Hosts use this to bind their endpoints so an endpoint conflict does not start a run.</remarks>
+    public async Task StartAsync(string solutionPath, Func<Task>? beforeRunsStart)
     {
         if (_ownership is not null)
         {
@@ -173,6 +181,11 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
         try
         {
+            if (beforeRunsStart is not null)
+            {
+                await beforeRunsStart().ConfigureAwait(false);
+            }
+
             await _orchestrator.StartAsync(solutionPath).ConfigureAwait(false);
         }
         catch
