@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Text.Json;
 using Piston.Engine.Impact;
 using Xunit;
 
@@ -19,6 +20,8 @@ public sealed class VerificationInputCoverageTests : IDisposable
         _solution = Path.Combine(directory, "Test.slnx");
         _project = Path.Combine(directory, "Test.csproj");
         File.WriteAllText(_solution, """<Solution><Project Path="Test.csproj" /></Solution>""");
+        File.WriteAllText(Path.Combine(directory, "Test.cs"), "class Test {}");
+        File.WriteAllText(Path.Combine(directory, ".editorconfig"), "root = true\n");
         WriteProject("");
     }
 
@@ -67,6 +70,121 @@ public sealed class VerificationInputCoverageTests : IDisposable
         WriteProject("""<ItemGroup><Compile Include="../Linked.cs" /></ItemGroup>""");
 
         Assert.Contains("Linked.cs", new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Fact]
+    public void AncestorEditorConfigOutsideSolutionIsNotCovered()
+    {
+        File.Delete(Path.Combine(Path.GetDirectoryName(_solution)!, ".editorconfig"));
+        var editorConfig = Path.Combine(_root, ".editorconfig");
+        File.WriteAllText(editorConfig, "root = true\n");
+
+        Assert.Contains(".editorconfig", new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Fact]
+    public void EditorConfigInsideSolutionIsCovered()
+    {
+        File.WriteAllText(Path.Combine(Path.GetDirectoryName(_solution)!, ".editorconfig"), "root = true\n");
+
+        Assert.Null(new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Fact]
+    public void UsingTaskAssemblyOutsideSolutionIsNotCovered()
+    {
+        var build = Directory.CreateDirectory(Path.Combine(_root, "build")).FullName;
+        File.WriteAllBytes(Path.Combine(build, "Tasks.dll"), [1, 2, 3]);
+        WriteProject("""<UsingTask TaskName="CustomTask" AssemblyFile="../build/Tasks.dll" />""");
+
+        Assert.Contains("Tasks.dll", new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Fact]
+    public void RestoredPackageTargetsAreExcludedButUserImportsUnderPackageRootAreNot()
+    {
+        var packageRoot = Path.Combine(_root, "packages");
+        var packageDirectory = Path.Combine(packageRoot, "sample.package", "1.0.0");
+        var targetPath = Path.Combine(packageDirectory, "build", "Package.targets");
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
+        File.WriteAllText(targetPath, "<Project />");
+
+        var extensions = Path.Combine(Path.GetDirectoryName(_project)!, "obj");
+        _ = Directory.CreateDirectory(extensions);
+        File.WriteAllText(Path.Combine(extensions, "Test.csproj.nuget.g.targets"),
+            """<Project><Import Project="$(NuGetPackageRoot)sample.package/1.0.0/build/Package.targets" /></Project>""");
+        File.WriteAllText(Path.Combine(extensions, "project.assets.json"), JsonSerializer.Serialize(new
+        {
+            packageFolders = new Dictionary<string, object> { [packageRoot] = new { } },
+            libraries = new Dictionary<string, object>
+            {
+                ["sample.package/1.0.0"] = new { type = "package", path = "sample.package/1.0.0" },
+            },
+        }));
+
+        var packageProperties = $$"""
+            <PropertyGroup>
+              <NuGetPackageRoot>{{packageRoot}}{{Path.DirectorySeparatorChar}}</NuGetPackageRoot>
+              <MSBuildProjectExtensionsPath>{{extensions}}{{Path.DirectorySeparatorChar}}</MSBuildProjectExtensionsPath>
+              <ProjectAssetsFile>{{Path.Combine(extensions, "project.assets.json")}}</ProjectAssetsFile>
+            </PropertyGroup>
+            """;
+        WriteProject(packageProperties);
+
+        Assert.Null(new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+
+        WriteProject(packageProperties +
+            """<Import Project="$(NuGetPackageRoot)sample.package/1.0.0/build/Package.targets" />""");
+        Assert.Contains("cannot safely apply the package/targeting-pack exclusion",
+            new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Fact]
+    public void RepositorySolutionCoverage()
+    {
+        var solution = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../../Piston.slnx"));
+        var issue = new MsBuildSolutionGraph(solution).VerificationCoverageIssue;
+        Assert.True(issue is null, issue);
+    }
+
+    [Theory]
+    [InlineData("NuGetPackageRoot")]
+    [InlineData("NetCoreTargetingPackRoot")]
+    public void ExclusionRootContainingUserInputFailsClosed(string propertyName)
+    {
+        var externalDirectory = Directory.CreateDirectory(Path.Combine(_root, "external-inputs")).FullName;
+        var source = Path.Combine(externalDirectory, "External.cs");
+        File.WriteAllText(source, "class External {}");
+        WriteProject($$"""
+            <PropertyGroup>
+              <{{propertyName}}>{{externalDirectory}}</{{propertyName}}>
+            </PropertyGroup>
+            <ItemGroup><Compile Include="../external-inputs/External.cs" /></ItemGroup>
+            """);
+
+        Assert.Contains("cannot safely apply the package/targeting-pack exclusion",
+            new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Theory]
+    [InlineData("NuGetPackageRoot")]
+    [InlineData("NetCoreTargetingPackRoot")]
+    public void ExclusionRootContainingExternalProjectFailsClosed(string propertyName)
+    {
+        var externalDirectory = Directory.CreateDirectory(Path.Combine(_root, "external-inputs")).FullName;
+        File.WriteAllText(Path.Combine(externalDirectory, "External.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+            </Project>
+            """);
+        WriteProject($$"""
+            <PropertyGroup>
+              <{{propertyName}}>{{externalDirectory}}</{{propertyName}}>
+            </PropertyGroup>
+            <ItemGroup><ProjectReference Include="../external-inputs/External.csproj" /></ItemGroup>
+            """);
+
+        Assert.NotNull(new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
     }
 
     [Fact]
