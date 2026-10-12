@@ -10,6 +10,7 @@ using Piston.Hosting;
 using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
 using Piston.Hosting.Protocol;
+using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
@@ -319,6 +320,13 @@ static async Task RunDaemonAsync(
         Environment.Exit(1);
         return;
     }
+    catch (DaemonStartupException ex)
+    {
+        // A web or MCP port is in use; components already started were stopped by the host.
+        Console.Error.WriteLine($"error: {ex.Message}");
+        Environment.Exit(1);
+        return;
+    }
 
     // Clients (e.g. DaemonLauncher) read this line from stdout to discover the pipe.
     Console.WriteLine($"PIPE:{pipeName}");
@@ -493,10 +501,64 @@ static async Task<int> RunStopAsync(FileInfo? solutionArg, string? cliPipeName)
         return 0;
     }
 
-    await client.StopAsync(CancellationToken.None);
-    Console.Error.WriteLine("[piston] Daemon stopped.");
+    DaemonInfoResponse? info;
+    try
+    {
+        info = await client.GetDaemonInfoAsync();
+    }
+    catch (InvalidOperationException)
+    {
+        // Daemons without daemon/info cannot exit on request; stopping the engine is all we can do.
+        await client.StopAsync(CancellationToken.None);
+        Console.Error.WriteLine("[piston] Engine stopped, but this daemon does not support shutdown; its process is still running.");
+        return 1;
+    }
+
+    try
+    {
+        await client.ShutdownDaemonAsync();
+    }
+    catch (IOException)
+    {
+        // The daemon may close the pipe before the reply arrives; the exit wait below decides.
+    }
+
+    await client.DisposeAsync();
+
+    var pid = info!.ProcessId;
+    if (!await WaitForProcessExitAsync(pid, TimeSpan.FromSeconds(30)))
+    {
+        Console.Error.WriteLine($"error: daemon (PID {pid}) did not exit within 30s.");
+        return 1;
+    }
+
+    Console.Error.WriteLine($"[piston] Daemon stopped (PID {pid}).");
     return 0;
 }
+
+static async Task<bool> WaitForProcessExitAsync(int pid, TimeSpan timeout)
+{
+    try
+    {
+        using var process = System.Diagnostics.Process.GetProcessById(pid);
+        using var cts = new CancellationTokenSource(timeout);
+        await process.WaitForExitAsync(cts.Token);
+        return true;
+    }
+    catch (ArgumentException)
+    {
+        return true; // already exited
+    }
+    catch (OperationCanceledException)
+    {
+        return false;
+    }
+}
+
+static string DescribeRunDto(TestRunDto run) =>
+    $"{run.RunId} | {run.Trigger} | {run.Status} | scope {run.Scope ?? "unknown"} | {run.Freshness} | " +
+    $"current full result: {(run.IsCurrentFullResult ? "yes" : "no")} | " +
+    $"{run.TotalTests} tests ({run.Passed} passed, {run.Failed} failed, {run.Skipped} skipped)";
 
 // ── status command ─────────────────────────────────────────────────────────────
 
@@ -553,11 +615,36 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
         return 0;
     }
 
+    DaemonInfoResponse? info = null;
+    try
+    {
+        info = await client.GetDaemonInfoAsync();
+    }
+    catch (InvalidOperationException)
+    {
+        // Older daemon without daemon/info.
+    }
+
     Console.WriteLine($"Daemon running.");
-    Console.WriteLine($"  Solution : {solutionPath}");
+    Console.WriteLine($"  Solution : {info?.SolutionPath ?? solutionPath}");
+    if (info is not null)
+    {
+        Console.WriteLine($"  PID      : {info.ProcessId}");
+        Console.WriteLine($"  Started  : {info.StartedAt:u}");
+        Console.WriteLine($"  Version  : {info.Version ?? "unknown"}");
+        Console.WriteLine($"  Web      : {info.WebUrl}");
+        Console.WriteLine($"  MCP      : {info.McpUrl ?? "disabled (set mcpPort in .piston.json or pass --mcp-port)"}");
+    }
+
     Console.WriteLine($"  Pipe     : {pipeName}");
     Console.WriteLine($"  Phase    : {snapshot.Phase}");
     Console.WriteLine($"  Tests    : {snapshot.CompletedTests}/{snapshot.TotalExpectedTests}");
     Console.WriteLine($"  Suites   : {snapshot.Suites.Count}");
+    Console.WriteLine($"  Latest   : {(snapshot.LastRun is { } last ? DescribeRunDto(last) : "(none)")}");
+    if (snapshot.ActiveRun is { } active)
+    {
+        Console.WriteLine($"  Active   : {DescribeRunDto(active)}");
+    }
+
     return 0;
 }

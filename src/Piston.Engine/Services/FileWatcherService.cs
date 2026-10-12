@@ -17,6 +17,17 @@ public sealed class FileWatcherService : IFileWatcherService
 
     public event Action<FileChangeBatch>? FileChanged;
 
+    public bool HasPendingChanges
+    {
+        get
+        {
+            lock (_lock)
+            {
+                return _pendingEvents.Count > 0;
+            }
+        }
+    }
+
     public FileWatcherService(TimeSpan? debounceInterval = null)
         : this(debounceInterval ?? TimeSpan.FromMilliseconds(300), TimeProvider.System)
     {

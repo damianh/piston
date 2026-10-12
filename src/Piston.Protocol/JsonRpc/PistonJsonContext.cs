@@ -62,6 +62,7 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(ClearResultsCommand))]
 [JsonSerializable(typeof(GetFileCoverageCommand))]
 [JsonSerializable(typeof(McpCallLogResponse))]
+[JsonSerializable(typeof(DaemonInfoResponse))]
 
 // ── Named param records (used by RemoteEngineClient) ─────────────────────
 [JsonSerializable(typeof(StartCommandParams))]

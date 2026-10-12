@@ -20,6 +20,13 @@ public interface IEngine : IDisposable
     }
     void Stop();
 
+    /// <summary>
+    /// Produces current full verification for the present source, reusing or awaiting qualifying runs
+    /// before requesting a forced full run. See <see cref="Verification.VerificationPolicy"/>.
+    /// </summary>
+    Task<Verification.VerificationResult> VerifyAsync(TimeSpan timeout, CancellationToken ct) =>
+        throw new NotSupportedException("Verification is not supported by this engine.");
+
     // State queries
     PistonState State { get; }
 

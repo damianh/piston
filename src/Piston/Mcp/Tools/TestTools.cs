@@ -52,6 +52,36 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         return result;
     }
 
+    [McpServerTool(Name = "verify"), Description(
+        "Get current full verification of the solution as it is on disk now. Reuses the latest run when it is a " +
+        "completed full-scope, unfiltered result for the present source fingerprint; otherwise awaits an active " +
+        "full run or forces one, retrying a bounded number of times if the source changes during the run. " +
+        "Only 'Verdict: Passed' counts as full verification. Other verdicts: TestsFailed, BuildFailed, Incomplete, " +
+        "Stale, Cancelled, NotFullScope (a test filter is set), Faulted, TimedOut. " +
+        "Prefer this over run_tests and over get_test_results, which may combine several runs.")]
+    public async Task<string> VerifyAsync(
+        [Description("Overall timeout in seconds (default 600). On timeout the run continues; call verify again.")] int timeoutSeconds = 600,
+        CancellationToken ct = default)
+    {
+        var sw = Stopwatch.StartNew();
+        string? result = null;
+        var succeeded = false;
+        try
+        {
+            var timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 3600));
+            var verification = await engine.VerifyAsync(timeout, ct).ConfigureAwait(false);
+            result = VerificationReport.Format(verification);
+            succeeded = true;
+            return result;
+        }
+        finally
+        {
+            sw.Stop();
+            recorder.Record("Verify", timeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                result, sw.Elapsed.TotalMilliseconds, succeeded);
+        }
+    }
+
     [McpServerTool, Description("Get current test results from the last test run.")]
     public string GetTestResults()
     {

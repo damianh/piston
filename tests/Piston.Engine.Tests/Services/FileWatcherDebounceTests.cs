@@ -260,4 +260,18 @@ public sealed class FileWatcherDebounceTests
             }
         }
     }
+
+    [Fact]
+    public void HasPendingChanges_TrueOnlyWhileDebouncing()
+    {
+        var debounce = TimeSpan.FromMilliseconds(100);
+        var time = new TestTimeProvider();
+        using var sut = new FileWatcherService(debounce, time);
+
+        Assert.False(sut.HasPendingChanges);
+        sut.ScheduleDebounce(new("Test.cs", WatcherChangeTypes.Changed, time.GetUtcNow()));
+        Assert.True(sut.HasPendingChanges);
+        time.Advance(debounce);
+        Assert.False(sut.HasPendingChanges);
+    }
 }

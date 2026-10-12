@@ -26,18 +26,29 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
     private readonly ConcurrentDictionary<string, WebSocketClientSession> _wsSessions = new();
     private int _sessionCounter;
     private McpCallTracker? _mcpCallTracker;
+    private DaemonControl? _daemonControl;
 
     public int ClientCount => _pipeSessions.Count + _wsSessions.Count;
 
     public void SetMcpCallTracker(McpCallTracker tracker) =>
         _mcpCallTracker = tracker;
 
-    private EngineCommandDispatcher CreateDispatcher()
+    public void SetDaemonControl(DaemonControl control) =>
+        _daemonControl = control;
+
+    private EngineCommandDispatcher CreateDispatcher(bool allowDaemonControl)
     {
         var dispatcher = new EngineCommandDispatcher(engine);
         if (_mcpCallTracker is not null)
         {
             dispatcher.SetMcpCallTracker(_mcpCallTracker);
+        }
+
+        // Process control is limited to local pipe clients (the CLI); browser-reachable
+        // WebSocket sessions cannot shut down the daemon.
+        if (allowDaemonControl && _daemonControl is not null)
+        {
+            dispatcher.SetDaemonControl(_daemonControl);
         }
 
         return dispatcher;
@@ -55,7 +66,7 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
             await foreach (var stream in listener.AcceptClientsAsync(ct).ConfigureAwait(false))
             {
                 var sessionId = $"pipe-{Interlocked.Increment(ref _sessionCounter)}";
-                var dispatcher = CreateDispatcher();
+                var dispatcher = CreateDispatcher(allowDaemonControl: true);
                 var session = new ClientSession(stream, sessionId, dispatcher);
 
                 _pipeSessions[sessionId] = session;
@@ -99,7 +110,7 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
     public async Task AddWebSocketSessionAsync(WebSocket webSocket, CancellationToken ct)
     {
         var sessionId = $"ws-{Interlocked.Increment(ref _sessionCounter)}";
-        var dispatcher = CreateDispatcher();
+        var dispatcher = CreateDispatcher(allowDaemonControl: false);
         var session = new WebSocketClientSession(webSocket, sessionId, dispatcher);
 
         _wsSessions[sessionId] = session;

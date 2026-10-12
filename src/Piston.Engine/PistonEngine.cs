@@ -192,6 +192,9 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
     public void Stop() => _orchestrator.Stop();
 
+    public Task<Verification.VerificationResult> VerifyAsync(TimeSpan timeout, CancellationToken ct) =>
+        _orchestrator.VerifyAsync(timeout, ct);
+
     public void SetFilter(string? filter)
     {
         _state.TestFilter = filter;
