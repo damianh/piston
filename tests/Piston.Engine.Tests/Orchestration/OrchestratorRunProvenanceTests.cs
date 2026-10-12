@@ -362,6 +362,8 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
 
 internal sealed class ProvenanceImpactAnalyzer(IReadOnlyList<string> testProjects) : IImpactAnalyzer
 {
+    public Func<string?> VerificationCoverage { get; set; } = () => null;
+    public string? GetVerificationCoverageIssue(string solutionPath) => VerificationCoverage();
     public Task Initialization { get; set; } = Task.CompletedTask;
     public HashSet<string> MtpProjects { get; } = [];
     public Task InitializeAsync(string solutionPath, CancellationToken ct) => Initialization;

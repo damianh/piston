@@ -72,7 +72,7 @@ public sealed partial class DogfoodSmokeTests : IDisposable
         Assert.Contains("Verdict: Passed", pass);
         AssertFingerprintMatchesTree(pass);
         var reused = await VerifyAsync(mcp);
-        Assert.Contains("Reused: yes", reused);
+        Assert.True(reused.Contains("Reused: yes", StringComparison.Ordinal), reused);
         Assert.Equal(RunId(pass), RunId(reused));
 
         // Failing test.
@@ -92,9 +92,44 @@ public sealed partial class DogfoodSmokeTests : IDisposable
 
         // Edit during execution: the result is bound to the final tree, or is honestly not a pass.
         File.WriteAllText(PriceRules, original);
+        var entered = Path.Combine(_root, "test-entered");
+        var release = Path.Combine(_root, "test-release");
+        File.WriteAllText(Path.Combine(SolutionDir, "Pricing.Tests", "VerificationGateTests.cs"), $$"""
+            using System;
+            using System.IO;
+            using System.Threading;
+            using Xunit;
+            public sealed class VerificationGateTests
+            {
+                [Fact]
+                public void BlocksUntilSourceIsEdited()
+                {
+                    File.WriteAllText({{System.Text.Json.JsonSerializer.Serialize(entered)}}, "entered");
+                    var deadline = DateTime.UtcNow.AddMinutes(2);
+                    while (!File.Exists({{System.Text.Json.JsonSerializer.Serialize(release)}}) && DateTime.UtcNow < deadline)
+                        Thread.Sleep(25);
+                    Assert.True(File.Exists({{System.Text.Json.JsonSerializer.Serialize(release)}}));
+                }
+            }
+            """);
         var during = VerifyAsync(mcp);
-        await Task.Delay(1500);
-        File.WriteAllText(PriceRules, original + "\n// edited during run\n");
+        try
+        {
+            var deadline = DateTime.UtcNow.AddMinutes(2);
+            while (!File.Exists(entered))
+            {
+                Assert.False(during.IsCompleted, "Verification completed before the controlled test entered.");
+                Assert.True(DateTime.UtcNow < deadline, "The controlled test never entered.");
+                await Task.Delay(25);
+            }
+
+            Assert.False(during.IsCompleted, "Verification must still be running when the edit is made.");
+            File.WriteAllText(PriceRules, original + "\n// edited during run\n");
+        }
+        finally
+        {
+            File.WriteAllText(release, "release");
+        }
         var afterEdit = await during;
         if (afterEdit.Contains("Verdict: Passed"))
         {

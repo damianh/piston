@@ -109,4 +109,28 @@ public sealed class VerifyToolTests
         Assert.DoesNotContain("get_test_run", text);
         Assert.Equal(TimeSpan.FromSeconds(5), engine.LastVerifyTimeout);
     }
+
+    [Fact]
+    public async Task Incomplete_ListsFailedEmptyAndUnfinishedProjectsAndTests()
+    {
+        var run = Run(TestRunStatus.Incomplete, tests: [Test("A.Pending", TestStatus.NotRun)]) with
+        {
+            Projects =
+            [
+                new("Failed.csproj", ProjectRunStatus.Failed, 0),
+                new("Empty.csproj", ProjectRunStatus.Completed, 0),
+                new("Crashed.csproj", ProjectRunStatus.Crashed, 0),
+                new("Good.csproj", ProjectRunStatus.Completed, 1),
+            ],
+        };
+        var text = await VerifyAsync(new(VerificationVerdict.Incomplete, "Incomplete results",
+            VerificationSource.Forced, 1, run, Source));
+
+        Assert.Contains("Projects without complete results (3)", text);
+        Assert.Contains("Failed.csproj: Failed", text);
+        Assert.Contains("Empty.csproj: no test results", text);
+        Assert.Contains("Crashed.csproj: Crashed", text);
+        Assert.DoesNotContain("Good.csproj", text);
+        Assert.Contains("A.Pending: NotRun", text);
+    }
 }

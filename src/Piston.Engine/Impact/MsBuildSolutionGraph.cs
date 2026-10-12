@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Collections.Concurrent;
 using Microsoft.Build.Evaluation;
 using Microsoft.Build.Graph;
 using Piston.Engine.Services;
@@ -15,12 +16,15 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
     private readonly Dictionary<string, IReadOnlyList<string>> _sourceFilesByProject;
     private readonly Dictionary<string, bool> _mtpProjects;
     private readonly Dictionary<string, string> _mtpOutputPaths;
+    private readonly string _solutionPath;
+    private readonly ConcurrentBag<Project> _evaluated = [];
 
     // Sorted list of (projectDirectory, projectPath) for directory-based ownership lookup
     private readonly List<(string Directory, string ProjectPath)> _sortedProjectDirs;
 
     public IReadOnlyList<string> AllProjectPaths => _allProjects;
     public IReadOnlyList<string> TestProjectPaths => _testProjects;
+    public string? VerificationCoverageIssue => VerificationInputCoverage.FindIssue(_solutionPath, _evaluated);
 
     public MsBuildSolutionGraph(string solutionPath)
     {
@@ -30,7 +34,14 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
 
         using var collection = new ProjectCollection();
 
-        var graph = new ProjectGraph(solutionPath, collection);
+        _solutionPath = solutionPath;
+        var graph = new ProjectGraph([new ProjectGraphEntryPoint(solutionPath)], collection,
+            (path, properties, projectCollection) =>
+            {
+                var project = new Project(path, properties, null, projectCollection);
+                _evaluated.Add(project);
+                return project.CreateProjectInstance();
+            }, CancellationToken.None);
 
         _allProjects = [];
         _testProjects = [];

@@ -142,4 +142,22 @@ public sealed class VerificationPolicyTests
         Assert.Equal(VerificationVerdict.Incomplete,
             VerificationPolicy.Evaluate(Run(duplicate: true), Source).Verdict);
     }
+
+    [Theory]
+    [InlineData(TestStatus.NotRun)]
+    [InlineData(TestStatus.Running)]
+    public void Evaluate_UnfinishedTestsAreIncompleteEvenInCompletedRun(TestStatus status)
+    {
+        var run = Run() with
+        {
+            Suites = [new TestSuite("A",
+                [new TestResult("A.T1", "T1", status, TimeSpan.Zero, null, null, null, null)],
+                DateTimeOffset.UtcNow, TimeSpan.Zero)],
+        };
+
+        Assert.False(run.IsCurrentFullResult);
+        Assert.Equal(VerificationVerdict.Incomplete, VerificationPolicy.Evaluate(run, Source).Verdict);
+        Assert.Equal(VerificationAction.RequestForced,
+            VerificationPolicy.Decide(Source, null, [run], null, false).Action);
+    }
 }

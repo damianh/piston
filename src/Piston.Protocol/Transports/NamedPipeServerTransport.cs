@@ -10,10 +10,11 @@ namespace Piston.Protocol.Transports;
 /// Server-side named pipe transport that accepts a single client connection.
 /// Create a new instance per client; the underlying <see cref="NamedPipeServerStream"/>
 /// supports exactly one connection.
-/// On Windows, the pipe is restricted to the current user via ACL (see <see cref="PipeSecurityHelper"/>).
+/// Restricted to the current user via Windows ACL or Unix peer-credential checks.
 /// </summary>
 public sealed class NamedPipeServerTransport : IAsyncDisposable
 {
+    internal const PipeOptions UnixPipeOptions = PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly;
     private readonly string _pipeName;
     private NamedPipeServerStream? _pipe;
 
@@ -48,7 +49,7 @@ public sealed class NamedPipeServerTransport : IAsyncDisposable
             PipeDirection.InOut,
             maxNumberOfServerInstances: NamedPipeServerStream.MaxAllowedServerInstances,
             transmissionMode: PipeTransmissionMode.Byte,
-            options: PipeOptions.Asynchronous);
+            options: UnixPipeOptions);
     }
 
     [SupportedOSPlatform("windows")]

@@ -80,7 +80,8 @@ Call `verify` (optional `timeoutSeconds`, default 600) whenever you need to know
 whether the current code builds and every test passes. It:
 
 1. waits briefly for pending file-change events to settle and fingerprints the
-   source tree;
+   source tree, then reevaluates the solution's project graph to check that user
+   projects, imports and declared file inputs are covered by that fingerprint;
 2. reuses the latest run if it is a current, full-scope, unfiltered result for
    exactly that fingerprint. No build happens and the reply says `Reused: yes`;
 3. otherwise awaits an already-running full run, or requests a forced full
@@ -90,6 +91,15 @@ whether the current code builds and every test passes. It:
    result. If the third attempt still has no current result, the verdict is
    `Stale`. The default overall timeout is 10 minutes (`timeoutSeconds`).
 
+The present fingerprint is recaptured even when reusing a result. External
+projects (including transitive `ProjectReference`s), linked source files, and
+custom imports outside the fingerprint produce `NotFullScope`, not a pass.
+The nearest ancestor build/configuration files remain covered; SDK/workload
+installations, restored packages and their generated restore imports remain
+toolchain/cache exclusions. If coverage evaluation fails, `verify` reports
+`Faulted`. Use `dotnet test` explicitly for unsupported inputs; Piston does not
+silently fall back. Edits after a verification reply require a new call.
+
 Only `Verdict: Passed` with `Counts as full verification: yes` means the current
 source builds and all tests pass. Every other verdict is not a pass:
 
@@ -98,11 +108,11 @@ source builds and all tests pass. Every other verdict is not a pass:
 | `Passed` | Current full run, all tests passed. | Done. |
 | `TestsFailed` | Current full run; failing tests are listed (name + message). | Fix them; call `verify` again. |
 | `BuildFailed` | The full build of the current source failed; errors listed with ID/file/line. | Fix them; call `verify` again. |
-| `Incomplete` | A test project crashed, produced no results or reported duplicates. | Inspect `get_test_run`; treat as failure. |
+| `Incomplete` | A project crashed, produced no results, or results include duplicate IDs or `NotRun`/`Running` tests. | Inspect `get_test_run`; treat as failure. |
 | `Stale` | The source kept changing or runs kept being superseded; no current result after 2 retries. | Stop editing, then call `verify` again. |
 | `Cancelled` | The daemon is shutting down. | Restart the daemon or fall back to `dotnet test` explicitly. |
 | `TimedOut` | No result within `timeoutSeconds`. The run may still be queued or running. | Call `verify` again (it awaits the active run) or raise the timeout. |
-| `NotFullScope` | A test filter is active on the daemon. | Clear it (`set_test_filter` with empty filter) and retry. |
+| `NotFullScope` | A filter is active, or evaluated user build inputs are not fingerprinted. | Clear the filter, or use `dotnet test` explicitly for unsupported inputs. |
 | `Faulted` | The daemon or pipeline failed. | Fall back to `dotnet test` explicitly and report it. |
 
 An `Admission:` line means the run waited for the machine execution budget (queue

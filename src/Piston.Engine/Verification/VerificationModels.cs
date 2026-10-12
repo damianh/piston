@@ -17,7 +17,7 @@ public enum VerificationVerdict
     /// <summary>The full build for the present source failed; no tests ran.</summary>
     BuildFailed,
 
-    /// <summary>Tests ran for the present source, but a project crashed, produced no results or reported duplicate IDs.</summary>
+    /// <summary>Tests ran for the present source, but results were missing, unfinished or duplicated.</summary>
     Incomplete,
 
     /// <summary>The source changed during or after the run (or freshness is unknown); the result is not current.</summary>
@@ -32,7 +32,7 @@ public enum VerificationVerdict
     /// <summary>No terminal result was available within the verification timeout.</summary>
     TimedOut,
 
-    /// <summary>A test filter is active, so no full-scope result can be produced.</summary>
+    /// <summary>A test filter is active or evaluated build inputs are outside the source fingerprint.</summary>
     NotFullScope,
 }
 

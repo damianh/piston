@@ -137,7 +137,7 @@ Every run, including startup and file-change runs, gets a record in the
 
 The source fingerprint (`piston-source-v2`) is a SHA-256 over every file under the solution directory except `bin`, `obj`, `TestResults`, `.git`, `.vs`, `.idea`, `.piston` and `node_modules`. It also covers the nearest ancestor `global.json`, `Directory.Build.*`, `Directory.Packages.props` and `NuGet.config`. Paths and contents are length-prefixed (unsigned 64-bit big-endian byte lengths), so embedded NUL bytes cannot collide with file boundaries. Capture is attempted before and after every started run, including cancellation and faults; unavailable fingerprints are reported as `Unknown`. Queued requests cancelled before starting have no fingerprints. A run is `Stale` if the fingerprint changed or the file watcher saw a change during the run; a watcher change also cancels the run.
 
-`isCurrentFullResult` is true only for a `Completed`, unfiltered, `Full`-scope, `Current` run with no duplicate IDs. Selective or filtered runs never qualify, and a filter can turn even a forced run into a filtered one.
+`isCurrentFullResult` is true only for a `Completed`, unfiltered, `Full`-scope, `Current` run with no duplicate IDs or unfinished (`NotRun`/`Running`) tests. Selective or filtered runs never qualify, and a filter can turn even a forced run into a filtered one.
 
 A `BuildFailed` run can have `Current` build diagnostics but is never a current full
 **test** result. Its `build` is captured from that run, not the aggregate `LastBuild`,
@@ -149,6 +149,7 @@ Limits:
 
 - Only the 16 most recent runs are kept, and only in memory.
 - The fingerprint does not cover sources outside the solution directory, installed SDKs, the NuGet cache, or merged user/machine NuGet configuration.
+- `verify` reevaluates project inputs and returns `NotFullScope` for user projects, imports or declared files outside the fingerprint (including excluded directories). SDK/workload files, packages and generated restore imports remain toolchain/cache exclusions. Evaluation failure is `Faulted`; neither verdict is a pass or a hidden fallback.
 - The SDK version is recorded from `dotnet --version` run in the daemon's working directory.
 - `context.workingDirectory` is the build/SDK-probe directory. `context.testWorkingDirectories` records each test target's actual directory: the solution directory for MTP, the daemon directory for VSTest.
 

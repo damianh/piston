@@ -30,6 +30,10 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         _rebuildScheduled = false;
     }
 
+    // Reevaluate rather than trusting the impact graph cached before the agent's latest edit.
+    public string? GetVerificationCoverageIssue(string solutionPath) =>
+        _graphFactory(solutionPath).VerificationCoverageIssue;
+
     public ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes)
     {
         // If a rebuild was scheduled from a prior run, execute it now synchronously

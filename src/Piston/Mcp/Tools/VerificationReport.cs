@@ -60,8 +60,12 @@ internal static class VerificationReport
 
         if (result.Verdict is VerificationVerdict.Incomplete)
         {
-            var problems = run.Projects.Where(p => p.Status is not (ProjectRunStatus.Completed or ProjectRunStatus.Failed)).ToList();
-            AppendList(sb, "Projects without complete results", problems, p => $"{p.ProjectPath}: {p.Status}");
+            var problems = run.Projects.Where(p => p.Status != ProjectRunStatus.Completed || p.TestCount == 0).ToList();
+            AppendList(sb, "Projects without complete results", problems,
+                p => $"{p.ProjectPath}: {(p.Status == ProjectRunStatus.Completed ? "no test results" : p.Status.ToString())}");
+            AppendList(sb, "Tests without complete results",
+                tests.Where(t => t.Status is TestStatus.NotRun or TestStatus.Running).ToList(),
+                t => $"{t.FullyQualifiedName}: {t.Status}");
             AppendList(sb, "Duplicate test IDs", run.DuplicateTestIds, id => id);
         }
 

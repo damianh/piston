@@ -105,6 +105,12 @@ public static class VerificationPolicy
                 $"{run.DuplicateTestIds.Count} duplicate test ID(s); results cannot be attributed reliably.");
         }
 
+        var unfinished = run.Tests.Count(t => t.Status is TestStatus.NotRun or TestStatus.Running);
+        if (unfinished > 0)
+        {
+            return new(VerificationVerdict.Incomplete, false, $"{unfinished} test(s) have not finished.");
+        }
+
         var failed = run.Tests.Count(t => t.Status == TestStatus.Failed);
         return failed > 0
             ? new(VerificationVerdict.TestsFailed, false, $"{failed} test(s) failed.")
@@ -118,6 +124,6 @@ public static class VerificationPolicy
             || (active.Scope is null && active.Trigger != TestRunTrigger.FileChange));
 
     private static bool IsReusable(TestRunRecord run) =>
-        (run.Status == TestRunStatus.Completed && run.DuplicateTestIds.Count == 0)
+        run.IsCurrentFullResult
         || run.Status == TestRunStatus.BuildFailed;
 }

@@ -14,4 +14,7 @@ public interface IImpactAnalyzer
     IReadOnlyList<string> GetAllTestProjectPaths();
     bool IsMtpProject(string projectPath);
     string? GetMtpOutputPath(string projectPath);
+
+    /// <summary>Null only when evaluated project inputs are covered by the source fingerprint.</summary>
+    string? GetVerificationCoverageIssue(string solutionPath) => "Build-input coverage is unavailable.";
 }

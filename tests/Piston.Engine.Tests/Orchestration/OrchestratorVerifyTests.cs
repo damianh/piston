@@ -70,6 +70,44 @@ public sealed class OrchestratorVerifyTests : IDisposable
     }
 
     [Fact]
+    public async Task ExternalBuildInputs_NeverReuseOrStartVerificationRun()
+    {
+        await StartAsync();
+        var startup = _state.LastRun!;
+        _impact.VerificationCoverage = () => "External import is outside the source fingerprint.";
+
+        var result = await _orchestrator.VerifyAsync(Timeout, CancellationToken.None);
+
+        Assert.Equal(VerificationVerdict.NotFullScope, result.Verdict);
+        Assert.Equal(0, result.Attempts);
+        Assert.Null(result.Run);
+        Assert.Same(startup, _state.LastRun);
+    }
+
+    [Fact]
+    public async Task EditBetweenReuseDecisionAndReturn_RechecksFingerprint()
+    {
+        await StartAsync();
+        var startup = _state.LastRun!;
+        var checks = 0;
+        _impact.VerificationCoverage = () =>
+        {
+            if (checks++ == 0)
+            {
+                File.WriteAllText(Path.Combine(_root, "Code.cs"), "class EditedDuringReuse { }");
+            }
+            return null;
+        };
+
+        var result = await _orchestrator.VerifyAsync(Timeout, CancellationToken.None);
+
+        Assert.Equal(VerificationVerdict.Passed, result.Verdict);
+        Assert.NotEqual(startup.RunId, result.Run!.RunId);
+        Assert.Equal(2, result.Attempts);
+        Assert.Equal(SourceFingerprinter.Compute(_root), result.SourceFingerprint);
+    }
+
+    [Fact]
     public async Task AfterEdit_RequestsForcedRunBoundToEditedSource()
     {
         await StartAsync();

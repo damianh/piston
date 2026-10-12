@@ -240,6 +240,26 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 await WaitForWatcherToSettleAsync(token).ConfigureAwait(false);
 
                 var current = SourceFingerprinter.TryCompute(solutionDir);
+                string? coverageIssue;
+                try
+                {
+                    coverageIssue = await Task.Run(
+                        () => _impactAnalyzer.GetVerificationCoverageIssue(_solutionPath), CancellationToken.None)
+                        .WaitAsync(token).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    return new VerificationResult(VerificationVerdict.Faulted,
+                        $"Could not evaluate build-input coverage: {ex.GetType().Name}: {ex.Message}",
+                        VerificationSource.None, attempts, null, current);
+                }
+
+                if (coverageIssue is not null)
+                {
+                    return new VerificationResult(VerificationVerdict.NotFullScope,
+                        coverageIssue, VerificationSource.None, attempts, null, current);
+                }
+
                 TestRunRecord? active;
                 IReadOnlyList<TestRunRecord> recent;
                 lock (_runRecordsLock)
@@ -300,8 +320,13 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                     continue;
                 }
 
-                var after = source == VerificationSource.Reused ? current : SourceFingerprinter.TryCompute(solutionDir);
+                var after = SourceFingerprinter.TryCompute(solutionDir);
                 var evaluation = VerificationPolicy.Evaluate(run, after);
+                if (evaluation.Verdict == VerificationVerdict.Passed && _fileWatcher.HasPendingChanges)
+                {
+                    evaluation = new VerificationEvaluation(VerificationVerdict.Stale, true,
+                        "File changes were observed while verifying the result.");
+                }
                 last = new VerificationResult(evaluation.Verdict, evaluation.Reason, source, attempts, run, after);
                 if (!evaluation.Retryable || _stopping || attempts >= MaxVerificationAttempts)
                 {

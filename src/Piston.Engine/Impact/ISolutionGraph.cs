@@ -13,4 +13,5 @@ internal interface ISolutionGraph
     bool IsTestProject(string projectPath);
     bool IsMtpProject(string projectPath);
     string? GetMtpOutputPath(string projectPath);
+    string? VerificationCoverageIssue => "Build-input coverage is unavailable.";
 }

@@ -217,7 +217,8 @@ public sealed record TestRunRecord
         Status == TestRunStatus.Completed
         && IsFullScope
         && Freshness == ResultFreshness.Current
-        && DuplicateTestIds.Count == 0;
+        && DuplicateTestIds.Count == 0
+        && !Tests.Any(t => t.Status is TestStatus.NotRun or TestStatus.Running);
 
     public IEnumerable<TestResult> Tests => Suites.SelectMany(s => s.Tests);
 }
