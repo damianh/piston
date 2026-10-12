@@ -292,5 +292,56 @@ public sealed class VerificationInputCoverageTests : IDisposable
         Assert.Contains("Hidden.cs", new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
     }
 
+    [Theory]
+    [InlineData("Content", true)]
+    [InlineData("Content", false)]
+    [InlineData("None", false)]
+    [InlineData("EmbeddedResource", false)]
+    [InlineData("AdditionalFiles", false)]
+    public void ExternalDeclaredFileItemIsNotCoveredWhetherOrNotItExists(string itemType, bool exists)
+    {
+        var external = Path.Combine(_root, "config.json");
+        if (exists)
+        {
+            File.WriteAllText(external, "{}");
+        }
+
+        WriteProject($"""<ItemGroup><{itemType} Include="../config.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>""");
+
+        Assert.Contains("config.json", new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Fact]
+    public void MissingInTreeDeclaredFileItemIsCovered()
+    {
+        WriteProject("""<ItemGroup><Content Include="missing.json" CopyToOutputDirectory="PreserveNewest" /></ItemGroup>""");
+
+        var issue = new MsBuildSolutionGraph(_solution).VerificationCoverageIssue;
+        Assert.True(issue is null, issue);
+    }
+
+    [Fact]
+    public void MissingRuntimeConfigProducedByReferencedProjectIsCovered()
+    {
+        var directory = Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(_project)!, "Host"));
+        File.WriteAllText(Path.Combine(directory.FullName, "Host.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+                <GenerateRuntimeConfigurationFiles>true</GenerateRuntimeConfigurationFiles>
+              </PropertyGroup>
+            </Project>
+            """);
+        WriteProject("""
+            <ItemGroup>
+              <ProjectReference Include="Host/Host.csproj" />
+              <None Include="Host/bin/Debug/net10.0/Host.runtimeconfig.json" CopyToOutputDirectory="PreserveNewest" />
+            </ItemGroup>
+            """);
+
+        var issue = new MsBuildSolutionGraph(_solution).VerificationCoverageIssue;
+        Assert.True(issue is null, issue);
+    }
+
     public void Dispose() => Directory.Delete(_root, recursive: true);
 }

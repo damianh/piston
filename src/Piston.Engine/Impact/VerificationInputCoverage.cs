@@ -10,6 +10,21 @@ namespace Piston.Engine.Impact;
 /// <summary>Fails closed for evaluated user inputs outside the fingerprint's boundaries.</summary>
 internal static class VerificationInputCoverage
 {
+    // Item types whose include is a file path consumed by build, compile or copy-to-output.
+    private static readonly HashSet<string> DeclaredFileItemTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Content",
+        "None",
+        "EmbeddedResource",
+        "AdditionalFiles",
+        "Analyzer",
+        "EditorConfigFiles",
+        "GlobalAnalyzerConfigFiles",
+        "Resource",
+        "Page",
+        "ApplicationDefinition",
+    };
+
     public static string? FindIssue(string solutionPath, IEnumerable<Project> projects)
     {
         var root = Path.GetDirectoryName(Path.GetFullPath(solutionPath))!;
@@ -99,7 +114,14 @@ internal static class VerificationInputCoverage
                 }
 
                 var pathExists = File.Exists(path);
-                var isFileInput = pathExists || item.ItemType is "Compile" or "ProjectReference";
+                // A user-declared file item still feeds the build when its file is missing (the build
+                // fails), so it must be judged by declaration rather than by existence.
+                var isDeclaredFileItem = item.ItemType is "Compile" or "ProjectReference"
+                    || (DeclaredFileItemTypes.Contains(item.ItemType)
+                        && !isRestoredPackageOrigin
+                        && !IsUnder(itemOrigin, installedPacksRoot)
+                        && !IsUnder(itemOrigin, Path.Combine(userDotnetRoot, "packs")));
+                var isFileInput = pathExists || isDeclaredFileItem;
                 var isInstalledPackInput = Path.IsPathFullyQualified(path)
                     && IsInstalledPackInput(path, itemOrigin, sdkRoot, userDotnetRoot);
                 var isRestoredPackageItem = packageRootPath is not null
@@ -115,7 +137,8 @@ internal static class VerificationInputCoverage
                 {
                     inputs.Add(path);
                 }
-                else if (item.ItemType is "Compile" or "ProjectReference")
+                else if (!pathExists && isDeclaredFileItem
+                    && !isInstalledPackInput && !isRestoredPackageItem && !isGeneratedOutput)
                 {
                     inputs.Add(Path.GetFullPath(item.EvaluatedInclude, projectDir));
                 }

@@ -83,7 +83,9 @@ whether the current code builds and every test passes. It:
    source tree, then reevaluates the solution's project graph to check that user
    projects, imports and declared file inputs are covered by that fingerprint;
 2. reuses the latest run if it is a current, full-scope, unfiltered result for
-   exactly that fingerprint. No build happens and the reply says `Reused: yes`;
+   exactly that fingerprint and that run also established build-input coverage
+   before it built (so inputs outside the fingerprint cannot have differed). No
+   build happens and the reply says `Reused: yes`;
 3. otherwise awaits an already-running full run, or requests a forced full
    build + test run;
 4. if the source changes while that run is in progress (or the run is superseded),
@@ -93,7 +95,9 @@ whether the current code builds and every test passes. It:
 
 The present fingerprint is recaptured even when reusing a result. External
 projects (including transitive `ProjectReference`s), linked source files, and
-custom imports outside the fingerprint produce `NotFullScope`, not a pass.
+custom imports outside the fingerprint produce `NotFullScope`, not a pass. Declared
+file items (for example `Content`/`None`) outside the fingerprint do so even when
+the file is missing.
 The nearest ancestor build/configuration files remain covered; SDK/workload
 installations, restored packages and their generated restore imports remain
 toolchain/cache exclusions. If coverage evaluation fails, `verify` reports
