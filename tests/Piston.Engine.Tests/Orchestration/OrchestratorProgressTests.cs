@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Collections.Concurrent;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
 using Piston.Engine.Services;
@@ -98,7 +99,7 @@ public sealed class OrchestratorProgressTests
     {
         var projects = new[] { "a.csproj", "b.csproj", "c.csproj" };
         var state = new PistonState();
-        var completedCounts = new List<int>();
+        var completedCounts = new ConcurrentQueue<int>();
 
         var testRunnerStub = new StubTestRunnerService(projects, delay: TimeSpan.FromMilliseconds(10));
 
@@ -113,7 +114,7 @@ public sealed class OrchestratorProgressTests
         {
             if (state.Phase == PistonPhase.Testing)
             {
-                completedCounts.Add(state.CompletedTestProjects);
+                completedCounts.Enqueue(state.CompletedTestProjects);
             }
         };
 
