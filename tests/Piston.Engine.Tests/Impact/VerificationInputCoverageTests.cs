@@ -298,6 +298,7 @@ public sealed class VerificationInputCoverageTests : IDisposable
     [InlineData("None", false)]
     [InlineData("EmbeddedResource", false)]
     [InlineData("AdditionalFiles", false)]
+    [InlineData("SplashScreen", false)]
     public void ExternalDeclaredFileItemIsNotCoveredWhetherOrNotItExists(string itemType, bool exists)
     {
         var external = Path.Combine(_root, "config.json");

@@ -23,6 +23,7 @@ internal static class VerificationInputCoverage
         "Resource",
         "Page",
         "ApplicationDefinition",
+        "SplashScreen",
     };
 
     public static string? FindIssue(string solutionPath, IEnumerable<Project> projects)
