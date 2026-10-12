@@ -124,6 +124,33 @@ public sealed class OrchestratorVerifyTests : IDisposable
     }
 
     [Fact]
+    public async Task SourceEditDuringCoverageEvaluation_RetriesBeforeAcceptingRun()
+    {
+        await StartAsync();
+        var projectPath = Path.Combine(_root, "App.csproj");
+        File.WriteAllText(projectPath, "<Project />");
+        var coverageChecks = 0;
+        _impact.VerificationCoverage = () =>
+        {
+            if (Interlocked.Increment(ref coverageChecks) == 1)
+            {
+                File.WriteAllText(projectPath,
+                    """<Project><ItemGroup><ProjectReference Include="../External/External.csproj" /></ItemGroup></Project>""");
+                return null;
+            }
+
+            return "A newly added ProjectReference is outside the source fingerprint.";
+        };
+
+        var result = await _orchestrator.VerifyAsync(Timeout, CancellationToken.None);
+
+        Assert.Equal(VerificationVerdict.NotFullScope, result.Verdict);
+        Assert.Equal(1, result.Attempts);
+        Assert.Null(result.Run);
+        Assert.Equal(2, coverageChecks);
+    }
+
+    [Fact]
     public async Task FailingTest_IsTestsFailed()
     {
         await StartAsync();

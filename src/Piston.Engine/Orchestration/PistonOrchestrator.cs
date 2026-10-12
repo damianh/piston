@@ -341,7 +341,10 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 }
 
                 var after = SourceFingerprinter.TryCompute(solutionDir);
-                var evaluation = VerificationPolicy.Evaluate(run, after, requiredTestProjects);
+                var evaluation = after != current
+                    ? new VerificationEvaluation(VerificationVerdict.Stale, true,
+                        "Source changed after build-input coverage was evaluated.")
+                    : VerificationPolicy.Evaluate(run, after, requiredTestProjects);
                 if (_fileWatcher.MonitoringError is { } afterMonitoringError)
                 {
                     evaluation = new VerificationEvaluation(VerificationVerdict.Faulted, false,
