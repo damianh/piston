@@ -153,6 +153,31 @@ public sealed class WorktreeOwnershipTests : IDisposable
     }
 
     [Fact]
+    public async Task Acquire_RetriesBriefly_WhenLockIsReleasedWithinWindow()
+    {
+        // Models `status`/`stop` probing the lock at the instant a new owner starts.
+        var solution = CreateSolution(CreateWorktree("wt"));
+        var holder = WorktreeOwnership.Acquire(_directory, solution, "probe");
+        var release = Task.Delay(100).ContinueWith(_ => holder.Dispose(), TaskScheduler.Default);
+
+        using var owner = WorktreeOwnership.Acquire(_directory, solution, "mcp", TimeSpan.FromSeconds(5));
+        await release;
+        Assert.Equal("mcp", owner.Owner.Host);
+    }
+
+    [Fact]
+    public void Acquire_StillConflicts_AfterRetryWindow()
+    {
+        var solution = CreateSolution(CreateWorktree("wt"));
+        using var owner = WorktreeOwnership.Acquire(_directory, solution);
+
+        var started = DateTime.UtcNow;
+        _ = Assert.Throws<WorktreeOwnershipConflictException>(
+            () => WorktreeOwnership.Acquire(_directory, solution, contentionRetry: TimeSpan.FromMilliseconds(150)));
+        Assert.True(DateTime.UtcNow - started >= TimeSpan.FromMilliseconds(140));
+    }
+
+    [Fact]
     public void Acquire_AllowsDifferentWorktreesConcurrently()
     {
         using var a = WorktreeOwnership.Acquire(_directory, CreateSolution(CreateWorktree("a")));

@@ -112,6 +112,47 @@ public sealed class McpStdioHostTests : IDisposable
     }
 
     [Fact]
+    public async Task OwnedElsewhere_LeavesWorktreeFilesUntouched()
+    {
+        var solution = CreateWorktree("owned-files");
+        var worktree = Path.GetDirectoryName(solution)!;
+        var coordination = Path.Combine(_root, "coordination");
+        var directory = new ExecutionCoordinationDirectory(coordination);
+        directory.EnsureReady();
+        using var owner = WorktreeOwnership.Acquire(directory, solution, "daemon");
+
+        // The live owner's diagnostics log must survive a refused `piston mcp`.
+        var log = Path.Combine(worktree, ".piston", "diagnostics.log");
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(log)!);
+        File.WriteAllText(log, "owner log\n");
+        var before = Snapshot(worktree);
+
+        var (host, run) = Start(new McpStdioHostOptions
+        {
+            SolutionPath = solution,
+            EngineOptions = new PistonOptions { SolutionPath = solution, ExecutionCoordinationDirectory = coordination },
+        });
+        var client = await ConnectAsync();
+        var (isError, _) = await CallAsync(client, "verify");
+        Assert.True(isError);
+        Assert.Equal(EngineAvailabilityState.OwnedElsewhere, host.Availability.State);
+
+        await client.DisposeAsync();
+        await _toServer.Writer.CompleteAsync();
+        Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(15)));
+
+        Assert.Equal("owner log\n", File.ReadAllText(log));
+        Assert.Equal(before, Snapshot(worktree));
+
+        static string Snapshot(string root) => string.Join("\n", Directory
+            .EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories)
+            .Order(StringComparer.Ordinal)
+            .Select(p => File.Exists(p)
+                ? $"{p}|{new FileInfo(p).Length}|{File.GetLastWriteTimeUtc(p):O}"
+                : p));
+    }
+
+    [Fact]
     public async Task WorktreeDeleted_ToolsReportIt_ThenExitsAndReleasesOwnership()
     {
         var solution = CreateWorktree("deleted");

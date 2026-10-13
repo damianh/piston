@@ -29,15 +29,127 @@ internal static class OwnerLookup
     }
 
     /// <summary>
-    /// Live owners whose solution is <paramref name="path"/>, or whose worktree is or contains it.
+    /// Live owners of <paramref name="path"/>: the owner of that exact solution; otherwise, when the path
+    /// exists, the owner of the worktree containing it (by <see cref="WorktreeIdentity"/>, so a nested worktree
+    /// never matches its parent's owner); otherwise (deleted worktree) the owner with the deepest recorded
+    /// worktree path that is or contains it.
     /// </summary>
     public static IReadOnlyList<OwnershipRecord> FindLive(IEnumerable<OwnershipRecord> records, string path)
     {
         var target = Normalize(path);
-        return records
-            .Where(r => r.Liveness == OwnershipLiveness.Live && r.Owner is { } owner &&
-                        (PathEquals(Normalize(owner.SolutionPath), target) || IsSameOrUnder(target, Normalize(owner.WorktreePath))))
+        var live = records.Where(r => r.Liveness == OwnershipLiveness.Live).ToList();
+
+        var exact = live.Where(r => r.Owner is { } owner && PathEquals(Normalize(owner.SolutionPath), target)).ToList();
+        if (exact.Count > 0)
+        {
+            return exact;
+        }
+
+        if ((File.Exists(target) || Directory.Exists(target)) && TryGetWorktreeKey(target) is { } key)
+        {
+            return live.Where(r => string.Equals(r.Key, key, StringComparison.Ordinal)).ToList();
+        }
+
+        var containing = live
+            .Where(r => r.Owner is { } owner && IsSameOrUnder(target, Normalize(owner.WorktreePath)))
             .ToList();
+        if (containing.Count == 0)
+        {
+            return containing;
+        }
+
+        var deepest = containing.Max(r => Normalize(r.Owner!.WorktreePath).Length);
+        return containing.Where(r => Normalize(r.Owner!.WorktreePath).Length == deepest).ToList();
+    }
+
+    private static string? TryGetWorktreeKey(string path)
+    {
+        try
+        {
+            return WorktreeIdentity.FromSolutionPath(path).Key;
+        }
+        catch (Exception ex) when (ex is ExecutionCoordinationException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Re-checks <paramref name="record"/> against <paramref name="current"/> records immediately before signalling,
+    /// so a stale sidecar never leads to terminating an unrelated process that reused the PID.
+    /// Returns the process to terminate, or null with <paramref name="reason"/> explaining why it was skipped.
+    /// </summary>
+    public static Process? VerifyOwnerProcess(OwnershipRecord record, IEnumerable<OwnershipRecord> current, out string reason)
+    {
+        var fresh = current.FirstOrDefault(r => string.Equals(r.Key, record.Key, StringComparison.Ordinal));
+        if (fresh is not { Liveness: OwnershipLiveness.Live, Owner: { } owner } ||
+            record.Owner is not { } expected ||
+            owner.ProcessId != expected.ProcessId || owner.AcquiredAt != expected.AcquiredAt)
+        {
+            reason = "the ownership record changed or was released; re-run `piston status` and try again.";
+            return null;
+        }
+
+        Process process;
+        try
+        {
+            process = Process.GetProcessById(owner.ProcessId);
+        }
+        catch (ArgumentException)
+        {
+            reason = $"PID {owner.ProcessId} is no longer running.";
+            return null;
+        }
+
+        string name;
+        DateTime startTime;
+        try
+        {
+            name = process.ProcessName;
+            startTime = process.StartTime.ToUniversalTime();
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+        {
+            process.Dispose();
+            reason = $"cannot inspect PID {owner.ProcessId} ({ex.Message}).";
+            return null;
+        }
+
+        if (!IsPlausibleOwner(name, startTime, owner, out reason))
+        {
+            process.Dispose();
+            return null;
+        }
+
+        return process;
+    }
+
+    /// <summary>Clock skew tolerated between a process's reported start time and its recorded acquisition.</summary>
+    internal static readonly TimeSpan StartTimeTolerance = TimeSpan.FromSeconds(2);
+
+    /// <summary>
+    /// True when a process named <paramref name="processName"/> started at <paramref name="startTimeUtc"/> can be the
+    /// recorded owner: it is piston or dotnet, and it started no later than it acquired ownership.
+    /// </summary>
+    internal static bool IsPlausibleOwner(string processName, DateTime startTimeUtc, ExecutionOwnerInfo owner, out string reason)
+    {
+        var name = Path.GetFileNameWithoutExtension(processName);
+        if (!name.StartsWith("piston", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(name, "dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            reason = $"PID {owner.ProcessId} is '{processName}', not piston/dotnet; the PID was probably reused.";
+            return false;
+        }
+
+        if (startTimeUtc > owner.AcquiredAt.UtcDateTime + StartTimeTolerance)
+        {
+            reason = $"PID {owner.ProcessId} started at {startTimeUtc:u}, after ownership was acquired at " +
+                     $"{owner.AcquiredAt:u}; the PID was probably reused.";
+            return false;
+        }
+
+        reason = "";
+        return true;
     }
 
     public static string Describe(OwnershipRecord record)
@@ -53,24 +165,19 @@ internal static class OwnerLookup
     }
 
     /// <summary>
-    /// Asks <paramref name="pid"/> to exit (SIGTERM on Unix), then kills its process tree after
-    /// <paramref name="gracePeriod"/>. Returns true when the process is gone.
+    /// Asks <paramref name="process"/> to exit (SIGTERM on Unix), then kills its process tree after
+    /// <paramref name="gracePeriod"/>. Returns true when the process is gone. Disposes <paramref name="process"/>.
     /// </summary>
-    public static async Task<bool> TerminateAsync(int pid, TimeSpan gracePeriod)
+    public static async Task<bool> TerminateAsync(Process process, TimeSpan gracePeriod)
     {
-        Process process;
-        try
-        {
-            process = Process.GetProcessById(pid);
-        }
-        catch (ArgumentException)
-        {
-            return true;
-        }
-
         using (process)
         {
-            if (!OperatingSystem.IsWindows() && Kill(pid, SigTerm) == 0 && await WaitAsync(process, gracePeriod).ConfigureAwait(false))
+            if (process.HasExited)
+            {
+                return true;
+            }
+
+            if (!OperatingSystem.IsWindows() && Kill(process.Id, SigTerm) == 0 && await WaitAsync(process, gracePeriod).ConfigureAwait(false))
             {
                 return true;
             }

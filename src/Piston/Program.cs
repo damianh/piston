@@ -622,7 +622,14 @@ static async Task<int> RunStopAsync(FileInfo? solutionArg, string? cliPipeName, 
             continue;
         }
 
-        if (await OwnerLookup.TerminateAsync(info.ProcessId, TimeSpan.FromSeconds(10)))
+        if (OwnerLookup.VerifyOwnerProcess(owner, OwnerLookup.ListAll(), out var skipReason) is not { } process)
+        {
+            Console.Error.WriteLine($"[piston] Skipped PID {info.ProcessId}: {skipReason}");
+            exit = 1;
+            continue;
+        }
+
+        if (await OwnerLookup.TerminateAsync(process, TimeSpan.FromSeconds(10)))
         {
             Console.Error.WriteLine($"[piston] Terminated PID {info.ProcessId}.");
         }

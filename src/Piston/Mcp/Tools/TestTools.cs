@@ -7,6 +7,7 @@ using System.Text;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using Piston.Engine;
+using Piston.Engine.Execution;
 using Piston.Engine.Models;
 
 namespace Piston.Mcp.Tools;
@@ -183,7 +184,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
     {
         availability?.ThrowIfUnavailable();
         var actual = engine.State.SolutionPath;
-        if (!string.IsNullOrWhiteSpace(expectedSolution) && !SolutionMatches(actual, expectedSolution))
+        if (!string.IsNullOrWhiteSpace(expectedSolution) && !SolutionMatches(actual, TryGetWorktreeRoot(actual), expectedSolution))
         {
             throw new McpException(
                 $"Solution mismatch: this Piston serves '{actual ?? "(none)"}', not '{expectedSolution}'. " +
@@ -193,8 +194,28 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         return actual ?? "(unknown)";
     }
 
-    /// <summary>True when <paramref name="expected"/> is the solution itself or a directory containing it.</summary>
-    internal static bool SolutionMatches(string? actual, string expected)
+    private static string? TryGetWorktreeRoot(string? solutionPath)
+    {
+        if (solutionPath is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return WorktreeIdentity.FromSolutionPath(solutionPath).RootPath;
+        }
+        catch (Exception ex) when (ex is ExecutionCoordinationException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// True when <paramref name="expected"/> is the solution itself, its directory, or the root of its worktree.
+    /// Ancestors of the worktree root do not match, so a parent repository never matches a nested worktree.
+    /// </summary>
+    internal static bool SolutionMatches(string? actual, string? worktreeRoot, string expected)
     {
         if (actual is null)
         {
@@ -204,9 +225,13 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
-        var a = Path.TrimEndingDirectorySeparator(Path.GetFullPath(actual));
-        var e = Path.TrimEndingDirectorySeparator(Path.GetFullPath(expected.Trim()));
-        return string.Equals(a, e, comparison) || a.StartsWith(e + Path.DirectorySeparatorChar, comparison);
+        var e = Normalize(expected.Trim());
+        var a = Normalize(actual);
+        return string.Equals(a, e, comparison) ||
+               (Path.GetDirectoryName(a) is { } dir && string.Equals(Normalize(dir), e, comparison)) ||
+               (worktreeRoot is not null && string.Equals(Normalize(worktreeRoot), e, comparison));
+
+        static string Normalize(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
     }
 
     private static string DescribeRun(TestRunRecord? run, bool includeCounts)

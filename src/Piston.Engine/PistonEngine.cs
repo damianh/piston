@@ -37,7 +37,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         // This must happen before MsBuildSolutionGraph (or any class referencing MSBuild) is JIT-compiled.
         MsBuildLocatorGuard.EnsureRegistered();
 
-        // Initialize diagnostic log early so all components can use it.
+        // Initialize diagnostic log early so all components can use it; the file is opened once ownership is held.
         var solutionDir = Path.GetDirectoryName(options.SolutionPath)
             ?? throw new ArgumentException("Cannot resolve solution directory.", nameof(options));
         _solutionDirectory = solutionDir;
@@ -175,6 +175,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
         var budget = _executionCoordinator.Initialize();
         _ownership = WorktreeOwnership.Acquire(_executionCoordinator.Directory, solutionPath, _ownerHost);
+        // Only the owner may touch the worktree's .piston directory.
+        _diagnosticLog.Open();
         _diagnosticLog.Write("Engine",
             $"Worktree ownership: {_ownership.Worktree.RootPath} (key {_ownership.Worktree.Key}); " +
             $"execution directory: {_executionCoordinator.Directory.BaseDirectory}; " +

@@ -76,7 +76,8 @@ results. Nothing needs to run before the agent starts. Per process:
 
 `verify` and `get_test_run` replies name the solution (`Solution: …` /
 `"solutionPath"`). `verify` and `run_tests` accept an optional `expectedSolution`
-(a solution path or the worktree directory). If it does not match, they fail
+(the solution path, its directory or the worktree root; a parent repository of
+a nested worktree does not match). If it does not match, they fail
 instead of verifying the wrong tree.
 
 Inspect and clean up from any directory:

@@ -28,18 +28,30 @@ public sealed class WorktreeOwnership : IDisposable
     public WorktreeIdentity Worktree { get; }
     public ExecutionOwnerInfo Owner { get; }
 
+    /// <summary>
+    /// How long <see cref="Acquire"/> retries a held lock before reporting a conflict. Covers the brief
+    /// window in which <see cref="ListOwners"/> (<c>status</c>/<c>stop</c>) probes an unheld lock.
+    /// </summary>
+    public static readonly TimeSpan DefaultContentionRetry = TimeSpan.FromMilliseconds(250);
+
     /// <param name="host">Recorded as <see cref="ExecutionOwnerInfo.Host"/> (for example <c>daemon</c> or <c>mcp</c>).</param>
+    /// <param name="contentionRetry">Retry window while the lock is held; defaults to <see cref="DefaultContentionRetry"/>.</param>
     /// <exception cref="WorktreeOwnershipConflictException">Another live process owns the worktree.</exception>
-    public static WorktreeOwnership Acquire(ExecutionCoordinationDirectory directory, string solutionPath, string? host = null)
+    public static WorktreeOwnership Acquire(
+        ExecutionCoordinationDirectory directory, string solutionPath, string? host = null, TimeSpan? contentionRetry = null)
     {
         var worktree = WorktreeIdentity.FromSolutionPath(solutionPath);
         var lockPath = Path.Combine(directory.OwnersDirectory, worktree.Key + ".lock");
         var infoPath = Path.Combine(directory.OwnersDirectory, worktree.Key + ".json");
 
         FileStream? stream;
+        var deadline = DateTime.UtcNow + (contentionRetry ?? DefaultContentionRetry);
         try
         {
-            stream = ExclusiveFileLock.TryAcquire(lockPath, FileMode.OpenOrCreate);
+            while ((stream = ExclusiveFileLock.TryAcquire(lockPath, FileMode.OpenOrCreate)) is null && DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(25);
+            }
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
@@ -70,7 +82,7 @@ public sealed class WorktreeOwnership : IDisposable
 
     /// <summary>
     /// Lists ownership records in <paramref name="directory"/>, probing each lock without blocking.
-    /// A probe briefly takes an unheld lock, so a daemon starting at that instant may see a conflict.
+    /// A probe briefly takes an unheld lock; <see cref="Acquire"/> retries briefly to ride over it.
     /// </summary>
     public static IReadOnlyList<OwnershipRecord> ListOwners(ExecutionCoordinationDirectory directory)
     {

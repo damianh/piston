@@ -138,20 +138,27 @@ public sealed class EngineAvailabilityTests
     }
 
     [Theory]
-    [InlineData("/w/a/App.slnx", "/w/a/App.slnx", true)]
-    [InlineData("/w/a/App.slnx", "/w/a", true)]
-    [InlineData("/w/a/App.slnx", "/w/a/", true)]
-    [InlineData("/w/a/src/App.slnx", "/w/a", true)]
-    [InlineData("/w/a/App.slnx", "/w/ab", false)]
-    [InlineData("/w/a/App.slnx", "/w/b/App.slnx", false)]
-    [InlineData(null, "/w/a", false)]
-    public void SolutionMatches(string? actual, string expected, bool matches)
+    [InlineData("/w/a/App.slnx", "/w/a", "/w/a/App.slnx", true)]
+    [InlineData("/w/a/App.slnx", "/w/a", "/w/a", true)]
+    [InlineData("/w/a/App.slnx", "/w/a", "/w/a/", true)]
+    [InlineData("/w/a/src/App.slnx", "/w/a", "/w/a", true)]
+    [InlineData("/w/a/src/App.slnx", "/w/a", "/w/a/src", true)]
+    [InlineData("/w/a/src/App.slnx", null, "/w/a", false)]
+    [InlineData("/w/a/App.slnx", "/w/a", "/w/ab", false)]
+    [InlineData("/w/a/App.slnx", "/w/a", "/w/b/App.slnx", false)]
+    [InlineData("/w/a/App.slnx", "/w/a", "/w", false)]
+    // A parent repository never matches a nested worktree's solution.
+    [InlineData("/repo/.worktrees/feat/App.slnx", "/repo/.worktrees/feat", "/repo", false)]
+    [InlineData("/repo/.worktrees/feat/src/App.slnx", "/repo/.worktrees/feat", "/repo/.worktrees", false)]
+    [InlineData("/repo/.worktrees/feat/src/App.slnx", "/repo/.worktrees/feat", "/repo/.worktrees/feat", true)]
+    [InlineData(null, "/w/a", "/w/a", false)]
+    public void SolutionMatches(string? actual, string? worktreeRoot, string expected, bool matches)
     {
         if (OperatingSystem.IsWindows())
         {
             return; // Unix-style fixtures.
         }
 
-        Assert.Equal(matches, TestTools.SolutionMatches(actual, expected));
+        Assert.Equal(matches, TestTools.SolutionMatches(actual, worktreeRoot, expected));
     }
 }
