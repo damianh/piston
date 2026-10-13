@@ -23,7 +23,7 @@ public sealed class McpStdioHostTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
     }
 
-    private (McpStdioHost Host, Task<int> Run) Start(McpStdioHostOptions options)
+    private (McpStdioHost Host, Task<int> Run) Start(McpStdioHostOptions options, CancellationToken ct = default)
     {
         var host = new McpStdioHost(new McpStdioHostOptions
         {
@@ -35,9 +35,9 @@ public sealed class McpStdioHostTests : IDisposable
             Input = _toServer.Reader.AsStream(),
             Output = _toClient.Writer.AsStream(),
             MonitorParentProcess = false,
-            Log = _ => { },
+            Log = options.Log ?? (_ => { }),
         });
-        return (host, host.RunAsync(CancellationToken.None));
+        return (host, host.RunAsync(ct));
     }
 
     private Task<McpClient> ConnectAsync() => McpClient.CreateAsync(
@@ -56,6 +56,31 @@ public sealed class McpStdioHostTests : IDisposable
         var solution = Path.Combine(worktree, "App.slnx");
         File.WriteAllText(solution, "<Solution />");
         return solution;
+    }
+
+    [Fact]
+    public async Task CancellationDuringEngineStartup_ExitsAndReleasesOwnership()
+    {
+        var solution = CreateWorktree("startup-cancel");
+        var coordination = Path.Combine(_root, "coordination");
+        using var cts = new CancellationTokenSource();
+        var (host, run) = Start(new McpStdioHostOptions
+        {
+            SolutionPath = solution,
+            EngineOptions = new PistonOptions { SolutionPath = solution, ExecutionCoordinationDirectory = coordination },
+            Log = message =>
+            {
+                if (message.StartsWith("[piston] Starting engine", StringComparison.Ordinal))
+                {
+                    cts.Cancel();
+                }
+            },
+        }, cts.Token);
+
+        Assert.True(cts.IsCancellationRequested);
+        Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.Equal(EngineAvailabilityState.Stopped, host.Availability.State);
+        Assert.Empty(WorktreeOwnership.ListOwners(new ExecutionCoordinationDirectory(coordination)));
     }
 
     [Fact]

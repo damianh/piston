@@ -62,6 +62,21 @@ public sealed class OwnerLookupTests : IDisposable
         Assert.Contains($"PID {Environment.ProcessId} (daemon)", OwnerLookup.Describe(record));
     }
 
+    [Fact]
+    public void FindLive_RespectsVolumeCaseSensitivity()
+    {
+        var upper = CreateSolution("Case");
+        var lower = CreateSolution("case");
+        using var owner = WorktreeOwnership.Acquire(_directory, upper);
+        var records = OwnerLookup.ListAll(_directory);
+        var names = Directory.GetDirectories(_root).Select(Path.GetFileName).ToList();
+        var distinct = names.Contains("Case") && names.Contains("case");
+
+        Assert.Equal(distinct ? 0 : 1, OwnerLookup.FindLive(records, lower).Count);
+        Assert.Equal(distinct ? 0 : 1, OwnerLookup.FindLive(records, Path.GetDirectoryName(lower)!).Count);
+        _ = Assert.Single(OwnerLookup.FindLive(records, upper));
+    }
+
     private string CreateNestedSolution(string parent, string name)
     {
         var worktree = Path.Combine(_root, parent, ".worktrees", name);

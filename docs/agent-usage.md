@@ -75,10 +75,12 @@ results. Nothing needs to run before the agent starts. Per process:
   `Piston could not start: … Use `dotnet test` instead.`
 
 `verify` and `get_test_run` replies name the solution (`Solution: …` /
-`"solutionPath"`). `verify` and `run_tests` accept an optional `expectedSolution`
+`"solutionPath"`), including queued runs and runs cancelled before execution.
+`verify` and `run_tests` accept an optional `expectedSolution`
 (the solution path, its directory or the worktree root; a parent repository of
 a nested worktree does not match). If it does not match, they fail
-instead of verifying the wrong tree.
+instead of verifying the wrong tree. Path matching resolves symbolic links and
+respects the filesystem's case sensitivity on macOS.
 
 Inspect and clean up from any directory:
 

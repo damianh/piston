@@ -92,8 +92,7 @@ public sealed class McpStdioSmokeTests : IDisposable
     public async Task HttpDaemon_WorktreeDeletion_ShutsDownAndFreesPorts()
     {
         var worktree = CreateWorktree("wt-daemon");
-        var mcpPort = FreePort();
-        var webPort = FreePort();
+        var (mcpPort, webPort) = DogfoodSmokeTests.FreePorts();
         File.WriteAllText(Path.Combine(worktree, ".piston.json"),
             $$"""{ "solution": "unit/Orders.slnx", "mcpPort": {{mcpPort}} }""");
         var daemon = StartPiston(worktree, ["daemon", "--web-port", webPort.ToString()]);
@@ -107,6 +106,47 @@ public sealed class McpStdioSmokeTests : IDisposable
         AssertPortFree(webPort);
         Assert.Contains("No Piston process owns a worktree.", (await RunPistonAsync(_root, "status", "--all")).Output);
     }
+
+    [DogfoodSmokeFact]
+    public async Task Sigterm_DuringEngineStartup_ExitsCleanlyAndReleasesOwnership()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // SIGTERM is a Unix signal.
+        }
+
+        var worktree = CreateWorktree("wt-sigterm");
+        var info = CreateStartInfo(worktree, ["mcp"]);
+        info.RedirectStandardInput = true;
+        var process = Process.Start(info) ?? throw new InvalidOperationException("Failed to start piston mcp.");
+        _processes.Add(process);
+        var signalled = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data is not { } line)
+            {
+                return;
+            }
+
+            Log(line);
+            if (line.StartsWith("[piston] Starting engine", StringComparison.Ordinal))
+            {
+                _ = signalled.TrySetResult(SendSignal(process.Id, 15));
+            }
+        };
+        process.BeginErrorReadLine();
+        var output = process.StandardOutput.ReadToEndAsync();
+
+        Assert.Equal(0, await signalled.Task.WaitAsync(TimeSpan.FromSeconds(30)));
+        using var exitCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        await process.WaitForExitAsync(exitCts.Token);
+        _ = await output;
+        Assert.Equal(0, process.ExitCode);
+        Assert.Contains("No Piston process owns a worktree.", (await RunPistonAsync(_root, "status", "--all")).Output);
+    }
+
+    [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "kill", SetLastError = true)]
+    private static extern int SendSignal(int pid, int signal);
 
     [DogfoodSmokeFact]
     public async Task StdinEof_MidRun_ExitsWithoutOrphanedChildren()
@@ -308,13 +348,6 @@ public sealed class McpStdioSmokeTests : IDisposable
     {
         using var listener = new TcpListener(IPAddress.Loopback, port);
         listener.Start();
-    }
-
-    private static int FreePort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
     private void Log(string line)

@@ -526,6 +526,19 @@ static async Task<int> RunMcpAsync(
     var stdin = Console.OpenStandardInput();
     Console.SetOut(Console.Error);
 
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        cts.Cancel();
+    };
+    using var sigterm = System.Runtime.InteropServices.PosixSignalRegistration.Create(
+        System.Runtime.InteropServices.PosixSignal.SIGTERM, e =>
+        {
+            e.Cancel = true;
+            cts.Cancel();
+        });
+
     string? solutionPath = null;
     PistonOptions? options = null;
     string? startupError = null;
@@ -543,13 +556,6 @@ static async Task<int> RunMcpAsync(
     {
         startupError = ex.Message;
     }
-
-    using var cts = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, e) =>
-    {
-        e.Cancel = true;
-        cts.Cancel();
-    };
 
     var host = new McpStdioHost(new McpStdioHostOptions
     {

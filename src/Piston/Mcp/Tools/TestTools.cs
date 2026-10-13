@@ -222,16 +222,14 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
             return false;
         }
 
-        var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
+        var comparison = StringComparison.Ordinal;
         var e = Normalize(expected.Trim());
         var a = Normalize(actual);
         return string.Equals(a, e, comparison) ||
                (Path.GetDirectoryName(a) is { } dir && string.Equals(Normalize(dir), e, comparison)) ||
                (worktreeRoot is not null && string.Equals(Normalize(worktreeRoot), e, comparison));
 
-        static string Normalize(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+        static string Normalize(string path) => WorktreeIdentity.CanonicalizePath(path);
     }
 
     private static string DescribeRun(TestRunRecord? run, bool includeCounts)

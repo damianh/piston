@@ -161,4 +161,56 @@ public sealed class EngineAvailabilityTests
 
         Assert.Equal(matches, TestTools.SolutionMatches(actual, worktreeRoot, expected));
     }
+
+    [Fact]
+    public void SolutionMatches_RespectsVolumeCaseSensitivity()
+    {
+        var root = Path.Combine(Path.GetTempPath(), $"piston-path-case-{Guid.NewGuid():N}");
+        try
+        {
+            var upper = Directory.CreateDirectory(Path.Combine(root, "Case")).FullName;
+            var lower = Directory.CreateDirectory(Path.Combine(root, "case")).FullName;
+            var solution = Path.Combine(upper, "App.slnx");
+            File.WriteAllText(solution, "<Solution />");
+            File.WriteAllText(Path.Combine(lower, "App.slnx"), "<Solution />");
+            var distinct = Directory.GetDirectories(root).Length == 2;
+
+            Assert.Equal(!distinct, TestTools.SolutionMatches(solution, upper, lower));
+            Assert.Equal(!distinct, TestTools.SolutionMatches(solution, upper, Path.Combine(lower, "App.slnx")));
+            Assert.True(TestTools.SolutionMatches(solution, upper, upper));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SolutionMatches_ResolvesSolutionAndDirectoryAliases()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return; // Creating symlinks may require elevation.
+        }
+
+        var root = Path.Combine(Path.GetTempPath(), $"piston-path-links-{Guid.NewGuid():N}");
+        try
+        {
+            var real = Directory.CreateDirectory(Path.Combine(root, "real")).FullName;
+            var solution = Path.Combine(real, "App.slnx");
+            File.WriteAllText(solution, "<Solution />");
+            var alias = Path.Combine(root, "alias");
+            _ = Directory.CreateSymbolicLink(alias, real);
+            var fileAlias = Path.Combine(root, "alias.slnx");
+            _ = File.CreateSymbolicLink(fileAlias, solution);
+
+            Assert.True(TestTools.SolutionMatches(solution, real, alias));
+            Assert.True(TestTools.SolutionMatches(solution, real, fileAlias));
+            Assert.False(TestTools.SolutionMatches(solution, real, root));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }

@@ -19,6 +19,35 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
 {
     private const int MaxLinkDepth = 40;
 
+    /// <summary>
+    /// Resolves links and canonicalizes existing path spelling, including on case-sensitive macOS
+    /// volumes. Missing suffixes retain their spelling relative to the nearest existing ancestor.
+    /// </summary>
+    public static string CanonicalizePath(string path)
+    {
+        var resolved = Path.TrimEndingDirectorySeparator(ResolveLinks(Path.GetFullPath(path)));
+        if (!OperatingSystem.IsMacOS())
+        {
+            return OperatingSystem.IsWindows() ? resolved.ToLowerInvariant() : resolved;
+        }
+
+        var suffix = new Stack<string>();
+        var ancestor = resolved;
+        while (!File.Exists(ancestor) && !Directory.Exists(ancestor))
+        {
+            suffix.Push(Path.GetFileName(ancestor));
+            ancestor = Path.GetDirectoryName(ancestor)
+                ?? throw new ExecutionCoordinationException($"Cannot canonicalize path '{path}'.");
+        }
+
+        var canonical = GetMacDirectoryPath(ancestor);
+        foreach (var segment in suffix)
+        {
+            canonical = Path.Combine(canonical, segment);
+        }
+        return Path.TrimEndingDirectorySeparator(canonical);
+    }
+
     public static WorktreeIdentity FromSolutionPath(string solutionPath)
     {
         var full = Path.GetFullPath(solutionPath);

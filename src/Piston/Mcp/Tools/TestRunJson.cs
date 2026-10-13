@@ -36,7 +36,7 @@ public static class TestRunJson
         {
             ["schema"] = Schema,
             ["runId"] = run.RunId,
-            ["solutionPath"] = run.Context?.SolutionPath,
+            ["solutionPath"] = run.SolutionPath ?? run.Context?.SolutionPath,
             ["engineInstanceId"] = run.EngineInstanceId,
             ["sequence"] = run.Sequence,
             ["trigger"] = run.Trigger.ToString(),

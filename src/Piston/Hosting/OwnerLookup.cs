@@ -209,11 +209,9 @@ internal static class OwnerLookup
         }
     }
 
-    private static string Normalize(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+    private static string Normalize(string path) => WorktreeIdentity.CanonicalizePath(path);
 
-    private static StringComparison Comparison => OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
-        ? StringComparison.OrdinalIgnoreCase
-        : StringComparison.Ordinal;
+    private static StringComparison Comparison => StringComparison.Ordinal;
 
     private static bool PathEquals(string a, string b) => string.Equals(a, b, Comparison);
 

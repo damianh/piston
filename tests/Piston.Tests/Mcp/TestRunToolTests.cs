@@ -127,6 +127,27 @@ public sealed class TestRunToolTests
         Assert.False(doc.RootElement.GetProperty("isTerminal").GetBoolean());
     }
 
+    [Theory]
+    [InlineData(TestRunStatus.Queued)]
+    [InlineData(TestRunStatus.Cancelled)]
+    public void GetTestRunIncludesSolutionBeforeExecutionContextExists(TestRunStatus status)
+    {
+        var engine = new StubEngine();
+        var run = Run("early", 1, status: status) with
+        {
+            SolutionPath = "/w/App.slnx",
+            Context = null,
+            StartedAt = null,
+        };
+        engine.State.CurrentRun = status == TestRunStatus.Queued ? run : null;
+        engine.State.RecentRuns = [run];
+        var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
+
+        using var doc = JsonDocument.Parse(tools.GetTestRun(status == TestRunStatus.Queued ? "active" : run.RunId));
+        Assert.Equal("/w/App.slnx", doc.RootElement.GetProperty("solutionPath").GetString());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("context").ValueKind);
+    }
+
     [Fact]
     public void BuildFailureDiagnosticsAreRunBoundInMcpAndProtocol()
     {
