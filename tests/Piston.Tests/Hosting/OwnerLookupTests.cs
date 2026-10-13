@@ -111,6 +111,15 @@ public sealed class OwnerLookupTests : IDisposable
         var records = OwnerLookup.ListAll(_directory);
 
         using var process = OwnerLookup.VerifyOwnerProcess(Assert.Single(records), records, out var reason);
+        using var self = System.Diagnostics.Process.GetCurrentProcess();
+        if (!OwnerLookup.IsPlausibleOwner(self.ProcessName, self.StartTime.ToUniversalTime(), records[0].Owner!, out _))
+        {
+            // On Windows the test host runs as testhost.exe, which is correctly not treated as piston/dotnet.
+            Assert.Null(process);
+            Assert.Contains("not piston/dotnet", reason);
+            return;
+        }
+
         Assert.True(process is not null, reason);
         Assert.Equal(Environment.ProcessId, process.Id);
     }
