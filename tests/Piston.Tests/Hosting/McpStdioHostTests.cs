@@ -133,7 +133,7 @@ public sealed class McpStdioHostTests : IDisposable
         var client = await ConnectAsync();
         Assert.Equal("mcp", Assert.Single(WorktreeOwnership.ListOwners(directory)).Owner!.Host);
 
-        Directory.Delete(Path.GetDirectoryName(solution)!, recursive: true);
+        await DeleteDirectoryWithRetryAsync(Path.GetDirectoryName(solution)!);
         var deadline = DateTime.UtcNow.AddSeconds(10);
         while (host.Availability.State != EngineAvailabilityState.WorktreeDeleted && DateTime.UtcNow < deadline)
         {
@@ -147,5 +147,26 @@ public sealed class McpStdioHostTests : IDisposable
         Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(30)));
         Assert.Empty(WorktreeOwnership.ListOwners(directory));
         await client.DisposeAsync();
+    }
+
+    // Windows can briefly hold handles (e.g. antivirus, file watchers) after a file is closed.
+    private static async Task DeleteDirectoryWithRetryAsync(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (IOException) when (attempt < 20)
+            {
+                await Task.Delay(100);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 20)
+            {
+                await Task.Delay(100);
+            }
+        }
     }
 }

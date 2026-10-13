@@ -35,7 +35,13 @@ internal sealed class DiagnosticLog : IDisposable
 
         try
         {
-            log._writer = new StreamWriter(logPath, append: false) { AutoFlush = true };
+            // FileShare.Delete so an open log never blocks removing the worktree (Windows).
+            var stream = new FileStream(
+                logPath,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.ReadWrite | FileShare.Delete);
+            log._writer = new StreamWriter(stream) { AutoFlush = true };
             log.Write("DiagnosticLog", $"Initialized. Log path: {logPath}");
         }
         catch
