@@ -12,11 +12,18 @@ using Piston.Engine.Models;
 namespace Piston.Mcp.Tools;
 
 [McpServerToolType]
-public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
+public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineAvailability? availability = null)
 {
-    [McpServerTool(Name = "run_tests"), Description("Force a full test run of the loaded solution. Returns a results summary plus the run ID, status, scope, freshness and source fingerprint; use GetTestRun with the run ID for per-test provenance.")]
-    public async Task<string> RunTestsAsync(CancellationToken ct)
+    private const string ExpectedSolutionDescription =
+        "Optional solution file or worktree directory you expect this Piston to serve. " +
+        "When set and it does not match, the tool fails instead of reporting another worktree's results.";
+
+    [McpServerTool(Name = "run_tests"), Description("Force a full test run of the loaded solution. Returns the solution path and a results summary plus the run ID, status, scope, freshness and source fingerprint; use GetTestRun with the run ID for per-test provenance.")]
+    public async Task<string> RunTestsAsync(
+        [Description(ExpectedSolutionDescription)] string? expectedSolution = null,
+        CancellationToken ct = default)
     {
+        var solution = GuardSolution(expectedSolution);
         var sw = Stopwatch.StartNew();
         var result = string.Empty;
         var succeeded = true;
@@ -28,7 +35,8 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
             var run = await engine.RequestRunAsync().WaitAsync(cts.Token).ConfigureAwait(false);
 
             var state = engine.State;
-            result = $"Phase: {state.Phase}, " +
+            result = $"Solution: {solution}" + Environment.NewLine +
+                     $"Phase: {state.Phase}, " +
                      $"Passed: {state.TotalPassed}, Failed: {state.TotalFailed}, Skipped: {state.TotalSkipped}, " +
                      $"Tests: {state.CompletedTests}/{state.TotalExpectedTests}, " +
                      $"Suites: {state.TestSuites.Count}" +
@@ -58,11 +66,15 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         "full run or forces one, retrying at most twice if the source changes during the run (then Stale). " +
         "Only 'Verdict: Passed' counts as full verification. Other verdicts: TestsFailed, BuildFailed, Incomplete, " +
         "Stale, Cancelled, NotFullScope (a test filter is set), Faulted, TimedOut. " +
-        "Prefer this over run_tests and over get_test_results, which may combine several runs.")]
+        "Prefer this over run_tests and over get_test_results, which may combine several runs. " +
+        "The Solution line names the solution verified. If the tool fails because Piston is owned by another process, " +
+        "the worktree was deleted, or Piston could not start, fall back to `dotnet test`.")]
     public async Task<string> VerifyAsync(
         [Description("Overall timeout in seconds (default 600). On timeout the run continues; call verify again.")] int timeoutSeconds = 600,
+        [Description(ExpectedSolutionDescription)] string? expectedSolution = null,
         CancellationToken ct = default)
     {
+        var solution = GuardSolution(expectedSolution);
         var sw = Stopwatch.StartNew();
         string? logSummary = null;
         var succeeded = false;
@@ -70,7 +82,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         {
             var timeout = TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 3600));
             var verification = await engine.VerifyAsync(timeout, ct).ConfigureAwait(false);
-            var result = VerificationReport.Format(verification);
+            var result = VerificationReport.Format(verification, solution);
             logSummary = $"Verdict: {verification.Verdict}; source: {verification.Source}; attempts: {verification.Attempts}";
             succeeded = true;
             return result;
@@ -86,9 +98,11 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
     [McpServerTool, Description("Get current test results from the last test run.")]
     public string GetTestResults()
     {
+        availability?.ThrowIfUnavailable();
         var sw = Stopwatch.StartNew();
         var state = engine.State;
         var sb = new StringBuilder();
+        _ = sb.AppendLine($"Solution: {state.SolutionPath ?? "(unknown)"}");
         _ = sb.AppendLine($"Phase: {state.Phase}");
         _ = sb.AppendLine($"Passed: {state.TotalPassed}, Failed: {state.TotalFailed}, Skipped: {state.TotalSkipped}");
         _ = sb.AppendLine($"Tests: {state.CompletedTests}/{state.TotalExpectedTests}");
@@ -135,6 +149,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         "A result is trustworthy for a full-scope oracle only when isCurrentFullResult is true and sourceAfter matches the expected source.")]
     public string GetTestRun(string runId = "")
     {
+        availability?.ThrowIfUnavailable();
         var sw = Stopwatch.StartNew();
         var state = engine.State;
         var key = runId?.Trim() ?? "";
@@ -162,6 +177,36 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
         sw.Stop();
         recorder.Record(nameof(GetTestRun), runId, $"{run.RunId} {run.Status}", sw.Elapsed.TotalMilliseconds, true);
         return result;
+    }
+
+    private string GuardSolution(string? expectedSolution)
+    {
+        availability?.ThrowIfUnavailable();
+        var actual = engine.State.SolutionPath;
+        if (!string.IsNullOrWhiteSpace(expectedSolution) && !SolutionMatches(actual, expectedSolution))
+        {
+            throw new McpException(
+                $"Solution mismatch: this Piston serves '{actual ?? "(none)"}', not '{expectedSolution}'. " +
+                $"Use the Piston MCP server started in that worktree, or {EngineAvailability.Fallback}");
+        }
+
+        return actual ?? "(unknown)";
+    }
+
+    /// <summary>True when <paramref name="expected"/> is the solution itself or a directory containing it.</summary>
+    internal static bool SolutionMatches(string? actual, string expected)
+    {
+        if (actual is null)
+        {
+            return false;
+        }
+
+        var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        var a = Path.TrimEndingDirectorySeparator(Path.GetFullPath(actual));
+        var e = Path.TrimEndingDirectorySeparator(Path.GetFullPath(expected.Trim()));
+        return string.Equals(a, e, comparison) || a.StartsWith(e + Path.DirectorySeparatorChar, comparison);
     }
 
     private static string DescribeRun(TestRunRecord? run, bool includeCounts)
@@ -207,6 +252,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
     [McpServerTool, Description("Set a test filter to narrow which tests are run. Pass empty string to clear.")]
     public string SetTestFilter(string filter)
     {
+        availability?.ThrowIfUnavailable();
         var sw = Stopwatch.StartNew();
         var effectiveFilter = string.IsNullOrEmpty(filter) ? null : filter;
         engine.SetFilter(effectiveFilter);
@@ -219,6 +265,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder)
     [McpServerTool, Description("Clear current test results and persisted coverage in the current solution directory. A running test run may publish new results afterwards.")]
     public string ClearResults()
     {
+        availability?.ThrowIfUnavailable();
         var sw = Stopwatch.StartNew();
         engine.ClearResults();
         const string Result = "Results cleared.";

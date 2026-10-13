@@ -32,7 +32,7 @@ public sealed class WorktreeOwnershipConflictException : ExecutionCoordinationEx
     private static string Describe(WorktreeIdentity worktree, ExecutionOwnerInfo? owner) =>
         owner is null
             ? $"Worktree '{worktree.RootPath}' is already owned by another running Piston daemon."
-            : $"Worktree '{worktree.RootPath}' is already owned by Piston daemon process {owner.ProcessId} " +
+            : $"Worktree '{worktree.RootPath}' is already owned by Piston {owner.Host ?? "daemon"} process {owner.ProcessId} " +
               $"(solution '{owner.SolutionPath}', since {owner.AcquiredAt:O}).";
 }
 

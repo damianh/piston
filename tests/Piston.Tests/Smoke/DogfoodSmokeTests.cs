@@ -274,7 +274,7 @@ public sealed partial class DogfoodSmokeTests : IDisposable
         }
     }
 
-    private static void CopyFixture(string destination)
+    internal static void CopyFixture(string destination)
     {
         var fixtures = Path.Combine(FindRepoRoot(), "measurements", "fixtures");
         _ = Directory.CreateDirectory(destination);

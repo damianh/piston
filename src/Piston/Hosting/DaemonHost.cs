@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Piston.Engine;
+using Piston.Engine.Execution;
 using Piston.Hosting.Protocol;
 using Piston.Hosting.Services;
 using Piston.Mcp;
@@ -28,6 +29,7 @@ public sealed class DaemonHost : IAsyncDisposable
     private ProtocolRouter? _router;
     private WebApplication? _webApp;
     private WebApplication? _mcpApp;
+    private WorktreePresenceMonitor? _presenceMonitor;
     private readonly TaskCompletionSource _shutdownRequested = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private DateTimeOffset _startedAt;
     private bool _disposed;
@@ -116,6 +118,15 @@ public sealed class DaemonHost : IAsyncDisposable
         // so an endpoint conflict fails the daemon without starting a run.
         await engine.StartAsync(_options.SolutionPath, () => StartEndpointsAsync(engine, activityProxy, ct))
             .ConfigureAwait(false);
+
+        // A daemon must not outlive its worktree: shut down so ports, pipe and ownership are released.
+        var worktreeRoot = WorktreeIdentity.FromSolutionPath(_options.SolutionPath).RootPath;
+        _presenceMonitor = new WorktreePresenceMonitor(_options.SolutionPath, worktreeRoot, root =>
+        {
+            _log($"[piston] Worktree '{root}' no longer exists; shutting down.");
+            RequestShutdown();
+        }, _options.PresenceCheckInterval);
+        _presenceMonitor.Start();
     }
 
     private async Task StartEndpointsAsync(PistonEngine engine, ActivityEventSinkProxy activityProxy, CancellationToken ct)
@@ -223,6 +234,9 @@ public sealed class DaemonHost : IAsyncDisposable
     /// <summary>Stops all daemon components in reverse start order.</summary>
     public async Task StopAsync()
     {
+        _presenceMonitor?.Dispose();
+        _presenceMonitor = null;
+
         if (_mcpApp is not null)
         {
             await _mcpApp.StopAsync().ConfigureAwait(false);

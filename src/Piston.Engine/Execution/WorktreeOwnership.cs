@@ -28,8 +28,9 @@ public sealed class WorktreeOwnership : IDisposable
     public WorktreeIdentity Worktree { get; }
     public ExecutionOwnerInfo Owner { get; }
 
+    /// <param name="host">Recorded as <see cref="ExecutionOwnerInfo.Host"/> (for example <c>daemon</c> or <c>mcp</c>).</param>
     /// <exception cref="WorktreeOwnershipConflictException">Another live process owns the worktree.</exception>
-    public static WorktreeOwnership Acquire(ExecutionCoordinationDirectory directory, string solutionPath)
+    public static WorktreeOwnership Acquire(ExecutionCoordinationDirectory directory, string solutionPath, string? host = null)
     {
         var worktree = WorktreeIdentity.FromSolutionPath(solutionPath);
         var lockPath = Path.Combine(directory.OwnersDirectory, worktree.Key + ".lock");
@@ -51,7 +52,8 @@ public sealed class WorktreeOwnership : IDisposable
             throw new WorktreeOwnershipConflictException(worktree, TryReadInfo(infoPath));
         }
 
-        var owner = new ExecutionOwnerInfo(Environment.ProcessId, Path.GetFullPath(solutionPath), worktree.RootPath, DateTimeOffset.UtcNow);
+        var owner = new ExecutionOwnerInfo(
+            Environment.ProcessId, Path.GetFullPath(solutionPath), worktree.RootPath, DateTimeOffset.UtcNow, host);
         try
         {
             WriteInfo(infoPath, owner);
@@ -64,6 +66,70 @@ public sealed class WorktreeOwnership : IDisposable
         }
 
         return new WorktreeOwnership(worktree, owner, stream, infoPath);
+    }
+
+    /// <summary>
+    /// Lists ownership records in <paramref name="directory"/>, probing each lock without blocking.
+    /// A probe briefly takes an unheld lock, so a daemon starting at that instant may see a conflict.
+    /// </summary>
+    public static IReadOnlyList<OwnershipRecord> ListOwners(ExecutionCoordinationDirectory directory)
+    {
+        string[] locks;
+        try
+        {
+            locks = Directory.GetFiles(directory.OwnersDirectory, "*.lock");
+        }
+        catch (Exception ex) when (ex is DirectoryNotFoundException or IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+
+        var records = new List<OwnershipRecord>();
+        foreach (var lockPath in locks)
+        {
+            var key = Path.GetFileNameWithoutExtension(lockPath);
+            var infoPath = Path.Combine(directory.OwnersDirectory, key + ".json");
+            var liveness = ProbeLock(lockPath);
+            if (liveness == OwnershipLiveness.None)
+            {
+                continue;
+            }
+
+            var info = TryReadInfo(infoPath);
+            if (liveness == OwnershipLiveness.Stale && info is null)
+            {
+                // A released lock without details is the normal idle state, not a stale record.
+                continue;
+            }
+
+            records.Add(new OwnershipRecord(key, liveness, info));
+        }
+        return records;
+    }
+
+    private static OwnershipLiveness ProbeLock(string lockPath)
+    {
+        FileStream? stream;
+        try
+        {
+            stream = ExclusiveFileLock.TryAcquire(lockPath, FileMode.Open);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return OwnershipLiveness.None;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return OwnershipLiveness.None;
+        }
+
+        if (stream is null)
+        {
+            return OwnershipLiveness.Live;
+        }
+
+        stream.Dispose();
+        return OwnershipLiveness.Stale;
     }
 
     public void Dispose()
@@ -95,7 +161,8 @@ public sealed class WorktreeOwnership : IDisposable
                 root.GetProperty("processId").GetInt32(),
                 root.GetProperty("solutionPath").GetString() ?? "",
                 root.GetProperty("worktreePath").GetString() ?? "",
-                root.GetProperty("acquiredAt").GetDateTimeOffset());
+                root.GetProperty("acquiredAt").GetDateTimeOffset(),
+                root.TryGetProperty("host", out var host) && host.ValueKind == JsonValueKind.String ? host.GetString() : null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException
                                        or KeyNotFoundException or InvalidOperationException or FormatException)
@@ -115,8 +182,29 @@ public sealed class WorktreeOwnership : IDisposable
             writer.WriteString("solutionPath", owner.SolutionPath);
             writer.WriteString("worktreePath", owner.WorktreePath);
             writer.WriteString("acquiredAt", owner.AcquiredAt);
+            if (owner.Host is not null)
+            {
+                writer.WriteString("host", owner.Host);
+            }
             writer.WriteEndObject();
         }
         File.Move(temp, infoPath, overwrite: true);
     }
 }
+
+/// <summary>Whether an ownership lock is held by a live process.</summary>
+public enum OwnershipLiveness
+{
+    /// <summary>No lock file.</summary>
+    None,
+
+    /// <summary>The lock is held: <see cref="OwnershipRecord.Owner"/> describes a running process.</summary>
+    Live,
+
+    /// <summary>The lock is free but owner details remain (the owner crashed or was killed).</summary>
+    Stale,
+}
+
+/// <summary>An ownership record found by <see cref="WorktreeOwnership.ListOwners"/>.</summary>
+/// <param name="Owner">Recorded details; null when a live owner's details could not be read.</param>
+public sealed record OwnershipRecord(string Key, OwnershipLiveness Liveness, ExecutionOwnerInfo? Owner);

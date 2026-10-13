@@ -20,6 +20,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     private readonly IActivityEventSink _activitySink;
     private readonly string _solutionDirectory;
     private readonly MachineExecutionCoordinator _executionCoordinator;
+    private readonly string? _ownerHost;
     private WorktreeOwnership? _ownership;
 
     public PistonEngine(PistonOptions options)
@@ -30,6 +31,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     public PistonEngine(PistonOptions options, IActivityEventSink activitySink)
     {
         _activitySink = activitySink;
+        _ownerHost = options.OwnerHost;
 
         // Register MSBuild before any Microsoft.Build.* types are loaded.
         // This must happen before MsBuildSolutionGraph (or any class referencing MSBuild) is JIT-compiled.
@@ -172,7 +174,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         }
 
         var budget = _executionCoordinator.Initialize();
-        _ownership = WorktreeOwnership.Acquire(_executionCoordinator.Directory, solutionPath);
+        _ownership = WorktreeOwnership.Acquire(_executionCoordinator.Directory, solutionPath, _ownerHost);
         _diagnosticLog.Write("Engine",
             $"Worktree ownership: {_ownership.Worktree.RootPath} (key {_ownership.Worktree.Key}); " +
             $"execution directory: {_executionCoordinator.Directory.BaseDirectory}; " +

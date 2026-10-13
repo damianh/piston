@@ -130,4 +130,6 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
 }
 
 /// <summary>Details recorded by a worktree owner for diagnostics when another daemon is refused.</summary>
-public sealed record ExecutionOwnerInfo(int ProcessId, string SolutionPath, string WorktreePath, DateTimeOffset AcquiredAt);
+/// <param name="Host">How the owner was started (<c>daemon</c>, <c>mcp</c>, ...); null when not recorded.</param>
+public sealed record ExecutionOwnerInfo(
+    int ProcessId, string SolutionPath, string WorktreePath, DateTimeOffset AcquiredAt, string? Host = null);

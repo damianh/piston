@@ -36,7 +36,7 @@ public sealed class VerifyToolTests
     private static async Task<string> VerifyAsync(VerificationResult verification, int timeoutSeconds = 600)
     {
         var engine = new StubEngine { NextVerification = verification };
-        return await new TestTools(engine, NullMcpCallRecorder.Instance).VerifyAsync(timeoutSeconds, CancellationToken.None);
+        return await new TestTools(engine, NullMcpCallRecorder.Instance).VerifyAsync(timeoutSeconds, ct: CancellationToken.None);
     }
 
     [Fact]
@@ -102,7 +102,7 @@ public sealed class VerifyToolTests
             NextVerification = new(VerificationVerdict.NotFullScope, "Test filter 'X' is active.", VerificationSource.None, 0, null, Source),
         };
 
-        var text = await new TestTools(engine, NullMcpCallRecorder.Instance).VerifyAsync(5, CancellationToken.None);
+        var text = await new TestTools(engine, NullMcpCallRecorder.Instance).VerifyAsync(5, ct: CancellationToken.None);
 
         Assert.Contains("Verdict: NotFullScope", text);
         Assert.Contains("Reason: Test filter 'X' is active.", text);

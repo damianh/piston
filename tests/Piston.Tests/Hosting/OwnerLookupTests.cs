@@ -1,0 +1,76 @@
+// Copyright (c) Damian Hickey. All rights reserved.
+// See LICENSE in the project root for license information.
+
+using Piston.Engine.Execution;
+using Piston.Hosting;
+using Xunit;
+
+namespace Piston.Tests.Hosting;
+
+public sealed class OwnerLookupTests : IDisposable
+{
+    private readonly string _root = Path.Combine(Path.GetTempPath(), $"piston-owners-{Guid.NewGuid():N}");
+    private readonly ExecutionCoordinationDirectory _directory;
+
+    public OwnerLookupTests()
+    {
+        _directory = new ExecutionCoordinationDirectory(Path.Combine(_root, "coordination"));
+        _directory.EnsureReady();
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
+    }
+
+    private string CreateSolution(string worktreeName)
+    {
+        var worktree = Path.Combine(_root, worktreeName);
+        _ = Directory.CreateDirectory(Path.Combine(worktree, ".git"));
+        _ = Directory.CreateDirectory(Path.Combine(worktree, "src"));
+        var solution = Path.Combine(worktree, "src", "App.slnx");
+        File.WriteAllText(solution, "<Solution />");
+        return solution;
+    }
+
+    [Fact]
+    public void FindLive_MatchesSolutionWorktreeOrPathInside()
+    {
+        var a = CreateSolution("a");
+        var b = CreateSolution("b");
+        using var ownerA = WorktreeOwnership.Acquire(_directory, a, "mcp");
+        using var ownerB = WorktreeOwnership.Acquire(_directory, b, "daemon");
+        var records = OwnerLookup.ListAll(_directory);
+
+        Assert.Equal(2, records.Count);
+        Assert.Equal("mcp", Assert.Single(OwnerLookup.FindLive(records, a)).Owner!.Host);
+        Assert.Equal("mcp", Assert.Single(OwnerLookup.FindLive(records, Path.Combine(_root, "a"))).Owner!.Host);
+        Assert.Equal("daemon", Assert.Single(OwnerLookup.FindLive(records, Path.Combine(_root, "b", "src"))).Owner!.Host);
+        Assert.Empty(OwnerLookup.FindLive(records, Path.Combine(_root, "c")));
+        Assert.Empty(OwnerLookup.FindLive(records, _root));
+    }
+
+    [Fact]
+    public void FindLive_StillFindsOwnerOfDeletedWorktree()
+    {
+        var a = CreateSolution("gone");
+        using var owner = WorktreeOwnership.Acquire(_directory, a, "daemon");
+        Directory.Delete(Path.Combine(_root, "gone"), recursive: true);
+
+        var record = Assert.Single(OwnerLookup.FindLive(OwnerLookup.ListAll(_directory), Path.Combine(_root, "gone")));
+        Assert.Contains("[worktree missing]", OwnerLookup.Describe(record));
+        Assert.Contains($"PID {Environment.ProcessId} (daemon)", OwnerLookup.Describe(record));
+    }
+
+    [Fact]
+    public async Task Terminate_ExitedProcess_ReturnsTrue()
+    {
+        using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("dotnet", "--version")
+        {
+            RedirectStandardOutput = true,
+            UseShellExecute = false,
+        })!;
+        await process.WaitForExitAsync();
+        Assert.True(await OwnerLookup.TerminateAsync(process.Id, TimeSpan.FromSeconds(1)));
+    }
+}

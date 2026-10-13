@@ -1,6 +1,6 @@
 # Piston
 
-An agent-facing continuous test backend for .NET, with a headless daemon, HTTP MCP test tools, and a web dashboard.
+An agent-facing continuous test backend for .NET, with a per-session stdio MCP server (`piston mcp`), a headless daemon with HTTP MCP, and a web dashboard.
 
 Piston watches a .NET solution, selects affected test projects, builds, runs test projects with bounded concurrency, and publishes results to connected clients. It uses standard `dotnet build` and `dotnet test` in the watched checkout.
 
@@ -56,10 +56,15 @@ piston [<solution>] [--pipe-name <name>] [--web-port <port>]
 # Run the daemon in the foreground
 piston daemon [<solution>] [options]
 
-# Manage a running daemon
-piston stop [<solution>]
-piston status [<solution>]
+# Serve MCP over stdio for one agent session (cwd = the session's worktree)
+piston mcp [<solution>] [--debounce <ms>] [--filter <pattern>] [--coverage] [--parallelism <n>]
+
+# Manage a running daemon / inspect worktree owners
+piston stop [<solution>] [--force]
+piston status [<solution>] [--all]
 ```
+
+`piston status --all` lists every live worktree owner (PID, `mcp` or `daemon`, solution, worktree) and stale ownership records. If a worktree's owner cannot be reached over the daemon pipe (for example a `piston mcp` process, or a daemon whose worktree was deleted), `piston stop` prints the owner's PID, solution and worktree and exits 1; `piston stop --force` sends SIGTERM and kills the process if it has not exited.
 
 `piston status` prints the daemon's PID, solution, phase, web and MCP URLs, and its latest and active run. `piston stop` asks the daemon to shut down, then waits for its process to exit. It exits 0 only once the process has exited, so the ports are free; with no daemon running it prints `No daemon running` and also exits 0. Startup failures exit with code 1 and an `error:` message: a worktree that already has a daemon, or an occupied `--mcp-port`/`--web-port`. Endpoints bind after worktree ownership is taken and before the startup run, so a port conflict starts no build or test run.
 
@@ -98,15 +103,29 @@ The daemon serves a Blazor WebAssembly dashboard (default `http://localhost:5199
 
 ## MCP server (AI agents)
 
+For coding agents, use the stdio server: configure `piston mcp` once, globally, as a local MCP server. Copilot CLI's `~/.copilot/mcp-config.json` would then contain:
+
+```json
+{ "mcpServers": { "piston": { "type": "local", "command": "piston", "args": ["mcp"], "tools": ["*"] } } }
+```
+
+The agent host starts one `piston mcp` process per session, with the working directory set to the session's worktree. That process:
+- runs an in-process engine: a full startup run, then watcher-triggered runs;
+- logs only to stderr;
+- exits when the session ends (stdin EOF, SIGTERM, or parent death on Unix), killing build/test processes and releasing worktree ownership;
+- exits if the worktree is deleted.
+
+If another Piston process already owns the worktree, or the engine cannot start, the server still answers. Every tool then returns an error that ends with ``Use `dotnet test` instead.``. To uninstall, run `dotnet tool uninstall -g Piston` and remove the config entry.
+
 With `--mcp-port` (or `mcpPort` in `.piston.json`), the daemon exposes an HTTP MCP endpoint backed by the running engine. For `--mcp-port 5200`, connect at `http://localhost:5200` (the root endpoint, not `/mcp`). The daemon retains current state, but runs still launch `dotnet build` and fresh `dotnet test` processes; there is no prewarmed test-process pool.
 
 To set up a coding agent, follow [docs/agent-usage.md](docs/agent-usage.md). It covers setup, the verification contract and a custom-instructions snippet.
 
 | Tool | Description |
 |---|---|
-| `verify` | Get current full verification. Reuses the latest run if it is a current, full-scope, unfiltered result for the present source fingerprint; otherwise awaits an active full run or forces one, retrying at most twice when the source changes mid-run, then reporting `Stale`. Returns a compact verdict (`Passed`, `TestsFailed`, `BuildFailed`, `Incomplete`, `Stale`, `Cancelled`, `Faulted`, `TimedOut`, `NotFullScope`) with run ID, fingerprint, counts, capped failing tests / build errors and queue info. Only `Passed` is proof. |
+| `verify` | Get current full verification (optional `expectedSolution` guard; the reply names the `Solution:`). Reuses the latest run if it is a current, full-scope, unfiltered result for the present source fingerprint; otherwise awaits an active full run or forces one, retrying at most twice when the source changes mid-run, then reporting `Stale`. Returns a compact verdict (`Passed`, `TestsFailed`, `BuildFailed`, `Incomplete`, `Stale`, `Cancelled`, `Faulted`, `TimedOut`, `NotFullScope`) with run ID, fingerprint, counts, capped failing tests / build errors and queue info. Only `Passed` is proof. |
 | `run_tests` | Request a full build + test run; returns a textual summary plus a `Run:` line with the run ID, status, scope, freshness and source fingerprint. |
-| `get_test_run` | Read one run's provenance, build diagnostics and per-test results as JSON (`piston.test-run/v1`): `runId` = an ID, `latest` (default) or `active`. |
+| `get_test_run` | Read one run's solution path, provenance, build diagnostics and per-test results as JSON (`piston.test-run/v1`): `runId` = an ID, `latest` (default) or `active`. |
 | `get_test_results` | Read current accumulated test results (may combine several runs; each suite shows its run ID). |
 | `set_test_filter` | Apply a test name filter. |
 | `clear_results` | Clear current test suites, last-run timestamp, coverage state, and persisted coverage in the current solution directory. A running test run may publish new results afterwards. |

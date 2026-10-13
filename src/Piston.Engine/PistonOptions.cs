@@ -76,5 +76,9 @@ public sealed class PistonOptions
     /// Null uses <c>PISTON_EXECUTION_DIRECTORY</c> or the per-user default.
     /// </summary>
     public string? ExecutionCoordinationDirectory { get; init; }
-}
 
+    /// <summary>
+    /// Recorded in the worktree ownership details so tools can tell a <c>piston mcp</c> session from a daemon.
+    /// </summary>
+    public string? OwnerHost { get; init; }
+}
