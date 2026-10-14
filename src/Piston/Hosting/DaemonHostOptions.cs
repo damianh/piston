@@ -23,6 +23,9 @@ public sealed class DaemonHostOptions
     /// <summary>Optional port for the MCP server. Null disables MCP.</summary>
     public int? McpPort { get; init; }
 
+    /// <summary>How often to check whether the worktree still exists; null uses the default.</summary>
+    public TimeSpan? PresenceCheckInterval { get; init; }
+
     /// <summary>
     /// Diagnostic log sink. Defaults to writing to <see cref="Console.Error"/>.
     /// </summary>

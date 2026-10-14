@@ -1,78 +1,123 @@
 # Using Piston as a coding agent's test backend
 
-This is the minimal dogfood flow: one developer, one Linux worktree, one daemon,
-one coding agent connected over HTTP MCP. It is a usability step, not evidence for
-gate G1 or any performance claim.
+This is the dogfood flow: one developer and one or more Linux worktrees, each with its
+own coding agent session. Every agent session runs its own `piston mcp` process over
+stdio. It is a usability step, not evidence for gate G1 or any performance claim.
 
-## 1. Install the local tool
+## 1. Install the tool
 
 ```sh
 dotnet pack src/Piston/Piston.csproj -c Release -o packages
-dotnet tool install Piston --version 0.1.0 --tool-path ./tools --source ./packages --no-cache
+dotnet tool install -g Piston --version 0.1.0 --add-source ./packages --no-cache
 ```
 
-To pick up a rebuilt package later, uninstall first (`dotnet tool uninstall Piston
---tool-path ./tools`) or pack with a new version (`-p:Version=0.1.0-dev.2`) and
-use `dotnet tool update`. With `--no-cache`, NuGet does not reuse a stale copy of
-the same version. The examples below assume `piston` resolves to that install.
+To pick up a rebuilt package, pack with a new version (`-p:Version=0.1.0-dev.2`) and
+run `dotnet tool update -g Piston --version 0.1.0-dev.2 --add-source ./packages`.
+Alternatively, uninstall first. To uninstall, run `dotnet tool uninstall -g Piston`
+and remove the `piston` entry from your MCP config (section 3).
 
-## 2. Configure the worktree
+A local install (`--tool-path ./tools`) also works. Then point the MCP `command`
+at that path instead of `piston`.
 
-In the worktree root, create `.piston.json`:
+## 2. Configure the worktree (optional)
+
+`piston mcp` resolves the solution from its working directory, the same way the
+daemon does: `.piston.json` first, then a single `.sln`/`.slnx`/`.slnf` in the
+working directory (the worktree root). If the solution is elsewhere, or there is
+more than one, add `.piston.json` to the worktree root:
 
 ```json
 {
-  "solution": "MyApp.slnx",
-  "mcpPort": 5200
+  "solution": "MyApp.slnx"
 }
 ```
 
-`solution` is resolved relative to the file. Pick an `mcpPort` that is unique per
-running daemon. Start the daemon in the foreground, in its own terminal:
-
-```sh
-piston daemon            # add --web-port <port> if 5199 is taken
-```
-
-Startup problems fail fast with `error: ...` and exit code 1. Examples:
-- another daemon already owns this worktree;
-- the MCP or web port is in use: `error: Could not start the MCP server on ...`.
-
-Piston binds its pipe, web and MCP endpoints after taking worktree ownership but
-before it starts watching or runs the startup build, so a port conflict starts no
-build or test run. Piston never edits the agent's configuration, and it never
-picks another port. Fix the port and start again.
-
-Check and stop it from the same directory:
-
-```sh
-piston status   # PID, solution, phase, web and MCP URLs, latest/active run
-piston stop     # asks the daemon to shut down and waits for the process to exit
-```
-
-`piston stop` exits 0 only after the daemon process has exited, so its ports are
-free. If no daemon is running it prints `No daemon running` and also exits 0;
-it exits non-zero if the daemon does not exit in time.
+`solution` is resolved relative to the file. `piston mcp` ignores `mcpPort`,
+`webPort` and `stdio`: it opens no ports and no dashboard.
 
 ## 3. Connect the agent
 
-The MCP endpoint is the root URL (`http://localhost:<mcpPort>/`, not `/mcp`). For
-Copilot CLI, add a server entry to the repository's `.mcp.json` (or your user MCP
-config). Merge it with the existing servers rather than replacing them:
+Add one global entry to `~/.copilot/mcp-config.json`, merged with the existing
+servers rather than replacing them:
 
 ```json
 {
   "mcpServers": {
     "piston": {
-      "type": "http",
-      "url": "http://localhost:5200/",
+      "type": "local",
+      "command": "piston",
+      "args": ["mcp"],
       "tools": ["*"]
     }
   }
 }
 ```
 
-Start the daemon before the agent session, so that the agent can connect.
+Copilot CLI starts stdio MCP servers with the working directory set to the session's
+worktree. Each session therefore gets its own `piston mcp` process, engine and
+results. Nothing needs to run before the agent starts. Per process:
+
+- **Startup.** It takes worktree ownership, does a full startup build + test run,
+  then reruns on file changes (the same behaviour as the daemon).
+- **Output streams.** Logs go to stderr; stdout carries only MCP JSON-RPC.
+- **Shutdown.** It exits when the session ends: stdin EOF, SIGTERM, or (on Unix)
+  the parent process dying. On exit it cancels runs, kills the build/test process
+  trees, and releases ownership. A hard `SIGKILL` cannot clean up; children of an
+  in-flight run may then finish on their own.
+- **Worktree deleted.** If both the worktree and the solution disappear for about
+  5s, it stops the engine. Tools then report the deletion, and the process exits
+  a few seconds later.
+- **Worktree already owned.** If another Piston process owns this worktree (a
+  second session, or a daemon you started), it still serves MCP but starts no
+  engine. Every tool then returns `Piston owned by another process (PID …,
+  solution …) … Use `dotnet test` instead.`
+- **Startup failure.** If there is no solution or no SDK, every tool returns
+  `Piston could not start: … Use `dotnet test` instead.`
+
+`verify` and `get_test_run` replies name the solution (`Solution: …` /
+`"solutionPath"`), including queued runs and runs cancelled before execution.
+`verify` and `run_tests` accept an optional `expectedSolution`
+(the solution path, its directory or the worktree root; a parent repository of
+a nested worktree does not match). If it does not match, they fail
+instead of verifying the wrong tree. Path matching resolves symbolic links and
+respects the filesystem's case sensitivity on macOS.
+
+Inspect and clean up from any directory:
+
+```sh
+piston status --all     # every live owner (PID, mcp/daemon, solution, worktree) and stale records
+piston status           # the daemon or owner for this worktree
+piston stop             # stop this worktree's HTTP daemon via its pipe
+piston stop --force     # SIGTERM (then kill) the owner if its pipe is unreachable, e.g. a piston mcp process
+```
+
+`piston stop` without `--force` never kills an unreachable owner. Instead it prints
+the PID, solution and worktree, and exits 1. It still finds owners whose worktree
+was deleted (`[worktree missing]`).
+
+### HTTP daemon (humans and the dashboard)
+
+For a dashboard, or to share one engine between a human and an agent, run the HTTP
+daemon instead. Set a unique `"mcpPort": 5200` in `.piston.json`, then:
+
+```sh
+piston daemon            # add --web-port <port> if 5199 is taken
+```
+
+Connect with an entry such as `{"type": "http", "url": "http://localhost:5200/"}`.
+The endpoint is the root URL, not `/mcp`. Each daemon serves exactly one
+worktree. Do not configure a single global HTTP URL for agents that work in
+several worktrees; use `piston mcp` for that.
+
+Daemon startup problems fail fast with `error: ...` and exit code 1. For example:
+- another Piston process already owns the worktree;
+- a port is already in use.
+
+Piston never edits the agent's configuration and never picks another port. The
+daemon shuts down by itself if its worktree is deleted, which frees its ports and
+ownership. `piston stop` exits 0 only after the daemon has exited, and prints `No
+daemon running` (exit 0) when nothing owns the worktree. While a `piston mcp`
+session owns the worktree, the daemon refuses to start.
 
 ## 4. The verification contract
 
@@ -105,7 +150,7 @@ toolchain/cache exclusions. If coverage evaluation fails, `verify` reports
 silently fall back. Edits after a verification reply require a new call.
 
 A file-watcher error (including buffer overflow) makes source monitoring
-unreliable. `verify` reports `Faulted` until the daemon is restarted; matching
+unreliable. `verify` reports `Faulted` until Piston is restarted; matching
 before/after fingerprints cannot prove that no transient edit was missed.
 
 Only `Verdict: Passed` with `Counts as full verification: yes` means the current
@@ -118,10 +163,10 @@ source builds and all tests pass. Every other verdict is not a pass:
 | `BuildFailed` | The full build of the current source failed; errors listed with ID/file/line. | Fix them; call `verify` again. |
 | `Incomplete` | A project crashed, produced no results, or results include duplicate IDs or `NotRun`/`Running` tests. | Inspect `get_test_run`; treat as failure. |
 | `Stale` | The source kept changing or runs kept being superseded; no current result after 2 retries. | Stop editing, then call `verify` again. |
-| `Cancelled` | The daemon is shutting down. | Restart the daemon or fall back to `dotnet test` explicitly. |
+| `Cancelled` | Piston is shutting down. | Fall back to `dotnet test` explicitly. |
 | `TimedOut` | No result within `timeoutSeconds`. The run may still be queued or running. | Call `verify` again (it awaits the active run) or raise the timeout. |
 | `NotFullScope` | A filter is active, or evaluated user build inputs are not fingerprinted. | Clear the filter, or use `dotnet test` explicitly for unsupported inputs. |
-| `Faulted` | The daemon or pipeline failed. | Fall back to `dotnet test` explicitly and report it. |
+| `Faulted` | The engine or pipeline failed. | Fall back to `dotnet test` explicitly and report it. |
 
 An `Admission:` line means the run waited for the machine execution budget (queue
 position and wait time). That is expected under load, not a failure.
@@ -133,8 +178,10 @@ Do not treat these as verification:
 
 `get_test_run("<runId>")` gives the full JSON record behind any reply.
 
-If the daemon is not reachable, say so and run `dotnet test` explicitly. Never
-report a Piston pass that you did not receive.
+A tool *error* (not a verdict) is also not a pass. Examples: ownership by another
+process, a deleted worktree, a startup failure, or a solution mismatch. On any of
+these, run `dotnet test` explicitly and say so. Do the same if the `piston` server
+is unavailable. Never report a Piston pass that you did not receive.
 
 ## Custom instructions snippet
 
@@ -144,7 +191,7 @@ Paste into the repository's agent instructions (for example
 ```markdown
 ## Testing with Piston
 
-- A Piston daemon serves this worktree over the `piston` MCP server.
+- The `piston` MCP server (`piston mcp`, one per session) tests this worktree.
 - To check whether the code builds and tests pass, call the `verify` tool instead of
   running `dotnet build` / `dotnet test`.
 - Only `Verdict: Passed` with `Counts as full verification: yes` counts as passing.
@@ -153,6 +200,9 @@ Paste into the repository's agent instructions (for example
 - On `Stale`, `Cancelled` or `TimedOut`, call `verify` again; do not report success.
 - Do not use `get_test_results` or filtered runs as proof that everything passes,
   and do not set test filters while verifying.
-- If the `piston` MCP server is unavailable or `verify` returns `Faulted`, run
-  `dotnet test` explicitly and say that you fell back to it.
+- The `Solution:` line in the reply must be this worktree's solution.
+- If the `piston` MCP server is unavailable, a tool returns an error (for example
+  "Piston owned by another process" or "could not start"), or `verify` returns
+  `Faulted`/`Cancelled`, run `dotnet test` explicitly and say that you fell back
+  to it.
 ```

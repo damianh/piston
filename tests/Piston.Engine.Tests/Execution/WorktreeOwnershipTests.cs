@@ -153,6 +153,31 @@ public sealed class WorktreeOwnershipTests : IDisposable
     }
 
     [Fact]
+    public async Task Acquire_RetriesBriefly_WhenLockIsReleasedWithinWindow()
+    {
+        // Models `status`/`stop` probing the lock at the instant a new owner starts.
+        var solution = CreateSolution(CreateWorktree("wt"));
+        var holder = WorktreeOwnership.Acquire(_directory, solution, "probe");
+        var release = Task.Delay(100).ContinueWith(_ => holder.Dispose(), TaskScheduler.Default);
+
+        using var owner = WorktreeOwnership.Acquire(_directory, solution, "mcp", TimeSpan.FromSeconds(5));
+        await release;
+        Assert.Equal("mcp", owner.Owner.Host);
+    }
+
+    [Fact]
+    public void Acquire_StillConflicts_AfterRetryWindow()
+    {
+        var solution = CreateSolution(CreateWorktree("wt"));
+        using var owner = WorktreeOwnership.Acquire(_directory, solution);
+
+        var started = DateTime.UtcNow;
+        _ = Assert.Throws<WorktreeOwnershipConflictException>(
+            () => WorktreeOwnership.Acquire(_directory, solution, contentionRetry: TimeSpan.FromMilliseconds(150)));
+        Assert.True(DateTime.UtcNow - started >= TimeSpan.FromMilliseconds(140));
+    }
+
+    [Fact]
     public void Acquire_AllowsDifferentWorktreesConcurrently()
     {
         using var a = WorktreeOwnership.Acquire(_directory, CreateSolution(CreateWorktree("a")));
@@ -207,5 +232,54 @@ public sealed class WorktreeOwnershipTests : IDisposable
         Assert.StartsWith("ERROR", line, StringComparison.Ordinal);
         Assert.Contains(Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture), line, StringComparison.Ordinal);
         Assert.Equal(2, other.WaitForExit());
+    }
+
+    [Fact]
+    public void ListOwners_ReportsLiveOwnerWithHost_AndNothingAfterRelease()
+    {
+        var solution = CreateSolution(CreateWorktree("listed"));
+        var owner = WorktreeOwnership.Acquire(_directory, solution, "mcp");
+
+        var record = Assert.Single(WorktreeOwnership.ListOwners(_directory));
+        Assert.Equal(OwnershipLiveness.Live, record.Liveness);
+        Assert.Equal(owner.Worktree.Key, record.Key);
+        Assert.Equal("mcp", record.Owner!.Host);
+        Assert.Equal(Environment.ProcessId, record.Owner.ProcessId);
+        Assert.Equal(Path.GetFullPath(solution), record.Owner.SolutionPath);
+
+        owner.Dispose();
+        Assert.Empty(WorktreeOwnership.ListOwners(_directory));
+    }
+
+    [Fact]
+    public void ListOwners_ReportsStaleDetailsLeftByCrashedOwner_WithoutHostField()
+    {
+        var worktree = WorktreeIdentity.FromSolutionPath(CreateSolution(CreateWorktree("crashed")));
+        var owners = Path.Combine(_directory.StateDirectory, "owners");
+        File.WriteAllText(Path.Combine(owners, worktree.Key + ".lock"), "");
+        File.WriteAllText(Path.Combine(owners, worktree.Key + ".json"),
+            $$"""{ "processId": 99999, "solutionPath": "/x/App.slnx", "worktreePath": "/x", "acquiredAt": "2026-01-01T00:00:00+00:00" }""");
+
+        var record = Assert.Single(WorktreeOwnership.ListOwners(_directory));
+        Assert.Equal(OwnershipLiveness.Stale, record.Liveness);
+        Assert.Null(record.Owner!.Host);
+        Assert.Equal(99999, record.Owner.ProcessId);
+    }
+
+    [Fact]
+    public void ListOwners_EmptyWhenOwnersDirectoryMissing()
+    {
+        var fresh = new ExecutionCoordinationDirectory(Path.Combine(_root, "never-created"));
+        Assert.Empty(WorktreeOwnership.ListOwners(fresh));
+    }
+
+    [Fact]
+    public void Conflict_NamesOwnerHost()
+    {
+        var solution = CreateSolution(CreateWorktree("hosted"));
+        using var owner = WorktreeOwnership.Acquire(_directory, solution, "mcp");
+        var ex = Assert.Throws<WorktreeOwnershipConflictException>(() => WorktreeOwnership.Acquire(_directory, solution));
+        Assert.Equal("mcp", ex.Owner!.Host);
+        Assert.Contains("Piston mcp process", ex.Message);
     }
 }

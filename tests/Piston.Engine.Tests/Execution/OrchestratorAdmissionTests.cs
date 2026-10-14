@@ -199,12 +199,16 @@ public sealed class OrchestratorAdmissionTests : IDisposable
         await WaitForAsync(() => _state.CurrentRun?.Admission is { State: TestRunAdmissionState.Queued },
             "startup run was not queued");
         var startup = _state.CurrentRun!;
+        Assert.Equal(SolutionPath, startup.SolutionPath);
+        Assert.Null(startup.Context);
 
         var forced = _orchestrator.RequestRunAsync();
         await WaitForAsync(() => _state.LastRun?.RunId == startup.RunId, "startup run was not superseded");
 
         var cancelled = _state.LastRun!;
         Assert.Equal(TestRunStatus.Cancelled, cancelled.Status);
+        Assert.Equal(SolutionPath, cancelled.SolutionPath);
+        Assert.Null(cancelled.Context);
         Assert.Equal("Superseded by a newer run while waiting for machine-wide execution admission.", cancelled.StatusReason);
         Assert.Null(cancelled.StartedAt);
         Assert.Equal(ResultFreshness.Unknown, cancelled.Freshness);

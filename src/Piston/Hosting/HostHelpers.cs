@@ -111,7 +111,8 @@ public static class HostHelpers
         string? cliFilter,
         bool cliCoverage,
         int cliParallelism,
-        PistonConfig config)
+        PistonConfig config,
+        string? ownerHost = null)
     {
         var debounceMs = cliDebounceMs > 0 ? cliDebounceMs
             : config.DebounceMs is > 0 ? config.DebounceMs.Value
@@ -150,6 +151,7 @@ public static class HostHelpers
             ProcessRecycleAfter = processRecycleAfter,
             TestExecutionMode = testExecutionMode,
             ExecutionMemoryReservationMb = memoryReservationMb,
+            OwnerHost = ownerHost,
         };
     }
 

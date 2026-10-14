@@ -155,6 +155,9 @@ public sealed record TestRunRecord
 {
     public required string RunId { get; init; }
 
+    /// <summary>The solution being verified, recorded before admission or execution context is available.</summary>
+    public string? SolutionPath { get; init; }
+
     /// <summary>Identifies the engine instance; <see cref="Sequence"/> is only ordered within one instance.</summary>
     public required string EngineInstanceId { get; init; }
 

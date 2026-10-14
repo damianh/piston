@@ -274,7 +274,7 @@ public sealed partial class DogfoodSmokeTests : IDisposable
         }
     }
 
-    private static void CopyFixture(string destination)
+    internal static void CopyFixture(string destination)
     {
         var fixtures = Path.Combine(FindRepoRoot(), "measurements", "fixtures");
         _ = Directory.CreateDirectory(destination);
@@ -316,7 +316,7 @@ public sealed partial class DogfoodSmokeTests : IDisposable
         return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
-    private static (int McpPort, int WebPort) FreePorts()
+    internal static (int McpPort, int WebPort) FreePorts()
     {
         using var mcp = new TcpListener(IPAddress.Loopback, 0);
         using var web = new TcpListener(IPAddress.Loopback, 0);

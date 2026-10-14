@@ -13,10 +13,14 @@ internal static class VerificationReport
     internal const int MaxListedItems = 20;
     internal const int MaxMessageLength = 400;
 
-    public static string Format(VerificationResult result)
+    public static string Format(VerificationResult result, string? solutionPath = null)
     {
         var sb = new StringBuilder();
         _ = sb.AppendLine($"Verdict: {result.Verdict}");
+        if (solutionPath is not null)
+        {
+            _ = sb.AppendLine($"Solution: {solutionPath}");
+        }
         if (result.Reason is { } reason)
         {
             _ = sb.AppendLine($"Reason: {reason}");

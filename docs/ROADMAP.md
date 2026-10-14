@@ -257,8 +257,21 @@ isolated; ownership, cleanup, interruption, and baseline behavior have tests.
 
 ## Phase 2: agent API and harness integrations
 
-- Add `piston mcp`, a stdio bridge that discovers/starts the hub and resolves the
-  workspace without loading MSBuild in the client.
+- **Done (dogfood stop-gap, pre-hub):** `piston mcp` serves the MCP tools over
+  stdio with an in-process engine, one process per agent session.
+  - The session's working directory selects the worktree, and the process holds
+    that worktree's ownership lock. It exits on stdin EOF, SIGTERM, parent death,
+    or worktree deletion, killing the build and test process trees.
+  - If the worktree is already owned, or startup fails, every tool returns an
+    error ending in "use `dotnet test`".
+  - Replies name the solution, and an optional `expectedSolution` guards against
+    verifying the wrong tree.
+  - The HTTP daemon now also exits when its worktree is deleted. `status --all`
+    and `stop --force` handle owners that the pipe cannot reach.
+  - This replaces the single global HTTP MCP URL, which could not route sessions
+    to their own worktrees. It does not yet provide shared scheduling or history.
+- Evolve `piston mcp` into a stdio bridge that discovers/starts the hub and
+  resolves the workspace without loading MSBuild in the client.
 - Provide concise verification, status, test-detail, explicit-run, and history
   operations. Report selection scope, freshness, incomplete runs, and failures
   before verbose detail. Selective verification is not full-suite verification.

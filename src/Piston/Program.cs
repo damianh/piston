@@ -71,6 +71,14 @@ var webPortOpt = new Option<int>(
     description: "Port for the web UI and WebSocket server.",
     getDefaultValue: () => 5199);
 
+var forceOpt = new Option<bool>(
+    name: "--force",
+    description: "Terminate a live owner that cannot be stopped over its pipe (SIGTERM, then kill after 10s).");
+
+var allOpt = new Option<bool>(
+    name: "--all",
+    description: "List every Piston process (daemons and `piston mcp` sessions) that owns a worktree.");
+
 // ── Root command (default: web UI with auto-start) ─────────────────────────────
 
 var rootCommand = new RootCommand("Piston — continuous test runner for .NET")
@@ -159,19 +167,48 @@ daemonCmd.SetHandler(async ctx =>
 
 rootCommand.AddCommand(daemonCmd);
 
+// ── mcp subcommand ─────────────────────────────────────────────────────────────
+
+var mcpCmd = new Command("mcp",
+    "Serve the Piston MCP tools over stdio for one agent session (cwd = worktree). " +
+    "Runs an in-process engine (startup run, then runs on file changes) and exits with the session.")
+{
+    solutionArg,
+    debounceOpt,
+    filterOpt,
+    coverageOpt,
+    parallelismOpt,
+    configDirectoryOpt,
+};
+
+mcpCmd.SetHandler(async ctx =>
+{
+    var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
+    var debounceMs = ctx.ParseResult.GetValueForOption(debounceOpt);
+    var filter = ctx.ParseResult.GetValueForOption(filterOpt);
+    var coverage = ctx.ParseResult.GetValueForOption(coverageOpt);
+    var parallelism = ctx.ParseResult.GetValueForOption(parallelismOpt);
+    var configDirectory = ctx.ParseResult.GetValueForOption(configDirectoryOpt);
+    ctx.ExitCode = await RunMcpAsync(solutionFile, debounceMs, filter, coverage, parallelism, configDirectory);
+});
+
+rootCommand.AddCommand(mcpCmd);
+
 // ── stop subcommand ────────────────────────────────────────────────────────────
 
 var stopCmd = new Command("stop", "Stop the running Piston daemon.")
 {
     solutionArg,
     pipeNameOpt,
+    forceOpt,
 };
 
 stopCmd.SetHandler(async ctx =>
 {
     var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
     var pipeName = ctx.ParseResult.GetValueForOption(pipeNameOpt);
-    var exitCode = await RunStopAsync(solutionFile, pipeName);
+    var force = ctx.ParseResult.GetValueForOption(forceOpt);
+    var exitCode = await RunStopAsync(solutionFile, pipeName, force);
     ctx.ExitCode = exitCode;
 });
 
@@ -183,13 +220,15 @@ var statusCmd = new Command("status", "Show the status of the running Piston dae
 {
     solutionArg,
     pipeNameOpt,
+    allOpt,
 };
 
 statusCmd.SetHandler(async ctx =>
 {
     var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
     var pipeName = ctx.ParseResult.GetValueForOption(pipeNameOpt);
-    var exitCode = await RunStatusAsync(solutionFile, pipeName);
+    var all = ctx.ParseResult.GetValueForOption(allOpt);
+    var exitCode = all ? RunStatusAll() : await RunStatusAsync(solutionFile, pipeName);
     ctx.ExitCode = exitCode;
 });
 
@@ -274,7 +313,7 @@ static async Task RunDaemonAsync(
     try
     {
         (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
-        options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
+        options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config, "daemon");
     }
     catch (InvalidOperationException ex)
     {
@@ -299,6 +338,13 @@ static async Task RunDaemonAsync(
         e.Cancel = true;
         cts.Cancel();
     };
+    // `piston stop --force` sends SIGTERM: shut down cleanly instead of letting the web host swallow it.
+    using var sigterm = System.Runtime.InteropServices.PosixSignalRegistration.Create(
+        System.Runtime.InteropServices.PosixSignal.SIGTERM, e =>
+        {
+            e.Cancel = true;
+            cts.Cancel();
+        });
 
     await using var host = new DaemonHost(new DaemonHostOptions
     {
@@ -350,7 +396,7 @@ static async Task RunDaemonStdioAsync(
     try
     {
         (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
-        options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config);
+        options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config, "daemon");
     }
     catch (InvalidOperationException ex)
     {
@@ -465,24 +511,147 @@ static async Task RunDaemonStdioAsync(
     }
 }
 
-// ── stop command ───────────────────────────────────────────────────────────────
+// ── MCP stdio mode ─────────────────────────────────────────────────────────────
 
-static async Task<int> RunStopAsync(FileInfo? solutionArg, string? cliPipeName)
+static async Task<int> RunMcpAsync(
+    FileInfo? solutionArg,
+    int cliDebounceMs,
+    string? cliFilter,
+    bool cliCoverage,
+    int cliParallelism,
+    string? configDirectory)
 {
-    string solutionPath;
-    PistonConfig config;
+    // stdout carries MCP JSON-RPC only: anything written through Console.Out goes to stderr instead.
+    var stdout = Console.OpenStandardOutput();
+    var stdin = Console.OpenStandardInput();
+    Console.SetOut(Console.Error);
+
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+        e.Cancel = true;
+        cts.Cancel();
+    };
+    using var sigterm = System.Runtime.InteropServices.PosixSignalRegistration.Create(
+        System.Runtime.InteropServices.PosixSignal.SIGTERM, e =>
+        {
+            e.Cancel = true;
+            cts.Cancel();
+        });
+
+    string? solutionPath = null;
+    PistonOptions? options = null;
+    string? startupError = null;
     try
     {
-        (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg);
+        (solutionPath, var config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
+        options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config,
+            McpStdioHost.OwnerHost);
+        if (!HostHelpers.DotnetSdkAvailable())
+        {
+            startupError = "'dotnet' SDK not found on PATH. Install .NET 10 SDK from https://dot.net.";
+        }
     }
     catch (InvalidOperationException ex)
     {
-        Console.Error.WriteLine($"error: {ex.Message}");
-        return 1;
+        startupError = ex.Message;
     }
 
-    var pipeName = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
+    var host = new McpStdioHost(new McpStdioHostOptions
+    {
+        SolutionPath = solutionPath,
+        EngineOptions = options,
+        StartupError = startupError,
+        Input = stdin,
+        Output = stdout,
+    });
+    return await host.RunAsync(cts.Token);
+}
 
+// ── stop command ───────────────────────────────────────────────────────────────
+
+static async Task<int> RunStopAsync(FileInfo? solutionArg, string? cliPipeName, bool force)
+{
+    string? solutionPath = null;
+    string? resolveError = null;
+    try
+    {
+        (solutionPath, var config) = HostHelpers.ResolveSolution(solutionArg);
+        var pipeName = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
+        if (await TryStopViaPipeAsync(pipeName) is { } exitCode)
+        {
+            return exitCode;
+        }
+    }
+    catch (InvalidOperationException ex)
+    {
+        // The worktree may have been deleted; fall back to the ownership records.
+        resolveError = ex.Message;
+    }
+
+    var target = solutionPath ?? solutionArg?.FullName ?? Directory.GetCurrentDirectory();
+    var owners = OwnerLookup.FindLive(OwnerLookup.ListAll(), target);
+    if (owners.Count == 0)
+    {
+        if (resolveError is not null)
+        {
+            Console.Error.WriteLine($"error: {resolveError}");
+            Console.Error.WriteLine("No live Piston owner found for this path either. `piston status --all` lists all owners.");
+            return 1;
+        }
+
+        Console.Error.WriteLine("No daemon running.");
+        return 0;
+    }
+
+    var exit = 0;
+    foreach (var owner in owners)
+    {
+        var info = owner.Owner;
+        Console.Error.WriteLine($"[piston] Live owner not reachable over its pipe: {OwnerLookup.Describe(owner)}");
+        if (info?.Host == McpStdioHost.OwnerHost)
+        {
+            Console.Error.WriteLine("[piston] It serves an agent session (`piston mcp`) and exits when that session ends.");
+        }
+
+        if (info is null)
+        {
+            Console.Error.WriteLine("error: owner details are unavailable, so its process cannot be identified.");
+            exit = 1;
+            continue;
+        }
+
+        if (!force)
+        {
+            Console.Error.WriteLine($"Re-run with --force to terminate PID {info.ProcessId}.");
+            exit = 1;
+            continue;
+        }
+
+        if (OwnerLookup.VerifyOwnerProcess(owner, OwnerLookup.ListAll(), out var skipReason) is not { } process)
+        {
+            Console.Error.WriteLine($"[piston] Skipped PID {info.ProcessId}: {skipReason}");
+            exit = 1;
+            continue;
+        }
+
+        if (await OwnerLookup.TerminateAsync(process, TimeSpan.FromSeconds(10)))
+        {
+            Console.Error.WriteLine($"[piston] Terminated PID {info.ProcessId}.");
+        }
+        else
+        {
+            Console.Error.WriteLine($"error: PID {info.ProcessId} did not exit.");
+            exit = 1;
+        }
+    }
+
+    return exit;
+}
+
+/// <summary>Stops the daemon behind <paramref name="pipeName"/>; null when no daemon answers on it.</summary>
+static async Task<int?> TryStopViaPipeAsync(string pipeName)
+{
     await using var client = new RemoteEngineClient(pipeName);
 
     using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
@@ -490,15 +659,9 @@ static async Task<int> RunStopAsync(FileInfo? solutionArg, string? cliPipeName)
     {
         await client.ConnectAsync(connectCts.Token);
     }
-    catch (OperationCanceledException)
+    catch (Exception)
     {
-        Console.Error.WriteLine("No daemon running (could not connect within 5s).");
-        return 0;
-    }
-    catch (Exception ex)
-    {
-        Console.Error.WriteLine($"No daemon running: {ex.Message}");
-        return 0;
+        return null;
     }
 
     DaemonInfoResponse? info;
@@ -573,7 +736,7 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
     catch (InvalidOperationException ex)
     {
         Console.Error.WriteLine($"error: {ex.Message}");
-        return 1;
+        return PrintOwners(solutionArg?.FullName ?? Directory.GetCurrentDirectory()) ? 0 : 1;
     }
 
     var pipeName = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
@@ -587,6 +750,11 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
     }
     catch
     {
+        if (PrintOwners(solutionPath))
+        {
+            return 0;
+        }
+
         Console.WriteLine("No daemon running for this solution.");
         Console.WriteLine($"  Solution : {solutionPath}");
         Console.WriteLine($"  Pipe     : {pipeName}");
@@ -644,6 +812,45 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
     if (snapshot.ActiveRun is { } active)
     {
         Console.WriteLine($"  Active   : {DescribeRunDto(active)}");
+    }
+
+    return 0;
+}
+
+/// <summary>Prints live owners of <paramref name="path"/> found in the ownership records; false when none.</summary>
+static bool PrintOwners(string path)
+{
+    var owners = OwnerLookup.FindLive(OwnerLookup.ListAll(), path);
+    foreach (var owner in owners)
+    {
+        Console.WriteLine($"Owned by a Piston process not reachable over the pipe: {OwnerLookup.Describe(owner)}");
+        if (owner.Owner?.Host == McpStdioHost.OwnerHost)
+        {
+            Console.WriteLine("  (a `piston mcp` agent session; it exits with that session)");
+        }
+    }
+
+    return owners.Count > 0;
+}
+
+static int RunStatusAll()
+{
+    var records = OwnerLookup.ListAll();
+    var live = records.Where(r => r.Liveness == OwnershipLiveness.Live).ToList();
+    var stale = records.Where(r => r.Liveness == OwnershipLiveness.Stale).ToList();
+    if (live.Count == 0)
+    {
+        Console.WriteLine("No Piston process owns a worktree.");
+    }
+
+    foreach (var record in live)
+    {
+        Console.WriteLine($"Live : {OwnerLookup.Describe(record)}");
+    }
+
+    foreach (var record in stale)
+    {
+        Console.WriteLine($"Stale: {OwnerLookup.Describe(record)} (owner exited without cleanup; harmless)");
     }
 
     return 0;

@@ -1008,6 +1008,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     private TestRunRecord CreateRunRecord(TestRunTrigger trigger) => new()
     {
         RunId = Guid.NewGuid().ToString("N"),
+        SolutionPath = _state.SolutionPath,
         EngineInstanceId = _engineInstanceId,
         Sequence = Interlocked.Increment(ref _runSequence),
         Trigger = trigger,

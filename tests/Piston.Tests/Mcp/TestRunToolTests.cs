@@ -52,7 +52,7 @@ public sealed class TestRunToolTests
         var engine = new StubEngine { NextRun = Run("run-1", 2) };
         var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
 
-        var result = await tools.RunTestsAsync(CancellationToken.None);
+        var result = await tools.RunTestsAsync(ct: CancellationToken.None);
 
         Assert.Contains("Run: run-1 | Status: Completed | Scope: Full | Filtered: no | Freshness: Current", result);
         Assert.Contains($"Source: piston-source-v2:{Source.Value}", result);
@@ -125,6 +125,27 @@ public sealed class TestRunToolTests
 
         Assert.Equal("Running", doc.RootElement.GetProperty("status").GetString());
         Assert.False(doc.RootElement.GetProperty("isTerminal").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData(TestRunStatus.Queued)]
+    [InlineData(TestRunStatus.Cancelled)]
+    public void GetTestRunIncludesSolutionBeforeExecutionContextExists(TestRunStatus status)
+    {
+        var engine = new StubEngine();
+        var run = Run("early", 1, status: status) with
+        {
+            SolutionPath = "/w/App.slnx",
+            Context = null,
+            StartedAt = null,
+        };
+        engine.State.CurrentRun = status == TestRunStatus.Queued ? run : null;
+        engine.State.RecentRuns = [run];
+        var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
+
+        using var doc = JsonDocument.Parse(tools.GetTestRun(status == TestRunStatus.Queued ? "active" : run.RunId));
+        Assert.Equal("/w/App.slnx", doc.RootElement.GetProperty("solutionPath").GetString());
+        Assert.Equal(JsonValueKind.Null, doc.RootElement.GetProperty("context").ValueKind);
     }
 
     [Fact]
@@ -238,7 +259,7 @@ public sealed class TestRunToolTests
         Assert.Contains("Active Run: unbudgeted-run", results);
         Assert.Contains("Latest Run: unbudgeted-run", results);
         Assert.Equal(2, results.Split("memory 1024+512 MiB (unbudgeted)", StringSplitOptions.None).Length - 1);
-        Assert.Contains("memory 1024+512 MiB (unbudgeted)", await tools.RunTestsAsync(CancellationToken.None));
+        Assert.Contains("memory 1024+512 MiB (unbudgeted)", await tools.RunTestsAsync(ct: CancellationToken.None));
 
         using var doc = JsonDocument.Parse(tools.GetTestRun("latest"));
         var recorded = doc.RootElement.GetProperty("admission");
