@@ -1,56 +1,60 @@
 @inject EngineClientService Client
 @implements IDisposable
 
-<!-- Header bar -->
-<HeaderBar Snapshot="@_snapshot" />
+<div class="flex flex-col h-full overflow-hidden">
 
-<!-- Toolbar -->
-<Toolbar IsExpanded="@_viewState.TreeExpanded"
-         Filter="@_filter"
-         OnForceRun="ForceRun"
-         OnClearResults="ClearResults"
-         OnToggleExpand="ToggleExpand"
-         OnFilterChanged="SetFilter" />
+    <!-- Header bar -->
+    <HeaderBar Snapshot="@_snapshot" />
 
-<!-- Main content area -->
-<div class="flex flex-1 overflow-hidden">
-    <!-- Test tree (left panel) -->
-    <div class="w-1/2 border-r border-gray-800 overflow-hidden flex flex-col">
-        <TestTree Nodes="@_treeNodes"
-                  SelectedFqn="@_viewState.SelectedTestFqn"
-                  PinnedFqns="@_viewState.PinnedTestFqns"
-                  OnSelectTest="SelectTest"
-                  OnTogglePin="TogglePin" />
+    <!-- Toolbar -->
+    <Toolbar IsExpanded="@_viewState.TreeExpanded"
+             Filter="@_filter"
+             OnForceRun="ForceRun"
+             OnClearResults="ClearResults"
+             OnToggleExpand="ToggleExpand"
+             OnFilterChanged="SetFilter" />
+
+    <!-- Main content area -->
+    <div class="flex flex-1 min-h-0 overflow-hidden">
+        <!-- Test tree (left panel) -->
+        <div class="w-1/2 border-r border-gray-800 overflow-hidden flex flex-col">
+            <TestTree Nodes="@_treeNodes"
+                      SelectedFqn="@_viewState.SelectedTestFqn"
+                      PinnedFqns="@_viewState.PinnedTestFqns"
+                      OnSelectTest="SelectTest"
+                      OnTogglePin="TogglePin" />
+        </div>
+
+        <!-- Detail panel (right panel) -->
+        <div class="w-1/2 overflow-hidden flex flex-col">
+            @if (_snapshot?.Phase == PistonPhaseDto.Error && _snapshot.LastBuild is not null)
+            {
+                <BuildErrors Build="@_snapshot.LastBuild" />
+            }
+            else
+            {
+                <TestDetail Test="@_selectedTest" />
+            }
+        </div>
     </div>
 
-    <!-- Detail panel (right panel) -->
-    <div class="w-1/2 overflow-hidden flex flex-col">
-        @if (_snapshot?.Phase == PistonPhaseDto.Error && _snapshot.LastBuild is not null)
-        {
-            <BuildErrors Build="@_snapshot.LastBuild" />
-        }
-        else
-        {
-            <TestDetail Test="@_selectedTest" />
-        }
-    </div>
+    <!-- Status bar -->
+    <StatusBar Grouping="@_viewState.Grouping"
+               ShowFailed="@_viewState.ShowFailed"
+               ShowPassed="@_viewState.ShowPassed"
+               ShowSkipped="@_viewState.ShowSkipped"
+               ShowNotRun="@_viewState.ShowNotRun"
+               Filter="@_filter"
+               FailureCount="@_failureCount"
+               OnCycleGrouping="CycleGrouping"
+               OnToggleFailed="() => ToggleStatus(s => s.ShowFailed = !s.ShowFailed)"
+               OnTogglePassed="() => ToggleStatus(s => s.ShowPassed = !s.ShowPassed)"
+               OnToggleSkipped="() => ToggleStatus(s => s.ShowSkipped = !s.ShowSkipped)"
+               OnToggleNotRun="() => ToggleStatus(s => s.ShowNotRun = !s.ShowNotRun)"
+               OnPrevFailure="NavigatePrevFailure"
+               OnNextFailure="NavigateNextFailure" />
+
 </div>
-
-<!-- Status bar -->
-<StatusBar Grouping="@_viewState.Grouping"
-           ShowFailed="@_viewState.ShowFailed"
-           ShowPassed="@_viewState.ShowPassed"
-           ShowSkipped="@_viewState.ShowSkipped"
-           ShowNotRun="@_viewState.ShowNotRun"
-           Filter="@_filter"
-           FailureCount="@_failureCount"
-           OnCycleGrouping="CycleGrouping"
-           OnToggleFailed="() => ToggleStatus(s => s.ShowFailed = !s.ShowFailed)"
-           OnTogglePassed="() => ToggleStatus(s => s.ShowPassed = !s.ShowPassed)"
-           OnToggleSkipped="() => ToggleStatus(s => s.ShowSkipped = !s.ShowSkipped)"
-           OnToggleNotRun="() => ToggleStatus(s => s.ShowNotRun = !s.ShowNotRun)"
-           OnPrevFailure="NavigatePrevFailure"
-           OnNextFailure="NavigateNextFailure" />
 
 @code {
     [Parameter] public KeyboardEventArgs? KeyboardEvent { get; set; }
@@ -65,6 +69,13 @@
     protected override void OnInitialized()
     {
         Client.StateChanged += OnStateChanged;
+
+        // The tab may mount after the latest snapshot arrived (e.g. on tab switch); start from it.
+        if (Client.CurrentSnapshot is { } current)
+        {
+            _snapshot = current;
+            RebuildTree();
+        }
     }
 
     protected override void OnParametersSet()
