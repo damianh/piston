@@ -84,6 +84,21 @@ public sealed class VerifyToolTests
     }
 
     [Fact]
+    public async Task BuildFailed_LongBuildError_KeepsStartAndEnd()
+    {
+        var error = "dotnet build exited with code 1 without reporting a recognizable error. Last 2 line(s) of output:\n" +
+            new string('x', 2000) + "\nThe real cause is here.";
+        var build = new BuildResult(BuildStatus.Failed, [error], [], TimeSpan.Zero);
+        var text = await VerifyAsync(new(VerificationVerdict.BuildFailed, "Build failed.",
+            VerificationSource.Forced, 1, Run(TestRunStatus.BuildFailed, build), Source));
+
+        Assert.Contains("Build errors (1):", text);
+        Assert.Contains("exited with code 1", text);
+        Assert.Contains("The real cause is here.", text);
+        Assert.DoesNotContain(new string('x', VerificationReport.MaxBuildErrorLength), text);
+    }
+
+    [Fact]
     public async Task QueuedAdmission_IsReported()
     {
         var admission = new TestRunAdmission(TestRunAdmissionState.Admitted, 2, null, 4, null, "default", 0, 0, 1, 2, 0,

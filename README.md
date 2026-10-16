@@ -101,6 +101,18 @@ piston daemon --coverage --mcp-port 5200
 
 The daemon serves a Blazor WebAssembly dashboard (default `http://localhost:5199`) connected over WebSocket. It shows test results, build errors, engine activity, and MCP tool-call history. The Roslyn diagnostic view has been removed.
 
+Dashboard styles are bundled locally; no CDN access is needed. After changing
+Tailwind classes in dashboard components, regenerate the checked-in stylesheet:
+
+```sh
+cd src/Piston.Web
+npm ci
+npm run build:css
+```
+
+Commit `wwwroot/css/tailwind.css` with the component changes. Normal .NET builds
+and tool installations use this generated file and do not require Node.js.
+
 ## MCP server (AI agents)
 
 For coding agents, use the stdio server: configure `piston mcp` once, globally, as a local MCP server. Copilot CLI's `~/.copilot/mcp-config.json` would then contain:
