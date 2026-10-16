@@ -291,6 +291,35 @@ public sealed class BuildServiceOutputParsingTests
         }
     }
 
+    [Fact]
+    public async Task BuildAsync_CodelessMsBuildError_IsReported()
+    {
+        var root = Directory.CreateTempSubdirectory("piston-build-codeless-error-test-").FullName;
+        try
+        {
+            var project = Path.Combine(root, "Fail.proj");
+            await File.WriteAllTextAsync(project, """
+                <Project DefaultTargets="Build">
+                  <Target Name="Restore" />
+                  <Target Name="Build">
+                    <Error Text="Codeless failure from target." />
+                  </Target>
+                </Project>
+                """);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+            var result = await new BuildService().BuildAsync(project, cts.Token);
+
+            Assert.Equal(BuildStatus.Failed, result.Status);
+            Assert.NotEmpty(result.Errors);
+            Assert.All(result.Errors, e => Assert.Contains("Codeless failure from target.", e));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static Task<int> RunDotnetAsync(string args, string workDir) =>
         TestProcess.RunDotnetAsync(args, workDir);
 }

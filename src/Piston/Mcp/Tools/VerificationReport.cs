@@ -12,6 +12,8 @@ internal static class VerificationReport
 {
     internal const int MaxListedItems = 20;
     internal const int MaxMessageLength = 400;
+    internal const int MaxBuildErrorLength = 800;
+    private const int BuildErrorHeadLength = 200;
 
     public static string Format(VerificationResult result, string? solutionPath = null)
     {
@@ -53,7 +55,7 @@ internal static class VerificationReport
 
         if (result.Verdict == VerificationVerdict.BuildFailed && run.Build is { } build)
         {
-            AppendList(sb, "Build errors", build.Errors, e => e);
+            AppendList(sb, "Build errors", build.Errors, e => e, CapBuildError);
         }
 
         if (result.Verdict is VerificationVerdict.TestsFailed)
@@ -82,8 +84,10 @@ internal static class VerificationReport
         return sb.ToString();
     }
 
-    private static void AppendList<T>(StringBuilder sb, string title, IReadOnlyList<T> items, Func<T, string> describe)
+    private static void AppendList<T>(StringBuilder sb, string title, IReadOnlyList<T> items, Func<T, string> describe,
+        Func<string, string>? cap = null)
     {
+        cap ??= Cap;
         if (items.Count == 0)
         {
             return;
@@ -92,7 +96,7 @@ internal static class VerificationReport
         _ = sb.AppendLine($"{title} ({items.Count}):");
         foreach (var item in items.Take(MaxListedItems))
         {
-            _ = sb.AppendLine($"  - {Cap(describe(item))}");
+            _ = sb.AppendLine($"  - {cap(describe(item))}");
         }
 
         if (items.Count > MaxListedItems)
@@ -105,5 +109,18 @@ internal static class VerificationReport
     {
         var line = text.ReplaceLineEndings(" ").Trim();
         return line.Length <= MaxMessageLength ? line : line[..MaxMessageLength] + "…";
+    }
+
+    // Build errors synthesized from raw output put the cause at the end, so keep both ends.
+    private static string CapBuildError(string text)
+    {
+        var line = text.ReplaceLineEndings(" | ").Trim();
+        if (line.Length <= MaxBuildErrorLength)
+        {
+            return line;
+        }
+
+        var tailLength = MaxBuildErrorLength - BuildErrorHeadLength;
+        return line[..BuildErrorHeadLength] + " … " + line[^tailLength..];
     }
 }
