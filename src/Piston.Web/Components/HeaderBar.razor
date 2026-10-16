@@ -33,9 +33,18 @@ else
             </div>
         }
 
+        @if (phase == PistonPhaseDto.Testing && RunningProjects(Snapshot) is { Count: > 0 } runningProjects)
+        {
+            <span class="flex items-center gap-1.5 min-w-0 text-cyan-400"
+                  title="@string.Join(Environment.NewLine, runningProjects)">
+                <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse shrink-0"></span>
+                <span class="truncate">running @string.Join(", ", runningProjects)</span>
+            </span>
+        }
+
         <!-- Test counts -->
         @{
-            var allTests = Snapshot.Suites.SelectMany(s => s.Tests).ToList();
+            var allTests = (Suites ?? Snapshot.Suites).SelectMany(s => s.Tests).ToList();
             var passed  = allTests.Count(t => t.Status == TestStatusDto.Passed);
             var failed  = allTests.Count(t => t.Status == TestStatusDto.Failed);
             var skipped = allTests.Count(t => t.Status == TestStatusDto.Skipped);
@@ -84,6 +93,16 @@ else
 
 @code {
     [Parameter] public StateSnapshotNotification? Snapshot { get; set; }
+
+    /// <summary>Suites currently displayed (including any live overlay); defaults to the snapshot's results.</summary>
+    [Parameter] public IReadOnlyList<TestSuiteDto>? Suites { get; set; }
+
+    private static List<string> RunningProjects(StateSnapshotNotification snapshot) =>
+        snapshot.ProjectStatuses?
+            .Where(p => p.Value == ProjectRunStatusDto.Running)
+            .Select(p => Path.GetFileNameWithoutExtension(p.Key))
+            .Order(StringComparer.Ordinal)
+            .ToList() ?? [];
 
     private static (string icon, string color) PhaseDisplay(PistonPhaseDto phase) =>
         phase switch

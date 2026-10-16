@@ -32,4 +32,8 @@ internal sealed class ProcessTestExecutionStrategy : ITestExecutionStrategy
             onProgress,
             _parser,
             ct);
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<TestResult>> DiscoverAsync(string projectPath, CancellationToken ct) =>
+        TestProcessRunner.DiscoverAsync(projectPath, ct);
 }

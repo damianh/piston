@@ -4,7 +4,7 @@
 <div class="flex flex-col h-full overflow-hidden">
 
     <!-- Header bar -->
-    <HeaderBar Snapshot="@_snapshot" />
+    <HeaderBar Snapshot="@_snapshot" Suites="@_displayedSuites" />
 
     <!-- Toolbar -->
     <Toolbar IsExpanded="@_viewState.TreeExpanded"
@@ -65,6 +65,7 @@
     private TestResultDto? _selectedTest;
     private string? _filter;
     private int _failureCount;
+    private IReadOnlyList<TestSuiteDto> _displayedSuites = [];
 
     protected override void OnInitialized()
     {
@@ -96,23 +97,28 @@
         if (_snapshot is null)
         {
             _treeNodes = [];
+            _displayedSuites = [];
             _failureCount = 0;
             return;
         }
 
+        _displayedSuites = _snapshot.Phase == PistonPhaseDto.Testing
+            ? TestTreeBuilder.WithLiveOverlay(_snapshot.Suites, _snapshot.InProgressSuites)
+            : _snapshot.Suites;
+
         _treeNodes = TestTreeBuilder.Build(
-            _snapshot.Suites,
+            _displayedSuites,
             _filter,
             _viewState,
             _snapshot.LastFileChangeTime);
 
-        _failureCount = _snapshot.Suites
+        _failureCount = _displayedSuites
             .SelectMany(s => s.Tests)
             .Count(t => t.Status == TestStatusDto.Failed);
 
         if (_viewState.SelectedTestFqn is not null)
         {
-            _selectedTest = _snapshot.Suites
+            _selectedTest = _displayedSuites
                 .SelectMany(s => s.Tests)
                 .FirstOrDefault(t => t.FullyQualifiedName == _viewState.SelectedTestFqn);
         }

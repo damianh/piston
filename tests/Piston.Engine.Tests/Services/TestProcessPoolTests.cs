@@ -68,7 +68,7 @@ public sealed class TestProcessPoolTests
             Task.FromResult(new ProjectTestResult(req.ProjectPath, [], null, [], false)));
 
         var requests = paths.Select(p => new ProjectTestRequest(p, null, false)).ToList();
-        var results = await pool.RunProjectsAsync(requests, null, CancellationToken.None);
+        var results = await pool.RunProjectsAsync(requests, onProjectCompleted: null, CancellationToken.None);
 
         Assert.Equal(3, results.Count);
         Assert.All(paths, p => Assert.Contains(results, r => r.ProjectPath == p));
@@ -106,7 +106,7 @@ public sealed class TestProcessPoolTests
             .Select(i => new ProjectTestRequest($"proj{i}.csproj", null, false))
             .ToList();
 
-        _ = await pool.RunProjectsAsync(requests, null, CancellationToken.None);
+        _ = await pool.RunProjectsAsync(requests, onProjectCompleted: null, CancellationToken.None);
 
         Assert.True(maxConcurrent <= poolSize,
             $"Max concurrent ({maxConcurrent}) exceeded pool size ({poolSize}).");
@@ -137,6 +137,44 @@ public sealed class TestProcessPoolTests
     }
 
     [Fact]
+    public async Task RunProjectsAsync_Callbacks_ReportStartProgressAndCompletionPerProject()
+    {
+        var events = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using var pool = new TestProcessPool(
+            poolSize: 1,
+            recycleAfter: 50,
+            runDelegate: (req, onProgress, _) =>
+            {
+                Assert.NotNull(onProgress);
+                onProgress([new TestSuite("live", [], DateTimeOffset.UnixEpoch, TimeSpan.Zero)]);
+                return Task.FromResult(new ProjectTestResult(req.ProjectPath, [], null, [], false));
+            });
+
+        var requests = new[]
+        {
+            new ProjectTestRequest("a.csproj", null, false),
+            new ProjectTestRequest("b.csproj", null, false),
+        }.ToList();
+
+        _ = await pool.RunProjectsAsync(requests, new TestRunCallbacks
+        {
+            OnProjectStarted = p => events.Enqueue($"start {p}"),
+            OnProjectProgress = (p, _) => events.Enqueue($"progress {p}"),
+            OnProjectCompleted = r => events.Enqueue($"done {r.ProjectPath}"),
+        }, CancellationToken.None);
+
+        var list = events.ToList();
+        Assert.Equal(6, list.Count);
+        foreach (var project in new[] { "a.csproj", "b.csproj" })
+        {
+            var start = list.IndexOf($"start {project}");
+            var progress = list.IndexOf($"progress {project}");
+            var done = list.IndexOf($"done {project}");
+            Assert.True(start >= 0 && start < progress && progress < done, string.Join(", ", list));
+        }
+    }
+
+    [Fact]
     public async Task RunProjectsAsync_CrashedProject_DoesNotAffectSiblings()
     {
         using var pool = CreatePool(2, (req, ct) =>
@@ -155,7 +193,7 @@ public sealed class TestProcessPoolTests
             new ProjectTestRequest("healthy.csproj", null, false),
         }.ToList();
 
-        var results = await pool.RunProjectsAsync(requests, null, CancellationToken.None);
+        var results = await pool.RunProjectsAsync(requests, onProjectCompleted: null, CancellationToken.None);
 
         Assert.Equal(2, results.Count);
 
@@ -183,7 +221,7 @@ public sealed class TestProcessPoolTests
         });
 
         var requests = paths.Select(p => new ProjectTestRequest(p, null, false)).ToList();
-        var results = await pool.RunProjectsAsync(requests, null, CancellationToken.None);
+        var results = await pool.RunProjectsAsync(requests, onProjectCompleted: null, CancellationToken.None);
 
         Assert.Equal(4, results.Count);
         Assert.Equal(2, results.Count(r => r.Crashed));
@@ -213,7 +251,7 @@ public sealed class TestProcessPoolTests
             new ProjectTestRequest("fast.csproj", null, false),
         }.ToList();
 
-        _ = await pool.RunProjectsAsync(requests, null, CancellationToken.None);
+        _ = await pool.RunProjectsAsync(requests, onProjectCompleted: null, CancellationToken.None);
 
         // At least one was active when we checked
         Assert.True(activeCountDuringRun >= 1);

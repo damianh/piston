@@ -769,16 +769,34 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 ? _state.TestSuites.Where(s => IsSuiteAffected(s, testTargets)).ToList()
                 : _state.TestSuites;
 
-            _state.InProgressSuites = SeedAsRunning(suitesToSeed);
-            _state.TotalExpectedTests = suitesToSeed.SelectMany(s => s.Tests).Count();
-            _state.CompletedTests = 0;
-
             // Per-project progress tracking
             _state.TotalTestProjects = testTargets?.Count ?? 0;
             _state.CompletedTestProjects = 0;
-            _state.ProjectStatuses = testTargets is not null
+            var projectStatuses = testTargets is not null
                 ? testTargets.ToDictionary(p => p, _ => Models.ProjectRunStatus.Pending)
                 : new Dictionary<string, Models.ProjectRunStatus>();
+            _state.ProjectStatuses = projectStatuses;
+
+            // Live overlay inputs: discovered test lists and live/final results, keyed by project path.
+            var discoveredByProject = new Dictionary<string, IReadOnlyList<TestResult>>(StringComparer.Ordinal);
+            var liveByProject = new Dictionary<string, IReadOnlyList<TestSuite>>(StringComparer.Ordinal);
+            var liveResultsLock = new object();
+            var testPhaseOver = false;
+            var lastProgressNotify = DateTimeOffset.MinValue;
+
+            // Caller holds liveResultsLock.
+            void RefreshOverlay()
+            {
+                _state.ProjectStatuses = new Dictionary<string, Models.ProjectRunStatus>(projectStatuses);
+                _state.InProgressSuites = ComposeTestOverlay(
+                    suitesToSeed, discoveredByProject, liveByProject, projectStatuses);
+                var overlayTests = _state.InProgressSuites.SelectMany(s => s.Tests).ToList();
+                _state.TotalExpectedTests = overlayTests.Count;
+                _state.CompletedTests = overlayTests.Count(t =>
+                    t.Status is TestStatus.Passed or TestStatus.Failed or TestStatus.Skipped);
+            }
+
+            RefreshOverlay();
 
             // Run-local project outcomes (independent of the UI-facing ProjectStatuses).
             var projectOutcomes = new Dictionary<string, TestRunProjectOutcome>(StringComparer.Ordinal);
@@ -790,50 +808,101 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             _state.NotifyChanged();
 
             var testStart = DateTimeOffset.UtcNow;
-            var liveResultsLock = new object();
 
-            void OnProgress(IReadOnlyList<TestSuite> liveSuites)
+            // Applies an overlay update unless the test phase has already finished.
+            void UpdateOverlay(Action mutate, bool throttle = false)
             {
                 lock (liveResultsLock)
                 {
-                    _state.InProgressSuites = MergeProgress(suitesToSeed, liveSuites);
-                    _state.CompletedTests = _state.InProgressSuites
-                        .SelectMany(s => s.Tests)
-                        .Count(t => t.Status != TestStatus.Running);
+                    if (testPhaseOver)
+                    {
+                        return;
+                    }
+
+                    mutate();
+                    RefreshOverlay();
+
+                    var now = DateTimeOffset.UtcNow;
+                    if (throttle && now - lastProgressNotify < ProgressNotifyInterval)
+                    {
+                        return;
+                    }
+
+                    lastProgressNotify = now;
                 }
                 _state.NotifyChanged();
             }
 
-            void OnProjectCompleted(Models.ProjectTestResult result)
+            void OnProjectStarted(string projectPath) => UpdateOverlay(() =>
+            {
+                if (projectStatuses.ContainsKey(projectPath))
+                {
+                    projectStatuses[projectPath] = Models.ProjectRunStatus.Running;
+                }
+            });
+
+            void OnProjectProgress(string projectPath, IReadOnlyList<TestSuite> liveSuites) =>
+                UpdateOverlay(() => liveByProject[projectPath] = liveSuites, throttle: true);
+
+            void OnProjectCompleted(Models.ProjectTestResult result) => UpdateOverlay(() =>
+            {
+                _state.CompletedTestProjects++;
+
+                var projectStatus = result.Crashed
+                    ? Models.ProjectRunStatus.Crashed
+                    : result.RunnerError is not null && result.Suites.Count == 0
+                        ? Models.ProjectRunStatus.Failed
+                        : Models.ProjectRunStatus.Completed;
+
+                if (projectStatuses.ContainsKey(result.ProjectPath))
+                {
+                    projectStatuses[result.ProjectPath] = projectStatus;
+                }
+
+                projectOutcomes[result.ProjectPath] = new TestRunProjectOutcome(
+                    result.ProjectPath, projectStatus, result.Suites.Sum(s => s.Tests.Count));
+
+                if (result.Suites.Count > 0)
+                {
+                    liveByProject[result.ProjectPath] = result.Suites;
+                }
+            });
+
+            // Best-effort discovery so a project's full test list shows before its results arrive.
+            // Projects with known results are already seeded; filtered runs would list tests that won't run.
+            using var discoveryCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var discoveryTask = Task.CompletedTask;
+            if (testTargets is { Count: > 0 } && string.IsNullOrWhiteSpace(effectiveFilter))
+            {
+                var knownSuiteNames = suitesToSeed.Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
+                var toDiscover = testTargets
+                    .Where(p => !knownSuiteNames.Contains(TestProjectNames.SuiteName(p)))
+                    .ToList();
+                if (toDiscover.Count > 0)
+                {
+                    discoveryTask = _testRunner.DiscoverTestsAsync(
+                        toDiscover,
+                        (projectPath, tests) => UpdateOverlay(() => discoveredByProject[projectPath] = tests),
+                        discoveryCts.Token);
+                }
+            }
+
+            async Task EndTestPhaseAsync()
             {
                 lock (liveResultsLock)
                 {
-                    _state.CompletedTestProjects++;
-
-                    var projectStatus = result.Crashed
-                        ? Models.ProjectRunStatus.Crashed
-                        : result.RunnerError is not null && result.Suites.Count == 0
-                            ? Models.ProjectRunStatus.Failed
-                            : Models.ProjectRunStatus.Completed;
-
-                    if (_state.ProjectStatuses is Dictionary<string, Models.ProjectRunStatus> mutableStatuses)
-                    {
-                        mutableStatuses[result.ProjectPath] = projectStatus;
-                    }
-
-                    projectOutcomes[result.ProjectPath] = new TestRunProjectOutcome(
-                        result.ProjectPath, projectStatus, result.Suites.Sum(s => s.Tests.Count));
-
-                    // Merge the completed project's suites into InProgressSuites
-                    if (result.Suites.Count > 0)
-                    {
-                        _state.InProgressSuites = MergeProgress(suitesToSeed, result.Suites);
-                        _state.CompletedTests = _state.InProgressSuites
-                            .SelectMany(s => s.Tests)
-                            .Count(t => t.Status != TestStatus.Running);
-                    }
+                    testPhaseOver = true;
                 }
-                _state.NotifyChanged();
+
+                await discoveryCts.CancelAsync().ConfigureAwait(false);
+                try
+                {
+                    await discoveryTask.ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    log?.Write("Orchestrator", $"Test discovery failed: {ex.Message}");
+                }
             }
 
             // Generate a run ID before running tests (per plan: CreateRunId before ProcessCoverageAsync)
@@ -851,8 +920,12 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                     testTargets,
                     effectiveFilter,
                     _coverageEnabled,
-                    OnProgress,
-                    OnProjectCompleted,
+                    new TestRunCallbacks
+                    {
+                        OnProjectStarted = OnProjectStarted,
+                        OnProjectProgress = OnProjectProgress,
+                        OnProjectCompleted = OnProjectCompleted,
+                    },
                     ct).ConfigureAwait(false);
                 newSuites = result.Suites.Select(s => s with { RunId = run.RunId }).ToList();
                 coverageReportPaths = result.CoverageReportPaths;
@@ -869,6 +942,10 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 _state.Phase = PistonPhase.Watching;
                 _state.NotifyChanged();
                 return Finish(TestRunStatus.Cancelled, "Cancelled during test execution.");
+            }
+            finally
+            {
+                await EndTestPhaseAsync().ConfigureAwait(false);
             }
 
             if (ct.IsCancellationRequested)
@@ -1248,58 +1325,104 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         return merged;
     }
 
-    /// <summary>
-    /// Returns a copy of <paramref name="suites"/> with every test status set to Running.
-    /// Used to seed the live overlay at the start of a test phase.
-    /// </summary>
-    private static IReadOnlyList<TestSuite> SeedAsRunning(IEnumerable<TestSuite> suites) => suites
-            .Select(s => s with
-            {
-                Tests = s.Tests
-                    .Select(t => t with { Status = TestStatus.Running })
-                    .ToList()
-            })
-            .ToList();
+    private static readonly TimeSpan ProgressNotifyInterval = TimeSpan.FromMilliseconds(250);
 
     /// <summary>
-    /// Merges live stdout progress into the last known suite results.
-    /// Tests reported by stdout get their new status; unreported tests keep their
-    /// Running seed status.
+    /// Builds the live test overlay shown while tests run. Starts from the last known results for the
+    /// targeted suites, adds discovered tests, then applies live/final results per test. Tests without a
+    /// result are <see cref="TestStatus.Running"/> while their project runs (or when the project can't be
+    /// identified) and <see cref="TestStatus.NotRun"/> while it is queued or after it finished without them.
     /// </summary>
-    private static IReadOnlyList<TestSuite> MergeProgress(
-        IEnumerable<TestSuite> lastSuites,
-        IReadOnlyList<TestSuite> liveSuites)
+    internal static IReadOnlyList<TestSuite> ComposeTestOverlay(
+        IReadOnlyList<TestSuite> lastSuites,
+        IReadOnlyDictionary<string, IReadOnlyList<TestResult>> discoveredByProject,
+        IReadOnlyDictionary<string, IReadOnlyList<TestSuite>> liveByProject,
+        IReadOnlyDictionary<string, ProjectRunStatus> projectStatuses)
     {
-        var lastSuiteList = lastSuites as IReadOnlyList<TestSuite> ?? lastSuites.ToList();
-
-        if (liveSuites.Count == 0)
-        {
-            return SeedAsRunning(lastSuiteList);
-        }
-
-        // Build a lookup from the flat live list
         // Duplicate identities are tolerated here (last wins) and reported on the run record.
-        var liveByFqn = new Dictionary<string, TestStatus>(StringComparer.Ordinal);
-        foreach (var test in liveSuites.SelectMany(s => s.Tests))
+        var liveByFqn = new Dictionary<string, TestResult>(StringComparer.Ordinal);
+        foreach (var test in liveByProject.Values.SelectMany(suites => suites).SelectMany(s => s.Tests))
         {
-            liveByFqn[test.FullyQualifiedName] = test.Status;
+            liveByFqn[test.FullyQualifiedName] = test;
         }
 
-        if (!lastSuiteList.Any())
+        var statusBySuiteName = new Dictionary<string, ProjectRunStatus>(StringComparer.Ordinal);
+        foreach (var (projectPath, status) in projectStatuses)
         {
-            // No prior results — just show the live tests grouped into one synthetic suite
-            return liveSuites;
+            statusBySuiteName[TestProjectNames.SuiteName(projectPath)] = status;
         }
 
-        return lastSuiteList
-            .Select(s => s with
+        TestStatus PendingStatus(string suiteName) =>
+            statusBySuiteName.TryGetValue(suiteName, out var status) && status != ProjectRunStatus.Running
+                ? TestStatus.NotRun
+                : TestStatus.Running;
+
+        TestResult Resolve(TestResult test, string suiteName) =>
+            liveByFqn.TryGetValue(test.FullyQualifiedName, out var live)
+                ? live
+                : test with { Status = PendingStatus(suiteName) };
+
+        var suites = new List<(string Name, DateTimeOffset Timestamp, TimeSpan Duration, List<TestResult> Tests)>();
+        var suiteIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        var placed = new HashSet<string>(StringComparer.Ordinal);
+
+        void Add(string suiteName, TestResult test)
+        {
+            if (!placed.Add(test.FullyQualifiedName))
             {
-                Tests = s.Tests
-                    .Select(t => liveByFqn.TryGetValue(t.FullyQualifiedName, out var liveStatus)
-                        ? t with { Status = liveStatus }
-                        : t with { Status = TestStatus.Running })
-                    .ToList()
-            })
+                return;
+            }
+
+            if (!suiteIndex.TryGetValue(suiteName, out var index))
+            {
+                index = suites.Count;
+                suiteIndex[suiteName] = index;
+                suites.Add((suiteName, DateTimeOffset.UtcNow, TimeSpan.Zero, []));
+            }
+
+            suites[index].Tests.Add(Resolve(test, suiteName));
+        }
+
+        foreach (var suite in lastSuites)
+        {
+            if (!suiteIndex.ContainsKey(suite.Name))
+            {
+                suiteIndex[suite.Name] = suites.Count;
+                suites.Add((suite.Name, suite.Timestamp, suite.TotalDuration, []));
+            }
+
+            foreach (var test in suite.Tests)
+            {
+                Add(suite.Name, test);
+            }
+        }
+
+        foreach (var (projectPath, tests) in discoveredByProject)
+        {
+            var suiteName = TestProjectNames.SuiteName(projectPath);
+            foreach (var test in tests)
+            {
+                Add(suiteName, test);
+            }
+        }
+
+        foreach (var (projectPath, projectSuites) in liveByProject)
+        {
+            foreach (var suite in projectSuites)
+            {
+                var suiteName = TestProjectNames.IsProjectFile(projectPath)
+                    ? TestProjectNames.SuiteName(projectPath)
+                    : suite.Name;
+                foreach (var test in suite.Tests)
+                {
+                    Add(suiteName, test);
+                }
+            }
+        }
+
+        return suites
+            .Where(s => s.Tests.Count > 0)
+            .Select(s => new TestSuite(s.Name, s.Tests, s.Timestamp, s.Duration))
             .ToList();
     }
 

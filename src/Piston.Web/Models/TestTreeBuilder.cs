@@ -12,6 +12,31 @@ namespace Piston.Web.Models;
 /// </summary>
 public static class TestTreeBuilder
 {
+    /// <summary>
+    /// Suites to show while tests run: the live overlay first, then last-known results for tests
+    /// outside this run (e.g. projects untouched by a selective run).
+    /// </summary>
+    public static IReadOnlyList<TestSuiteDto> WithLiveOverlay(
+        IReadOnlyList<TestSuiteDto> suites,
+        IReadOnlyList<TestSuiteDto> inProgressSuites)
+    {
+        if (inProgressSuites.Count == 0)
+        {
+            return suites;
+        }
+
+        var live = inProgressSuites
+            .SelectMany(s => s.Tests)
+            .Select(t => t.FullyQualifiedName)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var untouched = suites
+            .Select(s => s with { Tests = s.Tests.Where(t => !live.Contains(t.FullyQualifiedName)).ToList() })
+            .Where(s => s.Tests.Count > 0);
+
+        return [.. inProgressSuites, .. untouched];
+    }
+
     public static List<TestNode> Build(
         IReadOnlyList<TestSuiteDto> suites,
         string? filter,
@@ -185,12 +210,12 @@ public static class TestTreeBuilder
                 IsExpanded = viewState.TreeExpanded,
             };
 
-            foreach (var (suite, test) in grouped.OrderBy(x => x.Test.DisplayName))
+            foreach (var (suite, test) in grouped.OrderBy(x => ClassMethodLabel(x.Test.FullyQualifiedName), StringComparer.Ordinal))
             {
                 var isStale = IsStale(suite, lastFileChangeTime);
                 groupNode.Children.Add(new TestNode
                 {
-                    Label = test.DisplayName,
+                    Label = ClassMethodLabel(test.FullyQualifiedName),
                     Kind = TestNodeKind.Test,
                     Test = test,
                     IsStale = isStale,
@@ -214,7 +239,7 @@ public static class TestTreeBuilder
             .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
             .Where(x => matcher is null || matcher(x.Test.FullyQualifiedName))
             .Where(x => IsStatusVisible(x.Test.Status, viewState))
-            .OrderBy(x => x.Test.DisplayName)
+            .OrderBy(x => ClassMethodLabel(x.Test.FullyQualifiedName), StringComparer.Ordinal)
             .ToList();
 
         if (allTests.Count == 0)
@@ -228,7 +253,7 @@ public static class TestTreeBuilder
             var isStale = IsStale(suite, lastFileChangeTime);
             roots.Add(new TestNode
             {
-                Label = test.DisplayName,
+                Label = ClassMethodLabel(test.FullyQualifiedName),
                 Kind = TestNodeKind.Test,
                 Test = test,
                 IsStale = isStale,
@@ -250,7 +275,7 @@ public static class TestTreeBuilder
         var pinnedTests = suites
             .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
             .Where(x => viewState.PinnedTestFqns.Contains(x.Test.FullyQualifiedName))
-            .OrderBy(x => x.Test.DisplayName)
+            .OrderBy(x => ClassMethodLabel(x.Test.FullyQualifiedName), StringComparer.Ordinal)
             .ToList();
 
         if (pinnedTests.Count == 0)
@@ -271,7 +296,7 @@ public static class TestTreeBuilder
             var isStale = IsStale(suite, lastFileChangeTime);
             pinnedRoot.Children.Add(new TestNode
             {
-                Label = test.DisplayName,
+                Label = ClassMethodLabel(test.FullyQualifiedName),
                 Kind = TestNodeKind.Test,
                 Test = test,
                 IsStale = isStale,
@@ -288,12 +313,12 @@ public static class TestTreeBuilder
         ViewState viewState,
         DateTimeOffset? lastFileChangeTime)
     {
-        foreach (var test in tests.OrderBy(t => t.DisplayName))
+        foreach (var test in tests.OrderBy(t => MethodLabel(t.FullyQualifiedName), StringComparer.Ordinal))
         {
             var isStale = IsStale(suite, lastFileChangeTime);
             parent.Add(new TestNode
             {
-                Label = test.DisplayName,
+                Label = MethodLabel(test.FullyQualifiedName),
                 Kind = TestNodeKind.Test,
                 Test = test,
                 IsStale = isStale,
@@ -329,16 +354,37 @@ public static class TestTreeBuilder
     private static bool IsStale(TestSuiteDto suite, DateTimeOffset? lastFileChangeTime) =>
         lastFileChangeTime.HasValue && suite.Timestamp < lastFileChangeTime.Value;
 
+    // Dots inside a parameterised test's argument list (e.g. "dotnet.exe") are not name separators.
+    private static string NameHead(string fqn)
+    {
+        var paren = fqn.IndexOf('(');
+        return paren < 0 ? fqn : fqn[..paren];
+    }
+
     private static string NamespaceKey(string fqn)
     {
-        var parts = fqn.Split('.');
+        var parts = NameHead(fqn).Split('.');
         return parts.Length <= 2 ? string.Empty : string.Join('.', parts[..^2]);
     }
 
     private static string ClassKey(string fqn)
     {
-        var idx = fqn.LastIndexOf('.');
+        var idx = NameHead(fqn).LastIndexOf('.');
         return idx < 0 ? fqn : fqn[..idx];
+    }
+
+    /// <summary>Method name (with any arguments) for leaves that sit under their class node.</summary>
+    internal static string MethodLabel(string fqn)
+    {
+        var idx = NameHead(fqn).LastIndexOf('.');
+        return idx < 0 ? fqn : fqn[(idx + 1)..];
+    }
+
+    /// <summary>Class.Method label for lists where the class node is not shown.</summary>
+    internal static string ClassMethodLabel(string fqn)
+    {
+        var classKey = ClassKey(fqn);
+        return classKey == fqn ? fqn : $"{SimpleSegment(classKey)}.{MethodLabel(fqn)}";
     }
 
     private static string SimpleSegment(string key)

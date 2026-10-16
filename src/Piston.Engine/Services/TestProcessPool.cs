@@ -53,8 +53,14 @@ public sealed class TestProcessPool : ITestProcessPool
     public int ActiveCount => _activeCount;
 
     /// <inheritdoc/>
-    public async Task<ProjectTestResult> RunProjectAsync(
+    public Task<ProjectTestResult> RunProjectAsync(
         ProjectTestRequest request,
+        CancellationToken ct) =>
+        RunProjectAsync(request, new TestRunCallbacks(), ct);
+
+    private async Task<ProjectTestResult> RunProjectAsync(
+        ProjectTestRequest request,
+        TestRunCallbacks callbacks,
         CancellationToken ct)
     {
         try
@@ -80,7 +86,11 @@ public sealed class TestProcessPool : ITestProcessPool
 
         try
         {
-            return await _runDelegate(request, null, ct).ConfigureAwait(false);
+            callbacks.OnProjectStarted?.Invoke(request.ProjectPath);
+            Action<IReadOnlyList<Engine.Models.TestSuite>>? onProgress = callbacks.OnProjectProgress is { } onProjectProgress
+                ? suites => onProjectProgress(request.ProjectPath, suites)
+                : null;
+            return await _runDelegate(request, onProgress, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -98,22 +108,29 @@ public sealed class TestProcessPool : ITestProcessPool
     }
 
     /// <inheritdoc/>
-    public async Task<IReadOnlyList<ProjectTestResult>> RunProjectsAsync(
+    public Task<IReadOnlyList<ProjectTestResult>> RunProjectsAsync(
         IReadOnlyList<ProjectTestRequest> requests,
         Action<ProjectTestResult>? onProjectCompleted,
+        CancellationToken ct) =>
+        RunProjectsAsync(requests, new TestRunCallbacks { OnProjectCompleted = onProjectCompleted }, ct);
+
+    /// <inheritdoc/>
+    public async Task<IReadOnlyList<ProjectTestResult>> RunProjectsAsync(
+        IReadOnlyList<ProjectTestRequest> requests,
+        TestRunCallbacks callbacks,
         CancellationToken ct)
     {
-        var tasks = requests.Select(req => RunAndReportAsync(req, onProjectCompleted, ct)).ToList();
+        var tasks = requests.Select(req => RunAndReportAsync(req, callbacks, ct)).ToList();
         return await Task.WhenAll(tasks).ConfigureAwait(false);
     }
 
     private async Task<ProjectTestResult> RunAndReportAsync(
         ProjectTestRequest request,
-        Action<ProjectTestResult>? onProjectCompleted,
+        TestRunCallbacks callbacks,
         CancellationToken ct)
     {
-        var result = await RunProjectAsync(request, ct).ConfigureAwait(false);
-        onProjectCompleted?.Invoke(result);
+        var result = await RunProjectAsync(request, callbacks, ct).ConfigureAwait(false);
+        callbacks.OnProjectCompleted?.Invoke(result);
         return result;
     }
 

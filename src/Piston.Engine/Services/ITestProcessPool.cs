@@ -27,4 +27,13 @@ public interface ITestProcessPool : IDisposable
         IReadOnlyList<ProjectTestRequest> requests,
         Action<ProjectTestResult>? onProjectCompleted,
         CancellationToken ct);
+
+    /// <summary>
+    /// Runs multiple test projects concurrently (up to PoolSize), reporting each project's
+    /// start (once it holds a slot), live progress, and completion via <paramref name="callbacks"/>.
+    /// </summary>
+    Task<IReadOnlyList<ProjectTestResult>> RunProjectsAsync(
+        IReadOnlyList<ProjectTestRequest> requests,
+        TestRunCallbacks callbacks,
+        CancellationToken ct);
 }

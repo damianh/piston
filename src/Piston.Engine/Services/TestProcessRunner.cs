@@ -23,6 +23,117 @@ internal static class TestProcessRunner
         @"^\s+(Passed|Failed|Skipped|not run)\s+(.+?)(?:\s+\[.*?\])?\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    private const string ListTestsHeader = "The following Tests are available:";
+    private static readonly TimeSpan DiscoveryTimeout = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Lists the tests in <paramref name="projectPath"/> via <c>dotnet test --no-build --list-tests</c>.
+    /// Returns an empty list on failure, timeout, or cancellation — discovery is best-effort.
+    /// </summary>
+    internal static async Task<IReadOnlyList<TestResult>> DiscoverAsync(string projectPath, CancellationToken ct)
+    {
+        var log = DiagnosticLog.Instance;
+        var psi = new ProcessStartInfo("dotnet", $"test \"{projectPath}\" --no-build --list-tests")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
+
+        var lines = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        using var process = new Process { StartInfo = psi };
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data is not null)
+            {
+                lines.Enqueue(e.Data);
+            }
+        };
+        process.ErrorDataReceived += (_, _) => { };
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(DiscoveryTimeout);
+
+        try
+        {
+            _ = process.Start();
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+            catch (InvalidOperationException) { }
+            log?.Write("VSTestRunner", $"Discovery cancelled or timed out: {projectPath}");
+            return [];
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            log?.Write("VSTestRunner", $"Discovery failed to start for {projectPath}: {ex.Message}");
+            return [];
+        }
+
+        var tests = ParseListTestsOutput(lines);
+        log?.Write("VSTestRunner", $"Discovered {tests.Count} test(s) in {projectPath}");
+        return tests;
+    }
+
+    /// <summary>Parses the test names printed after VSTest's "The following Tests are available:" header.</summary>
+    internal static IReadOnlyList<TestResult> ParseListTestsOutput(IEnumerable<string> lines)
+    {
+        var results = new List<TestResult>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var inList = false;
+
+        foreach (var line in lines)
+        {
+            if (line.Trim().Equals(ListTestsHeader, StringComparison.OrdinalIgnoreCase))
+            {
+                inList = true;
+                continue;
+            }
+
+            if (!inList)
+            {
+                continue;
+            }
+
+            // Each test is indented; anything else ends the block (multi-assembly output restarts it).
+            if (line.Length == 0 || !char.IsWhiteSpace(line[0]))
+            {
+                inList = false;
+                continue;
+            }
+
+            var fqn = line.Trim();
+            if (fqn.Length > 0 && seen.Add(fqn))
+            {
+                results.Add(new TestResult(fqn, DisplayNameOf(fqn), TestStatus.NotRun,
+                    TimeSpan.Zero, null, null, null, null));
+            }
+        }
+
+        return results;
+    }
+
+    /// <summary>Last dotted segment of a test name, ignoring dots inside any argument list.</summary>
+    internal static string DisplayNameOf(string fqn)
+    {
+        var paren = fqn.IndexOf('(');
+        var head = paren >= 0 ? fqn[..paren] : fqn;
+        var dot = head.LastIndexOf('.');
+        return dot >= 0 ? fqn[(dot + 1)..] : fqn;
+    }
+
     internal static async Task<ProjectTestResult> RunAsync(
         string projectPath,
         string? filter,
@@ -102,8 +213,7 @@ internal static class TestProcessRunner
                 };
 
                 // Use last segment of FQN as display name
-                var dot = fqn.LastIndexOf('.');
-                var displayName = dot >= 0 ? fqn[(dot + 1)..] : fqn;
+                var displayName = DisplayNameOf(fqn);
 
                 lock (liveResultsLock)
                 {
@@ -181,6 +291,13 @@ internal static class TestProcessRunner
             {
                 try { suites.AddRange(parser.Parse(trx)); }
                 catch { /* malformed TRX — skip */ }
+            }
+
+            // Name per-project suites after the project so live, discovered and final results line up.
+            if (TestProjectNames.IsProjectFile(projectPath))
+            {
+                var projectSuiteName = TestProjectNames.SuiteName(projectPath);
+                suites = [.. suites.Select(s => s with { Name = projectSuiteName })];
             }
 
             // Surface stderr when there are no results (likely a runner-level failure)

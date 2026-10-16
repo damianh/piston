@@ -27,7 +27,8 @@
         <span class="@StatusColor(Node) w-4 text-center">@StatusIcon(Node)</span>
 
         <!-- Label -->
-        <span class="flex-1 truncate text-xs @(Node.Kind == TestNodeKind.Test ? "text-gray-200" : "text-gray-300 font-medium")">
+        <span class="flex-1 truncate text-xs @(Node.Kind == TestNodeKind.Test ? "text-gray-200" : "text-gray-300 font-medium")"
+              title="@(Node.Test?.FullyQualifiedName)">
             @if (isPinned)
             {
                 <span class="text-yellow-400 mr-1">★</span>

@@ -23,4 +23,11 @@ public interface ITestExecutionStrategy
     /// Returns true if this strategy is capable of executing the given project.
     /// </summary>
     bool CanExecute(string projectPath);
+
+    /// <summary>
+    /// Lists the tests in a project without running them (status <see cref="TestStatus.NotRun"/>).
+    /// Returns an empty list when the backend does not support discovery.
+    /// </summary>
+    Task<IReadOnlyList<TestResult>> DiscoverAsync(string projectPath, CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<TestResult>>([]);
 }
