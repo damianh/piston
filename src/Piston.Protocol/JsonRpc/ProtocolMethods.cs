@@ -22,6 +22,7 @@ public static class ProtocolMethods
 
     /// <summary>Clear all test results.</summary>
     public const string EngineClearResults = "engine/clearResults";
+    public const string EngineReset = "engine/reset";
 
     /// <summary>Request per-file coverage data for the given source file.</summary>
     public const string CoverageGetForFile = "coverage/getForFile";

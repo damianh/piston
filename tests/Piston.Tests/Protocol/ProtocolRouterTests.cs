@@ -107,10 +107,12 @@ public sealed class ProtocolRouterTests
         await router.DisposeAsync();
     }
 
-    // ── Client sends engine/forceRun → receives success response ────────────
+    // ── Client sends engine/forceRun or engine/reset → receives success response ──
 
-    [Fact]
-    public async Task ClientSendsForceRun_EngineForceRunCalled_ReceivesResponse()
+    [Theory]
+    [InlineData(ProtocolMethods.EngineForceRun)]
+    [InlineData(ProtocolMethods.EngineReset)]
+    public async Task ClientSendsEngineCommand_EngineMethodCalled_ReceivesResponse(string method)
     {
         var pipeName = UniquePipeName();
         var engine = new StubEngine();
@@ -126,8 +128,7 @@ public sealed class ProtocolRouterTests
         // Drain the initial snapshot
         _ = await client.ReceiveAsync(cts.Token);
 
-        // Send forceRun request
-        var request = new JsonRpcRequest("req-1", ProtocolMethods.EngineForceRun);
+        var request = new JsonRpcRequest("req-1", method);
         await client.SendAsync(JsonRpcSerializer.Serialize(request), cts.Token);
 
         // Read response
@@ -136,7 +137,8 @@ public sealed class ProtocolRouterTests
 
         Assert.Equal("req-1", response.Id);
         Assert.Null(response.Error);
-        Assert.True(engine.ForceRunCalled);
+        Assert.Equal(method == ProtocolMethods.EngineForceRun, engine.ForceRunCalled);
+        Assert.Equal(method == ProtocolMethods.EngineReset, engine.ResetCalled);
 
         await cts.CancelAsync();
         await client.DisposeAsync();
@@ -342,6 +344,14 @@ public sealed class ProtocolRouterTests
         public Task ForceRunAsync()
         {
             ForceRunCalled = true;
+            return Task.CompletedTask;
+        }
+
+        public bool ResetCalled { get; private set; }
+
+        public Task ResetAsync()
+        {
+            ResetCalled = true;
             return Task.CompletedTask;
         }
 

@@ -97,6 +97,9 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
     public Task ClearResultsAsync() =>
         SendCommandAsync(ProtocolMethods.EngineClearResults, null);
 
+    public Task ResetAsync() =>
+        SendCommandAsync(ProtocolMethods.EngineReset, null);
+
     // ── Dispose ───────────────────────────────────────────────────────────────
 
     public async ValueTask DisposeAsync()

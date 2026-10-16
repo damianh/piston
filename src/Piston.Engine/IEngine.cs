@@ -21,6 +21,13 @@ public interface IEngine : IDisposable
     void Stop();
 
     /// <summary>
+    /// Re-initialises the engine without restarting the process: cancels the active run, clears results
+    /// and coverage, reloads the solution graph, restarts file monitoring and starts a full run that
+    /// re-discovers all tests. Returns once the run is requested.
+    /// </summary>
+    Task ResetAsync() => throw new NotSupportedException("Reset is not supported by this engine.");
+
+    /// <summary>
     /// Produces current full verification for the present source, reusing or awaiting qualifying runs
     /// before requesting a forced full run. See <see cref="Verification.VerificationPolicy"/>.
     /// </summary>

@@ -207,6 +207,15 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
     public Task<TestRunRecord?> RequestRunAsync() => _orchestrator.RequestRunAsync();
 
+    public async Task ResetAsync()
+    {
+        await _orchestrator.ResetAsync().ConfigureAwait(false);
+        if (_state.SolutionPath is { } solutionPath)
+        {
+            _activitySink.Emit(new SolutionLoadedActivityEvent(solutionPath, 0));
+        }
+    }
+
     public void Stop() => _orchestrator.Stop();
 
     public Task<Verification.VerificationResult> VerifyAsync(TimeSpan timeout, CancellationToken ct) =>

@@ -35,6 +35,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     private string? _solutionPath;
     private Task? _graphInitTask;
     private readonly SemaphoreSlim _runLock = new(1, 1);
+    private readonly SemaphoreSlim _resetLock = new(1, 1);
     private readonly SemaphoreSlim _coverageLock = new(1, 1);
     private readonly string _engineInstanceId = Guid.NewGuid().ToString("N");
     private readonly object _runRecordsLock = new();
@@ -164,6 +165,107 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     }
 
     public async Task ForceRunAsync() => await RequestRunAsync().ConfigureAwait(false);
+
+    /// <summary>
+    /// Re-initialises the engine in-process: cancels the active run, clears results and coverage,
+    /// reloads the solution graph, restarts file monitoring and starts a full run, which re-discovers
+    /// every test project. Returns once that run is requested; the filter and run history are kept.
+    /// </summary>
+    public async Task ResetAsync()
+    {
+        var solutionPath = _solutionPath ?? throw new InvalidOperationException("Engine has not been started.");
+        var solutionDir = Path.GetDirectoryName(solutionPath)
+            ?? throw new InvalidOperationException("Cannot resolve solution directory.");
+
+        // Counted as a pipeline so disposal waits for it instead of disposing the locks it holds.
+        lock (_lifecycleLock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            if (_activePipelines++ == 0)
+            {
+                _pipelinesDrained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+        }
+
+        try
+        {
+            await _resetLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                _fileWatcher.Stop();
+                lock (_lifecycleLock)
+                {
+                    _stopping = false;
+                    _cts?.Cancel();
+                }
+
+                // A pipeline holds the run lock until it finishes, so holding it here means no run
+                // observes a half-reset state; the next run then waits for the reloaded graph.
+                await _runLock.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    ClearResults(solutionDir);
+                    ResetRunState();
+                    _impactAnalyzer.InvalidateGraph();
+                    _graphInitTask = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _impactAnalyzer.InitializeAsync(solutionPath, CancellationToken.None)
+                                .ConfigureAwait(false);
+                        }
+                        catch
+                        {
+                            // Graph load failure is non-fatal — falls back to full runs
+                        }
+                    });
+                }
+                finally
+                {
+                    _ = _runLock.Release();
+                }
+
+                _fileWatcher.Start(solutionDir);
+            }
+            finally
+            {
+                _ = _resetLock.Release();
+            }
+
+            _ = TriggerRunAsync(solutionPath, null, TestRunTrigger.Forced);
+        }
+        finally
+        {
+            lock (_lifecycleLock)
+            {
+                if (--_activePipelines == 0)
+                {
+                    _pipelinesDrained!.SetResult();
+                }
+            }
+        }
+    }
+
+    // Resets the per-run state shown by clients; caller holds the run lock.
+    private void ResetRunState()
+    {
+        _state.Phase = PistonPhase.Watching;
+        _state.InProgressSuites = [];
+        _state.LastBuild = null;
+        _state.LastBuildDuration = null;
+        _state.LastTestDuration = null;
+        _state.LastTestRunnerError = null;
+        _state.TotalExpectedTests = 0;
+        _state.CompletedTests = 0;
+        _state.TotalTestProjects = 0;
+        _state.CompletedTestProjects = 0;
+        _state.ProjectStatuses = new Dictionary<string, ProjectRunStatus>();
+        _state.AffectedProjects = null;
+        _state.AffectedTestProjects = null;
+        _state.LastFileChangeTime = null;
+        _state.LastChangedFiles = null;
+        _state.NotifyChanged();
+    }
 
     /// <summary>
     /// Requests a full-scope run and returns its provenance record once it reaches a terminal state.
@@ -1477,6 +1579,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         }
 
         _runLock.Dispose();
+        _resetLock.Dispose();
         _coverageLock.Dispose();
     }
 }

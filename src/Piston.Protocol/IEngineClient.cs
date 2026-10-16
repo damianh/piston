@@ -13,6 +13,7 @@ public interface IEngineClient : IAsyncDisposable
     void Stop();
     Task SetFilterAsync(string? filter);
     Task ClearResultsAsync();
+    Task ResetAsync();
 
     // State
     StateSnapshotNotification? CurrentSnapshot { get; }
