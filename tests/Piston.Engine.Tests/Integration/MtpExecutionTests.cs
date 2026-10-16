@@ -45,6 +45,7 @@ public sealed class MtpExecutionTests : IAsyncLifetime
               <PropertyGroup>
                 <TargetFramework>net10.0</TargetFramework>
                 <Nullable>enable</Nullable>
+                <OutputType>Exe</OutputType>
                 <IsTestingPlatformApplication>true</IsTestingPlatformApplication>
                 <NoWarn>$(NoWarn);NU1507</NoWarn>
               </PropertyGroup>
@@ -199,6 +200,33 @@ public sealed class MtpExecutionTests : IAsyncLifetime
         // Only the passing test should be in results when filtered
         Assert.All(allTests,
             t => Assert.Contains("PassingTest", t.FullyQualifiedName, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ListsTheSameNamesTheRunReports()
+    {
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
+
+        var discovered = await MtpTestProcessRunner.DiscoverAsync(_testCsproj, _root, CancellationToken.None);
+        var result = await MtpTestProcessRunner.RunAsync(
+            projectPath: _testCsproj,
+            solutionDirectory: _root,
+            filter: null,
+            collectCoverage: false,
+            onProgress: null,
+            ct: CancellationToken.None);
+
+        Assert.Equal(2, discovered.Count);
+        Assert.All(discovered, t => Assert.Equal(TestStatus.NotRun, t.Status));
+        Assert.Equal(
+            result.Suites.SelectMany(s => s.Tests).Select(t => t.FullyQualifiedName).Order(StringComparer.Ordinal),
+            discovered.Select(t => t.FullyQualifiedName).Order(StringComparer.Ordinal));
+
+        var suite = Assert.Single(result.Suites);
+        Assert.Equal("MtpE2E", suite.Name);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

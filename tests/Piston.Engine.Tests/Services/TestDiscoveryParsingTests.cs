@@ -38,6 +38,48 @@ public sealed class TestDiscoveryParsingTests
     [Fact]
     public void ParseListTestsOutput_NoHeader_ReturnsEmpty() => Assert.Empty(TestProcessRunner.ParseListTestsOutput(["Build FAILED.", "    error CS1002"]));
 
+    [Fact]
+    public void MtpParseListTestsOutput_ReadsNamesUnderEachAssemblyHeader()
+    {
+        // Captured from `dotnet test --project X.csproj --no-build --list-tests` (SDK 10, xunit.v3 3.2.2).
+        string[] lines =
+        [
+            "Discovering tests from /tmp/X/bin/Debug/net10.0/X.dll (net10.0|x64)",
+            "",
+            "Discovered 5 tests in assembly - /tmp/X/bin/Debug/net10.0/X.dll (net10.0|x64)",
+            "  Probe.Deep.SampleTests.Passing",
+            "  Probe.Deep.SampleTests.Theory(s: \"a.b\", n: 1)",
+            "  custom display name",
+            "  Probe.Deep.SampleTests+Nested.Inner",
+            "",
+            "Discovered 1 test in assembly - /tmp/X/bin/Debug/net9.0/X.dll (net9.0|x64)",
+            "  Probe.Deep.SampleTests.Passing",
+            "  Probe.Deep.SampleTests.OnlyOnNet9",
+            "",
+            "Discovered 6 tests.",
+            "  Not.A.Test",
+        ];
+
+        var tests = MtpTestProcessRunner.ParseListTestsOutput(lines);
+
+        Assert.Equal(
+            [
+                "Probe.Deep.SampleTests.Passing",
+                "Probe.Deep.SampleTests.Theory(s: \"a.b\", n: 1)",
+                "custom display name",
+                "Probe.Deep.SampleTests+Nested.Inner",
+                "Probe.Deep.SampleTests.OnlyOnNet9",
+            ],
+            tests.Select(t => t.FullyQualifiedName));
+        Assert.All(tests, t => Assert.Equal(TestStatus.NotRun, t.Status));
+        Assert.Equal("Theory(s: \"a.b\", n: 1)", tests[1].DisplayName);
+    }
+
+    [Fact]
+    public void MtpParseListTestsOutput_FailedDiscovery_ReturnsEmpty() =>
+        Assert.Empty(MtpTestProcessRunner.ParseListTestsOutput(
+            ["The following exception occurred when running the test module", "", "Discovered 0 tests."]));
+
     [Theory]
     [InlineData("Ns.Class.Method", "Method")]
     [InlineData("Method", "Method")]

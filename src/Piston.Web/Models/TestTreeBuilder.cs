@@ -113,6 +113,13 @@ public static class TestTreeBuilder
                 {
                     foreach (var (classKey, classTests) in classGroups)
                     {
+                        // Dot-less names (e.g. a custom DisplayName) have no class to group under.
+                        if (classTests.All(t => t.FullyQualifiedName == classKey))
+                        {
+                            AddTestLeaves(suiteNode.Children, classTests, suite, viewState, lastFileChangeTime);
+                            continue;
+                        }
+
                         var classNode = new TestNode
                         {
                             Label = SimpleSegment(classKey),

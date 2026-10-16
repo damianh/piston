@@ -24,68 +24,19 @@ internal static class TestProcessRunner
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private const string ListTestsHeader = "The following Tests are available:";
-    private static readonly TimeSpan DiscoveryTimeout = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// Lists the tests in <paramref name="projectPath"/> via <c>dotnet test --no-build --list-tests</c>.
     /// Returns an empty list on failure, timeout, or cancellation — discovery is best-effort.
     /// </summary>
-    internal static async Task<IReadOnlyList<TestResult>> DiscoverAsync(string projectPath, CancellationToken ct)
-    {
-        var log = DiagnosticLog.Instance;
-        var psi = new ProcessStartInfo("dotnet", $"test \"{projectPath}\" --no-build --list-tests")
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
-
-        var lines = new System.Collections.Concurrent.ConcurrentQueue<string>();
-        using var process = new Process { StartInfo = psi };
-        process.OutputDataReceived += (_, e) =>
-        {
-            if (e.Data is not null)
-            {
-                lines.Enqueue(e.Data);
-            }
-        };
-        process.ErrorDataReceived += (_, _) => { };
-
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeout.CancelAfter(DiscoveryTimeout);
-
-        try
-        {
-            _ = process.Start();
-            process.BeginOutputReadLine();
-            process.BeginErrorReadLine();
-            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            try
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-            }
-            catch (InvalidOperationException) { }
-            log?.Write("VSTestRunner", $"Discovery cancelled or timed out: {projectPath}");
-            return [];
-        }
-        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
-        {
-            log?.Write("VSTestRunner", $"Discovery failed to start for {projectPath}: {ex.Message}");
-            return [];
-        }
-
-        var tests = ParseListTestsOutput(lines);
-        log?.Write("VSTestRunner", $"Discovered {tests.Count} test(s) in {projectPath}");
-        return tests;
-    }
+    internal static Task<IReadOnlyList<TestResult>> DiscoverAsync(string projectPath, CancellationToken ct) =>
+        TestListProcess.RunAsync(
+            $"test \"{projectPath}\" --no-build --list-tests",
+            workingDirectory: null,
+            projectPath,
+            "VSTestRunner",
+            ParseListTestsOutput,
+            ct);
 
     /// <summary>Parses the test names printed after VSTest's "The following Tests are available:" header.</summary>
     internal static IReadOnlyList<TestResult> ParseListTestsOutput(IEnumerable<string> lines)

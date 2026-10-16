@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Diagnostics;
+using System.Text.RegularExpressions;
 using Piston.Engine.Impact;
 using Piston.Engine.Models;
 
@@ -21,8 +22,67 @@ namespace Piston.Engine.Services;
 /// The <paramref name="solutionDirectory"/> is set as the working directory so the
 /// SDK discovers the <c>global.json</c>.
 /// </remarks>
-internal static class MtpTestProcessRunner
+internal static partial class MtpTestProcessRunner
 {
+    /// <summary>
+    /// Lists the tests in an MTP project via <c>dotnet test --project &lt;csproj&gt; --no-build --list-tests</c>,
+    /// the same entry point used to run it, so listed names match the names reported in run output.
+    /// Returns an empty list on failure, timeout, or cancellation — discovery is best-effort.
+    /// </summary>
+    internal static Task<IReadOnlyList<TestResult>> DiscoverAsync(
+        string projectPath,
+        string solutionDirectory,
+        CancellationToken ct) => TestListProcess.RunAsync(
+            $"test --project \"{projectPath}\" --no-build --list-tests",
+            solutionDirectory,
+            projectPath,
+            "MtpRunner",
+            ParseListTestsOutput,
+            ct);
+
+    /// <summary>
+    /// Parses MTP <c>--list-tests</c> output: each "Discovered N tests in assembly - &lt;path&gt;" header is
+    /// followed by one indented test name per line, ending at the first blank or unindented line.
+    /// </summary>
+    internal static IReadOnlyList<TestResult> ParseListTestsOutput(IEnumerable<string> lines)
+    {
+        var results = new List<TestResult>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var inList = false;
+
+        foreach (var line in lines)
+        {
+            if (ListAssemblyHeaderRegex().IsMatch(line))
+            {
+                inList = true;
+                continue;
+            }
+
+            if (!inList)
+            {
+                continue;
+            }
+
+            if (line.Length == 0 || !char.IsWhiteSpace(line[0]) || line.Trim().Length == 0)
+            {
+                inList = false;
+                continue;
+            }
+
+            var name = line.Trim();
+            if (seen.Add(name))
+            {
+                results.Add(new TestResult(name, TestProcessRunner.DisplayNameOf(name), TestStatus.NotRun,
+                    TimeSpan.Zero, null, null, null, null));
+            }
+        }
+
+        return results;
+    }
+
+    [GeneratedRegex(@"^Discovered \d+ tests? in assembly\b", RegexOptions.IgnoreCase)]
+    private static partial Regex ListAssemblyHeaderRegex();
+
     internal static async Task<ProjectTestResult> RunAsync(
         string projectPath,
         string solutionDirectory,
@@ -141,7 +201,7 @@ internal static class MtpTestProcessRunner
         onProgress?.Invoke(BuildLiveSnapshot(liveResults, liveResultsLock));
 
         // Build suites from stdout-parsed results
-        var suites = BuildSuitesFromLiveResults(liveResults, liveResultsLock);
+        var suites = BuildSuitesFromLiveResults(projectPath, liveResults, liveResultsLock);
 
         var totalTests = suites.SelectMany(s => s.Tests).Count();
         log?.Write("MtpRunner",
@@ -165,8 +225,7 @@ internal static class MtpTestProcessRunner
         Dictionary<string, (TestStatus Status, string DisplayName, TimeSpan Duration, string? ErrorMessage, string? StackTrace, string? Source)> liveResults,
         object lockObj)
     {
-        var dot = parsed.FullyQualifiedName.LastIndexOf('.');
-        var displayName = dot >= 0 ? parsed.FullyQualifiedName[(dot + 1)..] : parsed.FullyQualifiedName;
+        var displayName = TestProcessRunner.DisplayNameOf(parsed.FullyQualifiedName);
 
         lock (lockObj)
         {
@@ -239,50 +298,22 @@ internal static class MtpTestProcessRunner
         return [new TestSuite("…", results, DateTimeOffset.UtcNow, TimeSpan.Zero)];
     }
 
+    /// <summary>
+    /// Builds the project's final suite, named after the project (as VSTest suites are) so results
+    /// can be attributed back to it.
+    /// </summary>
     private static IReadOnlyList<TestSuite> BuildSuitesFromLiveResults(
+        string projectPath,
         Dictionary<string, (TestStatus Status, string DisplayName, TimeSpan Duration, string? ErrorMessage, string? StackTrace, string? Source)> liveResults,
         object lockObj)
     {
-        List<KeyValuePair<string, (TestStatus Status, string DisplayName, TimeSpan Duration, string? ErrorMessage, string? StackTrace, string? Source)>> snapshot;
-        lock (lockObj)
-        {
-            snapshot = [.. liveResults];
-        }
-
-        if (snapshot.Count == 0)
+        var tests = BuildLiveSnapshot(liveResults, lockObj).SelectMany(s => s.Tests).ToList();
+        if (tests.Count == 0)
         {
             return [];
         }
 
-        // Group by namespace (prefix before last dot in FQN)
-        var byNamespace = snapshot
-            .GroupBy(kvp =>
-            {
-                var fqn = kvp.Key;
-                var dot = fqn.LastIndexOf('.');
-                return dot >= 0 ? fqn[..dot] : fqn;
-            })
-            .ToList();
-
-        var suites = new List<TestSuite>();
-        foreach (var group in byNamespace)
-        {
-            var tests = group
-                .Select(kvp => new TestResult(
-                    FullyQualifiedName: kvp.Key,
-                    DisplayName: kvp.Value.DisplayName,
-                    Status: kvp.Value.Status,
-                    Duration: kvp.Value.Duration,
-                    Output: null,
-                    ErrorMessage: kvp.Value.ErrorMessage,
-                    StackTrace: kvp.Value.StackTrace,
-                    Source: kvp.Value.Source))
-                .ToList();
-
-            var totalDuration = TimeSpan.FromTicks(tests.Sum(t => t.Duration.Ticks));
-            suites.Add(new TestSuite(group.Key, tests, DateTimeOffset.UtcNow, totalDuration));
-        }
-
-        return suites;
+        var totalDuration = TimeSpan.FromTicks(tests.Sum(t => t.Duration.Ticks));
+        return [new TestSuite(TestProjectNames.SuiteName(projectPath), tests, DateTimeOffset.UtcNow, totalDuration)];
     }
 }

@@ -44,4 +44,8 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
             request.CollectCoverage,
             onProgress,
             ct);
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<TestResult>> DiscoverAsync(string projectPath, CancellationToken ct) =>
+        MtpTestProcessRunner.DiscoverAsync(projectPath, _solutionDirectory, ct);
 }
