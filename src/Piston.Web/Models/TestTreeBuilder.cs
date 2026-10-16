@@ -3,6 +3,7 @@
 
 using System.Text.RegularExpressions;
 using Piston.Protocol.Dtos;
+using Piston.Protocol.Messages;
 
 namespace Piston.Web.Models;
 
@@ -37,18 +38,27 @@ public static class TestTreeBuilder
         return [.. inProgressSuites, .. untouched];
     }
 
+    /// <summary>
+    /// True until a build has completed and the run that follows has finished discovering tests,
+    /// so an empty list reads as "still discovering" rather than "nothing found".
+    /// </summary>
+    public static bool IsDiscovering(StateSnapshotNotification snapshot) =>
+        snapshot.Phase is PistonPhaseDto.Analyzing or PistonPhaseDto.Building or PistonPhaseDto.Testing
+        || (snapshot.LastBuild is null && snapshot.Phase is not PistonPhaseDto.Error);
+
     public static List<TestNode> Build(
         IReadOnlyList<TestSuiteDto> suites,
         string? filter,
         ViewState viewState,
-        DateTimeOffset? lastFileChangeTime)
+        DateTimeOffset? lastFileChangeTime,
+        bool discovering = false)
     {
         var matcher = BuildMatcher(filter);
         var roots = new List<TestNode>();
 
         if (suites.Count == 0)
         {
-            roots.Add(new TestNode { Label = "No tests discovered", Kind = TestNodeKind.Group, GroupKey = "" });
+            roots.Add(new TestNode { Label = discovering ? "Discovering tests…" : "No tests discovered", Kind = TestNodeKind.Group, GroupKey = "" });
             return roots;
         }
 

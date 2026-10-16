@@ -111,7 +111,8 @@
             _displayedSuites,
             _filter,
             _viewState,
-            _snapshot.LastFileChangeTime);
+            _snapshot.LastFileChangeTime,
+            TestTreeBuilder.IsDiscovering(_snapshot));
 
         _failureCount = _displayedSuites
             .SelectMany(s => s.Tests)
