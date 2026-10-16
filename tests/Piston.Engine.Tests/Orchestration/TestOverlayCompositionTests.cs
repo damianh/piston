@@ -22,7 +22,7 @@ public sealed class TestOverlayCompositionTests
         suites.SelectMany(s => s.Tests).ToDictionary(t => t.FullyQualifiedName, t => t.Status);
 
     [Fact]
-    public void FirstRun_DiscoveredTestsShowRunningOrQueuedByProjectStatus()
+    public void FirstRun_DiscoveredTestsAreQueuedUntilTheRunnerReportsThem()
     {
         var overlay = PistonOrchestrator.ComposeTestOverlay(
             [],
@@ -31,13 +31,13 @@ public sealed class TestOverlayCompositionTests
                 [ProjA] = [Test("A.One"), Test("A.Two")],
                 [ProjB] = [Test("B.One")],
             },
-            new Dictionary<string, IReadOnlyList<TestSuite>>(),
-            new Dictionary<string, ProjectRunStatus> { [ProjA] = ProjectRunStatus.Running, [ProjB] = ProjectRunStatus.Pending });
+            new Dictionary<string, IReadOnlyList<TestSuite>> { [ProjA] = [Suite("A.Tests", Test("A.One", TestStatus.Running))] },
+            filtered: false);
 
         Assert.Equal(["A.Tests", "B.Tests"], overlay.Select(s => s.Name));
         var status = StatusByFqn(overlay);
         Assert.Equal(TestStatus.Running, status["A.One"]);
-        Assert.Equal(TestStatus.Running, status["A.Two"]);
+        Assert.Equal(TestStatus.NotRun, status["A.Two"]);
         Assert.Equal(TestStatus.NotRun, status["B.One"]);
     }
 
@@ -48,24 +48,39 @@ public sealed class TestOverlayCompositionTests
             [Suite("A.Tests", Test("A.One", TestStatus.Failed), Test("A.Two", TestStatus.Passed))],
             new Dictionary<string, IReadOnlyList<TestResult>> { [ProjA] = [Test("A.One"), Test("A.New")] },
             new Dictionary<string, IReadOnlyList<TestSuite>> { [ProjA] = [Suite("A.Tests", Test("A.One", TestStatus.Passed))] },
-            new Dictionary<string, ProjectRunStatus> { [ProjA] = ProjectRunStatus.Running });
+            filtered: false);
 
         var suite = Assert.Single(overlay);
         Assert.Equal(["A.One", "A.Two", "A.New"], suite.Tests.Select(t => t.FullyQualifiedName));
         var status = StatusByFqn(overlay);
         Assert.Equal(TestStatus.Passed, status["A.One"]);
-        Assert.Equal(TestStatus.Running, status["A.Two"]);
-        Assert.Equal(TestStatus.Running, status["A.New"]);
+        Assert.Equal(TestStatus.NotRun, status["A.Two"]);
+        Assert.Equal(TestStatus.NotRun, status["A.New"]);
     }
 
     [Fact]
-    public void CompletedProject_TestsWithoutResultsAreNotRun()
+    public void FilteredRun_KnownTestsOutsideTheFilterKeepTheirLastStatus()
+    {
+        var overlay = PistonOrchestrator.ComposeTestOverlay(
+            [Suite("A.Tests", Test("A.One", TestStatus.Failed), Test("A.Two", TestStatus.Passed), Test("A.Three", TestStatus.Failed))],
+            new Dictionary<string, IReadOnlyList<TestResult>> { [ProjA] = [Test("A.One"), Test("A.Two")] },
+            new Dictionary<string, IReadOnlyList<TestSuite>> { [ProjA] = [Suite("A.Tests", Test("A.One", TestStatus.Running))] },
+            filtered: true);
+
+        var status = StatusByFqn(overlay);
+        Assert.Equal(TestStatus.Running, status["A.One"]);
+        Assert.Equal(TestStatus.NotRun, status["A.Two"]);
+        Assert.Equal(TestStatus.Failed, status["A.Three"]);
+    }
+
+    [Fact]
+    public void UnfilteredRun_TestsWithoutLiveResultsAreNotRun()
     {
         var overlay = PistonOrchestrator.ComposeTestOverlay(
             [Suite("A.Tests", Test("A.One", TestStatus.Passed), Test("A.Removed", TestStatus.Passed))],
             new Dictionary<string, IReadOnlyList<TestResult>>(),
             new Dictionary<string, IReadOnlyList<TestSuite>> { [ProjA] = [Suite("A.Tests", Test("A.One", TestStatus.Passed))] },
-            new Dictionary<string, ProjectRunStatus> { [ProjA] = ProjectRunStatus.Completed });
+            filtered: false);
 
         var status = StatusByFqn(overlay);
         Assert.Equal(TestStatus.Passed, status["A.One"]);
@@ -73,17 +88,17 @@ public sealed class TestOverlayCompositionTests
     }
 
     [Fact]
-    public void UnattributedSuite_IsShownAsRunning_AndLiveTestsFromSolutionRunKeepTheirSuite()
+    public void LiveTestsFromSolutionRunKeepTheirSuite()
     {
         var overlay = PistonOrchestrator.ComposeTestOverlay(
             [Suite("Some.Namespace", Test("Some.Namespace.T1", TestStatus.Passed))],
             new Dictionary<string, IReadOnlyList<TestResult>>(),
             new Dictionary<string, IReadOnlyList<TestSuite>> { ["/src/All.slnx"] = [Suite("Live", Test("X.New", TestStatus.Failed))] },
-            new Dictionary<string, ProjectRunStatus>());
+            filtered: false);
 
         Assert.Equal(["Some.Namespace", "Live"], overlay.Select(s => s.Name));
         var status = StatusByFqn(overlay);
-        Assert.Equal(TestStatus.Running, status["Some.Namespace.T1"]);
+        Assert.Equal(TestStatus.NotRun, status["Some.Namespace.T1"]);
         Assert.Equal(TestStatus.Failed, status["X.New"]);
     }
 }

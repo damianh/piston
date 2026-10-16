@@ -98,11 +98,14 @@ public interface ITestRunnerService
             ct);
 
     /// <summary>
-    /// Lists the tests in each project without running them, invoking <paramref name="onDiscovered"/>
-    /// per project as soon as its list is available. Projects whose runner cannot list tests are skipped.
+    /// Lists the tests in each project without running them, restricted to <paramref name="filter"/>
+    /// when given. <paramref name="onDiscovered"/> is invoked per project as tests are listed, each time
+    /// with the project's cumulative list (replacing the previous one). Projects whose runner cannot
+    /// list tests are skipped.
     /// </summary>
     Task DiscoverTestsAsync(
         IReadOnlyList<string> testProjectPaths,
+        string? filter,
         Action<string, IReadOnlyList<TestResult>> onDiscovered,
         CancellationToken ct) => Task.CompletedTask;
 }

@@ -98,21 +98,17 @@ public sealed class MtpExecutionTests : IAsyncLifetime
 
     // ── Tests ──────────────────────────────────────────────────────────────────
 
-    [Fact]
-    public async Task RunAsync_ReturnsOnePassAndOneFail()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_ReturnsOnePassAndOneFail(bool serverMode)
     {
         if (!_available)
         {
             return; // packages unavailable — skip gracefully
         }
 
-        var result = await MtpTestProcessRunner.RunAsync(
-            projectPath: _testCsproj,
-            solutionDirectory: _root,
-            filter: null,
-            collectCoverage: false,
-            onProgress: null,
-            ct: CancellationToken.None);
+        var result = await RunAsync(serverMode, filter: null);
 
         Assert.NotNull(result);
         Assert.False(result.Crashed);
@@ -129,21 +125,17 @@ public sealed class MtpExecutionTests : IAsyncLifetime
         Assert.Contains(failing, t => t.FullyQualifiedName.Contains("FailingTest", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public async Task RunAsync_FailingTest_HasNonEmptyErrorMessage()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_FailingTest_HasNonEmptyErrorMessage(bool serverMode)
     {
         if (!_available)
         {
             return; // packages unavailable — skip gracefully
         }
 
-        var result = await MtpTestProcessRunner.RunAsync(
-            projectPath: _testCsproj,
-            solutionDirectory: _root,
-            filter: null,
-            collectCoverage: false,
-            onProgress: null,
-            ct: CancellationToken.None);
+        var result = await RunAsync(serverMode, filter: null);
 
         var failing = result.Suites
             .SelectMany(s => s.Tests)
@@ -153,21 +145,17 @@ public sealed class MtpExecutionTests : IAsyncLifetime
         Assert.False(string.IsNullOrWhiteSpace(failing.ErrorMessage));
     }
 
-    [Fact]
-    public async Task RunAsync_AllTests_HaveNonNegativeDuration()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_AllTests_HaveNonNegativeDuration(bool serverMode)
     {
         if (!_available)
         {
             return; // packages unavailable — skip gracefully
         }
 
-        var result = await MtpTestProcessRunner.RunAsync(
-            projectPath: _testCsproj,
-            solutionDirectory: _root,
-            filter: null,
-            collectCoverage: false,
-            onProgress: null,
-            ct: CancellationToken.None);
+        var result = await RunAsync(serverMode, filter: null);
 
         var allTests = result.Suites.SelectMany(s => s.Tests).ToList();
         Assert.NotEmpty(allTests);
@@ -180,46 +168,80 @@ public sealed class MtpExecutionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RunAsync_WithFilter_RunsOnlyMatchingTest()
+    public async Task RunAsync_ServerModeWithFilter_RunsOnlyMatchingTest()
     {
         if (!_available)
         {
             return; // packages unavailable — skip gracefully
         }
 
-        var result = await MtpTestProcessRunner.RunAsync(
-            projectPath: _testCsproj,
-            solutionDirectory: _root,
-            filter: "PassingTest",
-            collectCoverage: false,
-            onProgress: null,
-            ct: CancellationToken.None);
+        var result = await RunAsync(serverMode: true, filter: "PassingTest");
 
-        var allTests = result.Suites.SelectMany(s => s.Tests).ToList();
-
-        // Only the passing test should be in results when filtered
-        Assert.All(allTests,
-            t => Assert.Contains("PassingTest", t.FullyQualifiedName, StringComparison.Ordinal));
+        var test = Assert.Single(result.Suites.SelectMany(s => s.Tests));
+        Assert.Contains("PassingTest", test.FullyQualifiedName, StringComparison.Ordinal);
+        Assert.Equal(TestStatus.Passed, test.Status);
     }
 
     [Fact]
-    public async Task DiscoverAsync_ListsTheSameNamesTheRunReports()
+    public async Task RunAsync_ServerModeFilterMatchingNothing_RunsNoTests()
     {
         if (!_available)
         {
             return; // packages unavailable — skip gracefully
         }
 
-        var discovered = await MtpTestProcessRunner.DiscoverAsync(_testCsproj, _root, CancellationToken.None);
+        var result = await RunAsync(serverMode: true, filter: "FullyQualifiedName=Nope");
+
+        Assert.Empty(result.Suites.SelectMany(s => s.Tests));
+        Assert.Null(result.RunnerError);
+    }
+
+    [Fact]
+    public async Task RunAsync_ServerMode_StreamsProgressAndEndsWithNoRunningTests()
+    {
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
+
+        var snapshots = new List<IReadOnlyList<TestResult>>();
         var result = await MtpTestProcessRunner.RunAsync(
             projectPath: _testCsproj,
+            appPath: AppPath,
             solutionDirectory: _root,
             filter: null,
-            collectCoverage: false,
-            onProgress: null,
+            onProgress: suites =>
+            {
+                lock (snapshots)
+                {
+                    snapshots.Add([.. suites.SelectMany(s => s.Tests)]);
+                }
+            },
             ct: CancellationToken.None);
 
+        Assert.Equal(2, result.Suites.SelectMany(s => s.Tests).Count());
+        Assert.NotEmpty(snapshots);
+        Assert.All(snapshots[^1], t => Assert.NotEqual(TestStatus.Running, t.Status));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DiscoverAsync_ListsTheSameNamesTheRunReports(bool serverMode)
+    {
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
+
+        Assert.True(!serverMode || File.Exists(AppPath), $"Test app not found: {AppPath}");
+        var partials = new List<int>();
+        var discovered = await MtpTestProcessRunner.DiscoverAsync(
+            _testCsproj, serverMode ? AppPath : null, _root, filter: null, tests => partials.Add(tests.Count), CancellationToken.None);
+        var result = await RunAsync(serverMode, filter: null);
+
         Assert.Equal(2, discovered.Count);
+        Assert.NotEmpty(partials);
         Assert.All(discovered, t => Assert.Equal(TestStatus.NotRun, t.Status));
         Assert.Equal(
             result.Suites.SelectMany(s => s.Tests).Select(t => t.FullyQualifiedName).Order(StringComparer.Ordinal),
@@ -229,7 +251,37 @@ public sealed class MtpExecutionTests : IAsyncLifetime
         Assert.Equal("MtpE2E", suite.Name);
     }
 
+    [Fact]
+    public async Task DiscoverAsync_ServerModeWithFilter_ListsOnlyMatchingTests()
+    {
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
+
+        var discovered = await MtpTestProcessRunner.DiscoverAsync(
+            _testCsproj, AppPath, _root, filter: "Name=FailingTest", onPartial: null, CancellationToken.None);
+
+        var test = Assert.Single(discovered);
+        Assert.Contains("FailingTest", test.FullyQualifiedName, StringComparison.Ordinal);
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────────────
+
+    private string AppPath => Path.Combine(_root, "bin", "Debug", "net10.0", "MtpE2E.dll");
+
+    // Server mode needs the built test app; without it the runner falls back to dotnet test.
+    private Task<ProjectTestResult> RunAsync(bool serverMode, string? filter)
+    {
+        Assert.True(!serverMode || File.Exists(AppPath), $"Test app not found: {AppPath}");
+        return MtpTestProcessRunner.RunAsync(
+            projectPath: _testCsproj,
+            appPath: serverMode ? AppPath : null,
+            solutionDirectory: _root,
+            filter: filter,
+            onProgress: null,
+            ct: CancellationToken.None);
+    }
 
     private static async Task<bool> TryRunDotnetAsync(string args, string workDir)
     {

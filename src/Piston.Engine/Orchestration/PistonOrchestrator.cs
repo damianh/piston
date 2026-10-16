@@ -782,14 +782,14 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             var liveByProject = new Dictionary<string, IReadOnlyList<TestSuite>>(StringComparer.Ordinal);
             var liveResultsLock = new object();
             var testPhaseOver = false;
-            var lastProgressNotify = DateTimeOffset.MinValue;
+            var filtered = !string.IsNullOrWhiteSpace(effectiveFilter);
 
             // Caller holds liveResultsLock.
             void RefreshOverlay()
             {
                 _state.ProjectStatuses = new Dictionary<string, Models.ProjectRunStatus>(projectStatuses);
                 _state.InProgressSuites = ComposeTestOverlay(
-                    suitesToSeed, discoveredByProject, liveByProject, projectStatuses);
+                    suitesToSeed, discoveredByProject, liveByProject, filtered);
                 var overlayTests = _state.InProgressSuites.SelectMany(s => s.Tests).ToList();
                 _state.TotalExpectedTests = overlayTests.Count;
                 _state.CompletedTests = overlayTests.Count(t =>
@@ -809,6 +809,25 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
             var testStart = DateTimeOffset.UtcNow;
 
+            // Frequent updates (live progress, streamed discovery) recompose the overlay at most every
+            // ProgressNotifyInterval; the trailing invocation guarantees the latest state is shown.
+            using var throttledRefresh = new TrailingThrottle(
+                () =>
+                {
+                    lock (liveResultsLock)
+                    {
+                        if (testPhaseOver)
+                        {
+                            return;
+                        }
+
+                        RefreshOverlay();
+                    }
+
+                    _state.NotifyChanged();
+                },
+                ProgressNotifyInterval);
+
             // Applies an overlay update unless the test phase has already finished.
             void UpdateOverlay(Action mutate, bool throttle = false)
             {
@@ -820,17 +839,21 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                     }
 
                     mutate();
-                    RefreshOverlay();
-
-                    var now = DateTimeOffset.UtcNow;
-                    if (throttle && now - lastProgressNotify < ProgressNotifyInterval)
+                    if (!throttle)
                     {
-                        return;
+                        RefreshOverlay();
                     }
-
-                    lastProgressNotify = now;
                 }
-                _state.NotifyChanged();
+
+                // Signalled outside the lock: the throttled refresh takes it.
+                if (throttle)
+                {
+                    throttledRefresh.Signal();
+                }
+                else
+                {
+                    _state.NotifyChanged();
+                }
             }
 
             void OnProjectStarted(string projectPath) => UpdateOverlay(() =>
@@ -868,21 +891,23 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 }
             });
 
-            // Best-effort discovery so a project's full test list shows before its results arrive.
-            // Projects with known results are already seeded; filtered runs would list tests that won't run.
+            // Best-effort discovery, streamed, so a project's test list shows before its results arrive.
+            // Unfiltered runs only discover projects without known results (those are already seeded);
+            // filtered runs discover every target with the filter, to tell which known tests will run.
             using var discoveryCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             var discoveryTask = Task.CompletedTask;
-            if (testTargets is { Count: > 0 } && string.IsNullOrWhiteSpace(effectiveFilter))
+            if (testTargets is { Count: > 0 })
             {
                 var knownSuiteNames = suitesToSeed.Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
-                var toDiscover = testTargets
-                    .Where(p => !knownSuiteNames.Contains(TestProjectNames.SuiteName(p)))
-                    .ToList();
+                var toDiscover = filtered
+                    ? [.. testTargets]
+                    : testTargets.Where(p => !knownSuiteNames.Contains(TestProjectNames.SuiteName(p))).ToList();
                 if (toDiscover.Count > 0)
                 {
                     discoveryTask = _testRunner.DiscoverTestsAsync(
                         toDiscover,
-                        (projectPath, tests) => UpdateOverlay(() => discoveredByProject[projectPath] = tests),
+                        effectiveFilter,
+                        (projectPath, tests) => UpdateOverlay(() => discoveredByProject[projectPath] = tests, throttle: true),
                         discoveryCts.Token);
                 }
             }
@@ -1329,15 +1354,16 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
     /// <summary>
     /// Builds the live test overlay shown while tests run. Starts from the last known results for the
-    /// targeted suites, adds discovered tests, then applies live/final results per test. Tests without a
-    /// result are <see cref="TestStatus.Running"/> while their project runs (or when the project can't be
-    /// identified) and <see cref="TestStatus.NotRun"/> while it is queued or after it finished without them.
+    /// targeted suites, adds discovered tests, then applies live results per test, so only tests the
+    /// runner reports as started are <see cref="TestStatus.Running"/>. Tests without a live result are
+    /// <see cref="TestStatus.NotRun"/> (queued) — except in a <paramref name="filtered"/> run, where a known
+    /// test that discovery did not select keeps its last status because it is not part of the run.
     /// </summary>
     internal static IReadOnlyList<TestSuite> ComposeTestOverlay(
         IReadOnlyList<TestSuite> lastSuites,
         IReadOnlyDictionary<string, IReadOnlyList<TestResult>> discoveredByProject,
         IReadOnlyDictionary<string, IReadOnlyList<TestSuite>> liveByProject,
-        IReadOnlyDictionary<string, ProjectRunStatus> projectStatuses)
+        bool filtered)
     {
         // Duplicate identities are tolerated here (last wins) and reported on the run record.
         var liveByFqn = new Dictionary<string, TestResult>(StringComparer.Ordinal);
@@ -1346,21 +1372,16 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             liveByFqn[test.FullyQualifiedName] = test;
         }
 
-        var statusBySuiteName = new Dictionary<string, ProjectRunStatus>(StringComparer.Ordinal);
-        foreach (var (projectPath, status) in projectStatuses)
-        {
-            statusBySuiteName[TestProjectNames.SuiteName(projectPath)] = status;
-        }
+        var selected = filtered
+            ? discoveredByProject.Values.SelectMany(tests => tests).Select(t => t.FullyQualifiedName).ToHashSet(StringComparer.Ordinal)
+            : null;
 
-        TestStatus PendingStatus(string suiteName) =>
-            statusBySuiteName.TryGetValue(suiteName, out var status) && status != ProjectRunStatus.Running
-                ? TestStatus.NotRun
-                : TestStatus.Running;
-
-        TestResult Resolve(TestResult test, string suiteName) =>
+        TestResult Resolve(TestResult test) =>
             liveByFqn.TryGetValue(test.FullyQualifiedName, out var live)
                 ? live
-                : test with { Status = PendingStatus(suiteName) };
+                : selected is not null && !selected.Contains(test.FullyQualifiedName)
+                    ? test
+                    : test with { Status = TestStatus.NotRun };
 
         var suites = new List<(string Name, DateTimeOffset Timestamp, TimeSpan Duration, List<TestResult> Tests)>();
         var suiteIndex = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -1380,7 +1401,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 suites.Add((suiteName, DateTimeOffset.UtcNow, TimeSpan.Zero, []));
             }
 
-            suites[index].Tests.Add(Resolve(test, suiteName));
+            suites[index].Tests.Add(Resolve(test));
         }
 
         foreach (var suite in lastSuites)

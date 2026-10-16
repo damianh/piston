@@ -13,7 +13,8 @@ internal static class TestListProcess
     private static readonly TimeSpan DiscoveryTimeout = TimeSpan.FromSeconds(60);
 
     /// <summary>
-    /// Runs <c>dotnet <paramref name="arguments"/></c> and parses the listed tests.
+    /// Runs <c>dotnet <paramref name="arguments"/></c> and parses the listed tests as they are printed,
+    /// reporting the cumulative list so far to <paramref name="onPartial"/> (throttled).
     /// Returns an empty list on failure, timeout, or cancellation — discovery is best-effort.
     /// </summary>
     internal static async Task<IReadOnlyList<TestResult>> RunAsync(
@@ -21,7 +22,8 @@ internal static class TestListProcess
         string? workingDirectory,
         string projectPath,
         string logCategory,
-        Func<IEnumerable<string>, IReadOnlyList<TestResult>> parse,
+        TestListParser parser,
+        Action<IReadOnlyList<TestResult>>? onPartial,
         CancellationToken ct)
     {
         var log = DiagnosticLog.Instance;
@@ -41,13 +43,39 @@ internal static class TestListProcess
         // The parsers match the English CLI headers.
         psi.Environment["DOTNET_CLI_UI_LANGUAGE"] = "en";
 
-        var lines = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        var parserLock = new object();
+        using var partials = onPartial is null
+            ? null
+            : new TrailingThrottle(
+                () =>
+                {
+                    IReadOnlyList<TestResult> snapshot;
+                    lock (parserLock)
+                    {
+                        snapshot = [.. parser.Results];
+                    }
+
+                    onPartial(snapshot);
+                },
+                TestProcessRunner.ProgressInterval);
+
         using var process = new Process { StartInfo = psi };
         process.OutputDataReceived += (_, e) =>
         {
-            if (e.Data is not null)
+            if (e.Data is null)
             {
-                lines.Enqueue(e.Data);
+                return;
+            }
+
+            bool added;
+            lock (parserLock)
+            {
+                added = parser.ProcessLine(e.Data);
+            }
+
+            if (added)
+            {
+                partials?.Signal();
             }
         };
         process.ErrorDataReceived += (_, _) => { };
@@ -81,8 +109,70 @@ internal static class TestListProcess
             return [];
         }
 
-        var tests = parse(lines);
+        partials?.Dispose();
+        IReadOnlyList<TestResult> tests;
+        lock (parserLock)
+        {
+            tests = [.. parser.Results];
+        }
+
         log?.Write(logCategory, $"Discovered {tests.Count} test(s) in {projectPath} (exit {process.ExitCode})");
         return tests;
+    }
+}
+
+/// <summary>
+/// Incremental parser for <c>--list-tests</c> output: test names are the indented lines following a
+/// header line, up to the first empty or unindented line (output for several assemblies repeats the header).
+/// </summary>
+internal sealed class TestListParser(Func<string, bool> isHeader)
+{
+    private readonly List<TestResult> _results = [];
+    private readonly HashSet<string> _seen = new(StringComparer.Ordinal);
+    private bool _inList;
+
+    /// <summary>The distinct tests parsed so far, in output order.</summary>
+    public IReadOnlyList<TestResult> Results => _results;
+
+    /// <summary>Processes one output line; returns <see langword="true"/> when it added a test.</summary>
+    public bool ProcessLine(string line)
+    {
+        if (isHeader(line))
+        {
+            _inList = true;
+            return false;
+        }
+
+        if (!_inList)
+        {
+            return false;
+        }
+
+        if (line.Length == 0 || !char.IsWhiteSpace(line[0]))
+        {
+            _inList = false;
+            return false;
+        }
+
+        var name = line.Trim();
+        if (name.Length == 0 || !_seen.Add(name))
+        {
+            return false;
+        }
+
+        _results.Add(new TestResult(name, TestProcessRunner.DisplayNameOf(name), TestStatus.NotRun,
+            TimeSpan.Zero, null, null, null, null));
+        return true;
+    }
+
+    /// <summary>Parses all <paramref name="lines"/> and returns the tests found.</summary>
+    public static IReadOnlyList<TestResult> ParseAll(TestListParser parser, IEnumerable<string> lines)
+    {
+        foreach (var line in lines)
+        {
+            _ = parser.ProcessLine(line);
+        }
+
+        return parser.Results;
     }
 }

@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Diagnostics;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using Piston.Engine.Impact;
 using Piston.Engine.Models;
@@ -25,56 +26,37 @@ internal static class TestProcessRunner
 
     private const string ListTestsHeader = "The following Tests are available:";
 
+    /// <summary>Minimum interval between live progress callbacks.</summary>
+    internal static readonly TimeSpan ProgressInterval = TimeSpan.FromMilliseconds(150);
+
     /// <summary>
     /// Lists the tests in <paramref name="projectPath"/> via <c>dotnet test --no-build --list-tests</c>.
     /// Returns an empty list on failure, timeout, or cancellation — discovery is best-effort.
     /// </summary>
-    internal static Task<IReadOnlyList<TestResult>> DiscoverAsync(string projectPath, CancellationToken ct) =>
+    internal static Task<IReadOnlyList<TestResult>> DiscoverAsync(
+        string projectPath,
+        string? filter,
+        Action<IReadOnlyList<TestResult>>? onPartial,
+        CancellationToken ct) =>
         TestListProcess.RunAsync(
-            $"test \"{projectPath}\" --no-build --list-tests",
+            $"test \"{projectPath}\" --no-build --list-tests" + FilterArgument(filter),
             workingDirectory: null,
             projectPath,
             "VSTestRunner",
-            ParseListTestsOutput,
+            new TestListParser(IsListHeader),
+            onPartial,
             ct);
 
+    /// <summary>The <c>--filter</c> argument for <paramref name="filter"/>, or empty when there is none.</summary>
+    internal static string FilterArgument(string? filter) =>
+        string.IsNullOrWhiteSpace(filter) ? string.Empty : $" --filter \"{filter}\"";
+
+    private static bool IsListHeader(string line) =>
+        line.Trim().Equals(ListTestsHeader, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Parses the test names printed after VSTest's "The following Tests are available:" header.</summary>
-    internal static IReadOnlyList<TestResult> ParseListTestsOutput(IEnumerable<string> lines)
-    {
-        var results = new List<TestResult>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var inList = false;
-
-        foreach (var line in lines)
-        {
-            if (line.Trim().Equals(ListTestsHeader, StringComparison.OrdinalIgnoreCase))
-            {
-                inList = true;
-                continue;
-            }
-
-            if (!inList)
-            {
-                continue;
-            }
-
-            // Each test is indented; anything else ends the block (multi-assembly output restarts it).
-            if (line.Length == 0 || !char.IsWhiteSpace(line[0]))
-            {
-                inList = false;
-                continue;
-            }
-
-            var fqn = line.Trim();
-            if (fqn.Length > 0 && seen.Add(fqn))
-            {
-                results.Add(new TestResult(fqn, DisplayNameOf(fqn), TestStatus.NotRun,
-                    TimeSpan.Zero, null, null, null, null));
-            }
-        }
-
-        return results;
-    }
+    internal static IReadOnlyList<TestResult> ParseListTestsOutput(IEnumerable<string> lines) =>
+        TestListParser.ParseAll(new TestListParser(IsListHeader), lines);
 
     /// <summary>Last dotted segment of a test name, ignoring dots inside any argument list.</summary>
     internal static string DisplayNameOf(string fqn)
@@ -107,9 +89,41 @@ internal static class TestProcessRunner
                 args += " --collect \"XPlat Code Coverage\"";
             }
 
-            if (!string.IsNullOrWhiteSpace(filter))
+            args += FilterArgument(filter);
+
+            // Live progress state keyed by display name, the name VSTest prints and the collector reports.
+            var liveResults = new Dictionary<string, (TestStatus Status, string DisplayName)>(
+                StringComparer.Ordinal);
+            var liveResultsLock = new object();
+
+            using var progress = onProgress is null
+                ? null
+                : new TrailingThrottle(() => onProgress(BuildLiveSnapshot(liveResults, liveResultsLock)), ProgressInterval);
+
+            // Per-test start/end events from the PistonLive data collector, when it is deployed.
+            var collectorDir = LiveTestEventListener.CollectorDirectory;
+            await using var liveEvents = onProgress is null || collectorDir is null
+                ? null
+                : LiveTestEventListener.TryStart(evt =>
+                {
+                    lock (liveResultsLock)
+                    {
+                        var exists = liveResults.TryGetValue(evt.DisplayName, out var current);
+                        // Console result lines are authoritative; the collector only fills gaps.
+                        if (evt.Status == TestStatus.Running ? exists : exists && current.Status != TestStatus.Running)
+                        {
+                            return;
+                        }
+
+                        liveResults[evt.DisplayName] = (evt.Status, DisplayNameOf(evt.DisplayName));
+                    }
+
+                    progress?.Signal();
+                });
+
+            if (liveEvents is not null)
             {
-                args += $" --filter \"{filter}\"";
+                args += $" --collect \"{LiveTestEventListener.CollectorFriendlyName}\" --test-adapter-path \"{collectorDir}\"";
             }
 
             var log = DiagnosticLog.Instance;
@@ -124,18 +138,13 @@ internal static class TestProcessRunner
                 CreateNoWindow = true,
             };
             MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
-
-            // Live progress state: FQN → current status (starts as Running when first seen)
-            var liveResults = new Dictionary<string, (TestStatus Status, string DisplayName)>(
-                StringComparer.Ordinal);
-            var liveResultsLock = new object();
+            if (liveEvents is not null)
+            {
+                psi.Environment[LiveTestEventListener.PortVariable] = liveEvents.Port.ToString(CultureInfo.InvariantCulture);
+            }
 
             // Collect stderr lines for error surfacing
             var stderrLines = new System.Collections.Concurrent.ConcurrentBag<string>();
-
-            // Throttle: fire onProgress at most every 150ms
-            var lastProgressFire = DateTimeOffset.MinValue;
-            const int progressThrottleMs = 150;
 
             using var process = new Process { StartInfo = psi };
 
@@ -163,34 +172,12 @@ internal static class TestProcessRunner
                     _ => TestStatus.NotRun,
                 };
 
-                // Use last segment of FQN as display name
-                var displayName = DisplayNameOf(fqn);
-
                 lock (liveResultsLock)
                 {
-                    liveResults[fqn] = (status, displayName);
+                    liveResults[fqn] = (status, DisplayNameOf(fqn));
                 }
 
-                if (onProgress is null)
-                {
-                    return;
-                }
-
-                var now = DateTimeOffset.UtcNow;
-                bool shouldFire;
-                lock (liveResultsLock)
-                {
-                    shouldFire = (now - lastProgressFire).TotalMilliseconds >= progressThrottleMs;
-                    if (shouldFire)
-                    {
-                        lastProgressFire = now;
-                    }
-                }
-
-                if (shouldFire)
-                {
-                    onProgress(BuildLiveSnapshot(liveResults, liveResultsLock));
-                }
+                progress?.Signal();
             };
 
             process.ErrorDataReceived += (_, e) =>
@@ -230,8 +217,13 @@ internal static class TestProcessRunner
 
             log?.Write("VSTestRunner", $"ExitCode: {process.ExitCode}");
 
-            // Fire one final progress update with everything that arrived
-            onProgress?.Invoke(BuildLiveSnapshot(liveResults, liveResultsLock));
+            // Deliver any buffered collector events, then one final progress update.
+            if (liveEvents is not null)
+            {
+                await liveEvents.DisposeAsync().ConfigureAwait(false);
+            }
+
+            progress?.Flush();
 
             // Parse TRX files for authoritative results (durations, error messages, stack traces)
             var trxFiles = Directory.GetFiles(resultsDir, "*.trx", SearchOption.AllDirectories);

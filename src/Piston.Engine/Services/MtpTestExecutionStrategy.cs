@@ -6,8 +6,8 @@ using Piston.Engine.Models;
 namespace Piston.Engine.Services;
 
 /// <summary>
-/// <see cref="ITestExecutionStrategy"/> that executes MTP v2 test projects via
-/// <c>dotnet test</c> in Microsoft.Testing.Platform mode.
+/// <see cref="ITestExecutionStrategy"/> that executes MTP v2 test projects through the test app's
+/// server mode, falling back to <c>dotnet test</c> in Microsoft.Testing.Platform mode.
 /// </summary>
 /// <remarks>
 /// Uses a <see cref="Func{T, TResult}"/> delegate to determine whether a project is
@@ -39,13 +39,17 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct) => MtpTestProcessRunner.RunAsync(
             request.ProjectPath,
+            _getMtpOutputPath(request.ProjectPath),
             _solutionDirectory,
             request.Filter,
-            request.CollectCoverage,
             onProgress,
             ct);
 
     /// <inheritdoc/>
-    public Task<IReadOnlyList<TestResult>> DiscoverAsync(string projectPath, CancellationToken ct) =>
-        MtpTestProcessRunner.DiscoverAsync(projectPath, _solutionDirectory, ct);
+    public Task<IReadOnlyList<TestResult>> DiscoverAsync(
+        string projectPath,
+        string? filter,
+        Action<IReadOnlyList<TestResult>>? onPartial,
+        CancellationToken ct) =>
+        MtpTestProcessRunner.DiscoverAsync(projectPath, _getMtpOutputPath(projectPath), _solutionDirectory, filter, onPartial, ct);
 }

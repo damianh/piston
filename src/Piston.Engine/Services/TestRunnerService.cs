@@ -84,6 +84,7 @@ public sealed class TestRunnerService : ITestRunnerService
 
     public async Task DiscoverTestsAsync(
         IReadOnlyList<string> testProjectPaths,
+        string? filter,
         Action<string, IReadOnlyList<TestResult>> onDiscovered,
         CancellationToken ct)
     {
@@ -102,7 +103,17 @@ public sealed class TestRunnerService : ITestRunnerService
 
             try
             {
-                var tests = await _strategy.DiscoverAsync(projectPath, ct).ConfigureAwait(false);
+                var tests = await _strategy.DiscoverAsync(
+                    projectPath,
+                    filter,
+                    partial =>
+                    {
+                        if (partial.Count > 0 && !ct.IsCancellationRequested)
+                        {
+                            onDiscovered(projectPath, partial);
+                        }
+                    },
+                    ct).ConfigureAwait(false);
                 if (tests.Count > 0 && !ct.IsCancellationRequested)
                 {
                     onDiscovered(projectPath, tests);

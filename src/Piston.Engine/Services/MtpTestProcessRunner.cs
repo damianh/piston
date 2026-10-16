@@ -9,95 +9,97 @@ using Piston.Engine.Models;
 namespace Piston.Engine.Services;
 
 /// <summary>
-/// Internal helper that runs an MTP v2 test project via <c>dotnet test</c> in
-/// Microsoft.Testing.Platform mode (<c>--project &lt;csproj&gt; --no-build --output Detailed</c>),
-/// streams live progress via <see cref="MtpStdoutParser"/>, and builds authoritative
-/// results from the parsed stdout output.
-/// This class is completely separate from <see cref="TestProcessRunner"/>; the VSTest
-/// code path is never modified.
+/// Internal helper that runs MTP v2 test projects. The primary path drives the test app in server mode
+/// (see <c>MtpTestProcessRunner.Server.cs</c>); the fallback runs <c>dotnet test</c> in
+/// Microsoft.Testing.Platform mode (<c>--project &lt;csproj&gt; --no-build --output Detailed</c>) and
+/// parses its stdout via <see cref="MtpStdoutParser"/>.
 /// </summary>
 /// <remarks>
 /// MTP mode of <c>dotnet test</c> requires a <c>global.json</c> with
-/// <c>"test": { "runner": "Microsoft.Testing.Platform" }</c> in the solution root.
-/// The <paramref name="solutionDirectory"/> is set as the working directory so the
-/// SDK discovers the <c>global.json</c>.
+/// <c>"test": { "runner": "Microsoft.Testing.Platform" }</c> in the solution root, so the fallback uses
+/// the solution directory as its working directory.
 /// </remarks>
 internal static partial class MtpTestProcessRunner
 {
     /// <summary>
-    /// Lists the tests in an MTP project via <c>dotnet test --project &lt;csproj&gt; --no-build --list-tests</c>,
-    /// the same entry point used to run it, so listed names match the names reported in run output.
+    /// Lists the tests in an MTP project, streaming them to <paramref name="onPartial"/>. Uses the test
+    /// app's server mode when <paramref name="appPath"/> exists, otherwise (or if the server fails)
+    /// <c>dotnet test --project &lt;csproj&gt; --no-build --list-tests</c>.
     /// Returns an empty list on failure, timeout, or cancellation — discovery is best-effort.
     /// </summary>
-    internal static Task<IReadOnlyList<TestResult>> DiscoverAsync(
+    internal static async Task<IReadOnlyList<TestResult>> DiscoverAsync(
         string projectPath,
+        string? appPath,
         string solutionDirectory,
-        CancellationToken ct) => TestListProcess.RunAsync(
-            $"test --project \"{projectPath}\" --no-build --list-tests",
+        string? filter,
+        Action<IReadOnlyList<TestResult>>? onPartial,
+        CancellationToken ct)
+    {
+        TestFilterExpression? expression = null;
+        var filterSupported = string.IsNullOrWhiteSpace(filter) || TestFilterExpression.TryParse(filter, out expression);
+        if (filterSupported && appPath is not null && File.Exists(appPath))
+        {
+            var tests = await DiscoverWithServerAsync(appPath, expression, onPartial, ct).ConfigureAwait(false);
+            if (tests is not null)
+            {
+                return tests;
+            }
+        }
+
+        return await TestListProcess.RunAsync(
+            $"test --project \"{projectPath}\" --no-build --list-tests" + TestProcessRunner.FilterArgument(filter),
             solutionDirectory,
             projectPath,
             "MtpRunner",
-            ParseListTestsOutput,
-            ct);
+            new TestListParser(ListAssemblyHeaderRegex().IsMatch),
+            onPartial,
+            ct).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Parses MTP <c>--list-tests</c> output: each "Discovered N tests in assembly - &lt;path&gt;" header is
     /// followed by one indented test name per line, ending at the first blank or unindented line.
     /// </summary>
-    internal static IReadOnlyList<TestResult> ParseListTestsOutput(IEnumerable<string> lines)
-    {
-        var results = new List<TestResult>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var inList = false;
-
-        foreach (var line in lines)
-        {
-            if (ListAssemblyHeaderRegex().IsMatch(line))
-            {
-                inList = true;
-                continue;
-            }
-
-            if (!inList)
-            {
-                continue;
-            }
-
-            if (line.Length == 0 || !char.IsWhiteSpace(line[0]) || line.Trim().Length == 0)
-            {
-                inList = false;
-                continue;
-            }
-
-            var name = line.Trim();
-            if (seen.Add(name))
-            {
-                results.Add(new TestResult(name, TestProcessRunner.DisplayNameOf(name), TestStatus.NotRun,
-                    TimeSpan.Zero, null, null, null, null));
-            }
-        }
-
-        return results;
-    }
+    internal static IReadOnlyList<TestResult> ParseListTestsOutput(IEnumerable<string> lines) =>
+        TestListParser.ParseAll(new TestListParser(ListAssemblyHeaderRegex().IsMatch), lines);
 
     [GeneratedRegex(@"^Discovered \d+ tests? in assembly\b", RegexOptions.IgnoreCase)]
     private static partial Regex ListAssemblyHeaderRegex();
 
+    /// <summary>
+    /// Runs an MTP project. Uses the test app's server mode when <paramref name="appPath"/> exists, which
+    /// reports each test as it starts; falls back to <c>dotnet test</c> when server mode is unavailable or
+    /// the filter is unsupported. Coverage is not collected for MTP projects.
+    /// </summary>
     internal static async Task<ProjectTestResult> RunAsync(
+        string projectPath,
+        string? appPath,
+        string solutionDirectory,
+        string? filter,
+        Action<IReadOnlyList<TestSuite>>? onProgress,
+        CancellationToken ct)
+    {
+        if (appPath is not null && File.Exists(appPath))
+        {
+            var result = await RunWithServerAsync(projectPath, appPath, filter, onProgress, ct).ConfigureAwait(false);
+            if (result is not null)
+            {
+                return result;
+            }
+        }
+
+        return await RunWithDotnetTestAsync(projectPath, solutionDirectory, filter, onProgress, ct).ConfigureAwait(false);
+    }
+
+    internal static async Task<ProjectTestResult> RunWithDotnetTestAsync(
         string projectPath,
         string solutionDirectory,
         string? filter,
-        bool collectCoverage,
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct)
     {
         // Build CLI args: dotnet test --project <csproj> --no-build --output Detailed
-        var args = $"test --project \"{projectPath}\" --no-build --output Detailed";
-
-        if (!string.IsNullOrWhiteSpace(filter))
-        {
-            args += $" --filter \"{filter}\"";
-        }
+        var args = $"test --project \"{projectPath}\" --no-build --output Detailed" + TestProcessRunner.FilterArgument(filter);
 
         var log = DiagnosticLog.Instance;
         log?.Write("MtpRunner", $"Project: {projectPath}");
@@ -119,8 +121,9 @@ internal static partial class MtpTestProcessRunner
         var liveResultsLock = new object();
         var stderrLines = new System.Collections.Concurrent.ConcurrentBag<string>();
 
-        var lastProgressFire = DateTimeOffset.MinValue;
-        const int progressThrottleMs = 150;
+        using var progress = onProgress is null
+            ? null
+            : new TrailingThrottle(() => onProgress(BuildLiveSnapshot(liveResults, liveResultsLock)), TestProcessRunner.ProgressInterval);
 
         using var process = new Process { StartInfo = psi };
 
@@ -145,8 +148,7 @@ internal static partial class MtpTestProcessRunner
             }
 
             RecordResult(parsed, liveResults, liveResultsLock);
-            FireThrottledProgress(onProgress, liveResults, liveResultsLock,
-                ref lastProgressFire, progressThrottleMs);
+            progress?.Signal();
         };
 
         process.ErrorDataReceived += (_, e) =>
@@ -197,8 +199,7 @@ internal static partial class MtpTestProcessRunner
             RecordResult(last, liveResults, liveResultsLock);
         }
 
-        // Fire final progress update
-        onProgress?.Invoke(BuildLiveSnapshot(liveResults, liveResultsLock));
+        progress?.Flush();
 
         // Build suites from stdout-parsed results
         var suites = BuildSuitesFromLiveResults(projectPath, liveResults, liveResultsLock);
@@ -236,35 +237,6 @@ internal static partial class MtpTestProcessRunner
                 parsed.ErrorMessage,
                 parsed.StackTrace,
                 parsed.Source);
-        }
-    }
-
-    private static void FireThrottledProgress(
-        Action<IReadOnlyList<TestSuite>>? onProgress,
-        Dictionary<string, (TestStatus Status, string DisplayName, TimeSpan Duration, string? ErrorMessage, string? StackTrace, string? Source)> liveResults,
-        object lockObj,
-        ref DateTimeOffset lastFire,
-        int throttleMs)
-    {
-        if (onProgress is null)
-        {
-            return;
-        }
-
-        var now = DateTimeOffset.UtcNow;
-        bool shouldFire;
-        lock (lockObj)
-        {
-            shouldFire = (now - lastFire).TotalMilliseconds >= throttleMs;
-            if (shouldFire)
-            {
-                lastFire = now;
-            }
-        }
-
-        if (shouldFire)
-        {
-            onProgress(BuildLiveSnapshot(liveResults, lockObj));
         }
     }
 

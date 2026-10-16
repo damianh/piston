@@ -80,6 +80,24 @@ public sealed class TestDiscoveryParsingTests
         Assert.Empty(MtpTestProcessRunner.ParseListTestsOutput(
             ["The following exception occurred when running the test module", "", "Discovered 0 tests."]));
 
+    [Fact]
+    public void TestListParser_ReportsEachNewTestAsItsLineArrives()
+    {
+        var parser = new TestListParser(line => line == "The following Tests are available:");
+
+        Assert.False(parser.ProcessLine("Build succeeded."));
+        Assert.False(parser.ProcessLine("The following Tests are available:"));
+        Assert.True(parser.ProcessLine("    A.B.One"));
+        _ = Assert.Single(parser.Results);
+        Assert.False(parser.ProcessLine("    A.B.One"));
+        Assert.False(parser.ProcessLine("   "));
+        Assert.True(parser.ProcessLine("    A.B.Two"));
+        Assert.False(parser.ProcessLine("Done."));
+        Assert.False(parser.ProcessLine("    Not.A.Test"));
+
+        Assert.Equal(["A.B.One", "A.B.Two"], parser.Results.Select(t => t.FullyQualifiedName));
+    }
+
     [Theory]
     [InlineData("Ns.Class.Method", "Method")]
     [InlineData("Method", "Method")]
