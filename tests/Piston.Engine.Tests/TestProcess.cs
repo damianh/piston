@@ -34,6 +34,7 @@ internal static class TestProcess
         };
         // Reused MSBuild nodes can outlive dotnet and keep its redirected pipes open.
         startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+        Piston.Engine.Impact.MsBuildLocatorGuard.RestoreOriginalEnvironment(startInfo);
         return RunAsync(startInfo, DefaultTimeout);
     }
 

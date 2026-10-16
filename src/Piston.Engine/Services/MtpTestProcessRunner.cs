@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Diagnostics;
+using Piston.Engine.Impact;
 using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
@@ -51,6 +52,7 @@ internal static class MtpTestProcessRunner
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
 
         var parser = new MtpStdoutParser();
         var liveResults = new Dictionary<string, (TestStatus Status, string DisplayName, TimeSpan Duration, string? ErrorMessage, string? StackTrace, string? Source)>(StringComparer.Ordinal);

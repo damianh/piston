@@ -715,18 +715,20 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             };
             PublishActiveRun(run);
 
-            _activitySink.Emit(new BuildCompletedActivityEvent(
-                solutionPath,
-                buildResult.Status == BuildStatus.Succeeded,
-                buildResult.Duration.TotalMilliseconds,
-                buildResult.Errors));
-
+            // A superseded build is killed and reports Failed with no diagnostics; it must
+            // not be published as a build failure.
             if (ct.IsCancellationRequested)
             {
                 _state.Phase = PistonPhase.Watching;
                 _state.NotifyChanged();
                 return Finish(TestRunStatus.Cancelled, "Cancelled after build.");
             }
+
+            _activitySink.Emit(new BuildCompletedActivityEvent(
+                solutionPath,
+                buildResult.Status == BuildStatus.Succeeded,
+                buildResult.Duration.TotalMilliseconds,
+                buildResult.Errors));
 
             if (buildResult.Status == BuildStatus.Failed)
             {

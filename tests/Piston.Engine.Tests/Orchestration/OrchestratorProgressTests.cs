@@ -46,6 +46,57 @@ public sealed class OrchestratorProgressTests
         Assert.Equal("/fake/solution.slnx", changed.SolutionPath);
     }
 
+    [Fact]
+    public async Task SupersededBuild_IsNotReportedAsBuildFailure()
+    {
+        var projects = new[] { "a.csproj" };
+        var watcher = new StubFileWatcherService();
+        var sink = new RecordingActivitySink();
+        var build = new FirstBuildBlocksUntilCancelledBuildService();
+        await using var orchestrator = new PistonOrchestrator(
+            watcher, build, new StubTestRunnerService(projects, TimeSpan.Zero),
+            new StubImpactAnalyzer(projects), new PistonState(), null, null, false, sink);
+
+        await orchestrator.StartAsync("/fake/solution.slnx");
+        await build.FirstBuildStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        watcher.TriggerChange(new FileChangeBatch(
+            [new FileChangeEvent("/fake/A.cs", WatcherChangeTypes.Changed, DateTimeOffset.UtcNow)],
+            DateTimeOffset.UtcNow));
+        await sink.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        var completed = Assert.Single(sink.Events.OfType<BuildCompletedActivityEvent>());
+        Assert.True(completed.Succeeded);
+    }
+
+    private sealed class FirstBuildBlocksUntilCancelledBuildService : IBuildService
+    {
+        private int _calls;
+
+        public TaskCompletionSource FirstBuildStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<BuildResult> BuildAsync(string solutionPath, CancellationToken ct) =>
+            BuildAsync(solutionPath, null, ct);
+
+        public async Task<BuildResult> BuildAsync(string solutionPath, IReadOnlyList<string>? projectPaths, CancellationToken ct)
+        {
+            if (Interlocked.Increment(ref _calls) > 1)
+            {
+                return new BuildResult(BuildStatus.Succeeded, [], [], TimeSpan.FromMilliseconds(1));
+            }
+
+            // Mirrors BuildService: a killed build reports Failed with no diagnostics.
+            _ = FirstBuildStarted.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            return new BuildResult(BuildStatus.Failed, [], [], TimeSpan.FromMilliseconds(1));
+        }
+    }
+
     private sealed class RecordingActivitySink : IActivityEventSink
     {
         public System.Collections.Concurrent.ConcurrentQueue<EngineActivityEvent> Events { get; } = new();
