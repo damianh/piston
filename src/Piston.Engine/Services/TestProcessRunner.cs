@@ -3,6 +3,7 @@
 
 using System.Diagnostics;
 using System.Text.RegularExpressions;
+using Piston.Engine.Impact;
 using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
@@ -60,6 +61,7 @@ internal static class TestProcessRunner
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
+            MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
 
             // Live progress state: FQN → current status (starts as Running when first seen)
             var liveResults = new Dictionary<string, (TestStatus Status, string DisplayName)>(
