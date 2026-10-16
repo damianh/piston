@@ -1,7 +1,7 @@
 @using Piston.Web.Components
 
 <div class="flex border-b border-gray-800 bg-gray-950 text-xs shrink-0">
-    @foreach (var tab in Enum.GetValues<DashboardTab>())
+    @foreach (var tab in new[] { DashboardTab.Tests, DashboardTab.Activity, DashboardTab.Mcp })
     {
         var tabName = tab.ToString();
         var isActive = tab == ActiveTab;
