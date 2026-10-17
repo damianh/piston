@@ -4,7 +4,7 @@
 
 @if (Snapshot is null)
 {
-    <div class="flex items-center gap-3 px-4 py-2 shrink-0 bg-gray-900 border-b border-gray-800 text-gray-500 text-xs">
+    <div class="flex items-center gap-3 px-4 h-9 shrink-0 whitespace-nowrap bg-gray-900 border-b border-gray-800 text-gray-500 text-xs">
         <span class="text-gray-600">⬡ Piston</span>
         <span>Connecting...</span>
     </div>
@@ -17,27 +17,27 @@ else
         ? Path.GetFileNameWithoutExtension(Snapshot.SolutionPath)
         : "Piston";
 
-    <div class="flex items-center gap-4 px-4 py-2 shrink-0 bg-gray-900 border-b border-gray-800 text-xs select-none">
+    <div class="flex items-center gap-4 px-4 h-9 shrink-0 whitespace-nowrap overflow-hidden bg-gray-900 border-b border-gray-800 text-xs select-none">
         <!-- Solution name + phase -->
-        <span class="text-gray-400 font-semibold" title="@Snapshot.SolutionPath">⬡ @solutionName</span>
-        <span class="@phaseColor font-mono">@phaseIcon @phase</span>
+        <span class="shrink-0 text-gray-400 font-semibold" title="@Snapshot.SolutionPath">⬡ @solutionName</span>
+        <span class="shrink-0 @phaseColor font-mono">@phaseIcon @phase</span>
 
         <!-- Progress bar (only during testing) -->
         @if (phase == PistonPhaseDto.Testing && Snapshot.TotalExpectedTests > 0)
         {
             var pct = (double)Snapshot.CompletedTests / Snapshot.TotalExpectedTests * 100;
-            <div class="flex items-center gap-2">
-                <div class="w-32 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+            <div class="flex items-center gap-2 shrink-0">
+                <div class="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
                     <div class="h-full bg-cyan-500 rounded-full transition-all duration-200"
                          style="width: @pct.ToString("F0")%"></div>
                 </div>
-                <span class="text-gray-400">@Snapshot.CompletedTests/@Snapshot.TotalExpectedTests</span>
+                <span class="text-gray-400 tabular-nums">@Snapshot.CompletedTests/@Snapshot.TotalExpectedTests</span>
             </div>
         }
 
         @if (phase == PistonPhaseDto.Testing && RunningProjects(Snapshot) is { Count: > 0 } runningProjects)
         {
-            <span class="flex items-center gap-1.5 min-w-0 text-cyan-400"
+            <span class="flex items-center gap-1.5 flex-1 min-w-0 text-cyan-400"
                   title="@string.Join(Environment.NewLine, runningProjects)">
                 <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse shrink-0"></span>
                 <span class="truncate">running @string.Join(", ", runningProjects)</span>
@@ -56,7 +56,7 @@ else
             var notRun  = allTests.Count(t => t.Status == TestStatusDto.NotRun);
             var running = allTests.Count(t => t.Status == TestStatusDto.Running);
         }
-        <div class="flex items-center gap-2 ml-auto">
+        <div class="flex items-center gap-2 ml-auto shrink-0 tabular-nums">
             @if (running > 0)
             {
                 <span class="text-cyan-400">⟳ @running</span>
@@ -82,7 +82,7 @@ else
         <!-- Timings -->
         @if (Snapshot.LastBuildDurationMs.HasValue || Snapshot.LastTestDurationMs.HasValue)
         {
-            <div class="flex items-center gap-2 text-gray-600">
+            <div class="flex items-center gap-2 shrink-0 tabular-nums text-gray-600">
                 @if (Snapshot.LastBuildDurationMs.HasValue)
                 {
                     <span>build @FormatDuration(Snapshot.LastBuildDurationMs.Value)</span>
