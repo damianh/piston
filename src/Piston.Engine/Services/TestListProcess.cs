@@ -95,19 +95,8 @@ internal static class TestListProcess
         }
         catch (OperationCanceledException)
         {
-            try
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-            }
-            catch (InvalidOperationException) { }
-            finally
-            {
-                // Don't report discovery over while the process is still exiting.
-                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            }
+            await ProcessTermination.KillAndWaitAsync(process, message => log?.Write(logCategory, message))
+                .ConfigureAwait(false);
 
             log?.Write(logCategory, $"Discovery cancelled or timed out: {projectPath}");
             return [];
