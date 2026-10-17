@@ -11,6 +11,8 @@ namespace Piston.Engine.Tests.Impact;
 
 public sealed class ImpactAnalyzerTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     // ── Test fixture: temp directory with a synthetic project layout ──────────
     //
     //   Root/
@@ -369,7 +371,7 @@ public sealed class ImpactAnalyzerTests : IDisposable
         _ = analyzer.Analyze([Change(_libCode)]);
 
         // Allow any pending async MarkFileStaleAsync to complete
-        await Task.Delay(50);
+        await Task.Delay(50, _ct);
 
         Assert.Contains(libCodeFull, coverageStore.MarkedStaleFiles, StringComparer.OrdinalIgnoreCase);
     }

@@ -16,7 +16,7 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
     private string _projectDir = string.Empty;
     private string _projectFile = string.Empty;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _projectDir = Directory.CreateTempSubdirectory("piston-runner-test-").FullName;
         _projectFile = Path.Combine(_projectDir, "RunnerTest.csproj");
@@ -52,10 +52,10 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
         _ = await RunDotnetAsync("build --no-restore", _projectDir);
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         try { Directory.Delete(_projectDir, recursive: true); } catch { /* ignore */ }
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]

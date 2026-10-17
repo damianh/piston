@@ -9,6 +9,8 @@ namespace Piston.Engine.Tests.Services;
 
 public sealed class TestDiscoveryParsingTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     [Fact]
     public void ParseListTestsOutput_ReadsIndentedNamesAfterHeader()
     {
@@ -112,7 +114,7 @@ public sealed class TestDiscoveryParsingTests
                     <Message Text="Sample.Test" Importance="high" />
                   </Target>
                 </Project>
-                """);
+                """, _ct);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
             var tests = await TestListProcess.RunAsync(

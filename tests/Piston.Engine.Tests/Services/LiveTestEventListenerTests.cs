@@ -11,6 +11,8 @@ namespace Piston.Engine.Tests.Services;
 
 public sealed class LiveTestEventListenerTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     [Theory]
     [InlineData("S\tA.B.Test", "A.B.Test", TestStatus.Running)]
     [InlineData("E\tA.B.Test(n: 1)\tPassed", "A.B.Test(n: 1)", TestStatus.Passed)]
@@ -57,14 +59,14 @@ public sealed class LiveTestEventListenerTests
             foreach (var payload in new[] { "S\tOne\nE\tOne\tPassed\n", "S\tTwo\n" })
             {
                 using var client = new TcpClient();
-                await client.ConnectAsync("127.0.0.1", listener.Port);
-                await client.GetStream().WriteAsync(Encoding.UTF8.GetBytes(payload));
+                await client.ConnectAsync("127.0.0.1", listener.Port, _ct);
+                await client.GetStream().WriteAsync(Encoding.UTF8.GetBytes(payload), _ct);
             }
 
             var deadline = DateTime.UtcNow.AddSeconds(10);
             while (DateTime.UtcNow < deadline && events.Count < 3)
             {
-                await Task.Delay(20);
+                await Task.Delay(20, _ct);
             }
         }
 

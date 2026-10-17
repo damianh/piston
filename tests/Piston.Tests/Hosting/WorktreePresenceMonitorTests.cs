@@ -8,6 +8,8 @@ namespace Piston.Tests.Hosting;
 
 public sealed class WorktreePresenceMonitorTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private bool _solutionExists = true;
     private bool _rootExists = true;
     private readonly List<string> _fired = [];
@@ -71,10 +73,10 @@ public sealed class WorktreePresenceMonitorTests
             interval: TimeSpan.FromMilliseconds(50));
         monitor.Start();
 
-        await Task.Delay(200);
+        await Task.Delay(200, _ct);
         Assert.False(fired.Task.IsCompleted);
 
         Directory.Delete(root, recursive: true);
-        Assert.Equal(root, await fired.Task.WaitAsync(TimeSpan.FromSeconds(10)));
+        Assert.Equal(root, await fired.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct));
     }
 }

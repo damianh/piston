@@ -13,6 +13,8 @@ namespace Piston.Tests.Mcp;
 
 public sealed class TestToolsTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private static readonly IMcpCallRecorder NullRecorder = NullMcpCallRecorder.Instance;
 
     [Fact]
@@ -40,7 +42,7 @@ public sealed class TestToolsTests
         _ = Assert.ThrowsAny<Exception>(() => tools.GetTestRun("missing"));
         _ = tools.SetTestFilter("");
         _ = tools.ClearResults();
-        _ = await tools.RunTestsAsync(ct: CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+        _ = await tools.RunTestsAsync(ct: CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2), _ct);
 
         Assert.Equal(
             ["get_test_results", "get_test_run", "set_test_filter", "clear_results", "run_tests"],
@@ -75,7 +77,7 @@ public sealed class TestToolsTests
         ];
 
         var tools = new TestTools(engine, NullRecorder);
-        var result = await tools.RunTestsAsync(ct: CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+        var result = await tools.RunTestsAsync(ct: CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2), _ct);
 
         Assert.True(engine.ForceRunCalled);
         Assert.Contains($"Phase: {completedPhase}", result);
@@ -96,7 +98,7 @@ public sealed class TestToolsTests
         try
         {
             _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(
-                () => run.WaitAsync(TimeSpan.FromSeconds(2)));
+                () => run.WaitAsync(TimeSpan.FromSeconds(2), _ct));
             Assert.True(engine.ForceRunCalled);
         }
         finally

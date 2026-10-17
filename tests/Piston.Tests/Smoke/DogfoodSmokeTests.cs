@@ -4,6 +4,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using ModelContextProtocol.Client;
@@ -16,7 +17,10 @@ namespace Piston.Tests.Smoke;
 /// <summary>Skips unless <c>PISTON_DOGFOOD_SMOKE=1</c>.</summary>
 public sealed class DogfoodSmokeFactAttribute : FactAttribute
 {
-    public DogfoodSmokeFactAttribute()
+    public DogfoodSmokeFactAttribute(
+        [CallerFilePath] string? sourceFilePath = null,
+        [CallerLineNumber] int sourceLineNumber = -1)
+        : base(sourceFilePath, sourceLineNumber)
     {
         if (Environment.GetEnvironmentVariable("PISTON_DOGFOOD_SMOKE") != "1")
         {

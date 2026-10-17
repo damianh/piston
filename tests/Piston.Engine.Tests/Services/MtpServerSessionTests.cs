@@ -17,6 +17,8 @@ namespace Piston.Engine.Tests.Services;
 /// </summary>
 public sealed class MtpServerSessionTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private static readonly MtpServerSession.StageTimeouts Short = new(TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(200));
 
     [Fact]
@@ -26,7 +28,7 @@ public sealed class MtpServerSessionTests
         {
             _ = await ReadAsync(host, ct);
             await Task.Delay(Timeout.Infinite, ct);
-        });
+        }, _ct);
 
         Assert.Equal(MtpServerSession.Outcome.TimedOut, outcome);
         Assert.Contains("initialization", error, StringComparison.Ordinal);
@@ -40,7 +42,7 @@ public sealed class MtpServerSessionTests
             await InitializeAsync(host, ct);
             _ = await ReadAsync(host, ct);
             await Task.Delay(Timeout.Infinite, ct);
-        });
+        }, _ct);
 
         Assert.Equal(MtpServerSession.Outcome.TimedOut, outcome);
         Assert.Contains("discovery", error, StringComparison.Ordinal);
@@ -56,7 +58,7 @@ public sealed class MtpServerSessionTests
             await Task.Delay(TimeSpan.FromMilliseconds(800), ct);
             await WriteAsync(host, """{"jsonrpc":"2.0","id":2,"result":{}}""", ct);
             await Task.Delay(Timeout.Infinite, ct);
-        });
+        }, _ct);
 
         Assert.Equal(MtpServerSession.Outcome.Completed, outcome);
         Assert.Null(error);
@@ -71,7 +73,7 @@ public sealed class MtpServerSessionTests
             _ = await ReadAsync(host, ct);
             await WriteAsync(host, """{"jsonrpc":"2.0","id":2,"error":{"code":-32000,"message":"nope"}}""", ct);
             await Task.Delay(Timeout.Infinite, ct);
-        });
+        }, _ct);
 
         Assert.Equal(MtpServerSession.Outcome.Completed, outcome);
         Assert.Equal("nope", error);

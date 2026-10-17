@@ -13,13 +13,15 @@ namespace Piston.Engine.Tests.Impact;
 /// </summary>
 public sealed class MtpDetectionTests : IAsyncLifetime
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private string _root = string.Empty;
     private string _slnPath = string.Empty;
     private string _mtpCsproj = string.Empty;
     private string _vsTestCsproj = string.Empty;
     private string _libCsproj = string.Empty;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         MsBuildLocatorGuard.EnsureRegistered();
 
@@ -69,10 +71,10 @@ public sealed class MtpDetectionTests : IAsyncLifetime
         await WriteSolution();
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         try { Directory.Delete(_root, recursive: true); } catch { /* ignore */ }
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     // ── Tests ─────────────────────────────────────────────────────────────────
@@ -168,7 +170,7 @@ public sealed class MtpDetectionTests : IAsyncLifetime
         Assert.False(new MsBuildSolutionGraph(_slnPath).IsMultiTargeted(_mtpCsproj));
 
         await File.WriteAllTextAsync(_mtpCsproj, BuildMtpCsproj("<IsTestingPlatformApplication>true</IsTestingPlatformApplication>")
-            .Replace("<TargetFramework>net10.0</TargetFramework>", "<TargetFrameworks>net10.0;net9.0</TargetFrameworks>", StringComparison.Ordinal));
+            .Replace("<TargetFramework>net10.0</TargetFramework>", "<TargetFrameworks>net10.0;net9.0</TargetFrameworks>", StringComparison.Ordinal), _ct);
         var sut = new MsBuildSolutionGraph(_slnPath);
 
         Assert.True(sut.IsMultiTargeted(_mtpCsproj));

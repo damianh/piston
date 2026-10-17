@@ -13,6 +13,8 @@ namespace Piston.Tests;
 
 public sealed class RemoteEngineClientTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private static string UniquePipeName() =>
         $"piston-remote-{Guid.NewGuid():N}";
 
@@ -94,7 +96,7 @@ public sealed class RemoteEngineClientTests
 
         Assert.Equal(info, await client.GetDaemonInfoAsync());
         await client.ShutdownDaemonAsync();
-        await shutdown.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await shutdown.Task.WaitAsync(TimeSpan.FromSeconds(5), _ct);
 
         await cts.CancelAsync();
         await client.DisposeAsync();
@@ -203,7 +205,7 @@ public sealed class RemoteEngineClientTests
         await router.DisposeAsync();
 
         // Client should handle this gracefully (not crash)
-        await Task.Delay(500); // allow time for pipe closure to propagate
+        await Task.Delay(500, _ct); // allow time for pipe closure to propagate
 
         // Dispose client — should not throw
         await client.DisposeAsync();

@@ -9,6 +9,8 @@ namespace Piston.Tests.JsonRpc;
 
 public sealed class MessageFramerTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private static byte[] Utf8(string s) => Encoding.UTF8.GetBytes(s);
 
     // ── Single message round-trip ─────────────────────────────────────────────
@@ -138,7 +140,7 @@ public sealed class MessageFramerTests
             {
                 await MessageFramer.WriteMessageAsync(writer, m, CancellationToken.None);
             }
-        });
+        }, _ct);
 
         // Read concurrently
         var received = new List<byte[]>();

@@ -24,7 +24,7 @@ public sealed class MsBuildSolutionGraphTests : IAsyncLifetime
     private string _testsCsproj = string.Empty;
     private string _libCode = string.Empty;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         // Register MSBuild BEFORE any MsBuildSolutionGraph is constructed.
         // This sets up the assembly resolver so Microsoft.Build.dll can be loaded.
@@ -102,10 +102,10 @@ public sealed class MsBuildSolutionGraphTests : IAsyncLifetime
         _ = await RunDotnetAsync("restore", _root);
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         try { Directory.Delete(_root, recursive: true); } catch { /* ignore */ }
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]

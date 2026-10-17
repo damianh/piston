@@ -13,6 +13,8 @@ namespace Piston.Tests.Protocol;
 
 public sealed class ProtocolRouterTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private static string UniquePipeName() =>
         $"piston-router-{Guid.NewGuid():N}";
 
@@ -361,7 +363,7 @@ public sealed class ProtocolRouterTests
         await client1.DisposeAsync();
 
         // Small delay for cleanup
-        await Task.Delay(200);
+        await Task.Delay(200, _ct);
 
         var count2 = received2.Count;
 

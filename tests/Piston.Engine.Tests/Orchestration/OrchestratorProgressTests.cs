@@ -15,6 +15,8 @@ namespace Piston.Engine.Tests.Orchestration;
 /// </summary>
 public sealed class OrchestratorProgressTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     [Fact]
     public async Task PipelineAndFileChanges_EmitEngineOwnedActivity()
     {
@@ -26,7 +28,7 @@ public sealed class OrchestratorProgressTests
             new StubImpactAnalyzer(projects), new PistonState(), null, null, false, sink);
 
         await orchestrator.StartAsync("/fake/solution.slnx");
-        await sink.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await sink.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5), _ct);
 
         var build = Assert.Single(sink.Events.OfType<BuildCompletedActivityEvent>());
         Assert.True(build.Succeeded);
@@ -58,11 +60,11 @@ public sealed class OrchestratorProgressTests
             new StubImpactAnalyzer(projects), new PistonState(), null, null, false, sink);
 
         await orchestrator.StartAsync("/fake/solution.slnx");
-        await build.FirstBuildStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await build.FirstBuildStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), _ct);
         watcher.TriggerChange(new FileChangeBatch(
             [new FileChangeEvent("/fake/A.cs", WatcherChangeTypes.Changed, DateTimeOffset.UtcNow)],
             DateTimeOffset.UtcNow));
-        await sink.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await sink.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5), _ct);
 
         var completed = Assert.Single(sink.Events.OfType<BuildCompletedActivityEvent>());
         Assert.True(completed.Succeeded);
@@ -89,7 +91,7 @@ public sealed class OrchestratorProgressTests
             new BuildProjectsImpactAnalyzer(projects), state, null, null, false, sink);
 
         await orchestrator.StartAsync("/fake/solution.slnx");
-        await sink.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await sink.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5), _ct);
 
         Assert.Equal(
             new (int, int, string?)[] { (0, 2, null), (1, 2, "Lib"), (1, 2, "Unexpected"), (2, 2, "App.Tests") },
@@ -321,7 +323,7 @@ internal sealed class StubTestRunnerService : ITestRunnerService
 {
     private readonly IReadOnlyList<string> _projectPaths;
     private readonly TimeSpan _delay;
-    private readonly TaskCompletionSource _completionSource = new();
+    private readonly TaskCompletionSource _completionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public StubTestRunnerService(IReadOnlyList<string> projectPaths, TimeSpan delay)
     {

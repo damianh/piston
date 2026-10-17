@@ -24,7 +24,7 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
     // Absolute path that will be the "covered file" in the coverage data
     private string _coveredFilePath = string.Empty;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _tempDir = Directory.CreateTempSubdirectory("piston-coverage-pipeline-").FullName;
         _coveredFilePath = Path.Combine(_tempDir, "src", "Lib", "Code.cs");
@@ -37,11 +37,11 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
         await _store.InitializeAsync(_tempDir);
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _store.Dispose();
         try { Directory.Delete(_tempDir, recursive: true); } catch { /* ignore */ }
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

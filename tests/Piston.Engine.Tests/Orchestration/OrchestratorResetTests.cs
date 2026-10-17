@@ -10,6 +10,8 @@ namespace Piston.Engine.Tests.Orchestration;
 
 public sealed class OrchestratorResetTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private const string Solution = "/fake/solution.slnx";
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
     private static readonly string[] Projects = ["a.csproj"];
@@ -28,7 +30,7 @@ public sealed class OrchestratorResetTests
 
         var clearedDuringReset = false;
         state.StateChanged += () => clearedDuringReset |= state.TestSuites.Count == 0;
-        await orchestrator.ResetAsync().WaitAsync(Timeout);
+        await orchestrator.ResetAsync().WaitAsync(Timeout, _ct);
 
         var run = await WaitForRunAsync(state, TestRunTrigger.Forced);
         Assert.True(clearedDuringReset);
@@ -48,9 +50,9 @@ public sealed class OrchestratorResetTests
         await using var orchestrator = new PistonOrchestrator(
             new CountingFileWatcher(), new StubBuildService(), runner, new CountingImpactAnalyzer(), state);
         await orchestrator.StartAsync(Solution);
-        await runner.FirstRunStarted.Task.WaitAsync(Timeout);
+        await runner.FirstRunStarted.Task.WaitAsync(Timeout, _ct);
 
-        await orchestrator.ResetAsync().WaitAsync(Timeout);
+        await orchestrator.ResetAsync().WaitAsync(Timeout, _ct);
 
         var run = await WaitForRunAsync(state, TestRunTrigger.Forced);
         Assert.Equal(TestRunStatus.Completed, run.Status);
@@ -69,7 +71,7 @@ public sealed class OrchestratorResetTests
         _ = await WaitForRunAsync(state, TestRunTrigger.Startup);
         orchestrator.Stop();
 
-        await orchestrator.ResetAsync().WaitAsync(Timeout);
+        await orchestrator.ResetAsync().WaitAsync(Timeout, _ct);
 
         var run = await WaitForRunAsync(state, TestRunTrigger.Forced);
         Assert.Equal(TestRunStatus.Completed, run.Status);

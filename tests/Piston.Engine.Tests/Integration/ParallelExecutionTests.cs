@@ -27,7 +27,7 @@ public sealed class ParallelExecutionTests : IAsyncLifetime
     private string _gammaTestsDir = string.Empty;
     private string _gammaTestsCsproj = string.Empty;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _root = Directory.CreateTempSubdirectory("piston-parallel-").FullName;
 
@@ -51,10 +51,10 @@ public sealed class ParallelExecutionTests : IAsyncLifetime
         }
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         try { Directory.Delete(_root, recursive: true); } catch { /* ignore */ }
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]

@@ -10,6 +10,8 @@ namespace Piston.Engine.Tests.Orchestration;
 
 public sealed class OrchestratorSelectiveBuildTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private const string Lib = "/repo/Lib/Lib.csproj";
     private const string LibTests = "/repo/Lib.Tests/Lib.Tests.csproj";
 
@@ -135,7 +137,7 @@ public sealed class OrchestratorSelectiveBuildTests
         var deadline = DateTime.UtcNow.AddSeconds(5);
         while (state.Phase != PistonPhase.Watching && DateTime.UtcNow < deadline)
         {
-            await Task.Delay(10);
+            await Task.Delay(10, _ct);
         }
 
         Assert.Equal(PistonPhase.Watching, state.Phase);

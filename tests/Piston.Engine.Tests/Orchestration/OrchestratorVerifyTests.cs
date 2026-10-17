@@ -11,6 +11,8 @@ namespace Piston.Engine.Tests.Orchestration;
 
 public sealed class OrchestratorVerifyTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private static readonly string[] Projects = ["/src/A.Tests/A.Tests.csproj", "/src/B.Tests/B.Tests.csproj"];
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
@@ -340,11 +342,11 @@ public sealed class OrchestratorVerifyTests : IDisposable
         while (Volatile.Read(ref runs) == 0)
         {
             Assert.True(DateTime.UtcNow < deadline);
-            await Task.Delay(10);
+            await Task.Delay(10, _ct);
         }
 
         var verify = Task.Run(() => _orchestrator.VerifyAsync(Timeout, CancellationToken.None));
-        await Task.Delay(50);
+        await Task.Delay(50, _ct);
         release.SetResult();
         var run = await forced;
         var result = await verify;

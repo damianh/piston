@@ -11,6 +11,8 @@ namespace Piston.Engine.Tests.Execution;
 
 public sealed class MachineExecutionCoordinatorTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private static readonly TimeSpan Poll = TimeSpan.FromMilliseconds(10);
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"piston-admission-{Guid.NewGuid():N}");
@@ -80,7 +82,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
     public async Task CpuBudget_IntMaxReservation_DoesNotOverflowAdmissionComparison()
     {
         SetBudget("""{ "cpuSlots": 2147483647 }""");
-        var holder = await Admit(Coordinator(int.MaxValue));
+        var holder = await Admit(Coordinator(int.MaxValue), ct: _ct);
         using var cancellation = new CancellationTokenSource();
         var log = new StatusLog();
         var waiting = Admit(Coordinator(1), log, ct: cancellation.Token);
@@ -90,7 +92,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
             Assert.False(waiting.IsCompleted);
             Assert.Equal(int.MaxValue, log.Last!.CpuSlotsInUse);
             holder.Dispose();
-            using var admitted = await waiting.WaitAsync(TimeSpan.FromSeconds(15));
+            using var admitted = await waiting.WaitAsync(TimeSpan.FromSeconds(15), _ct);
             Assert.Equal(TestRunAdmissionState.Admitted, admitted.Status!.State);
         }
         finally
@@ -106,7 +108,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
         SetBudget("""{ "cpuSlots": 4, "memoryMb": 2048 }""");
         var log = new StatusLog();
 
-        using var lease = await Admit(Coordinator(2, 512), log);
+        using var lease = await Admit(Coordinator(2, 512), log, ct: _ct);
 
         Assert.Empty(log.All);
         var status = lease.Status!;
@@ -126,11 +128,11 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
     public async Task Admit_BeyondCpuBudget_QueuesVisibly_UntilASlotIsReleased()
     {
         SetBudget("""{ "cpuSlots": 2 }""");
-        var first = await Admit(Coordinator(1));
-        using var second = await Admit(Coordinator(1));
+        var first = await Admit(Coordinator(1), ct: _ct);
+        using var second = await Admit(Coordinator(1), ct: _ct);
         var log = new StatusLog();
 
-        var third = Admit(Coordinator(1), log);
+        var third = Admit(Coordinator(1), log, ct: _ct);
         await WaitForAsync(() => log.Last is not null, "third run was not reported as queued");
 
         Assert.False(third.IsCompleted);
@@ -141,7 +143,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
         Assert.Equal(1, EntryCount(_directory.QueueDirectory));
 
         first.Dispose();
-        using var admitted = await third.WaitAsync(TimeSpan.FromSeconds(15));
+        using var admitted = await third.WaitAsync(TimeSpan.FromSeconds(15), _ct);
 
         Assert.Equal(TestRunAdmissionState.Admitted, admitted.Status!.State);
         Assert.Equal(queued.QueuedAt, admitted.Status.QueuedAt);
@@ -152,38 +154,38 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
     public async Task Admit_BeyondMemoryBudget_Queues()
     {
         SetBudget("""{ "cpuSlots": 8, "memoryMb": 1000 }""");
-        var first = await Admit(Coordinator(1, 600));
+        var first = await Admit(Coordinator(1, 600), ct: _ct);
         var log = new StatusLog();
 
-        var second = Admit(Coordinator(1, 600), log);
+        var second = Admit(Coordinator(1, 600), log, ct: _ct);
         await WaitForAsync(() => log.Last is not null, "second run was not queued");
         Assert.Equal(600, log.Last!.MemoryMbInUse);
 
         first.Dispose();
-        using var lease = await second.WaitAsync(TimeSpan.FromSeconds(15));
+        using var lease = await second.WaitAsync(TimeSpan.FromSeconds(15), _ct);
     }
 
     [Fact]
     public async Task Admission_IsStrictFifo_SmallerRunsDoNotOvertakeTheHead()
     {
         SetBudget("""{ "cpuSlots": 4 }""");
-        var large = await Admit(Coordinator(3));
+        var large = await Admit(Coordinator(3), ct: _ct);
         var headLog = new StatusLog();
-        var head = Admit(Coordinator(2), headLog);
+        var head = Admit(Coordinator(2), headLog, ct: _ct);
         await WaitForAsync(() => headLog.Last is not null, "head was not queued");
 
         var tailLog = new StatusLog();
-        var tail = Admit(Coordinator(1), tailLog);
+        var tail = Admit(Coordinator(1), tailLog, ct: _ct);
         await WaitForAsync(() => tailLog.Last is not null, "tail was not queued");
 
         // The tail would fit next to the large run, but it must not starve the head.
-        await Task.Delay(100);
+        await Task.Delay(100, _ct);
         Assert.False(tail.IsCompleted);
         Assert.Equal((1, 2), (tailLog.Last!.QueuedAhead, tailLog.Last.QueueLength));
 
         large.Dispose();
-        using var headLease = await head.WaitAsync(TimeSpan.FromSeconds(15));
-        using var tailLease = await tail.WaitAsync(TimeSpan.FromSeconds(15));
+        using var headLease = await head.WaitAsync(TimeSpan.FromSeconds(15), _ct);
+        using var tailLease = await tail.WaitAsync(TimeSpan.FromSeconds(15), _ct);
         Assert.Equal(2, tailLease.Status!.CpuSlotsInUse);
     }
 
@@ -206,7 +208,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
             _ = Interlocked.Decrement(ref running);
         }
 
-        await Task.WhenAll(Enumerable.Range(0, 16).Select(i => Task.Run(() => RunOnce(i)))).WaitAsync(TimeSpan.FromSeconds(60));
+        await Task.WhenAll(Enumerable.Range(0, 16).Select(i => Task.Run(() => RunOnce(i)))).WaitAsync(TimeSpan.FromSeconds(60), _ct);
 
         Assert.InRange(maxRunning, 1, 3);
         Assert.InRange(maxReported, 1, 3);
@@ -224,7 +226,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
     public async Task Cancellation_WhileQueued_RemovesTheTicket_AndReturnsItsPosition()
     {
         SetBudget("""{ "cpuSlots": 1 }""");
-        using var holder = await Admit(Coordinator(1));
+        using var holder = await Admit(Coordinator(1), ct: _ct);
         using var cts = new CancellationTokenSource();
         var log = new StatusLog();
 
@@ -241,7 +243,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
     public async Task InheritedSequence_KeepsQueuePosition_AheadOfLaterArrivals()
     {
         SetBudget("""{ "cpuSlots": 1 }""");
-        var holder = await Admit(Coordinator(1));
+        var holder = await Admit(Coordinator(1), ct: _ct);
         var superseded = Coordinator(1);
         using var cts = new CancellationTokenSource();
         var firstLog = new StatusLog();
@@ -249,25 +251,25 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
         await WaitForAsync(() => firstLog.Last is not null, "first was not queued");
 
         var laterLog = new StatusLog();
-        var later = Admit(Coordinator(1), laterLog);
+        var later = Admit(Coordinator(1), laterLog, ct: _ct);
         await WaitForAsync(() => laterLog.Last is { QueuedAhead: 1 }, "later did not queue behind first");
 
         cts.Cancel();
         var cancelled = await Assert.ThrowsAsync<ExecutionAdmissionCancelledException>(() => first);
 
         var replacementLog = new StatusLog();
-        var replacement = Admit(superseded, replacementLog, cancelled.QueueSequence);
+        var replacement = Admit(superseded, replacementLog, cancelled.QueueSequence, _ct);
         await WaitForAsync(() => replacementLog.Last is not null && laterLog.Last is { QueuedAhead: 1, QueueLength: 2 },
             "replacement did not rejoin");
         Assert.Equal(0, replacementLog.Last!.QueuedAhead);
         Assert.Equal(firstLog.Last!.QueuedAt, replacementLog.Last.QueuedAt);
 
         holder.Dispose();
-        using var replacementLease = await replacement.WaitAsync(TimeSpan.FromSeconds(15));
-        await Task.Delay(100);
+        using var replacementLease = await replacement.WaitAsync(TimeSpan.FromSeconds(15), _ct);
+        await Task.Delay(100, _ct);
         Assert.False(later.IsCompleted);
         replacementLease.Dispose();
-        using var laterLease = await later.WaitAsync(TimeSpan.FromSeconds(15));
+        using var laterLease = await later.WaitAsync(TimeSpan.FromSeconds(15), _ct);
     }
 
     [Fact]
@@ -280,13 +282,13 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
         Assert.Equal("READY", b.WaitForLine("READY", "ERROR"));
 
         var log = new StatusLog();
-        var queued = Admit(Coordinator(1), log);
+        var queued = Admit(Coordinator(1), log, ct: _ct);
         await WaitForAsync(() => log.Last is not null, "run was not queued behind other processes");
         Assert.Equal(2, log.Last!.OtherAdmittedRuns);
 
         a.Kill();
 
-        using var lease = await queued.WaitAsync(TimeSpan.FromSeconds(15));
+        using var lease = await queued.WaitAsync(TimeSpan.FromSeconds(15), _ct);
         Assert.Equal(1, lease.Status!.OtherAdmittedRuns);
     }
 
@@ -294,26 +296,26 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
     public async Task KilledProcessTicket_DoesNotBlockTheQueue()
     {
         SetBudget("""{ "cpuSlots": 1 }""");
-        var holder = await Admit(Coordinator(1));
+        var holder = await Admit(Coordinator(1), ct: _ct);
         using var waiting = LeaseHolderProcess.Start("admit", _directory.BaseDirectory, "1", "0");
         Assert.StartsWith("QUEUED 0", waiting.WaitForLine("QUEUED", "READY", "ERROR"), StringComparison.Ordinal);
 
         var log = new StatusLog();
-        var mine = Admit(Coordinator(1), log);
+        var mine = Admit(Coordinator(1), log, ct: _ct);
         await WaitForAsync(() => log.Last is { QueuedAhead: 1 }, "run did not queue behind the other process");
 
         waiting.Kill();
         await WaitForAsync(() => log.Last is { QueuedAhead: 0 }, "killed ticket was not purged");
 
         holder.Dispose();
-        using var lease = await mine.WaitAsync(TimeSpan.FromSeconds(15));
+        using var lease = await mine.WaitAsync(TimeSpan.FromSeconds(15), _ct);
     }
 
     [Fact]
     public async Task QueuedInAnotherProcess_IsAdmittedWhenSlotIsReleased()
     {
         SetBudget("""{ "cpuSlots": 1 }""");
-        var holder = await Admit(Coordinator(1));
+        var holder = await Admit(Coordinator(1), ct: _ct);
         using var waiting = LeaseHolderProcess.Start("admit", _directory.BaseDirectory, "1", "0");
         Assert.StartsWith("QUEUED", waiting.WaitForLine("QUEUED", "READY", "ERROR"), StringComparison.Ordinal);
 
@@ -330,7 +332,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
         File.WriteAllText(Path.Combine(_directory.QueueDirectory, "00000000000000000001_1_0_1_dead.ticket"), "");
         File.WriteAllText(Path.Combine(_directory.QueueDirectory, "garbage"), "");
 
-        using var lease = await Admit(Coordinator(1)).WaitAsync(TimeSpan.FromSeconds(15));
+        using var lease = await Admit(Coordinator(1), ct: _ct).WaitAsync(TimeSpan.FromSeconds(15), _ct);
 
         Assert.Equal(0, EntryCount(_directory.QueueDirectory));
         Assert.Equal(1, EntryCount(_directory.LeasesDirectory));
@@ -342,7 +344,7 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
         var path = Path.Combine(_directory.QueueDirectory, "foreign.ticket");
         using var foreign = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None);
 
-        var ex = await Assert.ThrowsAsync<ExecutionCoordinationException>(() => Admit(Coordinator(1)));
+        var ex = await Assert.ThrowsAsync<ExecutionCoordinationException>(() => Admit(Coordinator(1), ct: _ct));
         Assert.Contains("foreign.ticket", ex.Message, StringComparison.Ordinal);
     }
 
@@ -350,14 +352,14 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
     public async Task BudgetBecomingInvalidWhileQueued_FailsExplicitly_AndRemovesTicket()
     {
         SetBudget("""{ "cpuSlots": 1 }""");
-        using var holder = await Admit(Coordinator(1));
+        using var holder = await Admit(Coordinator(1), ct: _ct);
         var log = new StatusLog();
-        var queued = Admit(Coordinator(1), log);
+        var queued = Admit(Coordinator(1), log, ct: _ct);
         await WaitForAsync(() => log.Last is not null, "run was not queued");
 
         SetBudget("""{ "cpuSlots": "lots" }""");
 
-        _ = await Assert.ThrowsAsync<ExecutionCoordinationException>(() => queued.WaitAsync(TimeSpan.FromSeconds(15)));
+        _ = await Assert.ThrowsAsync<ExecutionCoordinationException>(() => queued.WaitAsync(TimeSpan.FromSeconds(15), _ct));
         Assert.Equal(0, EntryCount(_directory.QueueDirectory));
     }
 
@@ -438,14 +440,14 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
     public async Task RaisingTheBudget_AdmitsQueuedRuns()
     {
         SetBudget("""{ "cpuSlots": 1 }""");
-        using var holder = await Admit(Coordinator(1));
+        using var holder = await Admit(Coordinator(1), ct: _ct);
         var log = new StatusLog();
-        var queued = Admit(Coordinator(1), log);
+        var queued = Admit(Coordinator(1), log, ct: _ct);
         await WaitForAsync(() => log.Last is not null, "run was not queued");
 
         SetBudget("""{ "cpuSlots": 2 }""");
 
-        using var lease = await queued.WaitAsync(TimeSpan.FromSeconds(15));
+        using var lease = await queued.WaitAsync(TimeSpan.FromSeconds(15), _ct);
         Assert.Equal(2, lease.Status!.BudgetCpuSlots);
     }
 
@@ -456,6 +458,6 @@ public sealed class MachineExecutionCoordinatorTests : IDisposable
         var coordinator = new MachineExecutionCoordinator(_directory, new ExecutionReservation(3, null), Poll);
 
         _ = Assert.Throws<ExecutionCoordinationException>(() => coordinator.Initialize());
-        _ = await Assert.ThrowsAsync<InvalidOperationException>(() => Admit(coordinator));
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(() => Admit(coordinator, ct: _ct));
     }
 }

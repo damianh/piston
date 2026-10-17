@@ -12,11 +12,13 @@ namespace Piston.Engine.Tests.Coverage;
 /// </summary>
 public sealed class SqliteCoverageStoreTests : IAsyncLifetime
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private string _tempDir = string.Empty;
     private string _dbDir = string.Empty;
     private SqliteCoverageStore _sut = null!;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _tempDir = Directory.CreateTempSubdirectory("piston-coverage-store-test-").FullName;
         _dbDir = _tempDir; // InitializeAsync creates .piston/ inside this dir
@@ -24,11 +26,11 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
         await _sut.InitializeAsync(_dbDir);
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         _sut.Dispose();
         Directory.Delete(_tempDir, recursive: true);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
@@ -64,10 +66,10 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
             Pooling = false,
         }.ToString()))
         {
-            await connection.OpenAsync();
+            await connection.OpenAsync(_ct);
             using var command = connection.CreateCommand();
             command.CommandText = "SELECT (SELECT COUNT(*) FROM coverage_map) + (SELECT COUNT(*) FROM coverage_summary);";
-            Assert.Equal(0L, await command.ExecuteScalarAsync());
+            Assert.Equal(0L, await command.ExecuteScalarAsync(_ct));
         }
 
         _sut.Dispose();

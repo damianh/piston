@@ -9,6 +9,8 @@ namespace Piston.Tests.Transports;
 
 public sealed class NamedPipeTransportTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     [Fact]
     public void UnixServerOptionsRequireCurrentUser() =>
         Assert.True(NamedPipeServerTransport.UnixPipeOptions.HasFlag(System.IO.Pipes.PipeOptions.CurrentUserOnly));
@@ -157,7 +159,7 @@ public sealed class NamedPipeTransportTests
                     break;
                 }
             }
-        });
+        }, _ct);
 
         // Connect two clients
         var client1 = new NamedPipeClientTransport(pipeName);
