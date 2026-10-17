@@ -25,7 +25,7 @@ internal static class ProcessTermination
         catch (InvalidOperationException) when (process.HasExited)
         {
         }
-        catch (Win32Exception ex)
+        catch (Exception ex) when (ex is Win32Exception or AggregateException)
         {
             log($"Could not kill process tree after cancellation: {ex.Message}");
         }

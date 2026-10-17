@@ -36,7 +36,7 @@ public sealed class ProcessTerminationTests
         {
             if (int.TryParse(e.Data, out var childPid))
             {
-                output.TrySetResult(childPid);
+                _ = output.TrySetResult(childPid);
             }
         };
 
