@@ -20,6 +20,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
     private readonly IEngine _engine;
     private McpCallTracker? _mcpCallTracker;
     private DaemonControl? _daemonControl;
+    private ActivityHistory? _activityHistory;
 
     public EngineCommandDispatcher(IEngine engine) => _engine = engine;
 
@@ -31,6 +32,9 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
 
     public void SetMcpCallTracker(McpCallTracker tracker) =>
         _mcpCallTracker = tracker;
+
+    public void SetActivityHistory(ActivityHistory history) =>
+        _activityHistory = history;
 
     public async Task<JsonNode?> HandleCommandAsync(string method, JsonNode? @params, CancellationToken ct)
     {
@@ -81,6 +85,13 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                 {
                     var calls = _mcpCallTracker?.GetCallLog() ?? [];
                     var response = new McpCallLogResponse(calls);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.ActivityGetLog:
+                {
+                    var response = new ActivityLogResponse(_activityHistory?.Snapshot() ?? []);
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
                 }

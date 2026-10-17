@@ -49,6 +49,34 @@ public sealed class ProtocolRouterTests
         await routerTask;
     }
 
+    [Fact]
+    public async Task ActivityGetLog_BackfillsEventsEmittedBeforeClientConnected()
+    {
+        var pipeName = UniquePipeName();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var router = new ProtocolRouter(new StubEngine(), new NamedPipeListener(pipeName));
+        var routerTask = router.RunAsync(cts.Token);
+        router.Emit(ActivityEventFactory.McpToolCall("/repo/Test.slnx", "get_test_results", null, "ok", 1.5, true));
+        router.Emit(ActivityEventFactory.BuildCompleted("/repo/Test.slnx", true, 900, []));
+
+        await using var client = new NamedPipeClientTransport(pipeName);
+        await client.ConnectAsync(cts.Token);
+        _ = await client.ReceiveAsync(cts.Token);
+        await client.SendAsync(JsonRpcSerializer.Serialize(new JsonRpcRequest("log-1", ProtocolMethods.ActivityGetLog)), cts.Token);
+
+        var response = JsonRpcSerializer.DeserializeResponse(await client.ReceiveAsync(cts.Token));
+
+        Assert.Null(response.Error);
+        var log = JsonRpcSerializer.DeserializeParams<ActivityLogResponse>(response.Result)!;
+        Assert.Equal(
+            [ActivityEventTypes.McpToolCall, ActivityEventTypes.BuildCompleted],
+            log.Events.Select(e => e.Type));
+        Assert.Equal("get_test_results", log.Events[0].Data!["toolName"]!.GetValue<string>());
+
+        await cts.CancelAsync();
+        await routerTask;
+    }
+
     private static async Task<(NamedPipeClientTransport client, Task readerTask, List<object> received)>
         ConnectClientAsync(string pipeName, CancellationToken ct)
     {

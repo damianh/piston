@@ -27,6 +27,7 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
     private int _sessionCounter;
     private McpCallTracker? _mcpCallTracker;
     private DaemonControl? _daemonControl;
+    private readonly ActivityHistory _activityHistory = new();
 
     public int ClientCount => _pipeSessions.Count + _wsSessions.Count;
 
@@ -39,6 +40,7 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
     private EngineCommandDispatcher CreateDispatcher(bool allowDaemonControl)
     {
         var dispatcher = new EngineCommandDispatcher(engine);
+        dispatcher.SetActivityHistory(_activityHistory);
         if (_mcpCallTracker is not null)
         {
             dispatcher.SetMcpCallTracker(_mcpCallTracker);
@@ -194,7 +196,11 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
     /// <inheritdoc />
     public void Emit(EngineActivityEvent activity) => Emit(activity.ToDto());
 
-    public void Emit(ActivityEvent activity) => BroadcastNotification(ToNotification(ProtocolMethods.ActivityEvent, activity));
+    public void Emit(ActivityEvent activity)
+    {
+        _activityHistory.Add(activity);
+        BroadcastNotification(ToNotification(ProtocolMethods.ActivityEvent, activity));
+    }
 
     private JsonRpcNotification BuildStateSnapshot()
     {

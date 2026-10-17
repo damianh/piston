@@ -2,46 +2,116 @@
 @implements IDisposable
 
 <div class="flex flex-col h-full overflow-hidden">
-    <div class="px-3 py-2 border-b border-gray-800 text-xs text-gray-500 flex justify-between items-center">
-        <span>Activity Log (@_events.Count events)</span>
-        <button class="text-gray-600 hover:text-gray-400 transition-colors" @onclick="ClearLog" title="Clear">✕</button>
+    <div class="flex items-center gap-2 px-4 py-1.5 shrink-0 bg-gray-900 border-b border-gray-800 text-xs select-none">
+        <div class="flex items-center gap-0.5 p-0.5 bg-gray-800 rounded" role="group" aria-label="Show activity">
+            @foreach (var (filter, label, title, count) in FilterChips())
+            {
+                var on = filter == _filter;
+                <button class="px-2 py-0.5 rounded transition-colors @(on ? "bg-gray-700 text-gray-100 hover:bg-gray-600" : "text-gray-500 hover:text-gray-300 hover:bg-gray-700/50")"
+                        title="@title" aria-pressed="@(on ? "true" : "false")"
+                        @onclick="() => _filter = filter">
+                    @label <span class="tabular-nums @(on ? "text-gray-400" : "text-gray-600")">@count</span>
+                </button>
+            }
+        </div>
     </div>
-    <div class="flex-1 overflow-y-auto flex flex-col px-2 py-1 gap-0.5">
-        @for (var i = _events.Count - 1; i >= 0; i--)
+    <div class="flex-1 overflow-y-auto flex flex-col py-1">
+        @{ var rows = BuildRows(); }
+        @foreach (var row in rows)
         {
-            var evt = _events[i];
-            <ActivityEventRow Event="@evt" />
+            <ActivityEventRow @key="row.Latest" Event="@row.Latest" RepeatCount="@row.Count" />
         }
-        @if (_events.Count == 0)
+        @if (rows.Count == 0)
         {
-            <div class="text-gray-600 italic text-xs px-2 py-4">No activity yet.</div>
+            <div class="text-gray-600 italic text-xs px-4 py-4">@EmptyText</div>
         }
     </div>
 </div>
 
 @code {
+    private enum ActivityFilter { All, Runs, Agent }
+
+    private sealed record ActivityRow(ActivityEvent Latest, int Count);
+
     private List<ActivityEvent> _events = [];
+    private ActivityFilter _filter = ActivityFilter.All;
 
     protected override void OnInitialized()
     {
         _events = Client.ActivityLog.ToList();
         Client.ActivityEventReceived += OnActivityEvent;
+        Client.ActivityLogReset += OnActivityLogReset;
     }
 
-    private void OnActivityEvent(ActivityEvent evt)
+    private void OnActivityEvent(ActivityEvent _) => Reload();
+
+    private void OnActivityLogReset() => Reload();
+
+    private void Reload()
     {
-        _events.Add(evt);
+        _events = Client.ActivityLog.ToList();
         InvokeAsync(StateHasChanged);
     }
 
-    private void ClearLog()
+    private static bool IsAgent(ActivityEvent e) => e.Type == ActivityEventTypes.McpToolCall;
+
+    private bool Matches(ActivityEvent e) => _filter switch
     {
-        _events.Clear();
-        StateHasChanged();
+        ActivityFilter.Agent => IsAgent(e),
+        ActivityFilter.Runs  => !IsAgent(e) && e.Type != ActivityEventTypes.Reconnect,
+        _                    => true,
+    };
+
+    private IEnumerable<(ActivityFilter, string, string, int)> FilterChips()
+    {
+        var agent = _events.Count(IsAgent);
+        yield return (ActivityFilter.All, "All", "Everything: engine runs and agent tool calls", _events.Count);
+        yield return (ActivityFilter.Runs, "Runs", "File changes, builds and test runs", _events.Count - agent);
+        yield return (ActivityFilter.Agent, "Agent", "MCP tool calls made by agents", agent);
     }
+
+    private string EmptyText => _filter switch
+    {
+        ActivityFilter.Agent => "No agent tool calls yet.",
+        ActivityFilter.Runs  => "No builds or test runs yet.",
+        _                    => "No activity yet.",
+    };
+
+    // Newest first; consecutive identical MCP calls (same tool, params and outcome) collapse into one row.
+    private List<ActivityRow> BuildRows()
+    {
+        var rows = new List<ActivityRow>();
+        for (var i = _events.Count - 1; i >= 0; i--)
+        {
+            var evt = _events[i];
+            if (!Matches(evt))
+            {
+                continue;
+            }
+
+            if (rows.Count > 0 && IsRepeatOf(rows[^1].Latest, evt))
+            {
+                rows[^1] = rows[^1] with { Count = rows[^1].Count + 1 };
+                continue;
+            }
+
+            rows.Add(new ActivityRow(evt, 1));
+        }
+
+        return rows;
+    }
+
+    private static bool IsRepeatOf(ActivityEvent newer, ActivityEvent older) =>
+        IsAgent(newer) && IsAgent(older)
+        && Str(newer, "toolName") == Str(older, "toolName")
+        && Str(newer, "paramsSummary") == Str(older, "paramsSummary")
+        && newer.Data?["succeeded"]?.GetValue<bool>() == older.Data?["succeeded"]?.GetValue<bool>();
+
+    private static string? Str(ActivityEvent e, string key) => e.Data?[key]?.GetValue<string>();
 
     public void Dispose()
     {
         Client.ActivityEventReceived -= OnActivityEvent;
+        Client.ActivityLogReset -= OnActivityLogReset;
     }
 }

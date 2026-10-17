@@ -22,6 +22,9 @@ public sealed record SetFilterCommandParams(string? Filter);
 /// <summary>Response for <c>mcp/getCallLog</c>.</summary>
 public sealed record McpCallLogResponse(IReadOnlyList<McpToolCallData> Calls);
 
+/// <summary>Response for <c>activity/getLog</c>: retained activity events, oldest first.</summary>
+public sealed record ActivityLogResponse(IReadOnlyList<ActivityEvent> Events);
+
 /// <summary>Response to <c>daemon/info</c>.</summary>
 /// <param name="ProcessId">Daemon process ID.</param>
 /// <param name="SolutionPath">Solution loaded by the daemon.</param>

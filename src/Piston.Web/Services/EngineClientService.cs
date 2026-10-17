@@ -28,6 +28,9 @@ public sealed class EngineClientService : IAsyncDisposable
     public event Action? ConnectionStateChanged;
     public event Action<ActivityEvent>? ActivityEventReceived;
 
+    /// <summary>Raised when <see cref="ActivityLog"/> is replaced wholesale (history backfill on connect).</summary>
+    public event Action? ActivityLogReset;
+
     public StateSnapshotNotification? CurrentSnapshot { get; private set; }
     public bool IsConnected => _webSocket?.State == WebSocketState.Open;
     public bool IsConnecting { get; private set; }
@@ -72,6 +75,7 @@ public sealed class EngineClientService : IAsyncDisposable
                 backoffMs = 500;
                 ConnectionStateChanged?.Invoke();
 
+                _ = BackfillActivityLogAsync();
                 await ReceiveLoopAsync(_webSocket, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -283,16 +287,48 @@ public sealed class EngineClientService : IAsyncDisposable
         return await tcs.Task.ConfigureAwait(false);
     }
 
-    public async Task<McpCallLogResponse?> GetMcpCallLogAsync()
+    public async Task<ActivityLogResponse?> GetActivityLogAsync()
     {
-        var result = await SendRequestAsync(ProtocolMethods.McpGetCallLog).ConfigureAwait(false);
-        if (result is null)
+        var result = await SendRequestAsync(ProtocolMethods.ActivityGetLog).ConfigureAwait(false);
+        return result?.Deserialize<ActivityLogResponse>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>
+    /// Merges the daemon's retained activity history into the local log so events that
+    /// happened before this page connected (e.g. agent MCP calls) appear in the timeline.
+    /// </summary>
+    private async Task BackfillActivityLogAsync()
+    {
+        IReadOnlyList<ActivityEvent>? history;
+        try
         {
-            return null;
+            history = (await GetActivityLogAsync().ConfigureAwait(false))?.Events;
+        }
+        catch
+        {
+            return;
         }
 
-        return result.Deserialize<McpCallLogResponse>(JsonRpcSerializer.Options);
+        if (history is null || history.Count == 0)
+        {
+            return;
+        }
+
+        lock (_activityLog)
+        {
+            var merged = history
+                .Concat(_activityLog)
+                .DistinctBy(e => (e.Type, e.Timestamp))
+                .OrderBy(e => e.Timestamp)
+                .TakeLast(ActivityLogCapacity)
+                .ToList();
+            _activityLog.Clear();
+            _activityLog.AddRange(merged);
+        }
+
+        ActivityLogReset?.Invoke();
     }
+
     public Task ResetAsync() => SendCommandAsync(ProtocolMethods.EngineReset);
     public Task SetFilterAsync(string? filter) => SendCommandAsync(ProtocolMethods.EngineSetFilter, new SetFilterCommand(filter));
 

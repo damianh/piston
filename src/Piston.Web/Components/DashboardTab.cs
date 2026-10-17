@@ -7,5 +7,4 @@ public enum DashboardTab
 {
     Activity,
     Tests,
-    Mcp,
 }

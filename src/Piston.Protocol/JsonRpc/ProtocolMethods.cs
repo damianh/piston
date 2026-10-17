@@ -52,6 +52,9 @@ public static class ProtocolMethods
     /// <summary>Fetch the MCP tool call log (ring buffer).</summary>
     public const string McpGetCallLog = "mcp/getCallLog";
 
+    /// <summary>Fetch the daemon's retained activity timeline (oldest first), for backfilling late-joining clients.</summary>
+    public const string ActivityGetLog = "activity/getLog";
+
     /// <summary>Describe the daemon process: PID, solution, start time, version and endpoint URLs.</summary>
     public const string DaemonInfo = "daemon/info";
 
