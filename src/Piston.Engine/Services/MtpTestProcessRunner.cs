@@ -11,7 +11,7 @@ namespace Piston.Engine.Services;
 /// <summary>
 /// Internal helper that runs MTP v2 test projects. The primary path drives the test app in server mode
 /// (see <c>MtpTestProcessRunner.Server.cs</c>); the fallback runs <c>dotnet test</c> in
-/// Microsoft.Testing.Platform mode (<c>--project &lt;csproj&gt; --no-build --output Detailed</c>) and
+/// Microsoft.Testing.Platform mode (<c>--project &lt;csproj&gt; --no-build --output Detailed --no-ansi</c>) and
 /// parses its stdout via <see cref="MtpStdoutParser"/>.
 /// </summary>
 /// <remarks>
@@ -25,7 +25,7 @@ internal static partial class MtpTestProcessRunner
     /// <summary>
     /// Lists the tests in an MTP project, streaming them to <paramref name="onPartial"/>. Uses the test
     /// app's server mode when <paramref name="appPath"/> exists, otherwise (or if the server fails)
-    /// <c>dotnet test --project &lt;csproj&gt; --no-build --list-tests</c>.
+    /// <c>dotnet test --project &lt;csproj&gt; --no-build --list-tests --no-ansi</c>.
     /// Returns an empty list on failure, timeout, or cancellation — discovery is best-effort.
     /// </summary>
     internal static async Task<IReadOnlyList<TestResult>> DiscoverAsync(
@@ -48,7 +48,7 @@ internal static partial class MtpTestProcessRunner
         }
 
         return await TestListProcess.RunAsync(
-            $"test --project \"{projectPath}\" --no-build --list-tests" + TestProcessRunner.FilterArgument(filter),
+            $"test --project \"{projectPath}\" --no-build --list-tests --no-ansi" + TestProcessRunner.FilterArgument(filter),
             solutionDirectory,
             projectPath,
             "MtpRunner",
@@ -99,8 +99,10 @@ internal static partial class MtpTestProcessRunner
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct)
     {
-        // Build CLI args: dotnet test --project <csproj> --no-build --output Detailed
-        var args = $"test --project \"{projectPath}\" --no-build --output Detailed" + TestProcessRunner.FilterArgument(filter);
+        // Build CLI args: dotnet test --project <csproj> --no-build --output Detailed --no-ansi.
+        // Without --no-ansi, CI environments (e.g. GitHub Actions) get coloured output even when redirected,
+        // which the stdout parser cannot match.
+        var args = $"test --project \"{projectPath}\" --no-build --output Detailed --no-ansi" + TestProcessRunner.FilterArgument(filter);
 
         var log = DiagnosticLog.Instance;
         log?.Write("MtpRunner", $"Project: {projectPath}");

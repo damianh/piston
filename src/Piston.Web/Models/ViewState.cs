@@ -59,9 +59,13 @@ public sealed class ViewState
         {
             var clamped = Math.Clamp(value, MinSplitPercent, MaxSplitPercent);
             if (DetailPosition == DetailPosition.Right)
+            {
                 SplitRightPercent = clamped;
+            }
             else
+            {
                 SplitBottomPercent = clamped;
+            }
         }
     }
 
