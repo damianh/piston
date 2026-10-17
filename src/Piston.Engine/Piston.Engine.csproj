@@ -16,6 +16,7 @@
     <ProjectReference Include="..\Piston.LiveCollector\Piston.LiveCollector.csproj"
                       ReferenceOutputAssembly="false"
                       OutputItemType="PistonLiveCollectorAssembly" />
+    <ProjectReference Include="..\Piston.ProcessHost\Piston.ProcessHost.csproj" />
   </ItemGroup>
   <Target Name="IncludePistonLiveCollector" AfterTargets="ResolveProjectReferences">
     <ItemGroup>
@@ -25,4 +26,10 @@
             CopyToPublishDirectory="PreserveNewest" />
     </ItemGroup>
   </Target>
+  <ItemGroup>
+    <None Include="..\Piston.ProcessHost\bin\$(Configuration)\$(TargetFramework)\Piston.ProcessHost.runtimeconfig.json"
+          Link="Piston.ProcessHost.runtimeconfig.json"
+          CopyToOutputDirectory="PreserveNewest"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>
