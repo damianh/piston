@@ -5,23 +5,36 @@ html, body {
     overflow: hidden;
 }
 
-/* Scrollbar styling for dark theme */
+/* Scrollbars mirror the gray-900/700/600 theme tokens. Literal values because
+   WebKit does not resolve var() inside ::-webkit-scrollbar pseudo-elements. */
 ::-webkit-scrollbar {
     width: 6px;
     height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-    background: #111827;
+    background: #f6f8fa;
 }
 
 ::-webkit-scrollbar-thumb {
-    background: #374151;
+    background: #d1d9e0;
     border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: #4b5563;
+    background: #6e7781;
+}
+
+.dark ::-webkit-scrollbar-track {
+    background: #151b23;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+    background: #3d444d;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+    background: #656c76;
 }
 
 /* Blazor error boundary */
