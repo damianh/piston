@@ -28,9 +28,10 @@ internal sealed class BuildOutputCollector
         new(@":\s*warning(?:\s+[\w.-]+)?\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Printed once per built project: "  ProjectName -> /path/to/output.dll". Diagnostics start
-    // with a path or "MSBUILD :", so a bare project name before the arrow identifies these lines.
+    // with a path or "MSBUILD :", so a bare project name (which may contain single spaces) before
+    // the arrow identifies these lines; "(Blazor output)" and similar suffixes are excluded.
     private static readonly Regex ProjectOutputPattern =
-        new(@"^\s*(?<name>[\w.-]+) -> \S", RegexOptions.Compiled);
+        new(@"^\s*(?<name>[\w.-]+(?: [\w.-]+)*) -> \S", RegexOptions.Compiled);
 
     private readonly object _gate = new();
     private readonly List<string> _errors = [];

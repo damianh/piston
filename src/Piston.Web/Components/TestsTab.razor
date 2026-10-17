@@ -88,8 +88,13 @@
     private int _failureCount;
     private IReadOnlyList<TestSuiteDto> _displayedSuites = [];
 
+    // The parent keeps passing its last key event on every re-render, and a freshly mounted tab
+    // receives whatever was pressed before it existed; only act on events not seen yet.
+    private KeyboardEventArgs? _lastHandledKeyboardEvent;
+
     protected override void OnInitialized()
     {
+        _lastHandledKeyboardEvent = KeyboardEvent;
         Client.StateChanged += OnStateChanged;
 
         // The tab may mount after the latest snapshot arrived (e.g. on tab switch); start from it.
@@ -102,8 +107,11 @@
 
     protected override void OnParametersSet()
     {
-        if (KeyboardEvent is not null)
-            HandleKeyDown(KeyboardEvent);
+        if (KeyboardEvent is null || ReferenceEquals(KeyboardEvent, _lastHandledKeyboardEvent))
+            return;
+
+        _lastHandledKeyboardEvent = KeyboardEvent;
+        HandleKeyDown(KeyboardEvent);
     }
 
     private void OnStateChanged(StateSnapshotNotification snapshot)
@@ -243,10 +251,10 @@
     }
 
     private List<TestResultDto> GetFailedTests() =>
-        _snapshot?.Suites
+        _displayedSuites
             .SelectMany(s => s.Tests)
             .Where(t => t.Status == TestStatusDto.Failed)
-            .ToList() ?? [];
+            .ToList();
 
     private void HandleKeyDown(KeyboardEventArgs e)
     {

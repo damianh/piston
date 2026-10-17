@@ -62,7 +62,10 @@ internal sealed class LiveTestEventListener : IAsyncDisposable
         }
     }
 
-    /// <summary>Parses one collector line: <c>S\t&lt;name&gt;</c> or <c>E\t&lt;name&gt;\t&lt;outcome&gt;</c>.</summary>
+    /// <summary>
+    /// Parses one collector line: <c>S\t&lt;name&gt;[\t&lt;fqn&gt;]</c> or
+    /// <c>E\t&lt;name&gt;\t&lt;outcome&gt;[\t&lt;fqn&gt;]</c>, where name is the test case's display name.
+    /// </summary>
     internal static LiveTestEvent? Parse(string line)
     {
         var parts = line.Split('\t');
@@ -71,10 +74,12 @@ internal sealed class LiveTestEventListener : IAsyncDisposable
             return null;
         }
 
+        string? FullyQualifiedName(int index) => parts.Length > index && parts[index].Length > 0 ? parts[index] : null;
+
         return parts[0] switch
         {
-            "S" => new LiveTestEvent(parts[1], TestStatus.Running),
-            "E" => new LiveTestEvent(parts[1], parts.Length > 2 ? ParseOutcome(parts[2]) : TestStatus.NotRun),
+            "S" => new LiveTestEvent(parts[1], TestStatus.Running, FullyQualifiedName(2)),
+            "E" => new LiveTestEvent(parts[1], parts.Length > 2 ? ParseOutcome(parts[2]) : TestStatus.NotRun, FullyQualifiedName(3)),
             _ => null,
         };
     }
@@ -100,8 +105,10 @@ internal sealed class LiveTestEventListener : IAsyncDisposable
                 }
             }
         }
-        catch (Exception ex) when (ex is OperationCanceledException or SocketException or ObjectDisposedException)
+        catch (Exception ex) when (ex is OperationCanceledException or SocketException or ObjectDisposedException
+            || (ex is InvalidOperationException && Volatile.Read(ref _disposed) != 0))
         {
+            // Accepting on a listener that disposal has already stopped is a normal shutdown.
         }
     }
 
@@ -153,5 +160,12 @@ internal sealed class LiveTestEventListener : IAsyncDisposable
     }
 }
 
-/// <summary>A live test event: <see cref="TestStatus.Running"/> on start, or the outcome on end.</summary>
-internal sealed record LiveTestEvent(string DisplayName, TestStatus Status);
+/// <summary>
+/// A live test event: <see cref="TestStatus.Running"/> on start, or the outcome on end. The test case's
+/// <paramref name="FullyQualifiedName"/>, when known, qualifies the display name into its <see cref="Identity"/>.
+/// </summary>
+internal sealed record LiveTestEvent(string DisplayName, TestStatus Status, string? FullyQualifiedName = null)
+{
+    /// <summary>The test's identity, matching the one <see cref="TrxResultParser"/> gives its final result.</summary>
+    public string Identity => FullyQualifiedName is null ? DisplayName : TestIdentity.Of(FullyQualifiedName, DisplayName);
+}

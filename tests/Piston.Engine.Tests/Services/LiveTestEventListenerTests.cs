@@ -21,6 +21,17 @@ public sealed class LiveTestEventListenerTests
         Assert.Equal(new LiveTestEvent(name, status), LiveTestEventListener.Parse(line));
 
     [Theory]
+    [InlineData("S\tM\tNs.C.M", TestStatus.Running)]
+    [InlineData("E\tM\tPassed\tNs.C.M", TestStatus.Passed)]
+    public void Parse_QualifiesTheDisplayNameWithTheFullyQualifiedName(string line, TestStatus status)
+    {
+        var evt = LiveTestEventListener.Parse(line);
+
+        Assert.Equal(new LiveTestEvent("M", status, "Ns.C.M"), evt);
+        Assert.Equal("Ns.C.M", evt!.Identity);
+    }
+
+    [Theory]
     [InlineData("")]
     [InlineData("S")]
     [InlineData("S\t")]

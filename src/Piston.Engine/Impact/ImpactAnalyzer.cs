@@ -306,6 +306,14 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         }
     }
 
+    public bool IsMultiTargeted(string projectPath)
+    {
+        lock (_graphLock)
+        {
+            return _graph?.IsMultiTargeted(projectPath) ?? false;
+        }
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private static ImpactAnalysisResult FullRunResult() =>

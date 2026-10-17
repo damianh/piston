@@ -75,7 +75,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         var vsTestStrategy = new ProcessTestExecutionStrategy(trxParser);
         var mtpStrategy = new MtpTestExecutionStrategy(
             projectPath => impactAnalyzer.GetMtpOutputPath(projectPath),
-            solutionDir);
+            solutionDir,
+            impactAnalyzer.IsMultiTargeted);
 
         ITestExecutionStrategy strategy = options.TestExecutionMode switch
         {

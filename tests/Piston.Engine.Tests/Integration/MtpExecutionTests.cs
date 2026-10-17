@@ -58,12 +58,26 @@ public sealed class MtpExecutionTests : IAsyncLifetime
         await File.WriteAllTextAsync(Path.Combine(_root, "Tests.cs"), """
             namespace MtpE2E;
 
+            internal static class LaunchDirectory
+            {
+                internal static string Value = "";
+
+                // Runs before the test framework starts (and may change the current directory).
+                [System.Runtime.CompilerServices.ModuleInitializer]
+                internal static void Capture() => Value = System.Environment.CurrentDirectory;
+            }
+
             public class SampleTests
             {
                 [Xunit.Fact]
                 public void PassingTest()
                 {
-                    // This test should pass.
+                    // Server mode and dotnet test must both start the app in the solution directory, so
+                    // solution-relative paths resolve identically on either path.
+                    if (!System.IO.File.Exists(System.IO.Path.Combine(LaunchDirectory.Value, "global.json")))
+                    {
+                        throw new System.InvalidOperationException($"Started in {LaunchDirectory.Value}, not the solution directory.");
+                    }
                 }
 
                 [Xunit.Fact]

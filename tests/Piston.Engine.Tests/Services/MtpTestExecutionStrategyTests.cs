@@ -79,4 +79,18 @@ public sealed class MtpTestExecutionStrategyTests
         Assert.NotNull(result);
         Assert.Empty(result.Suites);
     }
+
+    [Fact]
+    public void ServerAppPath_MultiTargetedProject_UsesDotnetTestForDiscoveryAndExecution()
+    {
+        var strategy = new MtpTestExecutionStrategy(
+            _ => "/path/to/tests.dll",
+            Path.GetTempPath(),
+            p => p == "multi.csproj");
+
+        // Only one framework's output is known, so server mode would skip the others.
+        Assert.True(strategy.CanExecute("multi.csproj"));
+        Assert.Null(strategy.ServerAppPath("multi.csproj"));
+        Assert.Equal("/path/to/tests.dll", strategy.ServerAppPath("single.csproj"));
+    }
 }

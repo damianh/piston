@@ -16,6 +16,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
     private readonly Dictionary<string, IReadOnlyList<string>> _sourceFilesByProject;
     private readonly Dictionary<string, bool> _mtpProjects;
     private readonly Dictionary<string, string> _mtpOutputPaths;
+    private readonly HashSet<string> _multiTargetedProjects;
     private readonly string _solutionPath;
     private readonly ConcurrentBag<Project> _evaluated = [];
 
@@ -49,6 +50,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         _sourceFilesByProject = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
         _mtpProjects = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         _mtpOutputPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        _multiTargetedProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         _sortedProjectDirs = [];
 
         var log = DiagnosticLog.Instance;
@@ -81,6 +83,15 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
                 {
                     _mtpOutputPaths[projectPath] = Path.GetFullPath(targetPath);
                 }
+            }
+
+            var targetFrameworks = node.ProjectInstance.GetPropertyValue("TargetFrameworks")
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Count();
+            if (targetFrameworks > 1)
+            {
+                _ = _multiTargetedProjects.Add(projectPath);
             }
 
             log?.Write("SolutionGraph",
@@ -183,6 +194,9 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         var normalized = Path.GetFullPath(projectPath);
         return _mtpOutputPaths.TryGetValue(normalized, out var p) ? p : null;
     }
+
+    public bool IsMultiTargeted(string projectPath) =>
+        _multiTargetedProjects.Contains(Path.GetFullPath(projectPath));
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

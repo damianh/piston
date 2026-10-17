@@ -86,4 +86,36 @@ public sealed class MtpServerNodeMappingTests
         Assert.Equal("hello", result.Output);
         Assert.Equal("/bin/Mt.dll", result.Source);
     }
+
+    private static JsonElement Named(string uid, string state) => JsonDocument.Parse($$"""
+        { "uid": "{{uid}}", "display-name": "Mt.A.Same", "node-type": "action", "execution-state": "{{state}}" }
+        """).RootElement;
+
+    [Fact]
+    public void AddDiscovered_KeepsDistinctNodesSharingADisplayName_AndDropsRepeatedUpdates()
+    {
+        var tests = new List<TestResult>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        Assert.True(MtpTestProcessRunner.AddDiscovered(tests, seen, [Named("1", "discovered"), Named("2", "discovered")], null, "/bin/Mt.dll"));
+        Assert.False(MtpTestProcessRunner.AddDiscovered(tests, seen, [Named("1", "discovered")], null, "/bin/Mt.dll"));
+
+        Assert.Equal(2, tests.Count);
+        Assert.All(tests, t => Assert.Equal("Mt.A.Same", t.FullyQualifiedName));
+    }
+
+    [Fact]
+    public void ApplyRunUpdates_KeepsOppositeOutcomesOfNodesSharingADisplayName()
+    {
+        var live = new Dictionary<string, TestResult>(StringComparer.Ordinal);
+
+        MtpTestProcessRunner.ApplyRunUpdates(live, [Named("1", "in-progress"), Named("2", "in-progress")], "/bin/Mt.dll");
+        MtpTestProcessRunner.ApplyRunUpdates(live, [Named("1", "failed")], "/bin/Mt.dll");
+        MtpTestProcessRunner.ApplyRunUpdates(live, [Named("2", "passed")], "/bin/Mt.dll");
+
+        Assert.Equal(
+            [TestStatus.Failed, TestStatus.Passed],
+            live.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => kv.Value.Status));
+        Assert.All(live.Values, t => Assert.Equal("Mt.A.Same", t.FullyQualifiedName));
+    }
 }

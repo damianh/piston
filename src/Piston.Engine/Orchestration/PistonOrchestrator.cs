@@ -195,7 +195,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 _fileWatcher.Stop();
                 lock (_lifecycleLock)
                 {
-                    _stopping = false;
+                    _stopping = _disposed;
                     _cts?.Cancel();
                 }
 
@@ -225,7 +225,14 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                     _ = _runLock.Release();
                 }
 
-                _fileWatcher.Start(solutionDir);
+                // Disposal disposes the watcher under this lock, so a restart cannot outlive it.
+                lock (_lifecycleLock)
+                {
+                    if (!_disposed)
+                    {
+                        _fileWatcher.Start(solutionDir);
+                    }
+                }
             }
             finally
             {
@@ -916,20 +923,22 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             // Live overlay inputs: discovered test lists and live/final results, keyed by project path.
             var discoveredByProject = new Dictionary<string, IReadOnlyList<TestResult>>(StringComparer.Ordinal);
             var liveByProject = new Dictionary<string, IReadOnlyList<TestSuite>>(StringComparer.Ordinal);
+            // Projects whose authoritative results replaced their discovery placeholders.
+            var settledProjects = new HashSet<string>(StringComparer.Ordinal);
             var liveResultsLock = new object();
             var testPhaseOver = false;
             var filtered = !string.IsNullOrWhiteSpace(effectiveFilter);
 
-            // Caller holds liveResultsLock.
+            // Caller holds liveResultsLock. Progress counts only tests in this run, not the known
+            // results a filtered run keeps for display.
             void RefreshOverlay()
             {
                 _state.ProjectStatuses = new Dictionary<string, Models.ProjectRunStatus>(projectStatuses);
                 _state.InProgressSuites = ComposeTestOverlay(
-                    suitesToSeed, discoveredByProject, liveByProject, filtered);
-                var overlayTests = _state.InProgressSuites.SelectMany(s => s.Tests).ToList();
-                _state.TotalExpectedTests = overlayTests.Count;
-                _state.CompletedTests = overlayTests.Count(t =>
-                    t.Status is TestStatus.Passed or TestStatus.Failed or TestStatus.Skipped);
+                    suitesToSeed, discoveredByProject, liveByProject, filtered,
+                    out var expectedTests, out var completedTests);
+                _state.TotalExpectedTests = expectedTests;
+                _state.CompletedTests = completedTests;
             }
 
             RefreshOverlay();
@@ -1024,6 +1033,14 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 if (result.Suites.Count > 0)
                 {
                     liveByProject[result.ProjectPath] = result.Suites;
+
+                    // The project's final results are the authority on what ran: drop its discovery
+                    // placeholders, whose listed names may not match the final identities.
+                    if (!result.Crashed)
+                    {
+                        _ = settledProjects.Add(result.ProjectPath);
+                        _ = discoveredByProject.Remove(result.ProjectPath);
+                    }
                 }
             });
 
@@ -1043,7 +1060,13 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                     discoveryTask = _testRunner.DiscoverTestsAsync(
                         toDiscover,
                         effectiveFilter,
-                        (projectPath, tests) => UpdateOverlay(() => discoveredByProject[projectPath] = tests, throttle: true),
+                        (projectPath, tests) => UpdateOverlay(() =>
+                        {
+                            if (!settledProjects.Contains(projectPath))
+                            {
+                                discoveredByProject[projectPath] = tests;
+                            }
+                        }, throttle: true),
                         discoveryCts.Token);
                 }
             }
@@ -1499,7 +1522,19 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         IReadOnlyList<TestSuite> lastSuites,
         IReadOnlyDictionary<string, IReadOnlyList<TestResult>> discoveredByProject,
         IReadOnlyDictionary<string, IReadOnlyList<TestSuite>> liveByProject,
-        bool filtered)
+        bool filtered) =>
+        ComposeTestOverlay(lastSuites, discoveredByProject, liveByProject, filtered, out _, out _);
+
+    /// <inheritdoc cref="ComposeTestOverlay(IReadOnlyList{TestSuite}, IReadOnlyDictionary{string, IReadOnlyList{TestResult}}, IReadOnlyDictionary{string, IReadOnlyList{TestSuite}}, bool)"/>
+    /// <param name="expectedTests">The number of overlay tests that are part of this run.</param>
+    /// <param name="completedTests">How many of those have finished (passed, failed or skipped).</param>
+    internal static IReadOnlyList<TestSuite> ComposeTestOverlay(
+        IReadOnlyList<TestSuite> lastSuites,
+        IReadOnlyDictionary<string, IReadOnlyList<TestResult>> discoveredByProject,
+        IReadOnlyDictionary<string, IReadOnlyList<TestSuite>> liveByProject,
+        bool filtered,
+        out int expectedTests,
+        out int completedTests)
     {
         // Duplicate identities are tolerated here (last wins) and reported on the run record.
         var liveByFqn = new Dictionary<string, TestResult>(StringComparer.Ordinal);
@@ -1508,16 +1543,55 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             liveByFqn[test.FullyQualifiedName] = test;
         }
 
-        var selected = filtered
-            ? discoveredByProject.Values.SelectMany(tests => tests).Select(t => t.FullyQualifiedName).ToHashSet(StringComparer.Ordinal)
-            : null;
+        var selected = filtered ? new HashSet<string>(StringComparer.Ordinal) : null;
+        var placeholders = new List<(string SuiteName, TestResult Test)>();
+        foreach (var (projectPath, tests) in discoveredByProject)
+        {
+            var suiteName = TestProjectNames.SuiteName(projectPath);
+            var matcher = new DiscoveredNameMatcher(
+                lastSuites.Where(s => s.Name == suiteName)
+                    .Concat(liveByProject.GetValueOrDefault(projectPath) ?? [])
+                    .SelectMany(s => s.Tests)
+                    .Select(t => t.FullyQualifiedName));
+            foreach (var test in tests)
+            {
+                var matches = matcher.Match(test.FullyQualifiedName);
+                if (matches.Count == 0)
+                {
+                    placeholders.Add((suiteName, test));
+                    _ = selected?.Add(test.FullyQualifiedName);
+                }
+                else
+                {
+                    selected?.UnionWith(matches);
+                }
+            }
+        }
 
-        TestResult Resolve(TestResult test) =>
-            liveByFqn.TryGetValue(test.FullyQualifiedName, out var live)
+        var expected = 0;
+        var completed = 0;
+
+        TestResult Resolve(TestResult test)
+        {
+            var resolved = liveByFqn.TryGetValue(test.FullyQualifiedName, out var live)
                 ? live
                 : selected is not null && !selected.Contains(test.FullyQualifiedName)
-                    ? test
+                    ? null
                     : test with { Status = TestStatus.NotRun };
+            if (resolved is null)
+            {
+                // A known test outside this filtered run: shown with its last status, but not counted.
+                return test;
+            }
+
+            expected++;
+            if (resolved.Status is TestStatus.Passed or TestStatus.Failed or TestStatus.Skipped)
+            {
+                completed++;
+            }
+
+            return resolved;
+        }
 
         var suites = new List<(string Name, DateTimeOffset Timestamp, TimeSpan Duration, List<TestResult> Tests)>();
         var suiteIndex = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -1554,13 +1628,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             }
         }
 
-        foreach (var (projectPath, tests) in discoveredByProject)
+        foreach (var (suiteName, test) in placeholders)
         {
-            var suiteName = TestProjectNames.SuiteName(projectPath);
-            foreach (var test in tests)
-            {
-                Add(suiteName, test);
-            }
+            Add(suiteName, test);
         }
 
         foreach (var (projectPath, projectSuites) in liveByProject)
@@ -1577,10 +1647,55 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             }
         }
 
+        expectedTests = expected;
+        completedTests = completed;
         return suites
             .Where(s => s.Tests.Count > 0)
             .Select(s => new TestSuite(s.Name, s.Tests, s.Timestamp, s.Duration))
             .ToList();
+    }
+
+    /// <summary>
+    /// Matches the names <c>--list-tests</c> prints against one project's known test identities. VSTest
+    /// lists display names, which may lack the class (MSTest and NUnit print <c>Method</c> for
+    /// <c>Ns.Class.Method</c>), so a name that is not itself a known identity stands for the known tests
+    /// of the same project whose identity ends with <c>.name</c>. Matching is per project, never global.
+    /// </summary>
+    private sealed class DiscoveredNameMatcher(IEnumerable<string> knownIdentities)
+    {
+        private readonly HashSet<string> _known = knownIdentities.ToHashSet(StringComparer.Ordinal);
+        private Dictionary<string, List<string>>? _bySuffix;
+
+        public IReadOnlyCollection<string> Match(string listedName)
+        {
+            if (_known.Contains(listedName))
+            {
+                return [listedName];
+            }
+
+            _bySuffix ??= IndexBySuffix(_known);
+            return _bySuffix.TryGetValue(listedName, out var matches) ? matches : [];
+        }
+
+        private static Dictionary<string, List<string>> IndexBySuffix(HashSet<string> identities)
+        {
+            var index = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            foreach (var identity in identities)
+            {
+                for (var dot = identity.IndexOf('.'); dot >= 0; dot = identity.IndexOf('.', dot + 1))
+                {
+                    var suffix = identity[(dot + 1)..];
+                    if (!index.TryGetValue(suffix, out var list))
+                    {
+                        index[suffix] = list = [];
+                    }
+
+                    list.Add(identity);
+                }
+            }
+
+            return index;
+        }
     }
 
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();

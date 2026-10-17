@@ -17,7 +17,8 @@ namespace Piston.Engine.Services;
 /// <remarks>
 /// MTP mode of <c>dotnet test</c> requires a <c>global.json</c> with
 /// <c>"test": { "runner": "Microsoft.Testing.Platform" }</c> in the solution root, so the fallback uses
-/// the solution directory as its working directory.
+/// the solution directory as its working directory. <c>dotnet test</c> starts the test app there too, so
+/// server mode does the same.
 /// </remarks>
 internal static partial class MtpTestProcessRunner
 {
@@ -39,7 +40,7 @@ internal static partial class MtpTestProcessRunner
         var filterSupported = string.IsNullOrWhiteSpace(filter) || TestFilterExpression.TryParse(filter, out expression);
         if (filterSupported && appPath is not null && File.Exists(appPath))
         {
-            var tests = await DiscoverWithServerAsync(appPath, expression, onPartial, ct).ConfigureAwait(false);
+            var tests = await DiscoverWithServerAsync(appPath, solutionDirectory, expression, onPartial, ct).ConfigureAwait(false);
             if (tests is not null)
             {
                 return tests;
@@ -81,7 +82,7 @@ internal static partial class MtpTestProcessRunner
     {
         if (appPath is not null && File.Exists(appPath))
         {
-            var result = await RunWithServerAsync(projectPath, appPath, filter, onProgress, ct).ConfigureAwait(false);
+            var result = await RunWithServerAsync(projectPath, appPath, solutionDirectory, filter, onProgress, ct).ConfigureAwait(false);
             if (result is not null)
             {
                 return result;

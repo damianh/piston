@@ -100,6 +100,12 @@ internal static class TestListProcess
                 }
             }
             catch (InvalidOperationException) { }
+            finally
+            {
+                // Don't report discovery over while the process is still exiting.
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+
             log?.Write(logCategory, $"Discovery cancelled or timed out: {projectPath}");
             return [];
         }

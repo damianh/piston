@@ -23,6 +23,7 @@ internal static class MtpServerSession
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ExitTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan KillTimeout = TimeSpan.FromSeconds(10);
     private const int MaxStderrLines = 200;
 
     internal const string DiscoverMethod = "testing/discoverTests";
@@ -42,17 +43,30 @@ internal static class MtpServerSession
 
         /// <summary>Cancelled by the caller.</summary>
         Cancelled,
+
+        /// <summary>
+        /// The host stopped responding during initialization or discovery; no tests were run, so the
+        /// caller can fall back.
+        /// </summary>
+        TimedOut,
     }
 
     internal sealed record Result(Outcome Outcome, string? Error, IReadOnlyList<string> Stderr);
 
+    /// <summary>Deadlines for the session stages that precede test execution.</summary>
+    internal sealed record StageTimeouts(TimeSpan Initialize, TimeSpan Discovery)
+    {
+        public static StageTimeouts Default { get; } = new(TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(2));
+    }
+
     /// <summary>
     /// Runs <paramref name="method"/> against the app at <paramref name="appPath"/> (a framework-dependent
-    /// <c>.dll</c> or an executable). Each batch of updated nodes is passed to <paramref name="onNodes"/>;
-    /// nodes are cloned and remain valid after the callback.
+    /// <c>.dll</c> or an executable), started in <paramref name="workingDirectory"/>. Each batch of updated
+    /// nodes is passed to <paramref name="onNodes"/>; nodes are cloned and remain valid after the callback.
     /// </summary>
     internal static async Task<Result> RunAsync(
         string appPath,
+        string workingDirectory,
         string method,
         IReadOnlyList<JsonElement>? tests,
         Action<IReadOnlyList<JsonElement>> onNodes,
@@ -71,18 +85,7 @@ internal static class MtpServerSession
             return new Result(Outcome.NotStarted, $"Could not listen for the test host: {ex.Message}", stderr);
         }
 
-        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
-        var serverArgs = $"--server --client-host 127.0.0.1 --client-port {port.ToString(CultureInfo.InvariantCulture)}";
-        var isDll = appPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
-        var psi = new ProcessStartInfo(isDll ? "dotnet" : appPath, isDll ? $"exec \"{appPath}\" {serverArgs}" : serverArgs)
-        {
-            WorkingDirectory = Path.GetDirectoryName(appPath) ?? Environment.CurrentDirectory,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-        };
-        MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
+        var psi = CreateStartInfo(appPath, workingDirectory, ((IPEndPoint)listener.LocalEndpoint).Port);
 
         log?.Write("MtpServer", $"{method}: {psi.FileName} {psi.Arguments}");
 
@@ -123,7 +126,6 @@ internal static class MtpServerSession
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
-        var initialized = false;
         try
         {
             using var client = await AcceptAsync(listener, process, ct).ConfigureAwait(false);
@@ -132,18 +134,100 @@ internal static class MtpServerSession
                 return new Result(Outcome.NotStarted, "The test host did not connect in server mode.", Snapshot(stderr));
             }
 
-            var stream = client.GetStream();
+            var (outcome, error) = await ExchangeAsync(client.GetStream(), method, tests, onNodes, StageTimeouts.Default, ct).ConfigureAwait(false);
+            if (error is not null)
+            {
+                log?.Write("MtpServer", $"Session {outcome}: {error}");
+            }
+
+            switch (outcome)
+            {
+                case Outcome.Completed:
+                    await WaitForExitOrKillAsync(process, ExitTimeout).ConfigureAwait(false);
+                    return new Result(outcome, error, Snapshot(stderr));
+                case Outcome.Cancelled:
+                case Outcome.TimedOut:
+                    // The host is unresponsive (or no longer wanted): there is nothing to wait for.
+                    await KillAndWaitAsync(process).ConfigureAwait(false);
+                    return new Result(outcome, error, Snapshot(stderr));
+                case Outcome.NotStarted:
+                case Outcome.Failed:
+                default:
+                    return new Result(outcome, error, await StderrAfterExitAsync(process, stderr).ConfigureAwait(false));
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            await KillAndWaitAsync(process).ConfigureAwait(false);
+            return new Result(Outcome.Cancelled, null, Snapshot(stderr));
+        }
+        catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
+        {
+            log?.Write("MtpServer", $"Session failed: {ex.Message}");
+            return new Result(Outcome.NotStarted,
+                $"Lost connection to the test host: {ex.Message}",
+                await StderrAfterExitAsync(process, stderr).ConfigureAwait(false));
+        }
+        finally
+        {
+            // Never return while the host may still hold the outputs a subsequent build rewrites.
+            await KillAndWaitAsync(process).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
+    /// The host process. It starts in <paramref name="workingDirectory"/> (the solution directory), as
+    /// <c>dotnet test</c> starts it in the fallback, so relative paths resolve the same on either path.
+    /// </summary>
+    internal static ProcessStartInfo CreateStartInfo(string appPath, string workingDirectory, int port)
+    {
+        var serverArgs = $"--server --client-host 127.0.0.1 --client-port {port.ToString(CultureInfo.InvariantCulture)}";
+        var isDll = appPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
+        var psi = new ProcessStartInfo(isDll ? "dotnet" : appPath, isDll ? $"exec \"{appPath}\" {serverArgs}" : serverArgs)
+        {
+            WorkingDirectory = workingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
+        return psi;
+    }
+
+    /// <summary>
+    /// Runs the JSON-RPC exchange over a connected <paramref name="stream"/>: initialize, then
+    /// <paramref name="method"/>, then <c>exit</c>. Initialization and discovery are bounded by
+    /// <paramref name="timeouts"/> (reported as <see cref="Outcome.TimedOut"/>, distinct from caller
+    /// cancellation); test execution is not.
+    /// </summary>
+    internal static async Task<(Outcome Outcome, string? Error)> ExchangeAsync(
+        Stream stream,
+        string method,
+        IReadOnlyList<JsonElement>? tests,
+        Action<IReadOnlyList<JsonElement>> onNodes,
+        StageTimeouts timeouts,
+        CancellationToken ct)
+    {
+        using var stage = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var stageName = "initialization";
+        var stageTimeout = timeouts.Initialize;
+        stage.CancelAfter(stageTimeout);
+        var initialized = false;
+
+        try
+        {
             using var writeLock = new SemaphoreSlim(1, 1);
 
             async Task SendAsync(object message)
             {
                 var body = JsonSerializer.SerializeToUtf8Bytes(message);
                 var header = Encoding.ASCII.GetBytes($"Content-Length: {body.Length.ToString(CultureInfo.InvariantCulture)}\r\n\r\n");
-                await writeLock.WaitAsync(ct).ConfigureAwait(false);
+                await writeLock.WaitAsync(stage.Token).ConfigureAwait(false);
                 try
                 {
-                    await stream.WriteAsync(header, ct).ConfigureAwait(false);
-                    await stream.WriteAsync(body, ct).ConfigureAwait(false);
+                    await stream.WriteAsync(header, stage.Token).ConfigureAwait(false);
+                    await stream.WriteAsync(body, stage.Token).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -171,13 +255,12 @@ internal static class MtpServerSession
             // response marks the end of the session.
             while (true)
             {
-                using var message = await reader.ReadAsync(ct).ConfigureAwait(false);
+                using var message = await reader.ReadAsync(stage.Token).ConfigureAwait(false);
                 if (message is null)
                 {
-                    var error = initialized
-                        ? "The test host exited before the run completed."
-                        : "The test host disconnected before initializing.";
-                    return new Result(initialized ? Outcome.Failed : Outcome.NotStarted, error, await StderrAfterExitAsync(process, stderr).ConfigureAwait(false));
+                    return initialized
+                        ? (Outcome.Failed, "The test host exited before the run completed.")
+                        : (Outcome.NotStarted, "The test host disconnected before initializing.");
                 }
 
                 var root = message.RootElement;
@@ -237,10 +320,22 @@ internal static class MtpServerSession
                 {
                     if (errorText is not null)
                     {
-                        return new Result(Outcome.NotStarted, $"The test host rejected initialization: {errorText}", Snapshot(stderr));
+                        return (Outcome.NotStarted, $"The test host rejected initialization: {errorText}");
                     }
 
                     initialized = true;
+                    if (method == DiscoverMethod)
+                    {
+                        stageName = "discovery";
+                        stageTimeout = timeouts.Discovery;
+                        stage.CancelAfter(stageTimeout);
+                    }
+                    else
+                    {
+                        // Test execution has no deadline: tests may legitimately run for a long time.
+                        stage.CancelAfter(Timeout.InfiniteTimeSpan);
+                    }
+
                     var requestParams = new JsonObject { ["runId"] = Guid.NewGuid().ToString() };
                     if (tests is not null)
                     {
@@ -260,28 +355,24 @@ internal static class MtpServerSession
             {
                 await SendAsync(new { jsonrpc = "2.0", method = "exit", @params = new { } }).ConfigureAwait(false);
             }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException || (ex is OperationCanceledException && !ct.IsCancellationRequested))
             {
             }
 
-            await WaitForExitOrKillAsync(process, ExitTimeout).ConfigureAwait(false);
-            return new Result(Outcome.Completed, requestError, Snapshot(stderr));
+            return (Outcome.Completed, requestError);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            Kill(process);
-            return new Result(Outcome.Cancelled, null, Snapshot(stderr));
+            return (Outcome.Cancelled, null);
+        }
+        catch (OperationCanceledException) when (stage.IsCancellationRequested)
+        {
+            return (Outcome.TimedOut,
+                $"The test host did not complete {stageName} within {stageTimeout.TotalSeconds.ToString(CultureInfo.InvariantCulture)}s.");
         }
         catch (Exception ex) when (ex is IOException or SocketException or JsonException or ObjectDisposedException or FormatException or OverflowException)
         {
-            log?.Write("MtpServer", $"Session failed: {ex.Message}");
-            return new Result(initialized ? Outcome.Failed : Outcome.NotStarted,
-                $"Lost connection to the test host: {ex.Message}",
-                await StderrAfterExitAsync(process, stderr).ConfigureAwait(false));
-        }
-        finally
-        {
-            Kill(process);
+            return (initialized ? Outcome.Failed : Outcome.NotStarted, $"Lost connection to the test host: {ex.Message}");
         }
     }
 
@@ -327,11 +418,15 @@ internal static class MtpServerSession
         }
         catch (OperationCanceledException)
         {
-            Kill(process);
+            await KillAndWaitAsync(process).ConfigureAwait(false);
         }
     }
 
-    private static void Kill(Process process)
+    /// <summary>
+    /// Kills the host's process tree and waits for it to exit and for its redirected output to drain.
+    /// The wait is bounded so a stray grandchild holding the pipes cannot hang the caller.
+    /// </summary>
+    private static async Task KillAndWaitAsync(Process process)
     {
         try
         {
@@ -341,6 +436,20 @@ internal static class MtpServerSession
             }
         }
         catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            // Not started, or already exiting.
+        }
+
+        using var cts = new CancellationTokenSource(KillTimeout);
+        try
+        {
+            await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            DiagnosticLog.Instance?.Write("MtpServer", "The test host did not exit after being killed.");
+        }
+        catch (InvalidOperationException)
         {
         }
     }

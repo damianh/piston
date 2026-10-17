@@ -20,13 +20,26 @@ namespace Piston.Engine.Services;
 internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
 {
     private readonly Func<string, string?> _getMtpOutputPath;
+    private readonly Func<string, bool> _isMultiTargeted;
     private readonly string _solutionDirectory;
 
-    public MtpTestExecutionStrategy(Func<string, string?> getMtpOutputPath, string solutionDirectory)
+    public MtpTestExecutionStrategy(
+        Func<string, string?> getMtpOutputPath,
+        string solutionDirectory,
+        Func<string, bool>? isMultiTargeted = null)
     {
         _getMtpOutputPath = getMtpOutputPath;
         _solutionDirectory = solutionDirectory;
+        _isMultiTargeted = isMultiTargeted ?? (_ => false);
     }
+
+    /// <summary>
+    /// The test app to drive in server mode, or <see langword="null"/> to use <c>dotnet test</c>.
+    /// A multi-targeted project has one output per framework but only one is known here, so it always
+    /// uses <c>dotnet test --project</c>, which runs every framework.
+    /// </summary>
+    internal string? ServerAppPath(string projectPath) =>
+        _isMultiTargeted(projectPath) ? null : _getMtpOutputPath(projectPath);
 
     /// <inheritdoc/>
     /// <remarks>Returns <see langword="true"/> only when an MTP output path is available for the project.</remarks>
@@ -39,7 +52,7 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct) => MtpTestProcessRunner.RunAsync(
             request.ProjectPath,
-            _getMtpOutputPath(request.ProjectPath),
+            ServerAppPath(request.ProjectPath),
             _solutionDirectory,
             request.Filter,
             onProgress,
@@ -51,5 +64,5 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
         string? filter,
         Action<IReadOnlyList<TestResult>>? onPartial,
         CancellationToken ct) =>
-        MtpTestProcessRunner.DiscoverAsync(projectPath, _getMtpOutputPath(projectPath), _solutionDirectory, filter, onPartial, ct);
+        MtpTestProcessRunner.DiscoverAsync(projectPath, ServerAppPath(projectPath), _solutionDirectory, filter, onPartial, ct);
 }

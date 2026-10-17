@@ -53,6 +53,14 @@ public sealed class TestProcessPool : ITestProcessPool
     public int ActiveCount => _activeCount;
 
     /// <inheritdoc/>
+    public async Task<IDisposable> AcquireSlotAsync(CancellationToken ct)
+    {
+        await _semaphore.WaitAsync(ct).ConfigureAwait(false);
+        _ = Interlocked.Increment(ref _activeCount);
+        return new Slot(this);
+    }
+
+    /// <inheritdoc/>
     public Task<ProjectTestResult> RunProjectAsync(
         ProjectTestRequest request,
         CancellationToken ct) =>
@@ -144,5 +152,19 @@ public sealed class TestProcessPool : ITestProcessPool
 
         _disposed = true;
         _semaphore.Dispose();
+    }
+
+    private sealed class Slot(TestProcessPool pool) : IDisposable
+    {
+        private int _released;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+            {
+                _ = Interlocked.Decrement(ref pool._activeCount);
+                _ = pool._semaphore.Release();
+            }
+        }
     }
 }

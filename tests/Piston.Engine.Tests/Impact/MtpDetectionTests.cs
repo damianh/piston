@@ -161,6 +161,21 @@ public sealed class MtpDetectionTests : IAsyncLifetime
         Assert.True(Path.IsPathRooted(path), "MTP output path should be a full (rooted) path");
     }
 
+    [Fact]
+    public async Task IsMultiTargeted_ReflectsTargetFrameworks()
+    {
+        await SetMtpProjectContent("<IsTestingPlatformApplication>true</IsTestingPlatformApplication>");
+        Assert.False(new MsBuildSolutionGraph(_slnPath).IsMultiTargeted(_mtpCsproj));
+
+        await File.WriteAllTextAsync(_mtpCsproj, BuildMtpCsproj("<IsTestingPlatformApplication>true</IsTestingPlatformApplication>")
+            .Replace("<TargetFramework>net10.0</TargetFramework>", "<TargetFrameworks>net10.0;net9.0</TargetFrameworks>", StringComparison.Ordinal));
+        var sut = new MsBuildSolutionGraph(_slnPath);
+
+        Assert.True(sut.IsMultiTargeted(_mtpCsproj));
+        Assert.True(sut.IsMtpProject(_mtpCsproj));
+        Assert.False(sut.IsMultiTargeted(_libCsproj));
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private async Task SetMtpProjectContent(string? property, string? packageRef = null)

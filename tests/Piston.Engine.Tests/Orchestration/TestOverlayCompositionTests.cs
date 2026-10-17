@@ -3,6 +3,7 @@
 
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
+using Piston.Engine.Services;
 using Xunit;
 
 namespace Piston.Engine.Tests.Orchestration;
@@ -100,5 +101,100 @@ public sealed class TestOverlayCompositionTests
         var status = StatusByFqn(overlay);
         Assert.Equal(TestStatus.NotRun, status["Some.Namespace.T1"]);
         Assert.Equal(TestStatus.Failed, status["X.New"]);
+    }
+
+    [Fact]
+    public void Rerun_LiveResultWithUnqualifiedDisplayNameReplacesTheSeededTest()
+    {
+        // sample-mixed.trx style: display name M, TRX identity Ns.C.M; the collector reports both names.
+        var live = LiveResult("M", TestStatus.Running, "Ns.C.M");
+        var overlay = PistonOrchestrator.ComposeTestOverlay(
+            [Suite("A.Tests", Test("Ns.C.M", TestStatus.Passed), Test("Ns.C.N", TestStatus.Passed))],
+            new Dictionary<string, IReadOnlyList<TestResult>>(),
+            new Dictionary<string, IReadOnlyList<TestSuite>> { [ProjA] = [Suite("…", live)] },
+            filtered: false,
+            out var expected,
+            out var completed);
+
+        var status = StatusByFqn(overlay);
+        Assert.Equal(new Dictionary<string, TestStatus> { ["Ns.C.M"] = TestStatus.Running, ["Ns.C.N"] = TestStatus.NotRun }, status);
+        Assert.Equal(2, expected);
+        Assert.Equal(0, completed);
+    }
+
+    [Fact]
+    public void UnqualifiedDiscoveredNames_StandForTheProjectsKnownTests()
+    {
+        var overlay = PistonOrchestrator.ComposeTestOverlay(
+            [],
+            new Dictionary<string, IReadOnlyList<TestResult>>
+            {
+                [ProjA] = [Test("M"), Test("Other")],
+                [ProjB] = [Test("M")],
+            },
+            new Dictionary<string, IReadOnlyList<TestSuite>>
+            {
+                [ProjA] = [Suite("…", LiveResult("M", TestStatus.Passed, "Ns.C1.M"), LiveResult("M", TestStatus.Running, "Ns.C2.M"))],
+            },
+            filtered: false,
+            out var expected,
+            out var completed);
+
+        // Project A's "M" is covered by both live tests; project B's "M" is a different test and stays queued.
+        Assert.Equal(["Other", "Ns.C1.M", "Ns.C2.M"], overlay.Single(s => s.Name == "A.Tests").Tests.Select(t => t.FullyQualifiedName));
+        Assert.Equal(["M"], overlay.Single(s => s.Name == "B.Tests").Tests.Select(t => t.FullyQualifiedName));
+        Assert.Equal(4, expected);
+        Assert.Equal(1, completed);
+    }
+
+    [Fact]
+    public void FilteredRun_UnqualifiedDiscoveredNameSelectsTheSeededTest()
+    {
+        var overlay = PistonOrchestrator.ComposeTestOverlay(
+            [Suite("A.Tests", Test("Ns.C1.M", TestStatus.Failed), Test("Ns.C1.N", TestStatus.Passed))],
+            new Dictionary<string, IReadOnlyList<TestResult>> { [ProjA] = [Test("M")] },
+            new Dictionary<string, IReadOnlyList<TestSuite>>(),
+            filtered: true,
+            out var expected,
+            out var completed);
+
+        var status = StatusByFqn(overlay);
+        Assert.Equal(new Dictionary<string, TestStatus> { ["Ns.C1.M"] = TestStatus.NotRun, ["Ns.C1.N"] = TestStatus.Passed }, status);
+        Assert.Equal(1, expected);
+        Assert.Equal(0, completed);
+    }
+
+    [Fact]
+    public void FilteredRun_KnownResultsOutsideTheRunAreNotCountedAsProgress()
+    {
+        // Before discovery reports which tests the filter selects, nothing has run yet.
+        _ = PistonOrchestrator.ComposeTestOverlay(
+            [Suite("A.Tests", Test("A.One", TestStatus.Passed), Test("A.Two", TestStatus.Passed))],
+            new Dictionary<string, IReadOnlyList<TestResult>>(),
+            new Dictionary<string, IReadOnlyList<TestSuite>>(),
+            filtered: true,
+            out var expected,
+            out var completed);
+
+        Assert.Equal(0, expected);
+        Assert.Equal(0, completed);
+
+        _ = PistonOrchestrator.ComposeTestOverlay(
+            [Suite("A.Tests", Test("A.One", TestStatus.Passed), Test("A.Two", TestStatus.Passed))],
+            new Dictionary<string, IReadOnlyList<TestResult>> { [ProjA] = [Test("A.One")] },
+            new Dictionary<string, IReadOnlyList<TestSuite>> { [ProjA] = [Suite("A.Tests", Test("A.One", TestStatus.Failed))] },
+            filtered: true,
+            out expected,
+            out completed);
+
+        Assert.Equal(1, expected);
+        Assert.Equal(1, completed);
+    }
+
+    private static TestResult LiveResult(string displayName, TestStatus status, string fqn)
+    {
+        var tracker = new LiveResultTracker();
+        _ = tracker.ApplyCollectorEvent(new LiveTestEvent(displayName, status, fqn));
+        return tracker.Snapshot().Single().Tests.Single();
     }
 }

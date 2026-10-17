@@ -16,5 +16,8 @@ internal interface ISolutionGraph
     bool IsTestProject(string projectPath);
     bool IsMtpProject(string projectPath);
     string? GetMtpOutputPath(string projectPath);
+
+    /// <summary>Whether the project builds more than one target framework.</summary>
+    bool IsMultiTargeted(string projectPath) => false;
     string? VerificationCoverageIssue => "Build-input coverage is unavailable.";
 }

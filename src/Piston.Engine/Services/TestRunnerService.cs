@@ -10,6 +10,9 @@ public sealed class TestRunnerService : ITestRunnerService
     private readonly ITestExecutionStrategy _strategy;
     private readonly ITestProcessPool? _pool;
 
+    // Without a pool, discovery and execution still share a single test-process slot.
+    private readonly SemaphoreSlim _soloSlot = new(1, 1);
+
     public TestRunnerService(ITestExecutionStrategy strategy) => _strategy = strategy;
 
     public TestRunnerService(ITestExecutionStrategy strategy, ITestProcessPool pool)
@@ -66,8 +69,24 @@ public sealed class TestRunnerService : ITestRunnerService
         {
             // Single target (whole solution path) — run directly
             var request = new ProjectTestRequest(solutionPath, filter, collectCoverage);
-            callbacks.OnProjectStarted?.Invoke(solutionPath);
-            var single = await _strategy.ExecuteAsync(request, ProgressFor(callbacks, solutionPath), ct).ConfigureAwait(false);
+            ProjectTestResult single;
+            IDisposable slot;
+            try
+            {
+                slot = await AcquireSlotAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return new TestRunResult([], null, []);
+            }
+
+            using (slot)
+            {
+                callbacks.OnProjectStarted?.Invoke(solutionPath);
+                single = await _strategy.ExecuteAsync(request, ProgressFor(callbacks, solutionPath), ct).ConfigureAwait(false);
+            }
+
+            callbacks.OnProjectCompleted?.Invoke(single);
             return new TestRunResult(single.Suites, single.RunnerError, single.CoverageReportPaths);
         }
 
@@ -88,13 +107,13 @@ public sealed class TestRunnerService : ITestRunnerService
         Action<string, IReadOnlyList<TestResult>> onDiscovered,
         CancellationToken ct)
     {
-        using var gate = new SemaphoreSlim(Math.Max(1, _pool?.PoolSize ?? 1));
-
+        // Discovery runs alongside execution, so it draws on the same slots to stay within capacity.
         async Task DiscoverOneAsync(string projectPath)
         {
+            IDisposable slot;
             try
             {
-                await gate.WaitAsync(ct).ConfigureAwait(false);
+                slot = await AcquireSlotAsync(ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -124,11 +143,22 @@ public sealed class TestRunnerService : ITestRunnerService
             }
             finally
             {
-                _ = gate.Release();
+                slot.Dispose();
             }
         }
 
         await Task.WhenAll(testProjectPaths.Select(DiscoverOneAsync)).ConfigureAwait(false);
+    }
+
+    private async Task<IDisposable> AcquireSlotAsync(CancellationToken ct)
+    {
+        if (_pool is not null)
+        {
+            return await _pool.AcquireSlotAsync(ct).ConfigureAwait(false);
+        }
+
+        await _soloSlot.WaitAsync(ct).ConfigureAwait(false);
+        return new SoloSlotRelease(_soloSlot);
     }
 
     private static Action<IReadOnlyList<TestSuite>>? ProgressFor(TestRunCallbacks callbacks, string projectPath) =>
@@ -188,8 +218,12 @@ public sealed class TestRunnerService : ITestRunnerService
             try
             {
                 var request = new ProjectTestRequest(projectPath, filter, collectCoverage);
-                callbacks.OnProjectStarted?.Invoke(projectPath);
-                var result = await _strategy.ExecuteAsync(request, ProgressFor(callbacks, projectPath), ct).ConfigureAwait(false);
+                ProjectTestResult result;
+                using (await AcquireSlotAsync(ct).ConfigureAwait(false))
+                {
+                    callbacks.OnProjectStarted?.Invoke(projectPath);
+                    result = await _strategy.ExecuteAsync(request, ProgressFor(callbacks, projectPath), ct).ConfigureAwait(false);
+                }
 
                 allSuites.AddRange(result.Suites);
                 allCoveragePaths.AddRange(result.CoverageReportPaths);
@@ -208,5 +242,17 @@ public sealed class TestRunnerService : ITestRunnerService
 
         return new TestRunResult(allSuites, lastRunnerError, allCoveragePaths);
     }
-}
 
+    private sealed class SoloSlotRelease(SemaphoreSlim slot) : IDisposable
+    {
+        private int _released;
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _released, 1) == 0)
+            {
+                _ = slot.Release();
+            }
+        }
+    }
+}

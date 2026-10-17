@@ -29,20 +29,27 @@ window.pistonSplitter = {
                 handle.setAttribute('aria-valuenow', String(Math.round(pct)));
             };
 
-            const onUp = (ev) => {
+            // Undoes everything the drag set up; also run by detach if the tab goes away mid-drag.
+            const endDrag = () => {
                 handle.removeEventListener('pointermove', onMove);
                 handle.removeEventListener('pointerup', onUp);
                 handle.removeEventListener('pointercancel', onUp);
-                if (handle.hasPointerCapture(ev.pointerId)) handle.releasePointerCapture(ev.pointerId);
+                if (handle.hasPointerCapture(e.pointerId)) handle.releasePointerCapture(e.pointerId);
                 handle.removeAttribute('data-dragging');
                 document.body.style.userSelect = previousUserSelect;
                 document.body.style.cursor = previousCursor;
+                container.__pistonSplitterEndDrag = null;
+            };
+
+            const onUp = () => {
+                endDrag();
                 if (pct !== null) dotnetRef.invokeMethodAsync('SetSplit', pct);
             };
 
             handle.addEventListener('pointermove', onMove);
             handle.addEventListener('pointerup', onUp);
             handle.addEventListener('pointercancel', onUp);
+            container.__pistonSplitterEndDrag = endDrag;
         };
 
         container.addEventListener('pointerdown', onPointerDown);
@@ -50,6 +57,9 @@ window.pistonSplitter = {
     },
 
     detach(container) {
+        if (container && container.__pistonSplitterEndDrag) {
+            container.__pistonSplitterEndDrag();
+        }
         if (container && container.__pistonSplitter) {
             container.removeEventListener('pointerdown', container.__pistonSplitter);
             delete container.__pistonSplitter;

@@ -13,7 +13,9 @@ namespace Piston.LiveCollector;
 /// <summary>
 /// Streams test start/end events to the Piston process that launched <c>dotnet test</c>, so it can show
 /// which tests are running. Piston passes a loopback port in <c>PISTON_LIVE_PORT</c>; each event is one
-/// tab-separated line: <c>S\t&lt;display name&gt;</c> or <c>E\t&lt;display name&gt;\t&lt;outcome&gt;</c>.
+/// tab-separated line: <c>S\t&lt;display name&gt;\t&lt;fully qualified name&gt;</c> or
+/// <c>E\t&lt;display name&gt;\t&lt;outcome&gt;\t&lt;fully qualified name&gt;</c>. Piston derives the test's
+/// identity from both names, since display names need not be qualified or unique.
 /// Does nothing when the variable is missing or the connection fails.
 /// </summary>
 [DataCollectorFriendlyName("PistonLive")]
@@ -51,8 +53,10 @@ public sealed class LiveCollector : DataCollector
             return;
         }
 
-        events.TestCaseStart += (_, e) => Write("S\t" + Clean(e.TestElement?.DisplayName));
-        events.TestCaseEnd += (_, e) => Write("E\t" + Clean(e.TestElement?.DisplayName) + "\t" + e.TestOutcome);
+        events.TestCaseStart += (_, e) =>
+            Write("S\t" + Clean(e.TestElement?.DisplayName) + "\t" + Clean(e.TestElement?.FullyQualifiedName));
+        events.TestCaseEnd += (_, e) =>
+            Write("E\t" + Clean(e.TestElement?.DisplayName) + "\t" + e.TestOutcome + "\t" + Clean(e.TestElement?.FullyQualifiedName));
     }
 
     private void Write(string line)

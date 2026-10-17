@@ -21,6 +21,7 @@ internal static partial class MtpTestProcessRunner
     /// </summary>
     internal static async Task<IReadOnlyList<TestResult>?> DiscoverWithServerAsync(
         string appPath,
+        string solutionDirectory,
         TestFilterExpression? filter,
         Action<IReadOnlyList<TestResult>>? onPartial,
         CancellationToken ct)
@@ -43,19 +44,12 @@ internal static partial class MtpTestProcessRunner
                 },
                 TestProcessRunner.ProgressInterval);
 
-        var result = await MtpServerSession.RunAsync(appPath, MtpServerSession.DiscoverMethod, tests: null, nodes =>
+        var result = await MtpServerSession.RunAsync(appPath, solutionDirectory, MtpServerSession.DiscoverMethod, tests: null, nodes =>
         {
-            var added = false;
+            bool added;
             lock (gate)
             {
-                foreach (var node in nodes)
-                {
-                    if (IsAction(node) && Matches(filter, node) && DisplayName(node) is { } name && seen.Add(name))
-                    {
-                        tests.Add(ToTestResult(node, appPath, TestStatus.NotRun));
-                        added = true;
-                    }
-                }
+                added = AddDiscovered(tests, seen, nodes, filter, appPath);
             }
 
             if (added)
@@ -68,7 +62,9 @@ internal static partial class MtpTestProcessRunner
         DiagnosticLog.Instance?.Write("MtpRunner",
             $"Server discovery {result.Outcome}: {tests.Count} test(s) in {appPath}" + (result.Error is null ? "" : $" | {result.Error}"));
 
-        if (result.Outcome is MtpServerSession.Outcome.NotStarted or MtpServerSession.Outcome.Failed)
+        // A rejected request completes with an error: its list may be empty or partial, so fall back.
+        if (result.Outcome != MtpServerSession.Outcome.Cancelled
+            && (result.Outcome != MtpServerSession.Outcome.Completed || result.Error is not null))
         {
             return null;
         }
@@ -87,6 +83,7 @@ internal static partial class MtpTestProcessRunner
     internal static async Task<ProjectTestResult?> RunWithServerAsync(
         string projectPath,
         string appPath,
+        string solutionDirectory,
         string? filter,
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct)
@@ -102,8 +99,10 @@ internal static partial class MtpTestProcessRunner
             }
 
             var discovered = new List<JsonElement>();
-            var discovery = await MtpServerSession.RunAsync(appPath, MtpServerSession.DiscoverMethod, tests: null,
-                nodes => discovered.AddRange(nodes.Where(n => IsAction(n) && DisplayName(n) is not null)), ct).ConfigureAwait(false);
+            var discoveredKeys = new HashSet<string>(StringComparer.Ordinal);
+            var discovery = await MtpServerSession.RunAsync(appPath, solutionDirectory, MtpServerSession.DiscoverMethod, tests: null,
+                nodes => discovered.AddRange(nodes.Where(n => IsAction(n) && NodeKey(n) is { } key && discoveredKeys.Add(key))),
+                ct).ConfigureAwait(false);
             if (discovery.Outcome == MtpServerSession.Outcome.Cancelled)
             {
                 return new ProjectTestResult(projectPath, [], null, [], Crashed: false);
@@ -146,25 +145,11 @@ internal static partial class MtpTestProcessRunner
                 },
                 TestProcessRunner.ProgressInterval);
 
-        var run = await MtpServerSession.RunAsync(appPath, MtpServerSession.RunMethod, selection, nodes =>
+        var run = await MtpServerSession.RunAsync(appPath, solutionDirectory, MtpServerSession.RunMethod, selection, nodes =>
         {
             lock (gate)
             {
-                foreach (var node in nodes)
-                {
-                    if (!IsAction(node) || DisplayName(node) is not { } name || IsSupersededRetry(node))
-                    {
-                        continue;
-                    }
-
-                    var status = MapState(StringProperty(node, "execution-state"));
-                    if (status == TestStatus.NotRun && live.ContainsKey(name))
-                    {
-                        continue;
-                    }
-
-                    live[name] = ToTestResult(node, appPath, status);
-                }
+                ApplyRunUpdates(live, nodes, appPath);
             }
 
             progress?.Signal();
@@ -175,6 +160,7 @@ internal static partial class MtpTestProcessRunner
         switch (run.Outcome)
         {
             case MtpServerSession.Outcome.NotStarted:
+            case MtpServerSession.Outcome.TimedOut:
                 progress?.Dispose();
                 return null;
             case MtpServerSession.Outcome.Cancelled:
@@ -183,9 +169,9 @@ internal static partial class MtpTestProcessRunner
             case MtpServerSession.Outcome.Failed:
                 lock (gate)
                 {
-                    foreach (var (name, test) in live.Where(kv => kv.Value.Status == TestStatus.Running).ToList())
+                    foreach (var (key, test) in live.Where(kv => kv.Value.Status == TestStatus.Running).ToList())
                     {
-                        live[name] = test with { Status = TestStatus.Failed, ErrorMessage = HostExitedMessage };
+                        live[key] = test with { Status = TestStatus.Failed, ErrorMessage = HostExitedMessage };
                     }
                 }
 
@@ -222,6 +208,54 @@ internal static partial class MtpTestProcessRunner
     }
 
     // ── Test node mapping ───────────────────────────────────────────────────
+
+    /// <summary>
+    /// Adds newly discovered test nodes that match <paramref name="filter"/>. Nodes are deduplicated by
+    /// UID (repeated updates for one node), not display name: distinct tests may share a display name.
+    /// Returns whether any test was added.
+    /// </summary>
+    internal static bool AddDiscovered(
+        List<TestResult> tests,
+        HashSet<string> seen,
+        IReadOnlyList<JsonElement> nodes,
+        TestFilterExpression? filter,
+        string appPath)
+    {
+        var added = false;
+        foreach (var node in nodes)
+        {
+            if (IsAction(node) && Matches(filter, node) && NodeKey(node) is { } key && seen.Add(key))
+            {
+                tests.Add(ToTestResult(node, appPath, TestStatus.NotRun));
+                added = true;
+            }
+        }
+
+        return added;
+    }
+
+    /// <summary>
+    /// Records execution updates keyed by node UID, so distinct tests sharing a display name each keep
+    /// their own result (and surface as duplicate test IDs) instead of overwriting each other.
+    /// </summary>
+    internal static void ApplyRunUpdates(Dictionary<string, TestResult> live, IReadOnlyList<JsonElement> nodes, string appPath)
+    {
+        foreach (var node in nodes)
+        {
+            if (!IsAction(node) || NodeKey(node) is not { } key || IsSupersededRetry(node))
+            {
+                continue;
+            }
+
+            var status = MapState(StringProperty(node, "execution-state"));
+            if (status == TestStatus.NotRun && live.ContainsKey(key))
+            {
+                continue;
+            }
+
+            live[key] = ToTestResult(node, appPath, status);
+        }
+    }
 
     internal static TestStatus MapState(string? state) => state switch
     {
@@ -266,6 +300,10 @@ internal static partial class MtpTestProcessRunner
 
     private static string? DisplayName(JsonElement node) =>
         StringProperty(node, "display-name") is { Length: > 0 } name ? name : null;
+
+    /// <summary>The node's identity: its UID, or its display name when the host omits the UID.</summary>
+    private static string? NodeKey(JsonElement node) =>
+        DisplayName(node) is null ? null : StringProperty(node, "uid") is { Length: > 0 } uid ? uid : DisplayName(node);
 
     private static bool IsSupersededRetry(JsonElement node) =>
         node.TryGetProperty("retry.is-superseded", out var superseded) && superseded.ValueKind == JsonValueKind.True;
