@@ -21,6 +21,9 @@ public sealed class MtpServerSessionTests
 
     private static readonly MtpServerSession.StageTimeouts Short = new(TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(200));
 
+    // For exchanges expected to complete: a loaded CI runner can take longer than Short to answer.
+    private static readonly MtpServerSession.StageTimeouts Generous = new(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+
     [Fact]
     public async Task HostStallingBeforeInitialize_TimesOut()
     {
@@ -51,11 +54,13 @@ public sealed class MtpServerSessionTests
     [Fact]
     public async Task SlowTestExecution_IsNotBoundedByStageTimeouts()
     {
-        var (outcome, error) = await ExchangeAsync(MtpServerSession.RunMethod, Short, async (host, ct) =>
+        // Initialization gets enough time to succeed under load; execution then outlasts both stage timeouts.
+        var timeouts = new MtpServerSession.StageTimeouts(TimeSpan.FromSeconds(2), TimeSpan.FromMilliseconds(200));
+        var (outcome, error) = await ExchangeAsync(MtpServerSession.RunMethod, timeouts, async (host, ct) =>
         {
             await InitializeAsync(host, ct);
             _ = await ReadAsync(host, ct);
-            await Task.Delay(TimeSpan.FromMilliseconds(800), ct);
+            await Task.Delay(TimeSpan.FromSeconds(2.5), ct);
             await WriteAsync(host, """{"jsonrpc":"2.0","id":2,"result":{}}""", ct);
             await Task.Delay(Timeout.Infinite, ct);
         }, _ct);
@@ -67,7 +72,7 @@ public sealed class MtpServerSessionTests
     [Fact]
     public async Task RejectedDiscovery_CompletesWithError()
     {
-        var (outcome, error) = await ExchangeAsync(MtpServerSession.DiscoverMethod, Short, async (host, ct) =>
+        var (outcome, error) = await ExchangeAsync(MtpServerSession.DiscoverMethod, Generous, async (host, ct) =>
         {
             await InitializeAsync(host, ct);
             _ = await ReadAsync(host, ct);

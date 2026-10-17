@@ -12,7 +12,9 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
 {
     private readonly List<string> _allProjects;
     private readonly List<string> _testProjects;
-    private readonly Dictionary<string, ProjectGraphNode> _nodeByPath;
+    // Multi-targeted projects have an outer node plus one inner node per target framework,
+    // all sharing a path; each can carry framework-specific references.
+    private readonly Dictionary<string, List<ProjectGraphNode>> _nodesByPath;
     private readonly Dictionary<string, IReadOnlyList<string>> _sourceFilesByProject;
     private readonly Dictionary<string, bool> _mtpProjects;
     private readonly Dictionary<string, string> _mtpOutputPaths;
@@ -46,7 +48,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
 
         _allProjects = [];
         _testProjects = [];
-        _nodeByPath = new Dictionary<string, ProjectGraphNode>(StringComparer.OrdinalIgnoreCase);
+        _nodesByPath = new Dictionary<string, List<ProjectGraphNode>>(StringComparer.OrdinalIgnoreCase);
         _sourceFilesByProject = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
         _mtpProjects = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         _mtpOutputPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -61,7 +63,12 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         {
             var projectPath = Path.GetFullPath(node.ProjectInstance.FullPath);
             _allProjects.Add(projectPath);
-            _nodeByPath[projectPath] = node;
+            if (!_nodesByPath.TryGetValue(projectPath, out var nodes))
+            {
+                _nodesByPath[projectPath] = nodes = [];
+            }
+
+            nodes.Add(node);
 
             var isTest = IsTestProjectNode(node);
             var isMtp = IsMtpProjectNode(node);
@@ -147,29 +154,11 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         return null;
     }
 
-    public IReadOnlySet<string> GetTransitiveDependents(string projectPath)
-    {
-        var normalized = Path.GetFullPath(projectPath);
-        if (!_nodeByPath.TryGetValue(normalized, out var startNode))
-        {
-            return new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        }
+    public IReadOnlySet<string> GetTransitiveDependents(string projectPath) =>
+        Collect(projectPath, static node => node.ReferencingProjects);
 
-        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        CollectDependents(startNode, result);
-        return result;
-    }
-
-    public IReadOnlySet<string> GetTransitiveDependencies(string projectPath)
-    {
-        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (_nodeByPath.TryGetValue(Path.GetFullPath(projectPath), out var startNode))
-        {
-            CollectDependencies(startNode, result);
-        }
-
-        return result;
-    }
+    public IReadOnlySet<string> GetTransitiveDependencies(string projectPath) =>
+        Collect(projectPath, static node => node.ProjectReferences);
 
     public IReadOnlyList<string> GetSourceFiles(string projectPath)
     {
@@ -252,27 +241,40 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         return false;
     }
 
-    private static void CollectDependents(ProjectGraphNode node, HashSet<string> visited)
+    private HashSet<string> Collect(
+        string projectPath, Func<ProjectGraphNode, IEnumerable<ProjectGraphNode>> edges)
     {
-        foreach (var referencing in node.ReferencingProjects)
+        var start = Path.GetFullPath(projectPath);
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!_nodesByPath.TryGetValue(start, out var startNodes))
         {
-            var path = Path.GetFullPath(referencing.ProjectInstance.FullPath);
-            if (visited.Add(path))
-            {
-                CollectDependents(referencing, visited);
-            }
+            return result;
         }
-    }
 
-    private static void CollectDependencies(ProjectGraphNode node, HashSet<string> visited)
-    {
-        foreach (var reference in node.ProjectReferences)
+        // Visit by node identity so every inner build of a multi-targeted project is walked;
+        // dedupe by path only in the result.
+        var visited = new HashSet<ProjectGraphNode>(startNodes);
+        var pending = new Stack<ProjectGraphNode>(startNodes);
+        while (pending.TryPop(out var node))
         {
-            if (visited.Add(Path.GetFullPath(reference.ProjectInstance.FullPath)))
+            foreach (var next in edges(node))
             {
-                CollectDependencies(reference, visited);
+                if (!visited.Add(next))
+                {
+                    continue;
+                }
+
+                var path = Path.GetFullPath(next.ProjectInstance.FullPath);
+                if (!string.Equals(path, start, StringComparison.OrdinalIgnoreCase))
+                {
+                    _ = result.Add(path);
+                }
+
+                pending.Push(next);
             }
         }
+
+        return result;
     }
 
     private static bool IsInBinOrObj(string path)

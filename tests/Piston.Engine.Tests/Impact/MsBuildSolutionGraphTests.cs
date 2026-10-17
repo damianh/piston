@@ -17,6 +17,7 @@ public sealed class MsBuildSolutionGraphTests : IAsyncLifetime
     //   App/App.csproj               (references Lib)
     //   App.Tests/App.Tests.csproj   (test project, references App, IsTestProject=true)
 
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
     private string _root = string.Empty;
     private string _slnPath = string.Empty;
     private string _libCsproj = string.Empty;
@@ -179,6 +180,48 @@ public sealed class MsBuildSolutionGraphTests : IAsyncLifetime
         var dependents = sut.GetTransitiveDependents(_testsCsproj);
 
         Assert.Empty(dependents);
+    }
+
+    [Fact]
+    public async Task MultiTargetedProject_FrameworkConditionalReference_IsTraversedBothWays()
+    {
+        // Multi.csproj targets netstandard2.0;net10.0 but references Net.csproj only for net10.0,
+        // so the edge exists solely on one inner-build node.
+        var dir = Directory.CreateDirectory(Path.Combine(_root, "multi")).FullName;
+        var netCsproj = Path.Combine(dir, "Net", "Net.csproj");
+        var multiCsproj = Path.Combine(dir, "Multi", "Multi.csproj");
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(netCsproj)!);
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(multiCsproj)!);
+
+        await File.WriteAllTextAsync(netCsproj, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFramework>net10.0</TargetFramework>
+              </PropertyGroup>
+            </Project>
+            """, _ct);
+        await File.WriteAllTextAsync(multiCsproj, """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFrameworks>netstandard2.0;net10.0</TargetFrameworks>
+              </PropertyGroup>
+              <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
+                <ProjectReference Include="..\Net\Net.csproj" />
+              </ItemGroup>
+            </Project>
+            """, _ct);
+        var slnPath = Path.Combine(dir, "Multi.slnx");
+        await File.WriteAllTextAsync(slnPath, """
+            <Solution>
+              <Project Path="Net/Net.csproj" />
+              <Project Path="Multi/Multi.csproj" />
+            </Solution>
+            """, _ct);
+
+        var sut = new MsBuildSolutionGraph(slnPath);
+
+        Assert.Equal([Path.GetFullPath(netCsproj)], sut.GetTransitiveDependencies(multiCsproj));
+        Assert.Equal([Path.GetFullPath(multiCsproj)], sut.GetTransitiveDependents(netCsproj));
     }
 
     private static Task<int> RunDotnetAsync(string args, string workDir) =>
