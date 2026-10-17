@@ -22,6 +22,34 @@ else
         <span class="shrink-0 text-gray-400 font-semibold" title="@Snapshot.SolutionPath">⬡ @solutionName</span>
         <span class="shrink-0 @phaseColor font-mono">@phaseIcon @phase</span>
 
+        @if (phase == PistonPhaseDto.Building)
+        {
+            var total = Snapshot.TotalBuildProjects;
+            var done = Math.Min(Snapshot.CompletedBuildProjects, total);
+            var buildPct = total > 0 ? (double)done / total * 100 : 0;
+            <div class="flex items-center gap-2 shrink-0">
+                <div class="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                    @if (total > 0)
+                    {
+                        <div class="h-full bg-yellow-500 rounded-full transition-all duration-200"
+                             style="width: @buildPct.ToString("F0")%"></div>
+                    }
+                    else
+                    {
+                        <div class="h-full w-1/3 bg-yellow-500 rounded-full animate-pulse"></div>
+                    }
+                </div>
+                @if (total > 0)
+                {
+                    <span class="text-gray-400 tabular-nums">@done/@total</span>
+                }
+            </div>
+            @if (Snapshot.LastBuiltProject is { } lastBuilt)
+            {
+                <span class="flex-1 min-w-0 truncate text-gray-500" title="Last project built">built @lastBuilt</span>
+            }
+        }
+
         <!-- Progress bar (only during testing) -->
         @if (phase == PistonPhaseDto.Testing && Snapshot.TotalExpectedTests > 0)
         {

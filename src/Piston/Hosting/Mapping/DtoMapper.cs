@@ -179,6 +179,9 @@ public static class DtoMapper
                     kvp => kvp.Value.ToDto())
                 : null,
             LastRun: state.LastRun?.ToDto(),
-            ActiveRun: state.CurrentRun?.ToDto()
+            ActiveRun: state.CurrentRun?.ToDto(),
+            TotalBuildProjects: state.TotalBuildProjects,
+            CompletedBuildProjects: state.CompletedBuildProjects,
+            LastBuiltProject: state.LastBuiltProject
         );
 }

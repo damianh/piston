@@ -149,6 +149,17 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         return result;
     }
 
+    public IReadOnlySet<string> GetTransitiveDependencies(string projectPath)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (_nodeByPath.TryGetValue(Path.GetFullPath(projectPath), out var startNode))
+        {
+            CollectDependencies(startNode, result);
+        }
+
+        return result;
+    }
+
     public IReadOnlyList<string> GetSourceFiles(string projectPath)
     {
         var normalized = Path.GetFullPath(projectPath);
@@ -235,6 +246,17 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
             if (visited.Add(path))
             {
                 CollectDependents(referencing, visited);
+            }
+        }
+    }
+
+    private static void CollectDependencies(ProjectGraphNode node, HashSet<string> visited)
+    {
+        foreach (var reference in node.ProjectReferences)
+        {
+            if (visited.Add(Path.GetFullPath(reference.ProjectInstance.FullPath)))
+            {
+                CollectDependencies(reference, visited);
             }
         }
     }

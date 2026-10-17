@@ -38,6 +38,17 @@ public sealed class PistonState
     /// </summary>
     public string? TestFilter { get; set; }
 
+    // ── Build progress (populated by orchestrator during Building phase) ──
+
+    /// <summary>Projects the current build is expected to compile; 0 when unknown.</summary>
+    public int TotalBuildProjects { get; set; }
+
+    /// <summary>Projects the current build has produced output for.</summary>
+    public int CompletedBuildProjects { get; set; }
+
+    /// <summary>Name of the project the current build most recently finished.</summary>
+    public string? LastBuiltProject { get; set; }
+
     // ── Progress tracking (populated by orchestrator during Testing phase) ──
 
     /// <summary>Total number of tests expected in the current run. Set when entering Testing phase.</summary>

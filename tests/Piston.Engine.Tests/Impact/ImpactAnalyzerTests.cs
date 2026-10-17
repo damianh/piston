@@ -68,6 +68,11 @@ public sealed class ImpactAnalyzerTests : IDisposable
                 [_appCsproj] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { _testsCsproj },
                 [_testsCsproj] = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
             },
+            transitiveDependencies: new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                [_appCsproj] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { _libCsproj },
+                [_testsCsproj] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { _appCsproj, _libCsproj },
+            },
             fileToProject: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 [_libCode] = _libCsproj,
@@ -388,4 +393,28 @@ public sealed class ImpactAnalyzerTests : IDisposable
         // Empty FQN set → falls back to Tier 2 (null)
         Assert.Null(result.AffectedTestFqns);
     }
+
+    [Fact]
+    public void BuildProjectPaths_ForFullBuild_AreAllProjects()
+    {
+        var analyzer = CreateInitialized();
+
+        Assert.Equal(
+            new[] { _libCsproj, _appCsproj, _testsCsproj }.Order(),
+            analyzer.GetBuildProjectPaths(null).Order());
+    }
+
+    [Fact]
+    public void BuildProjectPaths_ForTargets_IncludeTheirReferences()
+    {
+        var analyzer = CreateInitialized();
+
+        Assert.Equal(
+            new[] { _libCsproj, _appCsproj }.Order(),
+            analyzer.GetBuildProjectPaths([_appCsproj]).Order());
+    }
+
+    [Fact]
+    public void BuildProjectPaths_WithoutGraph_AreEmpty() =>
+        Assert.Empty(new ImpactAnalyzer(_factory).GetBuildProjectPaths(null));
 }

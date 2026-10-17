@@ -265,6 +265,31 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         }
     }
 
+    public IReadOnlyList<string> GetBuildProjectPaths(IReadOnlyList<string>? buildTargets)
+    {
+        lock (_graphLock)
+        {
+            if (_graph is null)
+            {
+                return [];
+            }
+
+            if (buildTargets is null || buildTargets.Count == 0)
+            {
+                return _graph.AllProjectPaths.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            }
+
+            var projects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var target in buildTargets)
+            {
+                _ = projects.Add(Path.GetFullPath(target));
+                projects.UnionWith(_graph.GetTransitiveDependencies(target));
+            }
+
+            return [.. projects];
+        }
+    }
+
     public bool IsMtpProject(string projectPath)
     {
         lock (_graphLock)

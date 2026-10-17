@@ -10,16 +10,23 @@ namespace Piston.Engine.Services;
 public sealed class BuildService : IBuildService
 {
     public Task<BuildResult> BuildAsync(string solutionPath, CancellationToken ct) =>
-        BuildAsync(solutionPath, null, ct);
+        BuildAsync(solutionPath, null, null, ct);
+
+    public Task<BuildResult> BuildAsync(
+        string solutionPath,
+        IReadOnlyList<string>? projectPaths,
+        CancellationToken ct) =>
+        BuildAsync(solutionPath, projectPaths, null, ct);
 
     public async Task<BuildResult> BuildAsync(
         string solutionPath,
         IReadOnlyList<string>? projectPaths,
+        Action<string>? onProjectBuilt,
         CancellationToken ct)
     {
         if (projectPaths is null || projectPaths.Count == 0)
         {
-            return await RunBuildAsync($"build \"{solutionPath}\"", ct).ConfigureAwait(false);
+            return await RunBuildAsync($"build \"{solutionPath}\"", onProjectBuilt, ct).ConfigureAwait(false);
         }
 
         var targets = projectPaths
@@ -33,7 +40,7 @@ public sealed class BuildService : IBuildService
         var solution = SolutionFilterBuilder.ReadSolution(solutionPath);
         if (solution is null)
         {
-            return await BuildProjectsIndividuallyAsync(targets, ct).ConfigureAwait(false);
+            return await BuildProjectsIndividuallyAsync(targets, onProjectBuilt, ct).ConfigureAwait(false);
         }
 
         var members = targets.Where(solution.Value.Projects.Contains).ToList();
@@ -45,7 +52,7 @@ public sealed class BuildService : IBuildService
             var filterPath = SolutionFilterBuilder.WriteTemporaryFilter(solution.Value.SolutionPath, members);
             try
             {
-                results.Add(await RunBuildAsync($"build \"{filterPath}\"", ct).ConfigureAwait(false));
+                results.Add(await RunBuildAsync($"build \"{filterPath}\"", onProjectBuilt, ct).ConfigureAwait(false));
             }
             finally
             {
@@ -57,7 +64,7 @@ public sealed class BuildService : IBuildService
         // listed in a solution filter, so build them directly.
         if (outside.Count > 0 && !ct.IsCancellationRequested)
         {
-            results.Add(await BuildProjectsIndividuallyAsync(outside, ct).ConfigureAwait(false));
+            results.Add(await BuildProjectsIndividuallyAsync(outside, onProjectBuilt, ct).ConfigureAwait(false));
         }
 
         return Aggregate(results, ct.IsCancellationRequested);
@@ -65,6 +72,7 @@ public sealed class BuildService : IBuildService
 
     private static async Task<BuildResult> BuildProjectsIndividuallyAsync(
         IReadOnlyList<string> projectPaths,
+        Action<string>? onProjectBuilt,
         CancellationToken ct)
     {
         var results = new List<BuildResult>();
@@ -77,6 +85,7 @@ public sealed class BuildService : IBuildService
 
             results.Add(await RunBuildAsync(
                 $"build \"{projectPath}\" --no-restore",
+                onProjectBuilt,
                 ct).ConfigureAwait(false));
         }
 
@@ -93,7 +102,7 @@ public sealed class BuildService : IBuildService
             results.Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration));
     }
 
-    private static async Task<BuildResult> RunBuildAsync(string args, CancellationToken ct)
+    private static async Task<BuildResult> RunBuildAsync(string args, Action<string>? onProjectBuilt, CancellationToken ct)
     {
         var output = new BuildOutputCollector();
         var sw = Stopwatch.StartNew();
@@ -112,7 +121,14 @@ public sealed class BuildService : IBuildService
 
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
 
-        process.OutputDataReceived += (_, e) => output.AddOutputLine(e.Data);
+        process.OutputDataReceived += (_, e) =>
+        {
+            output.AddOutputLine(e.Data);
+            if (onProjectBuilt is not null && BuildOutputCollector.TryParseBuiltProject(e.Data, out var projectName))
+            {
+                onProjectBuilt(projectName);
+            }
+        };
         process.ErrorDataReceived += (_, e) => output.AddErrorLine(e.Data);
 
         _ = process.Start();

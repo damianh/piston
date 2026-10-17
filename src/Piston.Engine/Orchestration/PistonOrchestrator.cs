@@ -259,6 +259,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         _state.CompletedTests = 0;
         _state.TotalTestProjects = 0;
         _state.CompletedTestProjects = 0;
+        _state.TotalBuildProjects = 0;
+        _state.CompletedBuildProjects = 0;
+        _state.LastBuiltProject = null;
         _state.ProjectStatuses = new Dictionary<string, ProjectRunStatus>();
         _state.AffectedProjects = null;
         _state.AffectedTestProjects = null;
@@ -794,13 +797,44 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             }
 
             // ── Build ─────────────────────────────────────────────────────────
+            // Progress counts projects by name as dotnet build reports their output.
+            var expectedBuildProjects = _impactAnalyzer.GetBuildProjectPaths(buildTargets)
+                .Select(Path.GetFileNameWithoutExtension)
+                .OfType<string>()
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var builtProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var buildProgressLock = new object();
+
+            void OnProjectBuilt(string projectName)
+            {
+                lock (buildProgressLock)
+                {
+                    if (!builtProjects.Add(projectName))
+                    {
+                        return;
+                    }
+
+                    if (expectedBuildProjects.Count == 0 || expectedBuildProjects.Contains(projectName))
+                    {
+                        _state.CompletedBuildProjects++;
+                    }
+
+                    _state.LastBuiltProject = projectName;
+                }
+
+                _state.NotifyChanged();
+            }
+
+            _state.TotalBuildProjects = expectedBuildProjects.Count;
+            _state.CompletedBuildProjects = 0;
+            _state.LastBuiltProject = null;
             _state.Phase = PistonPhase.Building;
             _state.NotifyChanged();
 
             BuildResult buildResult;
             try
             {
-                buildResult = await _buildService.BuildAsync(solutionPath, buildTargets, ct).ConfigureAwait(false);
+                buildResult = await _buildService.BuildAsync(solutionPath, buildTargets, OnProjectBuilt, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {

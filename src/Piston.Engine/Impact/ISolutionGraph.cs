@@ -9,6 +9,9 @@ internal interface ISolutionGraph
     IReadOnlyList<string> TestProjectPaths { get; }
     string? FindOwningProject(string filePath);
     IReadOnlySet<string> GetTransitiveDependents(string projectPath);
+
+    /// <summary>Projects <paramref name="projectPath"/> references, directly or transitively.</summary>
+    IReadOnlySet<string> GetTransitiveDependencies(string projectPath) => new HashSet<string>(StringComparer.OrdinalIgnoreCase);
     IReadOnlyList<string> GetSourceFiles(string projectPath);
     bool IsTestProject(string projectPath);
     bool IsMtpProject(string projectPath);

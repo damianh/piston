@@ -27,6 +27,11 @@ internal sealed class BuildOutputCollector
     private static readonly Regex WarningPattern =
         new(@":\s*warning(?:\s+[\w.-]+)?\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+    // Printed once per built project: "  ProjectName -> /path/to/output.dll". Diagnostics start
+    // with a path or "MSBUILD :", so a bare project name before the arrow identifies these lines.
+    private static readonly Regex ProjectOutputPattern =
+        new(@"^\s*(?<name>[\w.-]+) -> \S", RegexOptions.Compiled);
+
     private readonly object _gate = new();
     private readonly List<string> _errors = [];
     private readonly List<string> _warnings = [];
@@ -35,6 +40,14 @@ internal sealed class BuildOutputCollector
 
     public BuildOutputCollector(int maxTailLines = DefaultMaxTailLines) =>
         _maxTailLines = Math.Max(1, maxTailLines);
+
+    /// <summary>Returns the project name when <paramref name="line"/> reports a built project's output.</summary>
+    public static bool TryParseBuiltProject(string? line, out string projectName)
+    {
+        var match = line is null ? Match.Empty : ProjectOutputPattern.Match(line);
+        projectName = match.Success ? match.Groups["name"].Value : string.Empty;
+        return match.Success;
+    }
 
     public void AddOutputLine(string? line)
     {
