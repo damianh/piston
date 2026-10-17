@@ -1,0 +1,24 @@
+@* Tests-tab items rendered into the app status bar via SectionContent *@
+<!-- Filter indicator -->
+@if (!string.IsNullOrEmpty(Filter))
+{
+    <span class="text-blue-400">filter: @Filter</span>
+}
+
+<!-- Failure navigation -->
+@if (FailureCount > 0)
+{
+    <div class="flex items-center gap-1">
+        <span class="text-red-400">@FailureCount failure@(FailureCount == 1 ? "" : "s")</span>
+        <button class="hover:text-gray-300" title="Previous failure ([)" @onclick="OnPrevFailure">◀</button>
+        <button class="hover:text-gray-300" title="Next failure (])" @onclick="OnNextFailure">▶</button>
+    </div>
+}
+
+@code {
+    [Parameter] public string? Filter { get; set; }
+    [Parameter] public int FailureCount { get; set; }
+
+    [Parameter] public EventCallback OnPrevFailure { get; set; }
+    [Parameter] public EventCallback OnNextFailure { get; set; }
+}

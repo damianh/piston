@@ -1,28 +1,143 @@
-@using Piston.Web.Models
 @using Piston.Protocol.Dtos
+@inject EngineClientService Client
+@implements IDisposable
 
-<div class="flex items-center gap-4 px-4 py-1.5 min-h-7 shrink-0 bg-gray-900 border-t border-gray-800 text-xs text-gray-500 select-none">
-    <!-- Filter indicator -->
-    @if (!string.IsNullOrEmpty(Filter))
+<div class="flex items-center gap-4 px-4 h-7 shrink-0 whitespace-nowrap overflow-hidden bg-gray-900 border-t border-gray-800 text-xs text-gray-500 select-none">
+    @if (Snapshot is null)
     {
-        <span class="text-blue-400">filter: @Filter</span>
+        <span>Connecting...</span>
     }
-
-    <!-- Failure navigation -->
-    @if (FailureCount > 0)
+    else
     {
-        <div class="flex items-center gap-1 ml-auto">
-            <span class="text-red-400">@FailureCount failure@(FailureCount == 1 ? "" : "s")</span>
-            <button class="hover:text-gray-300" title="Previous failure ([)" @onclick="OnPrevFailure">◀</button>
-            <button class="hover:text-gray-300" title="Next failure (])" @onclick="OnNextFailure">▶</button>
+        var phase = Snapshot.Phase;
+        var (phaseIcon, phaseColor) = PhaseDisplay(phase);
+
+        <span class="shrink-0 @phaseColor">@phaseIcon @phase</span>
+
+        @if (phase == PistonPhaseDto.Building)
+        {
+            var total = Snapshot.TotalBuildProjects;
+            var done = Math.Min(Snapshot.CompletedBuildProjects, total);
+            var buildPct = total > 0 ? (double)done / total * 100 : 0;
+            <div class="flex items-center gap-2 shrink-0">
+                <div class="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                    @if (total > 0)
+                    {
+                        <div class="h-full bg-yellow-500 rounded-full transition-all duration-200"
+                             style="width: @buildPct.ToString("F0")%"></div>
+                    }
+                    else
+                    {
+                        <div class="h-full w-1/3 bg-yellow-500 rounded-full animate-pulse"></div>
+                    }
+                </div>
+                @if (total > 0)
+                {
+                    <span class="text-gray-400 tabular-nums">@done/@total</span>
+                }
+            </div>
+            @if (Snapshot.LastBuiltProject is { } lastBuilt)
+            {
+                <span class="min-w-0 truncate" title="Last project built">built @lastBuilt</span>
+            }
+        }
+
+        @if (phase == PistonPhaseDto.Testing && Snapshot.TotalExpectedTests > 0)
+        {
+            var pct = (double)Snapshot.CompletedTests / Snapshot.TotalExpectedTests * 100;
+            <div class="flex items-center gap-2 shrink-0">
+                <div class="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                    <div class="h-full bg-cyan-500 rounded-full transition-all duration-200"
+                         style="width: @pct.ToString("F0")%"></div>
+                </div>
+                <span class="text-gray-400 tabular-nums">@Snapshot.CompletedTests/@Snapshot.TotalExpectedTests</span>
+            </div>
+        }
+
+        @if (phase == PistonPhaseDto.Testing && RunningProjects(Snapshot) is { Count: > 0 } runningProjects)
+        {
+            <span class="flex items-center gap-1.5 min-w-0 text-cyan-400"
+                  title="@string.Join(Environment.NewLine, runningProjects)">
+                <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse shrink-0"></span>
+                <span class="truncate">running @string.Join(", ", runningProjects)</span>
+            </span>
+        }
+
+        var suites = phase == PistonPhaseDto.Testing
+            ? TestTreeBuilder.WithLiveOverlay(Snapshot.Suites, Snapshot.InProgressSuites)
+            : Snapshot.Suites;
+        var allTests = suites.SelectMany(s => s.Tests).ToList();
+        var passed  = allTests.Count(t => t.Status == TestStatusDto.Passed);
+        var failed  = allTests.Count(t => t.Status == TestStatusDto.Failed);
+        var skipped = allTests.Count(t => t.Status == TestStatusDto.Skipped);
+        var notRun  = allTests.Count(t => t.Status == TestStatusDto.NotRun);
+        var running = allTests.Count(t => t.Status == TestStatusDto.Running);
+
+        <div class="flex items-center gap-4 ml-auto shrink-0">
+            <!-- Tab-specific items (e.g. Tests tab filter + failure navigation) -->
+            <SectionOutlet SectionName="@TabSection" />
+
+            <div class="flex items-center gap-2 tabular-nums">
+                @if (running > 0)
+                {
+                    <span class="text-cyan-400" title="Running">⟳ @running</span>
+                }
+                @if (failed > 0)
+                {
+                    <span class="text-red-400" title="Failed">✗ @failed</span>
+                }
+                @if (passed > 0)
+                {
+                    <span class="text-green-400" title="Passed">✓ @passed</span>
+                }
+                @if (skipped > 0)
+                {
+                    <span class="text-yellow-400" title="Skipped">● @skipped</span>
+                }
+                @if (notRun > 0)
+                {
+                    <span class="text-gray-500" title="Not run">◌ @notRun</span>
+                }
+            </div>
         </div>
     }
 </div>
 
 @code {
-    [Parameter] public string? Filter { get; set; }
-    [Parameter] public int FailureCount { get; set; }
+    public const string TabSection = "status-bar-tab";
 
-    [Parameter] public EventCallback OnPrevFailure { get; set; }
-    [Parameter] public EventCallback OnNextFailure { get; set; }
+    private StateSnapshotNotification? Snapshot { get; set; }
+
+    protected override void OnInitialized()
+    {
+        Client.StateChanged += OnStateChanged;
+        Snapshot = Client.CurrentSnapshot;
+    }
+
+    private void OnStateChanged(StateSnapshotNotification snapshot)
+    {
+        Snapshot = snapshot;
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose() => Client.StateChanged -= OnStateChanged;
+
+    private static List<string> RunningProjects(StateSnapshotNotification snapshot) =>
+        snapshot.ProjectStatuses?
+            .Where(p => p.Value == ProjectRunStatusDto.Running)
+            .Select(p => Path.GetFileNameWithoutExtension(p.Key))
+            .Order(StringComparer.Ordinal)
+            .ToList() ?? [];
+
+    private static (string icon, string color) PhaseDisplay(PistonPhaseDto phase) =>
+        phase switch
+        {
+            PistonPhaseDto.Idle      => ("◌", "text-gray-500"),
+            PistonPhaseDto.Watching  => ("◉", "text-gray-400"),
+            PistonPhaseDto.Analyzing => ("⟳", "text-blue-400"),
+            PistonPhaseDto.Building  => ("⚙", "text-yellow-400"),
+            PistonPhaseDto.Testing   => ("⟳", "text-cyan-400"),
+            PistonPhaseDto.Error     => ("✗", "text-red-400"),
+            _                        => ("?", "text-gray-500"),
+        };
 }

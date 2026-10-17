@@ -65,10 +65,12 @@
     </div>
 
     <!-- Status bar -->
-    <StatusBar Filter="@_filter"
-               FailureCount="@_failureCount"
-               OnPrevFailure="NavigatePrevFailure"
-               OnNextFailure="NavigateNextFailure" />
+    <SectionContent SectionName="@StatusBar.TabSection">
+        <TestsStatusItems Filter="@_filter"
+                          FailureCount="@_failureCount"
+                          OnPrevFailure="NavigatePrevFailure"
+                          OnNextFailure="NavigateNextFailure" />
+    </SectionContent>
 
 </div>
 

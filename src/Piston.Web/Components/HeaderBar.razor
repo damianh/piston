@@ -2,112 +2,19 @@
 @inject EngineClientService Client
 @implements IDisposable
 
-@if (Snapshot is null)
-{
-    <div class="flex items-center gap-3 px-4 h-9 shrink-0 whitespace-nowrap bg-gray-900 border-b border-gray-800 text-gray-500 text-xs">
+<div class="flex items-center gap-4 px-4 h-9 shrink-0 whitespace-nowrap overflow-hidden bg-gray-900 border-b border-gray-800 text-xs select-none">
+    @if (Snapshot is null)
+    {
         <span class="text-gray-600">⬡ Piston</span>
-        <span>Connecting...</span>
-    </div>
-}
-else
-{
-    var phase = Snapshot.Phase;
-    var (phaseIcon, phaseColor) = PhaseDisplay(phase);
-    var solutionName = Snapshot.SolutionPath is not null
-        ? Path.GetFileNameWithoutExtension(Snapshot.SolutionPath)
-        : "Piston";
-
-    <div class="flex items-center gap-4 px-4 h-9 shrink-0 whitespace-nowrap overflow-hidden bg-gray-900 border-b border-gray-800 text-xs select-none">
-        <!-- Solution name + phase -->
+    }
+    else
+    {
+        var solutionName = Snapshot.SolutionPath is not null
+            ? Path.GetFileNameWithoutExtension(Snapshot.SolutionPath)
+            : "Piston";
         <span class="shrink-0 text-gray-400 font-semibold" title="@Snapshot.SolutionPath">⬡ @solutionName</span>
-        <span class="shrink-0 @phaseColor font-mono">@phaseIcon @phase</span>
-
-        @if (phase == PistonPhaseDto.Building)
-        {
-            var total = Snapshot.TotalBuildProjects;
-            var done = Math.Min(Snapshot.CompletedBuildProjects, total);
-            var buildPct = total > 0 ? (double)done / total * 100 : 0;
-            <div class="flex items-center gap-2 shrink-0">
-                <div class="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                    @if (total > 0)
-                    {
-                        <div class="h-full bg-yellow-500 rounded-full transition-all duration-200"
-                             style="width: @buildPct.ToString("F0")%"></div>
-                    }
-                    else
-                    {
-                        <div class="h-full w-1/3 bg-yellow-500 rounded-full animate-pulse"></div>
-                    }
-                </div>
-                @if (total > 0)
-                {
-                    <span class="text-gray-400 tabular-nums">@done/@total</span>
-                }
-            </div>
-            @if (Snapshot.LastBuiltProject is { } lastBuilt)
-            {
-                <span class="flex-1 min-w-0 truncate text-gray-500" title="Last project built">built @lastBuilt</span>
-            }
-        }
-
-        <!-- Progress bar (only during testing) -->
-        @if (phase == PistonPhaseDto.Testing && Snapshot.TotalExpectedTests > 0)
-        {
-            var pct = (double)Snapshot.CompletedTests / Snapshot.TotalExpectedTests * 100;
-            <div class="flex items-center gap-2 shrink-0">
-                <div class="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                    <div class="h-full bg-cyan-500 rounded-full transition-all duration-200"
-                         style="width: @pct.ToString("F0")%"></div>
-                </div>
-                <span class="text-gray-400 tabular-nums">@Snapshot.CompletedTests/@Snapshot.TotalExpectedTests</span>
-            </div>
-        }
-
-        @if (phase == PistonPhaseDto.Testing && RunningProjects(Snapshot) is { Count: > 0 } runningProjects)
-        {
-            <span class="flex items-center gap-1.5 flex-1 min-w-0 text-cyan-400"
-                  title="@string.Join(Environment.NewLine, runningProjects)">
-                <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse shrink-0"></span>
-                <span class="truncate">running @string.Join(", ", runningProjects)</span>
-            </span>
-        }
-
-        <!-- Test counts -->
-        @{
-            var suites = phase == PistonPhaseDto.Testing
-                ? TestTreeBuilder.WithLiveOverlay(Snapshot.Suites, Snapshot.InProgressSuites)
-                : Snapshot.Suites;
-            var allTests = suites.SelectMany(s => s.Tests).ToList();
-            var passed  = allTests.Count(t => t.Status == TestStatusDto.Passed);
-            var failed  = allTests.Count(t => t.Status == TestStatusDto.Failed);
-            var skipped = allTests.Count(t => t.Status == TestStatusDto.Skipped);
-            var notRun  = allTests.Count(t => t.Status == TestStatusDto.NotRun);
-            var running = allTests.Count(t => t.Status == TestStatusDto.Running);
-        }
-        <div class="flex items-center gap-2 ml-auto shrink-0 tabular-nums">
-            @if (running > 0)
-            {
-                <span class="text-cyan-400">⟳ @running</span>
-            }
-            @if (failed > 0)
-            {
-                <span class="text-red-400">✗ @failed</span>
-            }
-            @if (passed > 0)
-            {
-                <span class="text-green-400">✓ @passed</span>
-            }
-            @if (skipped > 0)
-            {
-                <span class="text-yellow-400">● @skipped</span>
-            }
-            @if (notRun > 0)
-            {
-                <span class="text-gray-500">◌ @notRun</span>
-            }
-        </div>
-    </div>
-}
+    }
+</div>
 
 @code {
     private StateSnapshotNotification? Snapshot { get; set; }
@@ -125,23 +32,4 @@ else
     }
 
     public void Dispose() => Client.StateChanged -= OnStateChanged;
-
-    private static List<string> RunningProjects(StateSnapshotNotification snapshot) =>
-        snapshot.ProjectStatuses?
-            .Where(p => p.Value == ProjectRunStatusDto.Running)
-            .Select(p => Path.GetFileNameWithoutExtension(p.Key))
-            .Order(StringComparer.Ordinal)
-            .ToList() ?? [];
-
-    private static (string icon, string color) PhaseDisplay(PistonPhaseDto phase) =>
-        phase switch
-        {
-            PistonPhaseDto.Idle      => ("◌", "text-gray-500"),
-            PistonPhaseDto.Watching  => ("◉", "text-gray-400"),
-            PistonPhaseDto.Analyzing => ("⟳", "text-blue-400"),
-            PistonPhaseDto.Building  => ("⚙", "text-yellow-400"),
-            PistonPhaseDto.Testing   => ("⟳", "text-cyan-400"),
-            PistonPhaseDto.Error     => ("✗", "text-red-400"),
-            _                        => ("?", "text-gray-500"),
-        };
 }
