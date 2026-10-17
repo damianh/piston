@@ -319,14 +319,21 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             throw new InvalidOperationException("Test projects are still loading.");
         }
 
+        // Results are reported under the project's file name, so projects sharing one (e.g. One/Tests.csproj and
+        // Two/Tests.csproj) appear as a single node; selecting it runs all of them.
         var paths = new List<string>();
         var projects = selection.Projects.Distinct(StringComparer.Ordinal).ToList();
         foreach (var name in projects)
         {
-            var path = allTestProjects.FirstOrDefault(p =>
-                string.Equals(TestProjectNames.SuiteName(p), name, StringComparison.Ordinal))
-                ?? throw new ArgumentException($"'{name}' is not a test project in this solution.", nameof(selection));
-            paths.Add(path);
+            var matches = allTestProjects
+                .Where(p => string.Equals(TestProjectNames.SuiteName(p), name, StringComparison.Ordinal))
+                .ToList();
+            if (matches.Count == 0)
+            {
+                throw new ArgumentException($"'{name}' is not a test project in this solution.", nameof(selection));
+            }
+
+            paths.AddRange(matches);
         }
 
         var known = _state.TestSuites

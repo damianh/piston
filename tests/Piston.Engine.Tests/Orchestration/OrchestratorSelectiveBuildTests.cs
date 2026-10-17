@@ -228,6 +228,22 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
     }
 
     [Fact]
+    public async Task RunSelected_ProjectsSharingAName_RunsAllOfThem()
+    {
+        const string otherTests = "/repo/Other/Lib.Tests.csproj";
+        var runner = new RecordingTestRunner();
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), new RecordingBuildService(),
+            runner, new FixedImpactAnalyzer(new([], [], false, false)) { TestProjects = [LibTests, otherTests] },
+            new PistonState());
+        await orchestrator.StartAsync("/repo/All.slnx");
+        await runner.WaitForCallsAsync(1);
+
+        _ = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"], ["Lib.T.A"]));
+
+        Assert.Equal([LibTests, otherTests], runner.Calls[1]);
+    }
+
+    [Fact]
     public async Task RunSelected_UnknownProject_IsRejected()
     {
         var runner = new RecordingTestRunner();
@@ -376,11 +392,12 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
     private sealed class FixedImpactAnalyzer(ImpactAnalysisResult selective) : IImpactAnalyzer
     {
         public string? MtpOutputPath { get; init; }
+        public IReadOnlyList<string> TestProjects { get; init; } = [LibTests];
         public Task InitializeAsync(string solutionPath, CancellationToken ct) => Task.CompletedTask;
         public ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes) => selective;
         public ImpactAnalysisResult AnalyzeFullRun() => new([], [], RequiresGraphRebuild: false, IsFullRun: true);
         public void InvalidateGraph() { }
-        public IReadOnlyList<string> GetAllTestProjectPaths() => [LibTests];
+        public IReadOnlyList<string> GetAllTestProjectPaths() => TestProjects;
         public bool IsMtpProject(string projectPath) => false;
         public string? GetMtpOutputPath(string projectPath) => MtpOutputPath;
     }
