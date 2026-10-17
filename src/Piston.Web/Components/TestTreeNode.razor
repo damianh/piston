@@ -26,6 +26,29 @@
         <!-- Status icon -->
         <span class="@StatusColor(Node) w-4 text-center">@StatusIcon(Node)</span>
 
+        <!-- Structural icon: project / namespace / class -->
+        @switch (StructureOf(Node))
+        {
+            case NodeStructure.Project:
+                <svg class="w-3.5 h-3.5 shrink-0 text-violet-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-label="Project">
+                    <path d="M8 1.5 14 4.5v7L8 14.5 2 11.5v-7z" />
+                    <path d="M2 4.5 8 7.5 14 4.5M8 7.5v7" />
+                </svg>
+                break;
+            case NodeStructure.Namespace:
+                <svg class="w-3.5 h-3.5 shrink-0 text-sky-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-label="Namespace">
+                    <path d="M6 2.5c-1.4 0-2 .6-2 2V6c0 1-.5 2-1.5 2 1 0 1.5 1 1.5 2v1.5c0 1.4.6 2 2 2" />
+                    <path d="M10 2.5c1.4 0 2 .6 2 2V6c0 1 .5 2 1.5 2-1 0-1.5 1-1.5 2v1.5c0 1.4-.6 2-2 2" />
+                </svg>
+                break;
+            case NodeStructure.Class:
+                <svg class="w-3.5 h-3.5 shrink-0 text-amber-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-label="Class">
+                    <rect x="2" y="2" width="12" height="12" rx="2.5" />
+                    <path d="M10.2 6.1a2.6 2.6 0 1 0 0 3.8" />
+                </svg>
+                break;
+        }
+
         <!-- Label -->
         <span class="flex-1 truncate text-xs @(Node.Kind == TestNodeKind.Test ? "text-gray-200" : "text-gray-300 font-medium")"
               title="@(Node.Test?.FullyQualifiedName)">
@@ -91,6 +114,17 @@
             OnExpansionChanged?.Invoke(Node);
         }
     }
+
+    private enum NodeStructure { None, Project, Namespace, Class }
+
+    // TestTreeBuilder encodes the node's structural level in its expansion-key prefix.
+    private static NodeStructure StructureOf(TestNode node) => node.ExpansionKey switch
+    {
+        { } k when k.StartsWith("suite:", StringComparison.Ordinal) => NodeStructure.Project,
+        { } k when k.StartsWith("ns:", StringComparison.Ordinal)    => NodeStructure.Namespace,
+        { } k when k.StartsWith("class:", StringComparison.Ordinal) => NodeStructure.Class,
+        _                                                           => NodeStructure.None,
+    };
 
     private static string StatusIcon(TestNode node)
     {
