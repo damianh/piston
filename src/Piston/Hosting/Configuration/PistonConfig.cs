@@ -50,8 +50,7 @@ public sealed class PistonConfig
     public bool? Stdio { get; set; }
 
     /// <summary>
-    /// Port for the MCP server. When set, enables MCP alongside the named pipe listener.
-    /// Corresponds to the <c>--mcp-port</c> CLI flag.
+    /// Port for the daemon's MCP server (default 5200). Corresponds to the <c>--mcp-port</c> CLI flag.
     /// </summary>
     public int? McpPort { get; set; }
 

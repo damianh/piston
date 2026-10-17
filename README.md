@@ -28,7 +28,7 @@ Build and install the local .NET tool:
 dotnet pack src/Piston/Piston.csproj -c Release -o packages
 dotnet tool install Piston --version 0.1.0 --tool-path ./tools --source ./packages --no-cache
 ./tools/piston --help
-./tools/piston daemon /path/to/solution.slnx --mcp-port 5200 --web-port 5199
+./tools/piston daemon /path/to/solution.slnx
 ```
 
 Use an actual solution path in the last command. On Windows, the executable is
@@ -81,7 +81,7 @@ piston status [<solution>] [--all]
 | `--stdio` | Use stdin/stdout for engine JSON-RPC transport, not MCP. |
 | `--no-stdio` | Force named-pipe transport, overriding `.piston.json`'s `stdio` setting. |
 | `--pipe-name <name>` | Override the named pipe name (default: derived from solution path). |
-| `--mcp-port <port>` | Enable the MCP server on the specified port. |
+| `--mcp-port <port>` | Port for the always-on HTTP MCP server (default: 5200). |
 | `--web-port <port>` | Port for the web UI and WebSocket server (default: 5199). |
 
 **Examples:**
@@ -93,8 +93,8 @@ piston
 # Explicit solution path
 piston ./src/MyApp.slnx
 
-# Foreground daemon with coverage and MCP enabled
-piston daemon --coverage --mcp-port 5200
+# Foreground daemon with coverage, MCP on a non-default port
+piston daemon --coverage --mcp-port 5300
 ```
 
 ## Web dashboard
@@ -129,7 +129,7 @@ The agent host starts one `piston mcp` process per session, with the working dir
 
 If another Piston process already owns the worktree, or the engine cannot start, the server still answers. Every tool then returns an error that ends with ``Use `dotnet test` instead.``. To uninstall, run `dotnet tool uninstall -g Piston` and remove the config entry.
 
-With `--mcp-port` (or `mcpPort` in `.piston.json`), the daemon exposes an HTTP MCP endpoint backed by the running engine. For `--mcp-port 5200`, connect at `http://localhost:5200` (the root endpoint, not `/mcp`). The daemon retains current state, but runs still launch `dotnet build` and fresh `dotnet test` processes; there is no prewarmed test-process pool.
+The daemon always exposes an HTTP MCP endpoint backed by the running engine, on port 5200 unless `--mcp-port` (or `mcpPort` in `.piston.json`) says otherwise. Connect at `http://localhost:5200` (the root endpoint, not `/mcp`). The daemon retains current state, but runs still launch `dotnet build` and fresh `dotnet test` processes; there is no prewarmed test-process pool.
 
 To set up a coding agent, follow [docs/agent-usage.md](docs/agent-usage.md). It covers setup, the verification contract and a custom-instructions snippet.
 
@@ -254,7 +254,7 @@ no implemented `.piston/config.json` or user-global config hierarchy.
 | `processRecycleAfter` | `int` | Runs after which a pool slot logs a recycling warning (default 50). |
 | `pipeName` | `string` | Override the named pipe name. |
 | `stdio` | `bool` | Use stdin/stdout JSON-RPC transport. |
-| `mcpPort` | `int` | Enable the MCP server on this port. |
+| `mcpPort` | `int` | Port for the daemon's MCP server (default 5200). |
 | `testExecutionMode` | `string` | `"Auto"` and `"Process"` currently both route between MTP and VSTest. `"InProcess"` is not implemented and throws at startup. |
 | `execution.memoryMb` | `int` | Memory in MiB each run reserves from the machine execution budget (see [Worktree ownership and machine execution budget](#worktree-ownership-and-machine-execution-budget)). Must be positive; required when the budget sets `memoryMb`. A reservation, not a cap. |
 
