@@ -1,6 +1,7 @@
 @inject EngineClientService Client
 @inject ViewState _viewState
-@implements IDisposable
+@inject IJSRuntime JS
+@implements IAsyncDisposable
 
 <div class="flex flex-col h-full overflow-hidden">
 
@@ -11,12 +12,14 @@
             OnReset="Reset"
              OnExpandAll="() => SetExpanded(true)"
              OnCollapseAll="() => SetExpanded(false)"
+             DetailPosition="@_viewState.DetailPosition"
+             OnToggleDetailPosition="ToggleDetailPosition"
              OnFilterChanged="SetFilter" />
 
-    <!-- Main content area -->
-    <div class="flex flex-1 min-h-0 overflow-hidden">
-        <!-- Test tree (left panel) -->
-        <div class="w-1/2 border-r border-gray-800 overflow-hidden flex flex-col">
+    <!-- Main content area: test tree, resizable splitter, detail panel (docked right or bottom) -->
+    <div class="@(_isBottom ? "flex flex-col" : "flex") flex-1 min-h-0 overflow-hidden"
+         data-orientation="@(_isBottom ? "bottom" : "right")" @ref="_splitContainer">
+        <div class="flex flex-col min-w-0 min-h-0 overflow-hidden" style="flex: 0 0 @(_splitPercentCss)%">
             <TestTree Nodes="@_treeNodes"
                       SelectedFqn="@_viewState.SelectedTestFqn"
                       PinnedFqns="@_viewState.PinnedTestFqns"
@@ -25,8 +28,23 @@
                       OnExpansionChanged="RememberExpansion" />
         </div>
 
-        <!-- Detail panel (right panel) -->
-        <div class="w-1/2 overflow-hidden flex flex-col">
+        <div data-splitter
+             role="separator"
+             tabindex="0"
+             aria-label="Resize test list and details"
+             aria-orientation="@(_isBottom ? "horizontal" : "vertical")"
+             aria-valuemin="@ViewState.MinSplitPercent"
+             aria-valuemax="@ViewState.MaxSplitPercent"
+             aria-valuenow="@Math.Round(_viewState.SplitPercent)"
+             title="Drag to resize · double-click to reset"
+             class="@(_isBottom
+                 ? "h-px w-full cursor-row-resize before:-top-1 before:-bottom-1 before:inset-x-0"
+                 : "w-px h-full cursor-col-resize before:-left-1 before:-right-1 before:inset-y-0") relative z-10 shrink-0 bg-gray-800 transition-colors hover:bg-blue-500 focus-visible:bg-blue-500 focus:outline-none data-[dragging]:bg-blue-500 before:absolute before:content-['']"
+             @ondblclick="ResetSplit"
+             @onkeydown="HandleSplitterKeyDown"
+             @onkeydown:stopPropagation="true"></div>
+
+        <div class="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
             @if (_snapshot?.Phase == PistonPhaseDto.Error && _snapshot.LastBuild is not null)
             {
                 <BuildErrors Build="@_snapshot.LastBuild" />
@@ -246,8 +264,68 @@
         }
     }
 
-    public void Dispose()
+    // ── Split layout ──
+
+    private ElementReference _splitContainer;
+    private DotNetObjectReference<TestsTab>? _selfRef;
+    private bool _isBottom => _viewState.DetailPosition == DetailPosition.Bottom;
+    private string _splitPercentCss =>
+        _viewState.SplitPercent.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        _selfRef = DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("pistonSplitter.attach", _splitContainer, _selfRef,
+            ViewState.MinSplitPercent, ViewState.MaxSplitPercent);
+    }
+
+    [JSInvokable]
+    public void SetSplit(double percent)
+    {
+        _viewState.SplitPercent = percent;
+        StateHasChanged();
+    }
+
+    private void ResetSplit() => _viewState.ResetSplit();
+
+    private void ToggleDetailPosition() =>
+        _viewState.DetailPosition = _isBottom ? DetailPosition.Right : DetailPosition.Bottom;
+
+    private void HandleSplitterKeyDown(KeyboardEventArgs e)
+    {
+        var step = e.ShiftKey ? 1 : 5;
+        var delta = (e.Key, _isBottom) switch
+        {
+            ("ArrowLeft", false) or ("ArrowUp", true) => -step,
+            ("ArrowRight", false) or ("ArrowDown", true) => step,
+            _ => 0,
+        };
+
+        if (e.Key == "Home")
+            _viewState.SplitPercent = ViewState.MinSplitPercent;
+        else if (e.Key == "End")
+            _viewState.SplitPercent = ViewState.MaxSplitPercent;
+        else if (e.Key == "Enter")
+            _viewState.ResetSplit();
+        else if (delta != 0)
+            _viewState.SplitPercent += delta;
+    }
+
+    public async ValueTask DisposeAsync()
     {
         Client.StateChanged -= OnStateChanged;
+
+        try
+        {
+            await JS.InvokeVoidAsync("pistonSplitter.detach", _splitContainer);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+
+        _selfRef?.Dispose();
     }
 }

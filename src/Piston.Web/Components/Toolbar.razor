@@ -48,6 +48,25 @@
             <button class="text-gray-600 hover:text-gray-400" @onclick="ClearFilter">✕</button>
         }
     </div>
+
+    <!-- Detail panel dock position; the icon previews the layout the click switches to -->
+    @{
+        var dockLabel = DetailPosition == DetailPosition.Right ? "Dock details at bottom" : "Dock details on right";
+    }
+    <button class="ml-auto p-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+            title="@dockLabel" aria-label="@dockLabel" @onclick="OnToggleDetailPosition">
+        <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" />
+            @if (DetailPosition == DetailPosition.Right)
+            {
+                <rect x="2" y="8.5" width="12" height="4.5" rx="1" fill="currentColor" />
+            }
+            else
+            {
+                <rect x="8.5" y="3" width="5.5" height="10" rx="1" fill="currentColor" />
+            }
+        </svg>
+    </button>
 </div>
 
 @code {
@@ -58,6 +77,8 @@
     [Parameter] public EventCallback OnExpandAll { get; set; }
     [Parameter] public EventCallback OnCollapseAll { get; set; }
     [Parameter] public EventCallback<string?> OnFilterChanged { get; set; }
+    [Parameter] public DetailPosition DetailPosition { get; set; }
+    [Parameter] public EventCallback OnToggleDetailPosition { get; set; }
 
     private System.Timers.Timer? _debounceTimer;
     private bool _resetArmed;

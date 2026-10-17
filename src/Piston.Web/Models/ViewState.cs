@@ -37,6 +37,42 @@ public sealed class ViewState
 
     // ── Failure navigation ──
     public int CurrentFailureIndex { get; set; } = -1;
+
+    // ── Layout ──
+    public const double DefaultSplitRightPercent = 50;
+    public const double DefaultSplitBottomPercent = 60;
+    public const double MinSplitPercent = 15;
+    public const double MaxSplitPercent = 85;
+
+    public DetailPosition DetailPosition { get; set; } = DetailPosition.Right;
+
+    /// <summary>Width of the test tree, as a percentage, when details are docked on the right.</summary>
+    public double SplitRightPercent { get; set; } = DefaultSplitRightPercent;
+
+    /// <summary>Height of the test tree, as a percentage, when details are docked at the bottom.</summary>
+    public double SplitBottomPercent { get; set; } = DefaultSplitBottomPercent;
+
+    public double SplitPercent
+    {
+        get => DetailPosition == DetailPosition.Right ? SplitRightPercent : SplitBottomPercent;
+        set
+        {
+            var clamped = Math.Clamp(value, MinSplitPercent, MaxSplitPercent);
+            if (DetailPosition == DetailPosition.Right)
+                SplitRightPercent = clamped;
+            else
+                SplitBottomPercent = clamped;
+        }
+    }
+
+    public void ResetSplit() =>
+        SplitPercent = DetailPosition == DetailPosition.Right ? DefaultSplitRightPercent : DefaultSplitBottomPercent;
+}
+
+public enum DetailPosition
+{
+    Right,
+    Bottom,
 }
 
 public enum GroupingMode
