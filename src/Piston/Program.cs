@@ -761,15 +761,25 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
         return 1;
     }
 
-    var snapshotTask = StateSnapshotWaiter.WaitForSnapshotAsync(client, TimeSpan.FromSeconds(3));
+    var statusTimeout = TimeSpan.FromSeconds(3);
+    using var statusCts = new CancellationTokenSource(statusTimeout);
+    var snapshotTask = StateSnapshotWaiter.WaitForSnapshotAsync(client, statusTimeout);
     DaemonInfoResponse? info = null;
     try
     {
-        info = await client.GetDaemonInfoAsync();
+        info = await client.GetDaemonInfoAsync(statusCts.Token);
     }
     catch (InvalidOperationException)
     {
         // Older daemon without daemon/info.
+    }
+    catch (OperationCanceledException)
+    {
+        Console.Error.WriteLine("[piston] Could not retrieve daemon metadata: request timed out.");
+    }
+    catch (IOException ex)
+    {
+        Console.Error.WriteLine($"[piston] Could not retrieve daemon metadata: {ex.Message}");
     }
 
     var snapshot = await snapshotTask;

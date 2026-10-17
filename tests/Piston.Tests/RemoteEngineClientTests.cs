@@ -110,7 +110,7 @@ public sealed class RemoteEngineClientTests
         var client = new RemoteEngineClient(pipeName);
         await client.ConnectAsync(cts.Token);
 
-        Assert.Equal(info, await client.GetDaemonInfoAsync());
+        Assert.Equal(info, await client.GetDaemonInfoAsync(_ct));
         await client.ShutdownDaemonAsync();
         await shutdown.Task.WaitAsync(TimeSpan.FromSeconds(5), _ct);
 
