@@ -79,7 +79,7 @@ internal sealed class OwnedTestProcess : IDisposable
         catch (Win32Exception) when (Process.HasExited)
         {
         }
-        catch (Win32Exception ex)
+        catch (Exception ex) when (ex is Win32Exception or AggregateException)
         {
             error = ex.Message;
         }
