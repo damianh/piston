@@ -17,7 +17,6 @@ module.exports = {
         cyan: scale("cyan", [400, 500]),
         violet: scale("violet", [400]),
         sky: scale("sky", [400]),
-        amber: scale("amber", [400]),
         coral: token("coral"),
       },
       fontFamily: {

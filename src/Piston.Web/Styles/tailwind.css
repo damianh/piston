@@ -37,7 +37,6 @@
         --cyan-500: 9 105 218;
         --violet-400: 130 80 223; /* fgColor-done */
         --sky-400: 5 80 174;
-        --amber-400: 188 76 0;    /* fgColor-severe */
         --coral: 253 140 115;     /* underlineNav-borderColor-active */
     }
 
@@ -69,7 +68,6 @@
         --cyan-500: 31 111 235;
         --violet-400: 171 125 248; /* fgColor-done */
         --sky-400: 108 182 255;
-        --amber-400: 219 109 40;  /* fgColor-severe */
         --coral: 247 129 102;     /* underlineNav-borderColor-active */
     }
 
