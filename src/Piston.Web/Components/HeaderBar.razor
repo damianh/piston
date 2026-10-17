@@ -27,7 +27,7 @@
     </div>
 </div>
 
-<SettingsDialog IsOpen="@_settingsOpen" OnClose="CloseSettingsAsync" />
+<SettingsDialog IsOpen="@_settingsOpen" OnClose="CloseSettings" />
 
 @code {
     [Parameter, EditorRequired] public DashboardTab ActiveTab { get; set; }
@@ -37,14 +37,24 @@
 
     private ElementReference _settingsButton;
     private bool _settingsOpen;
+    private bool _returnFocus;
 
     private void OpenSettings() => _settingsOpen = true;
 
-    private async Task CloseSettingsAsync()
+    // The modal keeps the page inert until it leaves the DOM, so focus the gear after re-render.
+    private void CloseSettings()
     {
         _settingsOpen = false;
-        StateHasChanged();
-        await _settingsButton.FocusAsync();
+        _returnFocus = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_returnFocus)
+        {
+            _returnFocus = false;
+            await _settingsButton.FocusAsync();
+        }
     }
 
     protected override void OnInitialized()
