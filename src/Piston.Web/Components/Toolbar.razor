@@ -7,12 +7,6 @@
         ▶ Run
     </button>
 
-    <!-- Clear results -->
-    <button class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
-            title="Clear results (C)" @onclick="OnClearResults">
-        ✕ Clear
-    </button>
-
     <!-- Reset: two-step so a stray click doesn't discard results and restart discovery -->
     <button class="@(_resetArmed
                 ? "px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded transition-colors"
@@ -72,7 +66,6 @@
 @code {
     [Parameter] public string? Filter { get; set; }
     [Parameter] public EventCallback OnForceRun { get; set; }
-    [Parameter] public EventCallback OnClearResults { get; set; }
     [Parameter] public EventCallback OnReset { get; set; }
     [Parameter] public EventCallback OnExpandAll { get; set; }
     [Parameter] public EventCallback OnCollapseAll { get; set; }
