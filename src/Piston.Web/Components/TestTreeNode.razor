@@ -39,7 +39,7 @@
         <!-- Duration for test nodes -->
         @if (Node.Kind == TestNodeKind.Test && Node.Test?.DurationMs > 0 && Node.Test.Status != TestStatusDto.Running)
         {
-            <span class="text-gray-600 text-xs ml-1">@FormatDuration(Node.Test.DurationMs)</span>
+            <span class="text-yellow-600 text-xs ml-1 tabular-nums">@FormatDuration(Node.Test.DurationMs)</span>
         }
 
         <!-- Pin button (visible on hover for test nodes) -->
