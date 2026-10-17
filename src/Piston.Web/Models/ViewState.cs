@@ -34,11 +34,11 @@ public sealed class ViewState
     // ── Filter ──
     public string? Filter { get; set; }
 
-    // ── Selected test ──
+    // ── Selection: a test or a project, never both ──
     public string? SelectedTestKey { get; set; }
 
-    /// <summary>Whether the test details show the run log of the selected test's process.</summary>
-    public bool ShowRunLog { get; set; }
+    /// <summary>The project shown in the details pane, by <c>TestSuiteDto.Name</c>.</summary>
+    public string? SelectedProject { get; set; }
 
     // ── Failure navigation ──
     public int CurrentFailureIndex { get; set; } = -1;

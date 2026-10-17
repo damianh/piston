@@ -21,12 +21,11 @@ public sealed record StartCommandParams(string SolutionPath);
 /// <summary>Params payload for the set-filter JSON-RPC command.</summary>
 public sealed record SetFilterCommandParams(string? Filter);
 
-/// <summary>Parameters for <c>tests/getRunLog</c>: the result whose run log to fetch.</summary>
-/// <param name="FullyQualifiedName">The test's fully qualified name.</param>
-/// <param name="TargetFramework">The result's target framework, when its project ran under more than one.</param>
-public sealed record GetRunLogCommand(string FullyQualifiedName, string? TargetFramework = null);
+/// <summary>Parameters for <c>tests/getRunLog</c>: the test project whose latest run log to fetch.</summary>
+/// <param name="Project">The project's name, as reported in <see cref="Dtos.TestSuiteDto.Name"/>.</param>
+public sealed record GetRunLogCommand(string Project);
 
-/// <summary>Response for <c>tests/getRunLog</c>; <see cref="Log"/> is null when none was recorded for the result.</summary>
+/// <summary>Response for <c>tests/getRunLog</c>; <see cref="Log"/> is null when none was recorded for the project.</summary>
 public sealed record RunLogResponse(ExecutionLogDto? Log);
 
 /// <summary>Response for <c>mcp/getCallLog</c>.</summary>

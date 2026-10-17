@@ -101,7 +101,7 @@ piston daemon --coverage --mcp-port 5300
 
 The daemon serves a Blazor WebAssembly dashboard (default `http://localhost:5199`) connected over WebSocket. It shows test results, build errors, engine activity, and MCP tool-call history. The Roslyn diagnostic view has been removed.
 
-A test's details show its captured output (what the test wrote, e.g. via xUnit's `TestContext.Current.TestOutputHelper`) and, on demand, the run log of the process that produced the result: the runner Piston chose (VSTest, MTP server or MTP `dotnet test`), the command line, fallbacks, the process's console output and its exit code. Each log keeps the first 1,500 and last 500 lines of a run.
+A test's details show its captured output (what the test wrote, e.g. via xUnit's `TestContext.Current.TestOutputHelper`) and link to its project. Selecting a project in the tree (double-click or the chevron expands it) shows its result counts and the run log of its latest run, one process covering all of its target frameworks: the runner Piston chose (VSTest, MTP server or MTP `dotnet test`), the command line, fallbacks, the process's console output and its exit code. Each log keeps the first 1,500 and last 500 lines of a run.
 
 Dashboard styles are bundled locally; no CDN access is needed. After changing
 Tailwind classes in dashboard components, regenerate the checked-in stylesheet:

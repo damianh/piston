@@ -310,12 +310,12 @@ public sealed class EngineClientService : IAsyncDisposable
     }
 
     /// <summary>
-    /// The log of the test process that produced the current result of a test, or <see langword="null"/>
-    /// when none was recorded or the daemon is unreachable.
+    /// The log of a test project's latest run, or <see langword="null"/> when none was recorded or the
+    /// daemon is unreachable.
     /// </summary>
-    public async Task<ExecutionLogDto?> GetRunLogAsync(string fullyQualifiedName, string? targetFramework)
+    public async Task<ExecutionLogDto?> GetRunLogAsync(string project)
     {
-        var result = await SendRequestAsync(ProtocolMethods.TestsGetRunLog, new GetRunLogCommand(fullyQualifiedName, targetFramework))
+        var result = await SendRequestAsync(ProtocolMethods.TestsGetRunLog, new GetRunLogCommand(project))
             .ConfigureAwait(false);
         return result?.Deserialize<RunLogResponse>(JsonRpcSerializer.Options)?.Log;
     }

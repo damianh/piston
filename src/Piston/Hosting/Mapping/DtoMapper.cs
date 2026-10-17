@@ -104,23 +104,17 @@ public static class DtoMapper
         );
 
     /// <summary>
-    /// The log of the process that produced the current result of the test with
-    /// <paramref name="fullyQualifiedName"/> under <paramref name="targetFramework"/>, or
-    /// <see langword="null"/> when there is no such result or no log was recorded for it.
+    /// The log of the latest run of the test project named <paramref name="project"/> (one process covers
+    /// all of its target frameworks), or <see langword="null"/> when none was recorded.
     /// </summary>
-    public static ExecutionLogDto? FindRunLog(this PistonState state, string fullyQualifiedName, string? targetFramework)
+    public static ExecutionLogDto? FindRunLog(this PistonState state, string project)
     {
-        foreach (var suite in state.TestSuites)
-        {
-            if (suite.ExecutionLog is { } log && suite.Tests.Any(t =>
-                    string.Equals(t.FullyQualifiedName, fullyQualifiedName, StringComparison.Ordinal)
-                    && string.Equals(t.TargetFramework, targetFramework, StringComparison.OrdinalIgnoreCase)))
-            {
-                return log.ToDto(suite.RunId);
-            }
-        }
+        // A selective run leaves the project's untouched results in the previous suite, so take the latest.
+        var latest = state.TestSuites
+            .Where(s => s.ExecutionLog is not null && string.Equals(s.Name, project, StringComparison.Ordinal))
+            .MaxBy(s => s.Timestamp);
 
-        return null;
+        return latest?.ExecutionLog!.ToDto(latest.RunId);
     }
 
     public static SourceFingerprintDto ToDto(this SourceFingerprint fingerprint) =>

@@ -3,7 +3,10 @@
 
 @{
     var indent = Depth * 16;
-    var isSelected = Node.Kind == TestNodeKind.Test && Node.Test?.Key == SelectedKey;
+    var isProject = Node.Kind == TestNodeKind.Suite && Node.Suite is not null;
+    var isSelected = Node.Kind == TestNodeKind.Test
+        ? Node.Test?.Key == SelectedKey
+        : isProject && Node.Suite!.Name == SelectedProject;
     var isPinned = Node.Kind == TestNodeKind.Test && Node.Test is not null && PinnedFqns.Contains(Node.Test.FullyQualifiedName);
 }
 
@@ -11,10 +14,22 @@
     <!-- Node row -->
     <div class="flex items-center gap-1 px-2 py-0.5 cursor-pointer hover:bg-gray-800 @(isSelected ? "bg-gray-700" : "") @(Node.IsStale ? "opacity-50" : "")"
          style="padding-left: @(indent + 8)px"
-         @onclick="HandleClick">
+         title="@(isProject ? "Show project details and run log · double-click to expand or collapse" : null)"
+         @onclick="HandleClick"
+         @ondblclick="HandleDoubleClick">
 
-        <!-- Expand/collapse toggle for non-leaf nodes -->
-        @if (Node.Children.Count > 0)
+        <!-- Expand/collapse toggle for non-leaf nodes; a project row's click selects it instead -->
+        @if (Node.Children.Count > 0 && isProject)
+        {
+            <button type="button"
+                    class="text-gray-600 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none w-3 text-center text-xs select-none"
+                    aria-label="@(Node.IsExpanded ? "Collapse" : "Expand") @Node.Label"
+                    aria-expanded="@(Node.IsExpanded ? "true" : "false")"
+                    @onclick="ToggleExpanded"
+                    @onclick:stopPropagation="true"
+                    @ondblclick:stopPropagation="true">@(Node.IsExpanded ? "▾" : "▸")</button>
+        }
+        else if (Node.Children.Count > 0)
         {
             <span class="text-gray-600 w-3 text-center text-xs select-none">@(Node.IsExpanded ? "▾" : "▸")</span>
         }
@@ -96,8 +111,10 @@
             <TestTreeNode Node="child"
                           Depth="@(Depth + 1)"
                           SelectedKey="@SelectedKey"
+                          SelectedProject="@SelectedProject"
                           PinnedFqns="@PinnedFqns"
                           OnSelectTest="@OnSelectTest"
+                          OnSelectProject="@OnSelectProject"
                           OnTogglePin="@OnTogglePin"
                           OnExpansionChanged="@OnExpansionChanged" />
         }
@@ -108,8 +125,10 @@
     [Parameter] public required TestNode Node { get; set; }
     [Parameter] public int Depth { get; set; }
     [Parameter] public string? SelectedKey { get; set; }
+    [Parameter] public string? SelectedProject { get; set; }
     [Parameter] public HashSet<string> PinnedFqns { get; set; } = [];
     [Parameter] public EventCallback<TestResultDto> OnSelectTest { get; set; }
+    [Parameter] public EventCallback<string> OnSelectProject { get; set; }
     [Parameter] public EventCallback<string> OnTogglePin { get; set; }
     [Parameter] public Action<TestNode>? OnExpansionChanged { get; set; }
 
@@ -119,11 +138,28 @@
         {
             OnSelectTest.InvokeAsync(Node.Test);
         }
+        else if (Node.Kind == TestNodeKind.Suite && Node.Suite is not null)
+        {
+            OnSelectProject.InvokeAsync(Node.Suite.Name);
+        }
         else
         {
-            Node.IsExpanded = !Node.IsExpanded;
-            OnExpansionChanged?.Invoke(Node);
+            ToggleExpanded();
         }
+    }
+
+    private void HandleDoubleClick()
+    {
+        if (Node.Kind == TestNodeKind.Suite && Node.Children.Count > 0)
+        {
+            ToggleExpanded();
+        }
+    }
+
+    private void ToggleExpanded()
+    {
+        Node.IsExpanded = !Node.IsExpanded;
+        OnExpansionChanged?.Invoke(Node);
     }
 
     private enum NodeStructure { None, Project, Framework, Namespace, Class }

@@ -106,12 +106,12 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
             case ProtocolMethods.TestsGetRunLog:
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<GetRunLogCommand>(@params);
-                    if (string.IsNullOrWhiteSpace(cmd?.FullyQualifiedName))
+                    if (string.IsNullOrWhiteSpace(cmd?.Project))
                     {
-                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "fullyQualifiedName is required.");
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "project is required.");
                     }
 
-                    var response = new RunLogResponse(_engine.State.FindRunLog(cmd.FullyQualifiedName, cmd.TargetFramework));
+                    var response = new RunLogResponse(_engine.State.FindRunLog(cmd.Project));
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
                 }

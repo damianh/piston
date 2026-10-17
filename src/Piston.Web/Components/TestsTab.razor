@@ -30,8 +30,10 @@
         <div class="flex flex-col min-w-0 min-h-0 overflow-hidden" style="flex: 0 0 @(_splitPercentCss)%">
             <TestTree Nodes="@_treeNodes"
                       SelectedKey="@_viewState.SelectedTestKey"
+                      SelectedProject="@_viewState.SelectedProject"
                       PinnedFqns="@_viewState.PinnedTestFqns"
                       OnSelectTest="SelectTest"
+                      OnSelectProject="SelectProject"
                       OnTogglePin="TogglePin"
                       OnExpansionChanged="RememberExpansion" />
         </div>
@@ -57,9 +59,15 @@
             {
                 <BuildErrors Build="@_snapshot.LastBuild" />
             }
+            else if (_viewState.SelectedProject is { } project)
+            {
+                <ProjectDetail Project="@project"
+                               Suite="@TestTreeBuilder.ForProject(_displayedSuites, project)"
+                               RunId="@(_snapshot is null ? null : TestTreeBuilder.ForProject(_snapshot.Suites, project)?.RunId)" />
+            }
             else
             {
-                <TestDetail Test="@_selectedTest" RunId="@RunIdOf(_selectedTest)" />
+                <TestDetail Test="@_selectedTest" Project="@ProjectOf(_selectedTest)" OnShowProject="SelectProject" />
             }
         </div>
     </div>
@@ -164,14 +172,22 @@
         }
     }
 
-    // The run that produced the test's final result; live results are not attributed to a run yet.
-    private string? RunIdOf(TestResultDto? test) =>
-        test is null ? null : _snapshot?.Suites.FirstOrDefault(s => s.Tests.Any(t => t.Key == test.Key))?.RunId;
+    private string? ProjectOf(TestResultDto? test) =>
+        test is null ? null : _displayedSuites.FirstOrDefault(s => s.Tests.Any(t => t.Key == test.Key))?.Name;
 
     private void SelectTest(TestResultDto test)
     {
+        _viewState.SelectedProject = null;
         _viewState.SelectedTestKey = test.Key;
         _selectedTest = test;
+        StateHasChanged();
+    }
+
+    private void SelectProject(string project)
+    {
+        _viewState.SelectedTestKey = null;
+        _selectedTest = null;
+        _viewState.SelectedProject = project;
         StateHasChanged();
     }
 

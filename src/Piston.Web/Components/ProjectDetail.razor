@@ -1,0 +1,192 @@
+@using Piston.Protocol.Dtos
+@inject EngineClientService Client
+@inject IJSRuntime JS
+
+<div class="flex flex-col h-full overflow-y-auto p-4 gap-4 text-xs">
+    <!-- Project name + result counts -->
+    <div>
+        <div class="flex items-center gap-2 mb-1">
+            <svg class="w-4 h-4 shrink-0 text-violet-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
+                <path d="M8 1.5 14 4.5v7L8 14.5 2 11.5v-7z" />
+                <path d="M2 4.5 8 7.5 14 4.5M8 7.5v7" />
+            </svg>
+            <span class="text-gray-200 font-semibold break-all">@Project</span>
+        </div>
+        @if (Suite is not null)
+        {
+            <div class="flex flex-wrap gap-x-3 gap-y-1 text-gray-500 mt-1">
+                @foreach (var (status, count) in Counts(Suite))
+                {
+                    <span><span class="@StatusColor(status) tabular-nums">@count</span> @StatusLabel(status)</span>
+                }
+            </div>
+            var frameworks = Frameworks(Suite);
+            @if (frameworks.Count > 0)
+            {
+                <div class="text-gray-500 mt-1">
+                    @(frameworks.Count == 1 ? "Framework" : "Frameworks"): <span class="font-mono">@string.Join(", ", frameworks)</span>
+                </div>
+            }
+        }
+    </div>
+
+    <!-- Run log of the project's latest run -->
+    <div>
+        <div class="flex items-center justify-between mb-1">
+            <div class="text-gray-400 font-semibold">Run log</div>
+            @if (_log is { Entries.Count: > 0 })
+            {
+                <button type="button" class="text-gray-500 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none"
+                        @onclick="() => CopyAsync(FormatLog(_log))">Copy</button>
+            }
+        </div>
+        @if (_log is null)
+        {
+            <div class="text-gray-600">
+                @(_logLoading ? "Loading…" : "No run log yet. Piston keeps the log of each project's latest completed run while the daemon is running.")
+            </div>
+        }
+        else
+        {
+            <div class="text-gray-500 mb-1">@string.Join(" · ", RunLogSummary(_log))</div>
+            <div class="bg-gray-900 border border-gray-800 rounded p-3 font-mono text-xs overflow-x-auto">
+                @foreach (var entry in _log.Entries)
+                {
+                    <div class="flex gap-2 whitespace-pre-wrap break-all @EntryColor(entry.Category)">
+                        <span class="text-gray-600 shrink-0">@entry.Timestamp.ToLocalTime().ToString("HH:mm:ss.fff")</span>
+                        <span class="min-w-0"><span class="text-gray-500">@entry.Category</span> @entry.Message</span>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    /// <summary>The project's name, as in <see cref="TestSuiteDto.Name"/>.</summary>
+    [Parameter, EditorRequired] public string Project { get; set; } = "";
+
+    /// <summary>The project's displayed results, when it has any.</summary>
+    [Parameter] public TestSuiteDto? Suite { get; set; }
+
+    /// <summary>The project's latest completed run; a change means a newer log is available.</summary>
+    [Parameter] public string? RunId { get; set; }
+
+    private ExecutionLogDto? _log;
+    private bool _logLoading;
+    private string? _logProject;
+    private string? _logRunId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (Project == _logProject && RunId == _logRunId)
+        {
+            return;
+        }
+
+        // A newer run of the same project keeps showing the previous log until its own arrives.
+        if (Project != _logProject)
+        {
+            _log = null;
+        }
+
+        _logProject = Project;
+        _logRunId = RunId;
+        _logLoading = true;
+        var (project, runId) = (Project, RunId);
+        ExecutionLogDto? log = null;
+        try
+        {
+            log = await Client.GetRunLogAsync(project);
+        }
+        catch
+        {
+            // Unreachable daemon: shown as no log.
+        }
+
+        // A newer selection or run may have started its own request meanwhile.
+        if (_logProject == project && _logRunId == runId)
+        {
+            _log = log;
+            _logLoading = false;
+        }
+    }
+
+    private static readonly TestStatusDto[] StatusOrder =
+        [TestStatusDto.Failed, TestStatusDto.Running, TestStatusDto.Passed, TestStatusDto.Skipped, TestStatusDto.NotRun];
+
+    private static IEnumerable<(TestStatusDto Status, int Count)> Counts(TestSuiteDto suite) =>
+        StatusOrder
+            .Select(status => (status, suite.Tests.Count(t => t.Status == status)))
+            .Where(c => c.Item2 > 0);
+
+    private static List<string> Frameworks(TestSuiteDto suite) =>
+        [.. suite.Tests.Select(t => t.TargetFramework).OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase)];
+
+    private static string StatusColor(TestStatusDto status) => status switch
+    {
+        TestStatusDto.Passed  => "text-green-400",
+        TestStatusDto.Failed  => "text-red-400",
+        TestStatusDto.Skipped => "text-yellow-400",
+        TestStatusDto.Running => "text-cyan-400",
+        _                     => "text-gray-400",
+    };
+
+    private static string StatusLabel(TestStatusDto status) => status switch
+    {
+        TestStatusDto.Passed  => "passed",
+        TestStatusDto.Failed  => "failed",
+        TestStatusDto.Skipped => "skipped",
+        TestStatusDto.Running => "running",
+        _                     => "not run",
+    };
+
+    private static IEnumerable<string> RunLogSummary(ExecutionLogDto log)
+    {
+        if (log.Runner is { } runner)
+        {
+            yield return runner;
+        }
+
+        if (log.ExitCode is { } exitCode)
+        {
+            yield return $"exit code {exitCode}";
+        }
+
+        if (log.CompletedAt is { } completed)
+        {
+            yield return FormatDuration((completed - log.StartedAt).TotalMilliseconds);
+        }
+
+        yield return $"started {log.StartedAt.ToLocalTime():HH:mm:ss}";
+    }
+
+    private static string EntryColor(string category) =>
+        category.EndsWith("stderr", StringComparison.OrdinalIgnoreCase) ? "text-amber-300"
+        : category.EndsWith("stdout", StringComparison.OrdinalIgnoreCase) ? "text-gray-400"
+        : "text-gray-300";
+
+    private static string FormatLog(ExecutionLogDto log) =>
+        string.Join(Environment.NewLine, log.Entries.Select(e =>
+            $"{e.Timestamp.ToLocalTime():HH:mm:ss.fff} {e.Category} {e.Message}"));
+
+    private async Task CopyAsync(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+        }
+        catch (JSException)
+        {
+            // Clipboard access denied (e.g. insecure context); nothing to do.
+        }
+    }
+
+    private static string FormatDuration(double ms) =>
+        ms < 1000 ? $"{(int)ms}ms" : $"{ms / 1000.0:F1}s";
+}

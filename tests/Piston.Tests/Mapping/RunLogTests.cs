@@ -19,49 +19,71 @@ public sealed class RunLogTests
     private static readonly DateTimeOffset Now = new(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
 
     [Fact]
-    public void FindRunLog_ReturnsTheLogOfTheSuiteHoldingTheTestUnderThatFramework()
+    public void FindRunLog_ReturnsTheLogOfTheProjectsLatestRun()
     {
-        var net8 = Log("A.Tests.csproj", "net8 run");
-        var net10 = Log("A.Tests.csproj", "net10 run");
+        var other = Log("B.Tests.csproj", "other project");
+        var latest = Log("A.Tests.csproj", "multi-targeted run");
         var state = new PistonState
         {
             TestSuites =
             [
-                Suite("A (net8.0)", net8, "run-1", Test("A.T1", "net8.0")),
-                Suite("A (net10.0)", net10, "run-2", Test("A.T1", "net10.0")),
+                Suite("B.Tests", other, "run-1", Test("B.T1", null)),
+                Suite("A.Tests", latest, "run-2", Test("A.T1", "net8.0"), Test("A.T1", "net10.0")),
             ],
         };
 
-        var dto = state.FindRunLog("A.T1", "NET10.0");
+        var dto = state.FindRunLog("A.Tests");
 
         Assert.NotNull(dto);
         Assert.Equal("run-2", dto.RunId);
         Assert.Equal("VSTest", dto.Runner);
         Assert.Equal(1, dto.ExitCode);
-        Assert.Equal("net10 run", Assert.Single(dto.Entries).Message);
+        Assert.Equal("multi-targeted run", Assert.Single(dto.Entries).Message);
     }
 
     [Fact]
-    public void FindRunLog_UnknownTestOrNoLog_ReturnsNull()
+    public void FindRunLog_AfterASelectiveRun_ReturnsTheLatestSuitesLog()
+    {
+        // A selective run keeps the project's untouched results in the earlier suite and appends its own.
+        var state = new PistonState
+        {
+            TestSuites =
+            [
+                Suite("A.Tests", Log("A.Tests.csproj", "full run"), "run-1", Test("A.T1", null)),
+                Suite("A.Tests", Log("A.Tests.csproj", "selective run"), "run-2", Test("A.T2", null))
+                    with { Timestamp = Now.AddMinutes(1) },
+            ],
+        };
+
+        var dto = state.FindRunLog("A.Tests");
+
+        Assert.NotNull(dto);
+        Assert.Equal("run-2", dto.RunId);
+        Assert.Equal("selective run", Assert.Single(dto.Entries).Message);
+    }
+
+    [Fact]
+    public void FindRunLog_UnknownProjectOrNoLog_ReturnsNull()
     {
         var state = new PistonState
         {
-            TestSuites = [Suite("A", log: null, runId: null, Test("A.T1", null))],
+            TestSuites = [Suite("A.Tests", log: null, runId: null, Test("A.T1", null))],
         };
 
-        Assert.Null(state.FindRunLog("A.T1", null));
-        Assert.Null(state.FindRunLog("A.Missing", null));
+        Assert.Null(state.FindRunLog("A.Tests"));
+        Assert.Null(state.FindRunLog("a.tests"));
+        Assert.Null(state.FindRunLog("Missing.Tests"));
     }
 
     [Fact]
     public async Task Dispatcher_GetRunLog_ReturnsTheLog()
     {
         var engine = new StubEngine();
-        engine.State.TestSuites = [Suite("A", Log("A.Tests.csproj", "hello"), "run-1", Test("A.T1", null))];
+        engine.State.TestSuites = [Suite("A.Tests", Log("A.Tests.csproj", "hello"), "run-1", Test("A.T1", null))];
         var dispatcher = new EngineCommandDispatcher(engine);
 
         var result = await dispatcher.HandleCommandAsync(
-            ProtocolMethods.TestsGetRunLog, JsonNode.Parse("""{"fullyQualifiedName":"A.T1"}"""), _ct);
+            ProtocolMethods.TestsGetRunLog, JsonNode.Parse("""{"project":"A.Tests"}"""), _ct);
 
         var log = result!["log"]!;
         Assert.Equal("A.Tests.csproj", log["projectPath"]!.GetValue<string>());
@@ -69,7 +91,7 @@ public sealed class RunLogTests
     }
 
     [Fact]
-    public async Task Dispatcher_GetRunLog_WithoutName_IsInvalidParams()
+    public async Task Dispatcher_GetRunLog_WithoutProject_IsInvalidParams()
     {
         var dispatcher = new EngineCommandDispatcher(new StubEngine());
 

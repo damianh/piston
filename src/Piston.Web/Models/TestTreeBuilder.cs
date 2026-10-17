@@ -78,6 +78,26 @@ public static class TestTreeBuilder
         return roots;
     }
 
+    /// <summary>
+    /// The project's results as one suite, or null when it has none. A selective run adds a suite for the
+    /// tests it reran and keeps the project's other results in the previous one, so a project can have several;
+    /// the latest supplies the timestamp and run id.
+    /// </summary>
+    public static TestSuiteDto? ForProject(IEnumerable<TestSuiteDto> suites, string project)
+    {
+        var parts = suites.Where(s => string.Equals(s.Name, project, StringComparison.Ordinal)).ToList();
+        return parts.Count == 0 ? null : Combine(parts);
+    }
+
+    private static TestSuiteDto Combine(IReadOnlyList<TestSuiteDto> parts) =>
+        parts.Count == 1
+            ? parts[0]
+            : parts.MaxBy(s => s.Timestamp)! with
+            {
+                Tests = [.. parts.SelectMany(s => s.Tests)],
+                TotalDurationMs = parts.Sum(s => s.TotalDurationMs),
+            };
+
     private static void BuildByProjectNsClass(
         List<TestNode> roots,
         IReadOnlyList<TestSuiteDto> suites,
@@ -89,8 +109,9 @@ public static class TestTreeBuilder
 
         var anyVisible = false;
 
-        foreach (var suite in suites)
+        foreach (var parts in suites.GroupBy(s => s.Name, StringComparer.Ordinal))
         {
+            var suite = Combine([.. parts]);
             var visibleTests = GetVisibleTests(suite.Tests, matcher, viewState);
             if (visibleTests.Count == 0)
             {
@@ -98,6 +119,13 @@ public static class TestTreeBuilder
             }
 
             anyVisible = true;
+
+            // Each part keeps its own staleness: results a selective run did not refresh can predate a change.
+            var staleTests = parts
+                .Where(p => IsStale(p, lastFileChangeTime))
+                .SelectMany(p => p.Tests)
+                .ToHashSet<TestResultDto>(ReferenceEqualityComparer.Instance);
+            bool isStale(TestResultDto t) => staleTests.Contains(t);
 
             var suiteNode = new TestNode
             {
@@ -118,7 +146,7 @@ public static class TestTreeBuilder
 
             if (byFramework.Count == 0)
             {
-                AddNamespaceTree(suiteNode.Children, visibleTests, suite, suite.Name, viewState, lastFileChangeTime);
+                AddNamespaceTree(suiteNode.Children, visibleTests, isStale, suite.Name, viewState);
             }
             else
             {
@@ -133,13 +161,13 @@ public static class TestTreeBuilder
                         ExpansionKey = $"tfm:{scope}",
                         IsExpanded = viewState.IsNodeExpanded($"tfm:{scope}"),
                     };
-                    AddNamespaceTree(frameworkNode.Children, [.. frameworkGroup], suite, scope, viewState, lastFileChangeTime);
+                    AddNamespaceTree(frameworkNode.Children, [.. frameworkGroup], isStale, scope, viewState);
                     suiteNode.Children.Add(frameworkNode);
                 }
 
                 // Tests discovered but not yet run have no framework until their results arrive.
                 AddNamespaceTree(
-                    suiteNode.Children, [.. visibleTests.Where(t => t.TargetFramework is null)], suite, suite.Name, viewState, lastFileChangeTime);
+                    suiteNode.Children, [.. visibleTests.Where(t => t.TargetFramework is null)], isStale, suite.Name, viewState);
             }
 
             roots.Add(suiteNode);
@@ -155,10 +183,9 @@ public static class TestTreeBuilder
     private static void AddNamespaceTree(
         List<TestNode> parent,
         IReadOnlyList<TestResultDto> tests,
-        TestSuiteDto suite,
+        Func<TestResultDto, bool> isStale,
         string scope,
-        ViewState viewState,
-        DateTimeOffset? lastFileChangeTime)
+        ViewState viewState)
     {
         var byNamespace = tests
             .GroupBy(t => NamespaceKey(t.FullyQualifiedName))
@@ -178,11 +205,11 @@ public static class TestTreeBuilder
                     // Dot-less names (e.g. a custom DisplayName) have no class to group under.
                     if (classTests.All(t => t.FullyQualifiedName == classKey))
                     {
-                        AddTestLeaves(parent, classTests, suite, viewState, lastFileChangeTime);
+                        AddTestLeaves(parent, classTests, isStale);
                         continue;
                     }
 
-                    parent.Add(ClassNode(classKey, classTests, suite, scope, viewState, lastFileChangeTime));
+                    parent.Add(ClassNode(classKey, classTests, isStale, scope, viewState));
                 }
             }
             else
@@ -198,7 +225,7 @@ public static class TestTreeBuilder
 
                 foreach (var (classKey, classTests) in classGroups)
                 {
-                    nsNode.Children.Add(ClassNode(classKey, classTests, suite, scope, viewState, lastFileChangeTime));
+                    nsNode.Children.Add(ClassNode(classKey, classTests, isStale, scope, viewState));
                 }
 
                 parent.Add(nsNode);
@@ -209,10 +236,9 @@ public static class TestTreeBuilder
     private static TestNode ClassNode(
         string classKey,
         List<TestResultDto> classTests,
-        TestSuiteDto suite,
+        Func<TestResultDto, bool> isStale,
         string scope,
-        ViewState viewState,
-        DateTimeOffset? lastFileChangeTime)
+        ViewState viewState)
     {
         var classNode = new TestNode
         {
@@ -222,7 +248,7 @@ public static class TestTreeBuilder
             ExpansionKey = $"class:{scope}|{classKey}",
             IsExpanded = viewState.IsNodeExpanded($"class:{scope}|{classKey}"),
         };
-        AddTestLeaves(classNode.Children, classTests, suite, viewState, lastFileChangeTime);
+        AddTestLeaves(classNode.Children, classTests, isStale);
         return classNode;
     }
 
@@ -418,19 +444,16 @@ public static class TestTreeBuilder
     private static void AddTestLeaves(
         List<TestNode> parent,
         IEnumerable<TestResultDto> tests,
-        TestSuiteDto suite,
-        ViewState viewState,
-        DateTimeOffset? lastFileChangeTime)
+        Func<TestResultDto, bool> isStale)
     {
         foreach (var test in tests.OrderBy(t => MethodLabel(t.FullyQualifiedName), StringComparer.Ordinal))
         {
-            var isStale = IsStale(suite, lastFileChangeTime);
             parent.Add(new TestNode
             {
                 Label = MethodLabel(test.FullyQualifiedName),
                 Kind = TestNodeKind.Test,
                 Test = test,
-                IsStale = isStale,
+                IsStale = isStale(test),
             });
         }
     }
