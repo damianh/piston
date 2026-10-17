@@ -15,12 +15,22 @@ namespace Piston.ExecutionLeaseHolder;
 /// <item><c>admit &lt;dir&gt; &lt;cpu&gt; &lt;memoryMb|0&gt;</c>: print <c>QUEUED n</c> while queued, <c>READY</c> once admitted, wait.</item>
 /// <item><c>probe &lt;dir&gt;</c>: prepare the directory and exit 0, or print the error and exit 2.</item>
 /// <item><c>run[-raw] &lt;command&gt; [args]</c>: launch an owned test command and forward its output and exit code.</item>
+/// <item><c>discover</c>: run best-effort test discovery and print the number of results.</item>
 /// </list>
 /// </summary>
 public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args[0] == "discover")
+        {
+            var tests = await TestListProcess.RunAsync(
+                "--list-tests", Environment.CurrentDirectory, "Missing.csproj", "Test",
+                new TestListParser(_ => true), null, CancellationToken.None);
+            Console.WriteLine(tests.Count);
+            return 0;
+        }
+
         if (args[0] is "run" or "run-raw")
         {
             var start = new ProcessStartInfo(args[1])

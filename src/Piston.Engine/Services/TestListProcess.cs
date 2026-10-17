@@ -62,7 +62,18 @@ internal static class TestListProcess
                 },
                 TestProcessRunner.ProgressInterval);
 
-        using var ownedProcess = new OwnedTestProcess(psi);
+        OwnedTestProcess ownedProcess;
+        try
+        {
+            ownedProcess = new OwnedTestProcess(psi);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            log?.Write(logCategory, $"Discovery failed to start for {projectPath}: {ex.Message}");
+            return [];
+        }
+
+        using var processLifetime = ownedProcess;
         var process = ownedProcess.Process;
         process.OutputDataReceived += (_, e) =>
         {

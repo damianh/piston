@@ -92,7 +92,17 @@ internal static class MtpServerSession
 
         log?.Invoke("MtpServer", $"{method}: {psi.FileName} {psi.Arguments}");
 
-        using var ownedProcess = new OwnedTestProcess(psi);
+        OwnedTestProcess ownedProcess;
+        try
+        {
+            ownedProcess = new OwnedTestProcess(psi);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            return new Result(Outcome.NotStarted, $"Could not start the test host: {ex.Message}", stderr);
+        }
+
+        using var processLifetime = ownedProcess;
         var process = ownedProcess.Process;
         process.OutputDataReceived += (_, e) =>
         {
