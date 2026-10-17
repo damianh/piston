@@ -53,6 +53,36 @@ public sealed class BuildServiceOutputParsingTests
     }
 
     [Fact]
+    public async Task BuildAsync_RelativeSolutionPathWithDirectory_BuildsTheSolution()
+    {
+        // Relative to the test process, and including directories, unlike the build's own working directory.
+        var relativeRoot = $"piston-build-relative-path-test-{Guid.NewGuid():N}";
+        var root = Path.GetFullPath(relativeRoot);
+        try
+        {
+            var sub = Directory.CreateDirectory(Path.Combine(root, "sub")).FullName;
+            var project = Path.Combine(sub, "All.proj");
+            await File.WriteAllTextAsync(project, """
+                <Project>
+                  <Target Name="Restore" />
+                  <Target Name="Build" />
+                </Project>
+                """, _ct);
+            var relativePath = Path.Combine(relativeRoot, "sub", "All.proj");
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+            var result = await new BuildService().BuildAsync(relativePath, cts.Token);
+
+            Assert.Equal(BuildStatus.Succeeded, result.Status);
+            Assert.Empty(result.Errors);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task BuildAsync_SuccessfulProject_ReturnsBuildStatusSucceeded()
     {
         var dir = Directory.CreateTempSubdirectory("piston-build-test-");

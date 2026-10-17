@@ -192,6 +192,10 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                     {
                         return SerializeSettings(store, store.Update(patch ?? new UserSettings()));
                     }
+                    catch (ArgumentException ex)
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, $"Invalid settings: {ex.Message}");
+                    }
                     catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
                     {
                         throw new JsonRpcException(JsonRpcErrorCodes.InternalError, ex.Message);

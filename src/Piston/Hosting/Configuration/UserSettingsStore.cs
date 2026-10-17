@@ -73,10 +73,12 @@ public sealed class UserSettingsStore
     }
 
     /// <summary>Writes the non-null fields of <paramref name="patch"/> and returns the merged settings.</summary>
+    /// <exception cref="ArgumentException"><paramref name="patch"/> holds an invalid value; nothing is written.</exception>
     /// <exception cref="InvalidOperationException">The existing file is not a JSON object; it is left untouched.</exception>
     public UserSettings Update(UserSettings patch)
     {
         ArgumentNullException.ThrowIfNull(patch);
+        patch.Validate();
 
         lock (_gate)
         {
@@ -133,7 +135,7 @@ public sealed class UserSettingsStore
 
         try
         {
-            return root.Deserialize<UserSettings>(JsonRpcSerializer.Options) ?? new UserSettings();
+            return root.Deserialize<UserSettings>(JsonRpcSerializer.Options)?.WithoutInvalidValues() ?? new UserSettings();
         }
         catch (JsonException)
         {

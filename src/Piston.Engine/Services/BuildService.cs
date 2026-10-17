@@ -26,7 +26,10 @@ public sealed class BuildService : IBuildService
     {
         if (projectPaths is null || projectPaths.Count == 0)
         {
-            return await RunBuildAsync($"build \"{solutionPath}\"", TestProcessRunner.WorkingDirectoryFor(solutionPath), onProjectBuilt, ct).ConfigureAwait(false);
+            // Absolute, since the build starts in the solution's directory: a relative path with a
+            // directory (sub/My.slnx) would otherwise resolve against it a second time.
+            var fullSolutionPath = Path.GetFullPath(solutionPath);
+            return await RunBuildAsync($"build \"{fullSolutionPath}\"", TestProcessRunner.WorkingDirectoryFor(fullSolutionPath), onProjectBuilt, ct).ConfigureAwait(false);
         }
 
         var targets = projectPaths

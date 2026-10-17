@@ -25,6 +25,9 @@ public sealed class EngineClientService : IAsyncDisposable
     private readonly List<ActivityEvent> _activityLog = [];
     private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonRpcResponse?>> _pendingRequests = new();
 
+    // ClientWebSocket allows only one outstanding SendAsync at a time.
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
+
     public event Action<StateSnapshotNotification>? StateChanged;
     public event Action? ConnectionStateChanged;
     public event Action<ActivityEvent>? ActivityEventReceived;
@@ -258,12 +261,25 @@ public sealed class EngineClientService : IAsyncDisposable
 
         try
         {
-            await _webSocket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, CancellationToken.None)
-                .ConfigureAwait(false);
+            await SendSerializedAsync(_webSocket, bytes).ConfigureAwait(false);
         }
         catch
         {
             // Connection lost — reconnect loop will handle it
+        }
+    }
+
+    private async Task SendSerializedAsync(ClientWebSocket ws, ReadOnlyMemory<byte> bytes)
+    {
+        var ct = _cts?.Token ?? CancellationToken.None;
+        await _sendGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await ws.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _ = _sendGate.Release();
         }
     }
 
@@ -296,8 +312,7 @@ public sealed class EngineClientService : IAsyncDisposable
 
         try
         {
-            await _webSocket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, CancellationToken.None)
-                .ConfigureAwait(false);
+            await SendSerializedAsync(_webSocket, bytes).ConfigureAwait(false);
         }
         catch
         {
@@ -437,5 +452,6 @@ public sealed class EngineClientService : IAsyncDisposable
         }
 
         _webSocket?.Dispose();
+        _sendGate.Dispose();
     }
 }

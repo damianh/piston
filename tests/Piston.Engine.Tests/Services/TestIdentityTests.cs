@@ -21,6 +21,13 @@ public sealed class TestIdentityTests
     [InlineData("Ns.C.M", "nice name", "Ns.C.nice name")]
     [InlineData("Ns::C::M", "M", "Ns.C.M")]
     [InlineData("", "M", "M")]
+    // Dots in (generic) arguments are not the class/method separator.
+    [InlineData("Ns.C.M(x: 1.5, s: \"a.b\")", "nice name", "Ns.C.nice name")]
+    [InlineData("Ns.C.M(s: \"a(.)b\", c: '.')", "nice name", "Ns.C.nice name")]
+    [InlineData("Ns.C.M<System.Int32>(x: 1.5)", "nice name", "Ns.C.nice name")]
+    [InlineData("Ns.C<System.Int32>.M(x: 1.5)", "nice name", "Ns.C<System.Int32>.nice name")]
+    [InlineData("Ns.Outer+Inner.M(x: 1.5)", "nice name", "Ns.Outer+Inner.nice name")]
+    [InlineData("Ns.C.M(x: 1.5, s: \"a.b\")", "M(x: 1.5, s: \"a.b\")", "Ns.C.M(x: 1.5, s: \"a.b\")")]
     public void Of_QualifiesTheDisplayNameWithTheTestClass(string fqn, string displayName, string expected) =>
         Assert.Equal(expected, TestIdentity.Of(fqn, displayName));
 

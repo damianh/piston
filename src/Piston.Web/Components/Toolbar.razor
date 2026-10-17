@@ -56,7 +56,8 @@
                aria-label="Filter tests"
                value="@Filter"
                @oninput="HandleFilterInput"
-               @onkeydown="HandleFilterKeyDown" />
+               @onkeydown="HandleFilterKeyDown"
+               @onkeydown:stopPropagation="true" />
         @if (!string.IsNullOrEmpty(Filter))
         {
             <button class="text-gray-600 hover:text-gray-400" @onclick="ClearFilter">✕</button>

@@ -101,6 +101,40 @@ public sealed class RunLogTests
         Assert.Equal(JsonRpcErrorCodes.InvalidParams, ex.Code);
     }
 
+    [Theory]
+    [InlineData(1000)]
+    [InlineData(2100)] // beyond what the log retains, so it already has an omitted marker
+    public async Task Dispatcher_GetRunLog_FullLogOfLongLines_FitsInOneMessage(int lines)
+    {
+        // Every character of this filler needs escaping in JSON, the worst case for the serialized size.
+        var filler = new string('\u0001', 4000);
+        var log = new ExecutionLog("A.Tests.csproj") { Runner = "VSTest", ExitCode = 1 };
+        for (var i = 0; i < lines; i++)
+        {
+            log.Append("stdout", $"line {i}:\"<é>\n{filler}");
+        }
+
+        var engine = new StubEngine();
+        engine.State.TestSuites = [Suite("A.Tests", log, "run-1", Test("A.T1", null))];
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var result = await dispatcher.HandleCommandAsync(
+            ProtocolMethods.TestsGetRunLog, JsonNode.Parse("""{"project":"A.Tests"}"""), _ct);
+        var message = JsonRpcSerializer.Serialize(new JsonRpcResponse("1", result));
+
+        Assert.True(
+            message.Length < MessageFramer.DefaultMaxMessageSize,
+            $"Serialized run log is {message.Length} bytes.");
+
+        var entries = result!["log"]!["entries"]!.AsArray();
+        var marker = Assert.Single(entries, e => e!["category"]!.GetValue<string>() == ExecutionLog.OmittedCategory);
+        var omitted = result["log"]!["omittedEntries"]!.GetValue<int>();
+        Assert.Contains($"{omitted} line(s) omitted", marker!["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Equal(lines, entries.Count - 1 + omitted);
+        Assert.StartsWith("line 0:", entries[0]!["message"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.StartsWith($"line {lines - 1}:", entries[^1]!["message"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
     private static ExecutionLog Log(string project, string message)
     {
         var log = new ExecutionLog(project) { Runner = "VSTest", ExitCode = 1 };

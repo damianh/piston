@@ -88,14 +88,17 @@ public sealed class ExecutionLog
                     return [.. _head, .. _tail];
                 }
 
-                var marker = new ExecutionLogEntry(_tail.Peek().Timestamp, OmittedCategory, $"… {_omitted} line(s) omitted …");
-                return [.. _head, marker, .. _tail];
+                return [.. _head, OmittedMarker(_tail.Peek().Timestamp, _omitted), .. _tail];
             }
         }
     }
 
     /// <summary>Category of the entry marking dropped entries.</summary>
     public const string OmittedCategory = "Omitted";
+
+    /// <summary>Creates the <see cref="OmittedCategory"/> entry marking <paramref name="count"/> dropped entries.</summary>
+    public static ExecutionLogEntry OmittedMarker(DateTimeOffset timestamp, int count) =>
+        new(timestamp, OmittedCategory, $"… {count} line(s) omitted …");
 
     /// <summary>Records a diagnostic and also writes it to the solution's diagnostics log.</summary>
     public void Write(string category, string message)

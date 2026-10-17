@@ -12,6 +12,7 @@ namespace Piston.Tests.Hosting;
 
 public sealed class UserSettingsStoreTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
     private readonly string _directory = Path.Combine(Path.GetTempPath(), $"piston-settings-{Guid.NewGuid():N}");
 
     private string SettingsPath => Path.Combine(_directory, "nested", "settings.json");
@@ -80,6 +81,29 @@ public sealed class UserSettingsStoreTests : IDisposable
     }
 
     [Fact]
+    public void Get_UndefinedEnumValue_FallsBackToDefault()
+    {
+        Write("""{ "dashboard": { "detailPane": 99 } }""");
+        var store = new UserSettingsStore(SettingsPath);
+
+        var settings = store.Get();
+
+        Assert.Null(settings.Dashboard?.DetailPane);
+    }
+
+    [Fact]
+    public void Update_UndefinedEnumValue_ThrowsAndDoesNotPersist()
+    {
+        Write("""{ "dashboard": { "detailPane": "bottom" } }""");
+        var store = new UserSettingsStore(SettingsPath);
+
+        _ = Assert.Throws<ArgumentException>(() =>
+            store.Update(new UserSettings(new DashboardSettings((DetailPanePosition)99))));
+
+        Assert.Equal(DetailPanePosition.Bottom, store.Get().Dashboard?.DetailPane);
+    }
+
+    [Fact]
     public void Update_InvalidJson_ThrowsAndLeavesFileUntouched()
     {
         Write("{ not json");
@@ -145,11 +169,11 @@ public sealed class UserSettingsStoreTests : IDisposable
         var dispatcher = new EngineCommandDispatcher(null!);
         dispatcher.SetUserSettingsStore(new UserSettingsStore(SettingsPath));
 
-        var initial = await dispatcher.HandleCommandAsync(ProtocolMethods.SettingsGet, null, CancellationToken.None);
+        var initial = await dispatcher.HandleCommandAsync(ProtocolMethods.SettingsGet, null, _ct);
         var updated = await dispatcher.HandleCommandAsync(
             ProtocolMethods.SettingsUpdate,
             JsonNode.Parse("""{ "dashboard": { "detailPane": "bottom" } }"""),
-            CancellationToken.None);
+            _ct);
 
         Assert.Equal("{}", initial?["settings"]?.ToJsonString());
         Assert.Equal(SettingsPath, initial?["filePath"]?.GetValue<string>());
@@ -165,7 +189,22 @@ public sealed class UserSettingsStoreTests : IDisposable
         var ex = await Assert.ThrowsAsync<JsonRpcException>(() => dispatcher.HandleCommandAsync(
             ProtocolMethods.SettingsUpdate,
             JsonNode.Parse("""{ "dashboard": { "detailPane": "left" } }"""),
-            CancellationToken.None));
+            _ct));
+
+        Assert.Equal(JsonRpcErrorCodes.InvalidParams, ex.Code);
+        Assert.False(File.Exists(SettingsPath));
+    }
+
+    [Fact]
+    public async Task Dispatcher_UndefinedEnumValue_IsInvalidParamsAndNotPersisted()
+    {
+        var dispatcher = new EngineCommandDispatcher(null!);
+        dispatcher.SetUserSettingsStore(new UserSettingsStore(SettingsPath));
+
+        var ex = await Assert.ThrowsAsync<JsonRpcException>(() => dispatcher.HandleCommandAsync(
+            ProtocolMethods.SettingsUpdate,
+            JsonNode.Parse("""{ "dashboard": { "detailPane": 99 } }"""),
+            _ct));
 
         Assert.Equal(JsonRpcErrorCodes.InvalidParams, ex.Code);
         Assert.False(File.Exists(SettingsPath));
@@ -177,7 +216,7 @@ public sealed class UserSettingsStoreTests : IDisposable
         var dispatcher = new EngineCommandDispatcher(null!);
 
         var ex = await Assert.ThrowsAsync<JsonRpcException>(() =>
-            dispatcher.HandleCommandAsync(ProtocolMethods.SettingsGet, null, CancellationToken.None));
+            dispatcher.HandleCommandAsync(ProtocolMethods.SettingsGet, null, _ct));
 
         Assert.Equal(JsonRpcErrorCodes.MethodNotFound, ex.Code);
     }
