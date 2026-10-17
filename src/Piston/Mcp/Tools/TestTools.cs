@@ -15,11 +15,18 @@ namespace Piston.Mcp.Tools;
 [McpServerToolType]
 public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineAvailability? availability = null)
 {
+    public const string RunTestsTool = "run_tests";
+    public const string VerifyTool = "verify";
+    public const string GetTestResultsTool = "get_test_results";
+    public const string GetTestRunTool = "get_test_run";
+    public const string SetTestFilterTool = "set_test_filter";
+    public const string ClearResultsTool = "clear_results";
+
     private const string ExpectedSolutionDescription =
         "Optional solution file or worktree directory you expect this Piston to serve. " +
         "When set and it does not match, the tool fails instead of reporting another worktree's results.";
 
-    [McpServerTool(Name = "run_tests"), Description("Force a full test run of the loaded solution. Returns the solution path and a results summary plus the run ID, status, scope, freshness and source fingerprint; use GetTestRun with the run ID for per-test provenance.")]
+    [McpServerTool(Name = RunTestsTool), Description("Force a full test run of the loaded solution. Returns the solution path and a results summary plus the run ID, status, scope, freshness and source fingerprint; use get_test_run with the run ID for per-test provenance.")]
     public async Task<string> RunTestsAsync(
         [Description(ExpectedSolutionDescription)] string? expectedSolution = null,
         CancellationToken ct = default)
@@ -55,13 +62,13 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         finally
         {
             sw.Stop();
-            recorder.Record("RunTests", null, succeeded ? result! : null, sw.Elapsed.TotalMilliseconds, succeeded);
+            recorder.Record(RunTestsTool, null, succeeded ? result! : null, sw.Elapsed.TotalMilliseconds, succeeded);
         }
 
         return result;
     }
 
-    [McpServerTool(Name = "verify"), Description(
+    [McpServerTool(Name = VerifyTool), Description(
         "Get current full verification of the solution as it is on disk now. Reuses the latest run when it is a " +
         "completed full-scope, unfiltered result for the present source fingerprint; otherwise awaits an active " +
         "full run or forces one, retrying at most twice if the source changes during the run (then Stale). " +
@@ -91,12 +98,12 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         finally
         {
             sw.Stop();
-            recorder.Record("Verify", timeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            recorder.Record(VerifyTool, timeoutSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 logSummary, sw.Elapsed.TotalMilliseconds, succeeded);
         }
     }
 
-    [McpServerTool, Description("Get current test results from the last test run.")]
+    [McpServerTool(Name = GetTestResultsTool), Description("Get current test results from the last test run.")]
     public string GetTestResults()
     {
         availability?.ThrowIfUnavailable();
@@ -137,11 +144,11 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
 
         var result = sb.ToString();
         sw.Stop();
-        recorder.Record(nameof(GetTestResults), null, $"{state.TotalPassed} passed, {state.TotalFailed} failed", sw.Elapsed.TotalMilliseconds, true);
+        recorder.Record(GetTestResultsTool, null, $"{state.TotalPassed} passed, {state.TotalFailed} failed", sw.Elapsed.TotalMilliseconds, true);
         return result;
     }
 
-    [McpServerTool, Description(
+    [McpServerTool(Name = GetTestRunTool), Description(
         "Get provenance and per-test results for exactly one test run as JSON (schema piston.test-run/v1): " +
         "run ID, status, full/selective scope, filters, freshness, source fingerprints captured before and after the run, " +
         "build/runner context, machine-wide execution admission (queue position and CPU/memory reservations), " +
@@ -170,13 +177,13 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
                 _ => $"Test run '{key}' was not found; only the {PistonState.MaxRecentRuns} most recent runs are retained in memory.",
             };
             sw.Stop();
-            recorder.Record(nameof(GetTestRun), runId, message, sw.Elapsed.TotalMilliseconds, false);
+            recorder.Record(GetTestRunTool, runId, message, sw.Elapsed.TotalMilliseconds, false);
             throw new McpException(message);
         }
 
         var result = TestRunJson.Serialize(run);
         sw.Stop();
-        recorder.Record(nameof(GetTestRun), runId, $"{run.RunId} {run.Status}", sw.Elapsed.TotalMilliseconds, true);
+        recorder.Record(GetTestRunTool, runId, $"{run.RunId} {run.Status}", sw.Elapsed.TotalMilliseconds, true);
         return result;
     }
 
@@ -272,7 +279,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         return $"Admission: {queue}; machine budget CPU slots {a.CpuSlotsInUse}+{a.ReservedCpuSlots}/{a.BudgetCpuSlots}{memory} ({a.BudgetSource})";
     }
 
-    [McpServerTool, Description("Set a test filter to narrow which tests are run. Pass empty string to clear.")]
+    [McpServerTool(Name = SetTestFilterTool), Description("Set a test filter to narrow which tests are run. Pass empty string to clear.")]
     public string SetTestFilter(string filter)
     {
         availability?.ThrowIfUnavailable();
@@ -281,11 +288,11 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         engine.SetFilter(effectiveFilter);
         var result = $"Filter set to: {effectiveFilter ?? "(none)"}";
         sw.Stop();
-        recorder.Record(nameof(SetTestFilter), filter, result, sw.Elapsed.TotalMilliseconds, true);
+        recorder.Record(SetTestFilterTool, filter, result, sw.Elapsed.TotalMilliseconds, true);
         return result;
     }
 
-    [McpServerTool, Description("Clear current test results and persisted coverage in the current solution directory. A running test run may publish new results afterwards.")]
+    [McpServerTool(Name = ClearResultsTool), Description("Clear current test results and persisted coverage in the current solution directory. A running test run may publish new results afterwards.")]
     public string ClearResults()
     {
         availability?.ThrowIfUnavailable();
@@ -293,7 +300,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         engine.ClearResults();
         const string Result = "Results cleared.";
         sw.Stop();
-        recorder.Record(nameof(ClearResults), null, Result, sw.Elapsed.TotalMilliseconds, true);
+        recorder.Record(ClearResultsTool, null, Result, sw.Elapsed.TotalMilliseconds, true);
         return Result;
     }
 }

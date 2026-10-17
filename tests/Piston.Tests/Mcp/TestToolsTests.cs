@@ -25,6 +25,37 @@ public sealed class TestToolsTests
         Assert.Equal("run_tests", tool.ProtocolTool.Name);
     }
 
+    [Fact]
+    public async Task RecordedCallsUseMcpToolNames()
+    {
+        var recorder = new CapturingRecorder();
+        var engine = new StubEngine();
+        var tools = new TestTools(engine, recorder);
+        var advertised = typeof(TestTools).GetMethods()
+            .Where(m => m.GetCustomAttribute<McpServerToolAttribute>() is not null)
+            .Select(m => McpServerTool.Create(m, tools).ProtocolTool.Name)
+            .ToHashSet();
+
+        _ = tools.GetTestResults();
+        _ = Assert.ThrowsAny<Exception>(() => tools.GetTestRun("missing"));
+        _ = tools.SetTestFilter("");
+        _ = tools.ClearResults();
+        _ = await tools.RunTestsAsync(ct: CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2));
+
+        Assert.Equal(
+            ["get_test_results", "get_test_run", "set_test_filter", "clear_results", "run_tests"],
+            recorder.ToolNames);
+        Assert.All(recorder.ToolNames, name => Assert.Contains(name, advertised));
+    }
+
+    private sealed class CapturingRecorder : IMcpCallRecorder
+    {
+        public List<string> ToolNames { get; } = [];
+
+        public void Record(string toolName, string? paramsSummary, string? resultSummary, double durationMs, bool succeeded)
+            => ToolNames.Add(toolName);
+    }
+
     [Theory]
     [InlineData(PistonPhase.Idle)]
     [InlineData(PistonPhase.Watching)]
