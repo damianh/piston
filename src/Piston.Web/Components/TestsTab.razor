@@ -4,12 +4,12 @@
 <div class="flex flex-col h-full overflow-hidden">
 
     <!-- Toolbar -->
-    <Toolbar IsExpanded="@_viewState.TreeExpanded"
-             Filter="@_filter"
+    <Toolbar Filter="@_filter"
              OnForceRun="ForceRun"
              OnClearResults="ClearResults"
             OnReset="Reset"
-             OnToggleExpand="ToggleExpand"
+             OnExpandAll="() => SetExpanded(true)"
+             OnCollapseAll="() => SetExpanded(false)"
              OnFilterChanged="SetFilter" />
 
     <!-- Main content area -->
@@ -146,10 +146,12 @@
         await Client.ResetAsync();
     }
 
-    private void ToggleExpand()
+    private void ToggleExpand() => SetExpanded(!_viewState.TreeExpanded);
+
+    private void SetExpanded(bool expanded)
     {
-        _viewState.TreeExpanded = !_viewState.TreeExpanded;
-        SetExpandedRecursive(_treeNodes, _viewState.TreeExpanded);
+        _viewState.TreeExpanded = expanded;
+        SetExpandedRecursive(_treeNodes, expanded);
         StateHasChanged();
     }
 

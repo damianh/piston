@@ -22,11 +22,17 @@
         @(_resetArmed ? "⟲ Confirm reset?" : "⟲ Reset")
     </button>
 
-    <!-- Expand/collapse -->
-    <button class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
-            title="Toggle expand/collapse (E)" @onclick="OnToggleExpand">
-        @(IsExpanded ? "⊟ Collapse" : "⊞ Expand")
-    </button>
+    <!-- Expand/collapse all -->
+    <div class="flex items-center gap-1">
+        <button class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+                title="Expand all" aria-label="Expand all" @onclick="OnExpandAll">
+            ⊞
+        </button>
+        <button class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+                title="Collapse all" aria-label="Collapse all" @onclick="OnCollapseAll">
+            ⊟
+        </button>
+    </div>
 
     <!-- Filter input -->
     <div class="flex items-center gap-1 ml-2">
@@ -45,12 +51,12 @@
 </div>
 
 @code {
-    [Parameter] public bool IsExpanded { get; set; } = true;
     [Parameter] public string? Filter { get; set; }
     [Parameter] public EventCallback OnForceRun { get; set; }
     [Parameter] public EventCallback OnClearResults { get; set; }
     [Parameter] public EventCallback OnReset { get; set; }
-    [Parameter] public EventCallback OnToggleExpand { get; set; }
+    [Parameter] public EventCallback OnExpandAll { get; set; }
+    [Parameter] public EventCallback OnCollapseAll { get; set; }
     [Parameter] public EventCallback<string?> OnFilterChanged { get; set; }
 
     private System.Timers.Timer? _debounceTimer;
