@@ -50,6 +50,24 @@ public sealed class TestSelectionFilterTests
         Assert.Equal("FullyQualifiedName=Ns.C.M|FullyQualifiedName=Ns.C.Theory|FullyQualifiedName=Ns.C.Unknown", filter);
     }
 
+    [Fact]
+    public void CustomDisplayNames_SharingAName_SelectOnlyTheirOwnMethod()
+    {
+        static TestResult T(string identity, string method) =>
+            new(identity, identity, TestStatus.Passed, TimeSpan.Zero, null, null, null, null) { Method = method };
+
+        var known = new[]
+        {
+            T("Ns.C.checkout (guest)", "Ns.C.GuestCheckout"),
+            T("Ns.C.checkout (member)", "Ns.C.MemberCheckout"),
+        };
+
+        Assert.Equal("FullyQualifiedName=Ns.C.GuestCheckout", TestSelectionFilter.Build(["Ns.C.checkout (guest)"], known));
+        Assert.Equal(
+            "FullyQualifiedName=Ns.C.GuestCheckout|FullyQualifiedName=Ns.C.MemberCheckout",
+            TestSelectionFilter.Build(["Ns.C.checkout"], known));
+    }
+
     [Theory]
     [InlineData("X\" --settings \"/tmp/extra.runsettings")]
     [InlineData("Ns.C.say \"hi\"")]

@@ -118,7 +118,7 @@ else
     private RunTestsCommand? RunCommand =>
         Test is null || Project is null
             ? null
-            : new RunTestsCommand([Project], [TestTreeBuilder.NameHead(Test.FullyQualifiedName).Trim()]);
+            : new RunTestsCommand([Project], [Test.FullyQualifiedName]);
 
     // A filter selects by name, so every case of a theory and every target framework runs.
     private string? RunNote =>

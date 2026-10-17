@@ -16,7 +16,10 @@ internal static class TestSelectionFilter
     /// A filter matching <paramref name="tests"/> by method name, or by class when there are more than
     /// <see cref="MaxConditions"/> methods; null (run everything) when there are none or too many classes.
     /// </summary>
-    /// <param name="tests">Identities (<see cref="TestResult.FullyQualifiedName"/>) of the tests to run.</param>
+    /// <param name="tests">
+    /// Identities (<see cref="TestResult.FullyQualifiedName"/>) of the tests to run. An identity that matches no
+    /// known result exactly is matched by name with any argument list removed.
+    /// </param>
     /// <param name="known">
     /// Results for the selected tests' projects, which map an identity built from a custom display name to the
     /// method a filter must name.
@@ -29,13 +32,20 @@ internal static class TestSelectionFilter
             return null;
         }
 
-        var methodsByName = (known ?? [])
-            .Where(t => t.Method is not null)
+        var withMethod = (known ?? []).Where(t => t.Method is not null).ToList();
+
+        // Exact identities first: distinct display names such as "checkout (guest)" and "checkout (member)"
+        // share a name once their argument lists are stripped, but each maps to its own method.
+        var methodByIdentity = withMethod
+            .GroupBy(t => t.FullyQualifiedName, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => MethodName(g.First().Method!), StringComparer.Ordinal);
+        var methodsByName = withMethod
             .ToLookup(t => MethodName(t.FullyQualifiedName), t => MethodName(t.Method!), StringComparer.Ordinal);
 
         var methods = tests
-            .Select(MethodName)
-            .SelectMany(m => methodsByName.Contains(m) ? methodsByName[m] : [m])
+            .SelectMany(t => methodByIdentity.TryGetValue(t, out var method)
+                ? [method]
+                : methodsByName.Contains(MethodName(t)) ? methodsByName[MethodName(t)] : [MethodName(t)])
             .Where(m => m.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)

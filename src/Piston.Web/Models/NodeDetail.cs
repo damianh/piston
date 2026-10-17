@@ -73,7 +73,7 @@ public sealed record NodeDetail(
             ? null
             : new RunTestsCommand(
                 projects,
-                [.. tests.Select(t => TestTreeBuilder.NameHead(t.FullyQualifiedName).Trim()).Distinct(StringComparer.Ordinal)]);
+                [.. tests.Select(t => t.FullyQualifiedName).Distinct(StringComparer.Ordinal)]);
 
         var (title, subtitle) = structure switch
         {
