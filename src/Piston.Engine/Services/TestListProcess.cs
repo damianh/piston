@@ -62,7 +62,8 @@ internal static class TestListProcess
                 },
                 TestProcessRunner.ProgressInterval);
 
-        using var process = new Process { StartInfo = psi };
+        using var ownedProcess = new OwnedTestProcess(psi);
+        var process = ownedProcess.Process;
         process.OutputDataReceived += (_, e) =>
         {
             if (e.Data is null)
@@ -88,11 +89,11 @@ internal static class TestListProcess
 
         try
         {
-            _ = process.Start();
+            ownedProcess.Start();
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
             _ = await RedirectedProcessDrain.WaitForExitAndDrainAsync(
-                process,
+                ownedProcess,
                 RedirectedProcessDrain.DefaultTimeout,
                 timeout.Token,
                 message => log?.Write(logCategory, message)).ConfigureAwait(false);
@@ -100,8 +101,7 @@ internal static class TestListProcess
         catch (OperationCanceledException)
         {
             await RedirectedProcessDrain.KillAndWaitAsync(
-                process,
-                RedirectedProcessDrain.DefaultTimeout,
+                ownedProcess,
                 CancellationToken.None,
                 message => log?.Write(logCategory, message)).ConfigureAwait(false);
 

@@ -1,7 +1,6 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
-using System.ComponentModel;
 using System.Diagnostics;
 
 namespace Piston.Engine.Services;
@@ -13,12 +12,13 @@ internal static class RedirectedProcessDrain
     internal static readonly TimeSpan KillTimeout = TimeSpan.FromSeconds(10);
 
     internal static async Task<bool> WaitForExitAndDrainAsync(
-        Process process,
+        OwnedTestProcess ownedProcess,
         TimeSpan drainTimeout,
         CancellationToken ct,
         Action<string> onDrainTimeout,
         TimeSpan? exitTimeout = null)
     {
+        var process = ownedProcess.Process;
         if (exitTimeout is { } timeout)
         {
             try
@@ -27,22 +27,8 @@ internal static class RedirectedProcessDrain
             }
             catch (TimeoutException)
             {
-                var killError = KillProcessTree(process);
-                try
-                {
-                    await WaitForProcessExitAsync(process, ct).WaitAsync(KillTimeout, ct).ConfigureAwait(false);
-                }
-                catch (TimeoutException)
-                {
-                    StopReading(process);
-                    onDrainTimeout($"The process did not exit after being killed within {KillTimeout.TotalSeconds:0}s.");
-                    return false;
-                }
-
-                if (killError is not null)
-                {
-                    onDrainTimeout($"Could not kill the process tree: {killError}");
-                }
+                await KillAndWaitAsync(ownedProcess, ct, onDrainTimeout).ConfigureAwait(false);
+                return false;
             }
         }
         else
@@ -55,49 +41,55 @@ internal static class RedirectedProcessDrain
         try
         {
             await process.WaitForExitAsync(drainCts.Token).ConfigureAwait(false);
+            await KillAndWaitAsync(ownedProcess, ct, onDrainTimeout).ConfigureAwait(false);
             return true;
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            var killError = KillProcessTree(process);
-            StopReading(process);
-            var message = $"Redirected output drain exceeded {drainTimeout.TotalSeconds:0}s; output was cut off.";
-            if (killError is not null)
-            {
-                message += $" Could not kill the process tree: {killError}";
-            }
-
-            onDrainTimeout(message);
+            onDrainTimeout($"Redirected output drain exceeded {drainTimeout.TotalSeconds:g}s; output was cut off.");
+            await KillAndWaitAsync(ownedProcess, ct, onDrainTimeout).ConfigureAwait(false);
             return false;
         }
     }
 
     internal static async Task KillAndWaitAsync(
-        Process process,
-        TimeSpan drainTimeout,
+        OwnedTestProcess ownedProcess,
         CancellationToken ct,
         Action<string> onTimeout)
     {
-        var killError = KillProcessTree(process);
-        try
-        {
-            await WaitForProcessExitAsync(process, ct).WaitAsync(KillTimeout, ct).ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            StopReading(process);
-            onTimeout($"The process did not exit after being killed within {KillTimeout.TotalSeconds:0}s.");
-            return;
-        }
-
-        if (!await WaitForExitAndDrainAsync(process, drainTimeout, ct, onTimeout).ConfigureAwait(false))
-        {
-            return;
-        }
-
+        var process = ownedProcess.Process;
+        var killError = ownedProcess.KillProcessTree();
         if (killError is not null)
         {
             onTimeout($"Could not kill the process tree: {killError}");
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(KillTimeout);
+        try
+        {
+            await WaitForProcessExitAsync(process, timeout.Token).ConfigureAwait(false);
+            // The host may have established ownership between the first kill and its exit.
+            killError = ownedProcess.KillProcessTree();
+            if (killError is not null)
+            {
+                onTimeout($"Could not kill the process tree: {killError}");
+            }
+
+            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            await ownedProcess.WaitForTreeExitAsync(timeout.Token).ConfigureAwait(false);
+            if (killError is null)
+            {
+                ownedProcess.CompleteCleanup();
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            onTimeout($"The process tree did not exit and drain within {KillTimeout.TotalSeconds:0}s after being killed; output was cut off.");
+        }
+        finally
+        {
+            StopReading(process);
         }
     }
 
@@ -117,7 +109,7 @@ internal static class RedirectedProcessDrain
         {
             if (process.HasExited)
             {
-                exited.TrySetResult();
+                _ = exited.TrySetResult();
             }
 
             await exited.Task.WaitAsync(ct).ConfigureAwait(false);
@@ -125,27 +117,6 @@ internal static class RedirectedProcessDrain
         finally
         {
             process.Exited -= OnExited;
-        }
-    }
-
-    private static string? KillProcessTree(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-
-            return null;
-        }
-        catch (InvalidOperationException) when (process.HasExited)
-        {
-            return null;
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or Win32Exception)
-        {
-            return ex.Message;
         }
     }
 

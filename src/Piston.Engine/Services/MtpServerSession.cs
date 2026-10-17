@@ -92,7 +92,8 @@ internal static class MtpServerSession
 
         log?.Invoke("MtpServer", $"{method}: {psi.FileName} {psi.Arguments}");
 
-        using var process = new Process { StartInfo = psi };
+        using var ownedProcess = new OwnedTestProcess(psi);
+        var process = ownedProcess.Process;
         process.OutputDataReceived += (_, e) =>
         {
             if (!string.IsNullOrWhiteSpace(e.Data))
@@ -119,7 +120,7 @@ internal static class MtpServerSession
 
         try
         {
-            _ = process.Start();
+            ownedProcess.Start();
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
@@ -135,6 +136,8 @@ internal static class MtpServerSession
             using var client = await AcceptAsync(listener, process, ct).ConfigureAwait(false);
             if (client is null)
             {
+                await KillAndWaitAsync(ownedProcess, log).ConfigureAwait(false);
+                processCleanedUp = true;
                 return new Result(Outcome.NotStarted, "The test host did not connect in server mode.", Snapshot(stderr));
             }
 
@@ -147,33 +150,33 @@ internal static class MtpServerSession
             switch (outcome)
             {
                 case Outcome.Completed:
-                    await WaitForExitOrKillAsync(process, ExitTimeout, log).ConfigureAwait(false);
+                    await WaitForExitOrKillAsync(ownedProcess, ExitTimeout, log).ConfigureAwait(false);
                     processCleanedUp = true;
                     return new Result(outcome, error, Snapshot(stderr));
                 case Outcome.Cancelled:
                 case Outcome.TimedOut:
                     // The host is unresponsive (or no longer wanted): there is nothing to wait for.
-                    await KillAndWaitAsync(process, log).ConfigureAwait(false);
+                    await KillAndWaitAsync(ownedProcess, log).ConfigureAwait(false);
                     processCleanedUp = true;
                     return new Result(outcome, error, Snapshot(stderr));
                 case Outcome.NotStarted:
                 case Outcome.Failed:
                 default:
-                    var failedStderr = await StderrAfterExitAsync(process, stderr, log).ConfigureAwait(false);
+                    var failedStderr = await StderrAfterExitAsync(ownedProcess, stderr, log).ConfigureAwait(false);
                     processCleanedUp = true;
                     return new Result(outcome, error, failedStderr);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await KillAndWaitAsync(process, log).ConfigureAwait(false);
+            await KillAndWaitAsync(ownedProcess, log).ConfigureAwait(false);
             processCleanedUp = true;
             return new Result(Outcome.Cancelled, null, Snapshot(stderr));
         }
         catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
         {
             log?.Invoke("MtpServer", $"Session failed: {ex.Message}");
-            var failedStderr = await StderrAfterExitAsync(process, stderr, log).ConfigureAwait(false);
+            var failedStderr = await StderrAfterExitAsync(ownedProcess, stderr, log).ConfigureAwait(false);
             processCleanedUp = true;
             return new Result(Outcome.NotStarted, $"Lost connection to the test host: {ex.Message}", failedStderr);
         }
@@ -181,7 +184,7 @@ internal static class MtpServerSession
         {
             if (!processCleanedUp)
             {
-                await KillAndWaitAsync(process, log).ConfigureAwait(false);
+                await KillAndWaitAsync(ownedProcess, log).ConfigureAwait(false);
             }
         }
     }
@@ -415,7 +418,7 @@ internal static class MtpServerSession
     }
 
     private static async Task<IReadOnlyList<string>> StderrAfterExitAsync(
-        Process process,
+        OwnedTestProcess process,
         List<string> stderr,
         Action<string, string>? log)
     {
@@ -423,7 +426,7 @@ internal static class MtpServerSession
         return Snapshot(stderr);
     }
 
-    private static Task WaitForExitOrKillAsync(Process process, TimeSpan timeout, Action<string, string>? log) =>
+    private static Task WaitForExitOrKillAsync(OwnedTestProcess process, TimeSpan timeout, Action<string, string>? log) =>
         RedirectedProcessDrain.WaitForExitAndDrainAsync(
             process,
             RedirectedProcessDrain.DefaultTimeout,
@@ -431,10 +434,9 @@ internal static class MtpServerSession
             message => log?.Invoke("MtpServer", message),
             timeout);
 
-    private static Task KillAndWaitAsync(Process process, Action<string, string>? log) =>
+    private static Task KillAndWaitAsync(OwnedTestProcess process, Action<string, string>? log) =>
         RedirectedProcessDrain.KillAndWaitAsync(
             process,
-            RedirectedProcessDrain.DefaultTimeout,
             CancellationToken.None,
             message => log?.Invoke("MtpServer", message));
 

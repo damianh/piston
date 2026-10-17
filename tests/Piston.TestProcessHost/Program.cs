@@ -14,6 +14,37 @@ public static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args[0] == "--hold-output")
+        {
+            await Task.Delay(TimeSpan.FromMinutes(1));
+            return 0;
+        }
+
+        if (args[0] == "--spawn-output-holder")
+        {
+            var holderStart = new ProcessStartInfo("dotnet") { UseShellExecute = false };
+            holderStart.ArgumentList.Add(typeof(Program).Assembly.Location);
+            holderStart.ArgumentList.Add("--hold-output");
+            using var holder = Process.Start(holderStart)
+                ?? throw new InvalidOperationException("Could not start the output holder.");
+            Console.WriteLine(holder.Id);
+            return 0;
+        }
+
+        if (args[0] == "--write-output")
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(300));
+            Console.WriteLine("stdout");
+            Console.Error.WriteLine("stderr");
+            return 7;
+        }
+
+        if (args[0] == "--server")
+        {
+            Console.Error.WriteLine("Test host failed before connecting.");
+            return 1;
+        }
+
         // Keep the handle rooted until OS process exit: explicitly closing a job
         // containing this host would kill the host before it returns its exit code.
         _job = OperatingSystem.IsWindows() ? CreateJob() : null;

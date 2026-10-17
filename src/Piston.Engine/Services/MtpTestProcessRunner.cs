@@ -188,7 +188,8 @@ internal static partial class MtpTestProcessRunner
             ? null
             : new TrailingThrottle(() => onProgress(BuildLiveSnapshot(liveResults, liveResultsLock)), TestProcessRunner.ProgressInterval);
 
-        using var process = new Process { StartInfo = psi };
+        using var ownedProcess = new OwnedTestProcess(psi);
+        var process = ownedProcess.Process;
 
         process.OutputDataReceived += (_, e) =>
         {
@@ -223,14 +224,14 @@ internal static partial class MtpTestProcessRunner
             }
         };
 
-        _ = process.Start();
+        ownedProcess.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
         try
         {
             _ = await RedirectedProcessDrain.WaitForExitAndDrainAsync(
-                process,
+                ownedProcess,
                 RedirectedProcessDrain.DefaultTimeout,
                 ct,
                 message => log.Write("MtpRunner", message)).ConfigureAwait(false);
@@ -238,8 +239,7 @@ internal static partial class MtpTestProcessRunner
         catch (OperationCanceledException)
         {
             await RedirectedProcessDrain.KillAndWaitAsync(
-                process,
-                RedirectedProcessDrain.DefaultTimeout,
+                ownedProcess,
                 CancellationToken.None,
                 message => log.Write("MtpRunner", message)).ConfigureAwait(false);
             log.Write("MtpRunner", "Cancelled — returning empty result");

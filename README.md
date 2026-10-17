@@ -205,7 +205,9 @@ Daemons for the same OS user coordinate through a per-user directory: `$PISTON_E
 
 Graceful engine disposal waits for cancelled pipelines to finish and release their admission leases before releasing worktree ownership. Build/test cancellation waits for the killed runner to exit.
 
-Limits: this is admission control by reservation. Piston does not cap the actual CPU or memory of builds or test processes (no cgroups or job objects). A hung but live daemon keeps its lease. Child processes orphaned by a crashed daemon are no longer counted. Daemons of different OS users do not share a budget. Solution loading at startup is not admitted. Owner `.lock` files are left in place on purpose. Local validation covers Linux; CI is configured for Linux and Windows. macOS execution has not been validated.
+Test execution and discovery use a launcher that establishes a Unix process group or Windows job before starting the test command. After the command exits, redirected stdout/stderr get a five-second drain grace period. If descendants keep those streams open, Piston terminates the owned tree, bounds termination cleanup to ten seconds, and records that output was cut off in the run or diagnostic log.
+
+Limits: this is admission control by reservation. Piston does not cap the actual CPU or memory of builds or test processes (no cgroup or job-object resource limits). A hung but live daemon keeps its lease. Child processes orphaned by a crashed daemon are no longer counted. Daemons of different OS users do not share a budget. Solution loading at startup is not admitted. Owner `.lock` files are left in place on purpose. Local validation covers Linux; CI is configured for Linux and Windows. macOS execution has not been validated.
 
 ## Coverage and impact selection
 

@@ -170,7 +170,8 @@ internal static class TestProcessRunner
             // Collect stderr lines for error surfacing
             var stderrLines = new System.Collections.Concurrent.ConcurrentBag<string>();
 
-            using var process = new Process { StartInfo = psi };
+            using var ownedProcess = new OwnedTestProcess(psi);
+            var process = ownedProcess.Process;
 
             process.OutputDataReceived += (_, e) =>
             {
@@ -216,14 +217,14 @@ internal static class TestProcessRunner
                 }
             };
 
-            _ = process.Start();
+            ownedProcess.Start();
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
 
             try
             {
                 _ = await RedirectedProcessDrain.WaitForExitAndDrainAsync(
-                    process,
+                    ownedProcess,
                     RedirectedProcessDrain.DefaultTimeout,
                     ct,
                     message => log.Write("VSTestRunner", message)).ConfigureAwait(false);
@@ -231,8 +232,7 @@ internal static class TestProcessRunner
             catch (OperationCanceledException)
             {
                 await RedirectedProcessDrain.KillAndWaitAsync(
-                    process,
-                    RedirectedProcessDrain.DefaultTimeout,
+                    ownedProcess,
                     CancellationToken.None,
                     message => log.Write("VSTestRunner", message)).ConfigureAwait(false);
                 log.Write("VSTestRunner", "Cancelled — returning empty result");

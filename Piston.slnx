@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Piston.ProcessHost/Piston.ProcessHost.csproj" />
     <Project Path="src/Piston.Protocol/Piston.Protocol.csproj" />
     <Project Path="src/Piston.Engine/Piston.Engine.csproj" />
     <Project Path="src/Piston.LiveCollector/Piston.LiveCollector.csproj" />

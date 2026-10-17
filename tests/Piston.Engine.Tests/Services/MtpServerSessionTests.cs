@@ -25,6 +25,21 @@ public sealed class MtpServerSessionTests
     private static readonly MtpServerSession.StageTimeouts Generous = new(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
 
     [Fact]
+    public async Task HostExitingBeforeConnect_ReturnsDrainedStderr()
+    {
+        var result = await MtpServerSession.RunAsync(
+            typeof(TestProcessHost.Program).Assembly.Location,
+            Path.GetTempPath(),
+            MtpServerSession.DiscoverMethod,
+            tests: null,
+            _ => { },
+            _ct);
+
+        Assert.Equal(MtpServerSession.Outcome.NotStarted, result.Outcome);
+        Assert.Equal(["Test host failed before connecting."], result.Stderr);
+    }
+
+    [Fact]
     public async Task HostStallingBeforeInitialize_TimesOut()
     {
         var (outcome, error) = await ExchangeAsync(MtpServerSession.DiscoverMethod, Short, async (host, ct) =>
