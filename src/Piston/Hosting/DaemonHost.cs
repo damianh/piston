@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Piston.Engine;
 using Piston.Engine.Execution;
+using Piston.Hosting.Configuration;
 using Piston.Hosting.Protocol;
 using Piston.Hosting.Services;
 using Piston.Mcp;
@@ -129,6 +130,24 @@ public sealed class DaemonHost : IAsyncDisposable
         _presenceMonitor.Start();
     }
 
+    private void ConfigureUserSettings(ProtocolRouter router)
+    {
+        try
+        {
+            if (UserSettingsStore.ResolveDefaultPath() is { } path)
+            {
+                router.SetUserSettingsStore(new UserSettingsStore(path));
+                return;
+            }
+
+            _log("[piston] No application-data folder; machine-wide settings are unavailable.");
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            _log($"[piston] Machine-wide settings are unavailable: {ex.Message}");
+        }
+    }
+
     private async Task StartEndpointsAsync(PistonEngine engine, ActivityEventSinkProxy activityProxy, CancellationToken ct)
     {
         _log($"[piston] Listening on pipe: {_options.PipeName}");
@@ -143,6 +162,7 @@ public sealed class DaemonHost : IAsyncDisposable
         var mcpCallTracker = new McpCallTracker(_router.Emit, _options.SolutionPath);
         _router.SetMcpCallTracker(mcpCallTracker);
         _router.SetDaemonControl(new DaemonControl(GetInfo, RequestShutdown));
+        ConfigureUserSettings(_router);
 
         RouterTask = _router.RunAsync(ct);
 

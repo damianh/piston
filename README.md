@@ -232,7 +232,8 @@ as errors rather than silently ignored.
 Supplied CLI values override corresponding config values, with two caveats:
 `--coverage` enables coverage but cannot disable a config-enabled value, and
 non-positive debounce/parallelism values fall back to config/defaults. There is
-no implemented `.piston/config.json` or user-global config hierarchy.
+no implemented `.piston/config.json` or user-global config hierarchy for daemon
+options; dashboard preferences live in the separate [user settings file](#user-settings).
 
 ```json
 {
@@ -257,6 +258,28 @@ no implemented `.piston/config.json` or user-global config hierarchy.
 | `mcpPort` | `int` | Port for the daemon's MCP server (default 5200). |
 | `testExecutionMode` | `string` | `"Auto"` and `"Process"` currently both route between MTP and VSTest. `"InProcess"` is not implemented and throws at startup. |
 | `execution.memoryMb` | `int` | Memory in MiB each run reserves from the machine execution budget (see [Worktree ownership and machine execution budget](#worktree-ownership-and-machine-execution-budget)). Must be positive; required when the budget sets `memoryMb`. A reservation, not a cap. |
+
+### User settings
+
+Machine-wide preferences shared by every daemon and dashboard of the current user
+live in `$PISTON_SETTINGS_FILE` if set (must be absolute), otherwise
+`Piston/settings.json` under the roaming application-data folder
+(`~/.config/Piston/settings.json` on Linux, `%APPDATA%\Piston\settings.json` on
+Windows). The dashboard writes it when a preference changes and reads it each
+time it connects; you can also edit it by hand. A missing file, invalid JSON or
+invalid values fall back to defaults. Unknown keys are preserved on write.
+
+```json
+{
+  "dashboard": {
+    "detailPane": "bottom"
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `dashboard.detailPane` | `string` | Where the test details pane docks when a dashboard opens: `"right"` (default) or `"bottom"`. |
 
 ## Building from source
 

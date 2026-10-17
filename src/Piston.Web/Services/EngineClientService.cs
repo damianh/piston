@@ -31,7 +31,13 @@ public sealed class EngineClientService : IAsyncDisposable
     /// <summary>Raised when <see cref="ActivityLog"/> is replaced wholesale (history backfill on connect).</summary>
     public event Action? ActivityLogReset;
 
+    /// <summary>Raised when machine-wide user settings have been fetched from the daemon (on every connect).</summary>
+    public event Action? SettingsLoaded;
+
     public StateSnapshotNotification? CurrentSnapshot { get; private set; }
+
+    /// <summary>Machine-wide user settings as last read from or written to the daemon.</summary>
+    public UserSettings Settings { get; private set; } = new();
     public bool IsConnected => _webSocket?.State == WebSocketState.Open;
     public bool IsConnecting { get; private set; }
 
@@ -76,6 +82,7 @@ public sealed class EngineClientService : IAsyncDisposable
                 ConnectionStateChanged?.Invoke();
 
                 _ = BackfillActivityLogAsync();
+                _ = LoadSettingsAsync();
                 await ReceiveLoopAsync(_webSocket, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -327,6 +334,43 @@ public sealed class EngineClientService : IAsyncDisposable
         }
 
         ActivityLogReset?.Invoke();
+    }
+
+    private async Task LoadSettingsAsync()
+    {
+        try
+        {
+            var result = await SendRequestAsync(ProtocolMethods.SettingsGet).ConfigureAwait(false);
+            if (result is null)
+            {
+                return;
+            }
+
+            Settings = result.Deserialize<UserSettings>(JsonRpcSerializer.Options) ?? new UserSettings();
+        }
+        catch
+        {
+            return;
+        }
+
+        SettingsLoaded?.Invoke();
+    }
+
+    /// <summary>Saves the non-null fields of <paramref name="patch"/> to the machine-wide user settings.</summary>
+    public async Task UpdateSettingsAsync(UserSettings patch)
+    {
+        try
+        {
+            var result = await SendRequestAsync(ProtocolMethods.SettingsUpdate, patch).ConfigureAwait(false);
+            if (result?.Deserialize<UserSettings>(JsonRpcSerializer.Options) is { } merged)
+            {
+                Settings = merged;
+            }
+        }
+        catch
+        {
+            // Best effort: the dashboard keeps working with its in-memory state.
+        }
     }
 
     public Task ResetAsync() => SendCommandAsync(ProtocolMethods.EngineReset);

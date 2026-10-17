@@ -6,6 +6,7 @@ using System.Net.WebSockets;
 using System.Text.Json.Nodes;
 using Piston.Engine;
 using Piston.Engine.Models;
+using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
 using Piston.Hosting.Services;
 using Piston.Protocol.JsonRpc;
@@ -27,6 +28,7 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
     private int _sessionCounter;
     private McpCallTracker? _mcpCallTracker;
     private DaemonControl? _daemonControl;
+    private UserSettingsStore? _userSettings;
     private readonly ActivityHistory _activityHistory = new();
 
     public int ClientCount => _pipeSessions.Count + _wsSessions.Count;
@@ -37,6 +39,9 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
     public void SetDaemonControl(DaemonControl control) =>
         _daemonControl = control;
 
+    public void SetUserSettingsStore(UserSettingsStore store) =>
+        _userSettings = store;
+
     private EngineCommandDispatcher CreateDispatcher(bool allowDaemonControl)
     {
         var dispatcher = new EngineCommandDispatcher(engine);
@@ -44,6 +49,12 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
         if (_mcpCallTracker is not null)
         {
             dispatcher.SetMcpCallTracker(_mcpCallTracker);
+        }
+
+        // Settings are typed and validated, so browser sessions may read and change them.
+        if (_userSettings is not null)
+        {
+            dispatcher.SetUserSettingsStore(_userSettings);
         }
 
         // Process control is limited to local pipe clients (the CLI); browser-reachable

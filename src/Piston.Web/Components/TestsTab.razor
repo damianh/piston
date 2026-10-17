@@ -96,6 +96,7 @@
     {
         _lastHandledKeyboardEvent = KeyboardEvent;
         Client.StateChanged += OnStateChanged;
+        Client.SettingsLoaded += OnSettingsLoaded;
 
         // The tab may mount after the latest snapshot arrived (e.g. on tab switch); start from it.
         if (Client.CurrentSnapshot is { } current)
@@ -120,6 +121,9 @@
         RebuildTree();
         InvokeAsync(StateHasChanged);
     }
+
+    // AppShell applies loaded settings to the shared ViewState; re-render to reflect them.
+    private void OnSettingsLoaded() => InvokeAsync(StateHasChanged);
 
     private void RebuildTree()
     {
@@ -304,8 +308,11 @@
 
     private void ResetSplit() => _viewState.ResetSplit();
 
-    private void ToggleDetailPosition() =>
+    private void ToggleDetailPosition()
+    {
         _viewState.DetailPosition = _isBottom ? DetailPosition.Right : DetailPosition.Bottom;
+        _ = Client.UpdateSettingsAsync(new UserSettings(_viewState.ToSettings()));
+    }
 
     private void HandleSplitterKeyDown(KeyboardEventArgs e)
     {
@@ -330,6 +337,7 @@
     public async ValueTask DisposeAsync()
     {
         Client.StateChanged -= OnStateChanged;
+        Client.SettingsLoaded -= OnSettingsLoaded;
 
         try
         {

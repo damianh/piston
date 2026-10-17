@@ -1,5 +1,6 @@
 @inject EngineClientService Client
 @inject NavigationManager Nav
+@inject ViewState ViewState
 @implements IDisposable
 
 <ConnectionOverlay IsConnected="@Client.IsConnected" IsConnecting="@Client.IsConnecting" />
@@ -19,6 +20,7 @@
     protected override async Task OnInitializedAsync()
     {
         Client.ConnectionStateChanged += OnConnectionStateChanged;
+        Client.SettingsLoaded += OnSettingsLoaded;
 
         var wsUrl = BuildWsUrl();
         await Client.StartAsync(wsUrl);
@@ -33,6 +35,12 @@
 
     private void OnConnectionStateChanged() => InvokeAsync(StateHasChanged);
 
+    private void OnSettingsLoaded() => InvokeAsync(() =>
+    {
+        ViewState.ApplySettings(Client.Settings.Dashboard);
+        StateHasChanged();
+    });
+
     private void HandleKeyDown(KeyboardEventArgs e)
     {
         _lastKeyDown = e;
@@ -42,5 +50,6 @@
     public void Dispose()
     {
         Client.ConnectionStateChanged -= OnConnectionStateChanged;
+        Client.SettingsLoaded -= OnSettingsLoaded;
     }
 }

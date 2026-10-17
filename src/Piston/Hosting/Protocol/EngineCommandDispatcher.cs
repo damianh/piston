@@ -1,8 +1,10 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Piston.Engine;
+using Piston.Hosting.Configuration;
 using Piston.Hosting.Services;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
@@ -21,6 +23,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
     private McpCallTracker? _mcpCallTracker;
     private DaemonControl? _daemonControl;
     private ActivityHistory? _activityHistory;
+    private UserSettingsStore? _userSettings;
 
     public EngineCommandDispatcher(IEngine engine) => _engine = engine;
 
@@ -35,6 +38,9 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
 
     public void SetActivityHistory(ActivityHistory history) =>
         _activityHistory = history;
+
+    public void SetUserSettingsStore(UserSettingsStore store) =>
+        _userSettings = store;
 
     public async Task<JsonNode?> HandleCommandAsync(string method, JsonNode? @params, CancellationToken ct)
     {
@@ -114,6 +120,32 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                     return null;
                 }
 
+            case ProtocolMethods.SettingsGet:
+                return SerializeSettings(RequireUserSettings(method).Get());
+
+            case ProtocolMethods.SettingsUpdate:
+                {
+                    var store = RequireUserSettings(method);
+                    UserSettings? patch;
+                    try
+                    {
+                        patch = JsonRpcSerializer.DeserializeParams<UserSettings>(@params);
+                    }
+                    catch (JsonException ex)
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, $"Invalid settings: {ex.Message}");
+                    }
+
+                    try
+                    {
+                        return SerializeSettings(store.Update(patch ?? new UserSettings()));
+                    }
+                    catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InternalError, ex.Message);
+                    }
+                }
+
             default:
                 throw new JsonRpcException(
                     JsonRpcErrorCodes.MethodNotFound,
@@ -124,6 +156,13 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
     private DaemonControl RequireDaemonControl(string method) =>
         _daemonControl ?? throw new JsonRpcException(
             JsonRpcErrorCodes.MethodNotFound, $"Method not available in this host: {method}");
+
+    private UserSettingsStore RequireUserSettings(string method) =>
+        _userSettings ?? throw new JsonRpcException(
+            JsonRpcErrorCodes.MethodNotFound, $"Method not available in this host: {method}");
+
+    private static JsonNode? SerializeSettings(UserSettings settings) =>
+        JsonSerializer.SerializeToNode(settings, JsonRpcSerializer.Options);
 
     private static void ValidateFilter(string? filter)
     {

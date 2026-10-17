@@ -1,6 +1,8 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Piston.Protocol.Messages;
+
 namespace Piston.Web.Models;
 
 /// <summary>
@@ -71,6 +73,18 @@ public sealed class ViewState
 
     public void ResetSplit() =>
         SplitPercent = DetailPosition == DetailPosition.Right ? DefaultSplitRightPercent : DefaultSplitBottomPercent;
+
+    /// <summary>Applies machine-wide dashboard settings; unset values leave the current state alone.</summary>
+    public void ApplySettings(DashboardSettings? settings)
+    {
+        if (settings?.DetailPane is { } pane)
+        {
+            DetailPosition = pane == DetailPanePosition.Bottom ? DetailPosition.Bottom : DetailPosition.Right;
+        }
+    }
+
+    public DashboardSettings ToSettings() =>
+        new(DetailPosition == DetailPosition.Bottom ? DetailPanePosition.Bottom : DetailPanePosition.Right);
 }
 
 public enum DetailPosition
