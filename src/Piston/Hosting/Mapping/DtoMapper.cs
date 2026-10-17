@@ -46,6 +46,7 @@ public static class DtoMapper
         BuildStatus.Building => BuildStatusDto.Building,
         BuildStatus.Succeeded => BuildStatusDto.Succeeded,
         BuildStatus.Failed => BuildStatusDto.Failed,
+        BuildStatus.Skipped => BuildStatusDto.Skipped,
         _ => BuildStatusDto.None,
     };
 

@@ -43,6 +43,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     private long _runSequence;
     private long _fileChangeGeneration;
 
+    // The last successful build whose run finished Current; guarded by _runLock.
+    private BuildBaseline? _buildBaseline;
+
     /// <summary>Maximum runs reused, awaited or requested by one <see cref="VerifyAsync"/> call.</summary>
     internal int MaxVerificationAttempts { get; set; } = 3;
 
@@ -261,6 +264,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         _state.InProgressSuites = [];
         _state.LastBuild = null;
         _state.LastBuildDuration = null;
+        _buildBaseline = null;
         _state.LastTestDuration = null;
         _state.LastTestRunnerError = null;
         _state.TotalExpectedTests = 0;
@@ -736,8 +740,20 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         };
         PublishActiveRun(run);
 
-        TestRunRecord Finish(TestRunStatus status, string? reason, bool computeAfter = true) =>
-            CompleteRun(run, status, reason, solutionDir, changeGenerationAtStart, computeAfter);
+        BuildBaseline? builtBaseline = null;
+
+        TestRunRecord Finish(TestRunStatus status, string? reason, bool computeAfter = true)
+        {
+            var finished = CompleteRun(run, status, reason, solutionDir, changeGenerationAtStart, computeAfter);
+
+            // Outputs are reusable only if the sources were stable for the whole run.
+            if (builtBaseline is not null && finished.Freshness == ResultFreshness.Current)
+            {
+                _buildBaseline = builtBaseline;
+            }
+
+            return finished;
+        }
 
         try
         {
@@ -867,82 +883,108 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             }
 
             // ── Build ─────────────────────────────────────────────────────────
-            // Progress counts projects by name as dotnet build reports their output.
-            var expectedBuildProjects = _impactAnalyzer.GetBuildProjectPaths(buildTargets)
-                .Select(Path.GetFileNameWithoutExtension)
-                .OfType<string>()
-                .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var builtProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            var buildProgressLock = new object();
-
-            void OnProjectBuilt(string projectName)
+            // A targeted run reuses the outputs of the last build when nothing it could
+            // depend on has changed since; dotnet's own no-op build still costs seconds.
+            if (selection is not null && CanReuseLastBuild(solutionPath, run.SourceBefore, buildTargets))
             {
-                lock (buildProgressLock)
+                log?.Write("Orchestrator", "Build skipped: sources unchanged since the last successful build.");
+                _state.TotalBuildProjects = 0;
+                _state.CompletedBuildProjects = 0;
+                _state.LastBuiltProject = null;
+                run = run with { Build = new BuildResult(BuildStatus.Skipped, [], [], TimeSpan.Zero) };
+                PublishActiveRun(run);
+            }
+            else
+            {
+                _buildBaseline = null;
+
+                // Progress counts projects by name as dotnet build reports their output.
+                var expectedBuildProjects = _impactAnalyzer.GetBuildProjectPaths(buildTargets)
+                    .Select(Path.GetFileNameWithoutExtension)
+                    .OfType<string>()
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var builtProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var buildProgressLock = new object();
+
+                void OnProjectBuilt(string projectName)
                 {
-                    if (!builtProjects.Add(projectName))
+                    lock (buildProgressLock)
                     {
-                        return;
+                        if (!builtProjects.Add(projectName))
+                        {
+                            return;
+                        }
+
+                        if (expectedBuildProjects.Count == 0 || expectedBuildProjects.Contains(projectName))
+                        {
+                            _state.CompletedBuildProjects++;
+                        }
+
+                        _state.LastBuiltProject = projectName;
                     }
 
-                    if (expectedBuildProjects.Count == 0 || expectedBuildProjects.Contains(projectName))
-                    {
-                        _state.CompletedBuildProjects++;
-                    }
-
-                    _state.LastBuiltProject = projectName;
+                    _state.NotifyChanged();
                 }
 
+                _state.TotalBuildProjects = expectedBuildProjects.Count;
+                _state.CompletedBuildProjects = 0;
+                _state.LastBuiltProject = null;
+                _state.Phase = PistonPhase.Building;
                 _state.NotifyChanged();
-            }
 
-            _state.TotalBuildProjects = expectedBuildProjects.Count;
-            _state.CompletedBuildProjects = 0;
-            _state.LastBuiltProject = null;
-            _state.Phase = PistonPhase.Building;
-            _state.NotifyChanged();
+                BuildResult buildResult;
+                try
+                {
+                    buildResult = await _buildService.BuildAsync(solutionPath, buildTargets, OnProjectBuilt, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    _state.Phase = PistonPhase.Watching;
+                    _state.NotifyChanged();
+                    return Finish(TestRunStatus.Cancelled, "Cancelled during build.");
+                }
 
-            BuildResult buildResult;
-            try
-            {
-                buildResult = await _buildService.BuildAsync(solutionPath, buildTargets, OnProjectBuilt, ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                _state.Phase = PistonPhase.Watching;
-                _state.NotifyChanged();
-                return Finish(TestRunStatus.Cancelled, "Cancelled during build.");
-            }
+                _state.LastBuild = buildResult;
+                _state.LastBuildDuration = buildResult.Duration;
+                run = run with
+                {
+                    Build = buildResult with { Errors = buildResult.Errors.ToArray(), Warnings = buildResult.Warnings.ToArray() },
+                };
+                PublishActiveRun(run);
 
-            _state.LastBuild = buildResult;
-            _state.LastBuildDuration = buildResult.Duration;
-            run = run with
-            {
-                Build = buildResult with { Errors = buildResult.Errors.ToArray(), Warnings = buildResult.Warnings.ToArray() },
-            };
-            PublishActiveRun(run);
+                // A superseded build is killed and reports Failed with no diagnostics; it must
+                // not be published as a build failure.
+                if (ct.IsCancellationRequested)
+                {
+                    _state.Phase = PistonPhase.Watching;
+                    _state.NotifyChanged();
+                    return Finish(TestRunStatus.Cancelled, "Cancelled after build.");
+                }
 
-            // A superseded build is killed and reports Failed with no diagnostics; it must
-            // not be published as a build failure.
-            if (ct.IsCancellationRequested)
-            {
-                _state.Phase = PistonPhase.Watching;
-                _state.NotifyChanged();
-                return Finish(TestRunStatus.Cancelled, "Cancelled after build.");
-            }
+                _activitySink.Emit(new BuildCompletedActivityEvent(
+                    solutionPath,
+                    buildResult.Status == BuildStatus.Succeeded,
+                    buildResult.Duration.TotalMilliseconds,
+                    buildResult.Errors));
 
-            _activitySink.Emit(new BuildCompletedActivityEvent(
-                solutionPath,
-                buildResult.Status == BuildStatus.Succeeded,
-                buildResult.Duration.TotalMilliseconds,
-                buildResult.Errors));
+                if (buildResult.Status == BuildStatus.Failed)
+                {
+                    _state.Phase = PistonPhase.Error;
+                    _state.NotifyChanged();
+                    ScheduleGraphRebuildIfNeeded(impactResult);
+                    return Finish(TestRunStatus.BuildFailed,
+                        $"Build failed with {buildResult.Errors.Count} error(s).", computeAfter: true);
+                }
 
-            if (buildResult.Status == BuildStatus.Failed)
-            {
-                _state.Phase = PistonPhase.Error;
-                _state.NotifyChanged();
-                ScheduleGraphRebuildIfNeeded(impactResult);
-                return Finish(TestRunStatus.BuildFailed,
-                    $"Build failed with {buildResult.Errors.Count} error(s).", computeAfter: true);
+                // Outputs become reusable once the run finishes with stable sources (see Finish).
+                if (run.SourceBefore is { } builtFrom && Interlocked.Read(ref _fileChangeGeneration) == changeGenerationAtStart)
+                {
+                    builtBaseline = new BuildBaseline(
+                        Path.GetFullPath(solutionPath),
+                        builtFrom,
+                        buildTargets?.Select(Path.GetFullPath).ToHashSet(StringComparer.Ordinal),
+                        changeGenerationAtStart);
+                }
             }
 
             // ── Test ──────────────────────────────────────────────────────────
@@ -1319,6 +1361,35 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     }
 
     // ── Run provenance ────────────────────────────────────────────────────────
+
+    private sealed record BuildBaseline(
+        string SolutionPath,
+        SourceFingerprint Fingerprint,
+        IReadOnlySet<string>? Targets,
+        long ChangeGeneration);
+
+    // True when the last successful build covered the targets, nothing in the fingerprint changed
+    // since and no watcher change was seen, and the known test outputs still exist.
+    private bool CanReuseLastBuild(string solutionPath, SourceFingerprint? fingerprint, IReadOnlyList<string>? targets)
+    {
+        if (_buildBaseline is not { } baseline
+            || fingerprint is null
+            || baseline.Fingerprint != fingerprint
+            || Interlocked.Read(ref _fileChangeGeneration) != baseline.ChangeGeneration
+            || !string.Equals(baseline.SolutionPath, Path.GetFullPath(solutionPath), StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (targets is null)
+        {
+            return baseline.Targets is null;
+        }
+
+        return targets.All(target =>
+            (baseline.Targets is null || baseline.Targets.Contains(Path.GetFullPath(target)))
+            && (_impactAnalyzer.GetMtpOutputPath(target) is not { } output || File.Exists(output)));
+    }
 
     // Captured per run so a later verification never binds a result to inputs it cannot see.
     private bool IsInputCoverageVerified(string solutionPath)

@@ -8,9 +8,10 @@ using Xunit;
 
 namespace Piston.Engine.Tests.Orchestration;
 
-public sealed class OrchestratorSelectiveBuildTests
+public sealed class OrchestratorSelectiveBuildTests : IDisposable
 {
     private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+    private readonly string _root = Path.Combine(Path.GetTempPath(), $"piston-selective-{Guid.NewGuid():N}");
 
     private const string Lib = "/repo/Lib/Lib.csproj";
     private const string LibTests = "/repo/Lib.Tests/Lib.Tests.csproj";
@@ -255,20 +256,139 @@ public sealed class OrchestratorSelectiveBuildTests
         runner.Gate.SetResult();
     }
 
+    [Fact]
+    public async Task RunSelected_SourcesUnchangedSinceASuccessfulBuild_ReusesTheBuild()
+    {
+        var state = new PistonState();
+        var build = new RecordingBuildService();
+        var runner = new RecordingTestRunner();
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), build, runner,
+            new FixedImpactAnalyzer(new([], [], false, false)), state);
+        await StartInTempRepoAsync(orchestrator, state);
+
+        var first = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"], ["Lib.T.A"]));
+        var second = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"]));
+
+        _ = Assert.Single(build.Calls);
+        Assert.Equal(BuildStatus.Skipped, first.Build!.Status);
+        Assert.Equal(BuildStatus.Skipped, second.Build!.Status);
+        Assert.Equal([LibTests], runner.Calls[2]);
+    }
+
+    [Fact]
+    public async Task RunSelected_AfterASourceEdit_Builds()
+    {
+        var state = new PistonState();
+        var build = new RecordingBuildService();
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), build, new RecordingTestRunner(),
+            new FixedImpactAnalyzer(new([], [], false, false)), state);
+        await StartInTempRepoAsync(orchestrator, state);
+
+        File.WriteAllText(Path.Combine(_root, "Code.cs"), "class Code { int X; }");
+        var run = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"]));
+
+        Assert.Equal(2, build.Calls.Count);
+        Assert.Equal(BuildStatus.Succeeded, run.Build!.Status);
+    }
+
+    [Fact]
+    public async Task RunSelected_AfterAFailedBuild_Builds()
+    {
+        var state = new PistonState();
+        var build = new RecordingBuildService { Status = BuildStatus.Failed };
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), build, new RecordingTestRunner(),
+            new FixedImpactAnalyzer(new([], [], false, false)), state);
+        await StartInTempRepoAsync(orchestrator, state);
+
+        build.Status = BuildStatus.Succeeded;
+        var run = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"]));
+
+        Assert.Equal(2, build.Calls.Count);
+        Assert.Equal(BuildStatus.Succeeded, run.Build!.Status);
+    }
+
+    [Fact]
+    public async Task RunSelected_WhenTheLastBuildDidNotCoverTheProject_Builds()
+    {
+        var state = new PistonState();
+        var watcher = new StubFileWatcherService();
+        var build = new RecordingBuildService();
+        using var orchestrator = new PistonOrchestrator(watcher, build, new RecordingTestRunner(),
+            new FixedImpactAnalyzer(new([Lib], [], false, false)), state);
+        await StartInTempRepoAsync(orchestrator, state);
+
+        watcher.TriggerChange(new FileChangeBatch(
+            [new FileChangeEvent(Path.Combine(_root, "Code.cs"), WatcherChangeTypes.Changed, DateTimeOffset.UtcNow)],
+            DateTimeOffset.UtcNow));
+        await WaitForAsync(() => state.LastRun is { Trigger: TestRunTrigger.FileChange });
+
+        var run = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"]));
+
+        Assert.Equal([Lib], build.Calls[1]);
+        Assert.Equal([LibTests], build.Calls[2]);
+        Assert.Equal(BuildStatus.Succeeded, run.Build!.Status);
+    }
+
+    [Fact]
+    public async Task RunSelected_WhenTheTestOutputIsMissing_Builds()
+    {
+        var state = new PistonState();
+        var build = new RecordingBuildService();
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), build, new RecordingTestRunner(),
+            new FixedImpactAnalyzer(new([], [], false, false)) { MtpOutputPath = Path.Combine(_root, "bin", "Lib.Tests.dll") },
+            state);
+        await StartInTempRepoAsync(orchestrator, state);
+
+        var run = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"]));
+
+        Assert.Equal(2, build.Calls.Count);
+        Assert.Equal(BuildStatus.Succeeded, run.Build!.Status);
+    }
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
+    }
+
+    private async Task StartInTempRepoAsync(PistonOrchestrator orchestrator, PistonState state)
+    {
+        _ = Directory.CreateDirectory(_root);
+        File.WriteAllText(Path.Combine(_root, "All.slnx"), "<Solution />");
+        File.WriteAllText(Path.Combine(_root, "Code.cs"), "class Code { }");
+        await orchestrator.StartAsync(Path.Combine(_root, "All.slnx"));
+        await WaitForAsync(() => state.LastRun is { Trigger: TestRunTrigger.Startup });
+    }
+
+    private static async Task WaitForAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (!condition())
+        {
+            if (DateTime.UtcNow > deadline)
+            {
+                throw new TimeoutException("Condition was not met.");
+            }
+
+            await Task.Delay(10);
+        }
+    }
+
     private sealed class FixedImpactAnalyzer(ImpactAnalysisResult selective) : IImpactAnalyzer
     {
+        public string? MtpOutputPath { get; init; }
         public Task InitializeAsync(string solutionPath, CancellationToken ct) => Task.CompletedTask;
         public ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes) => selective;
         public ImpactAnalysisResult AnalyzeFullRun() => new([], [], RequiresGraphRebuild: false, IsFullRun: true);
         public void InvalidateGraph() { }
         public IReadOnlyList<string> GetAllTestProjectPaths() => [LibTests];
         public bool IsMtpProject(string projectPath) => false;
-        public string? GetMtpOutputPath(string projectPath) => null;
+        public string? GetMtpOutputPath(string projectPath) => MtpOutputPath;
     }
 
     private sealed class RecordingBuildService : IBuildService
     {
         private readonly CallCounter _counter = new();
+        public BuildStatus Status { get; set; } = BuildStatus.Succeeded;
         public List<IReadOnlyList<string>?> Calls { get; } = [];
 
         public Task WaitForCallsAsync(int count) => _counter.WaitForAsync(count);
@@ -284,7 +404,7 @@ public sealed class OrchestratorSelectiveBuildTests
             }
 
             _counter.Increment();
-            return Task.FromResult(new BuildResult(BuildStatus.Succeeded, [], [], TimeSpan.Zero));
+            return Task.FromResult(new BuildResult(Status, [], [], TimeSpan.Zero));
         }
     }
 
