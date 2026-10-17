@@ -5,6 +5,7 @@ using Piston.Engine;
 using Piston.Hosting;
 using Piston.Hosting.Protocol;
 using Piston.Protocol;
+using Piston.Protocol.Dtos;
 using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
 using Xunit;
@@ -25,6 +26,21 @@ public sealed class RemoteEngineClientTests
         var listener = new NamedPipeListener(pipeName);
         var router = new ProtocolRouter(engine, listener);
         return (listener, router, engine);
+    }
+
+    [Fact]
+    public async Task StateSnapshotWaiter_WaitsForSnapshotArrivingAfter500Milliseconds()
+    {
+        var client = new StubEngineClient();
+        var snapshotTask = StateSnapshotWaiter.WaitForSnapshotAsync(client, TimeSpan.FromSeconds(3));
+
+        await Task.Delay(600, _ct);
+        var snapshot = new StateSnapshotNotification(
+            PistonPhaseDto.Idle, [], [], null, null, null, null, null, 0, 0, 0, null, null,
+            null, null, null, false, false, null, 0, 0, null);
+        client.PublishSnapshot(snapshot);
+
+        Assert.Same(snapshot, await snapshotTask);
     }
 
     // ── Connect → CurrentSnapshot populated ──────────────────────────────────
@@ -94,7 +110,7 @@ public sealed class RemoteEngineClientTests
         var client = new RemoteEngineClient(pipeName);
         await client.ConnectAsync(cts.Token);
 
-        Assert.Equal(info, await client.GetDaemonInfoAsync());
+        Assert.Equal(info, await client.GetDaemonInfoAsync(_ct));
         await client.ShutdownDaemonAsync();
         await shutdown.Task.WaitAsync(TimeSpan.FromSeconds(5), _ct);
 
@@ -383,5 +399,47 @@ public sealed class RemoteEngineClientTests
         public void Dispose() { }
 
         public void TriggerStateChange() => State.NotifyChanged();
+    }
+
+    private sealed class StubEngineClient : IEngineClient
+    {
+        public event Action<StateSnapshotNotification>? StateChanged;
+        public event Action<PhaseChangedNotification>? PhaseChanged
+        {
+            add { }
+            remove { }
+        }
+        public event Action<TestProgressNotification>? TestProgressChanged
+        {
+            add { }
+            remove { }
+        }
+        public event Action<BuildErrorNotification>? BuildError
+        {
+            add { }
+            remove { }
+        }
+        public event Action<ConnectionState>? ConnectionStateChanged
+        {
+            add { }
+            remove { }
+        }
+
+        public StateSnapshotNotification? CurrentSnapshot { get; private set; }
+        public ConnectionState ConnectionState => ConnectionState.Connected;
+
+        public void PublishSnapshot(StateSnapshotNotification snapshot)
+        {
+            CurrentSnapshot = snapshot;
+            StateChanged?.Invoke(snapshot);
+        }
+
+        public Task StartAsync(string solutionPath) => Task.CompletedTask;
+        public Task ForceRunAsync() => Task.CompletedTask;
+        public void Stop() { }
+        public Task SetFilterAsync(string? filter) => Task.CompletedTask;
+        public Task ClearResultsAsync() => Task.CompletedTask;
+        public Task ResetAsync() => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
