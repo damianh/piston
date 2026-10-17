@@ -21,7 +21,7 @@
     </div>
 
     <!-- Status visibility toggles -->
-    <div class="flex items-center gap-0.5 ml-2 p-0.5 bg-gray-800 rounded" role="group" aria-label="Show tests by status">
+    <div class="flex items-center gap-0.5 ml-2" role="group" aria-label="Show tests by status">
         <button class="@ToggleClass(ShowFailed, "text-red-400")" title="Show failed (1)" aria-label="Show failed"
                 aria-pressed="@(ShowFailed ? "true" : "false")" @onclick="OnToggleFailed">✗</button>
         <button class="@ToggleClass(ShowPassed, "text-green-400")" title="Show passed (2)" aria-label="Show passed"
@@ -104,9 +104,11 @@
 
     private System.Timers.Timer? _debounceTimer;
 
+    // No colour transition: stalled transitions in embedded webviews left toggles showing their previous state.
     private static string ToggleClass(bool on, string onColor) =>
-        "w-6 py-0.5 rounded text-center transition-colors " +
-        (on ? $"bg-gray-900 ring-1 ring-gray-700 {onColor} hover:bg-gray-800" : "text-gray-500 hover:text-gray-400 hover:bg-gray-700/50");
+        "w-6 py-0.5 rounded text-center " +
+        // On: a raised surface in the status colour; off: flat and muted. Icons keep >= 3.8:1 in both themes.
+        (on ? $"bg-gray-800 ring-1 ring-inset ring-gray-700 {onColor} hover:ring-gray-500" : "text-gray-500 hover:text-gray-300 hover:bg-gray-800/50");
 
     private Task HandleGroupingChange(ChangeEventArgs e) =>
         Enum.TryParse<GroupingMode>(e.Value?.ToString(), out var mode)

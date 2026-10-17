@@ -23,7 +23,7 @@
                 <div class="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
                     @if (total > 0)
                     {
-                        <div class="h-full bg-yellow-500 rounded-full transition-all duration-200"
+                        <div class="h-full bg-yellow-500 rounded-full"
                              style="width: @buildPct.ToString("F0")%"></div>
                     }
                     else
@@ -47,7 +47,7 @@
             var pct = (double)Snapshot.CompletedTests / Snapshot.TotalExpectedTests * 100;
             <div class="flex items-center gap-2 shrink-0">
                 <div class="w-16 h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                    <div class="h-full bg-cyan-500 rounded-full transition-all duration-200"
+                    <div class="h-full bg-cyan-500 rounded-full"
                          style="width: @pct.ToString("F0")%"></div>
                 </div>
                 <span class="text-gray-400 tabular-nums">@Snapshot.CompletedTests/@Snapshot.TotalExpectedTests</span>

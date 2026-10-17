@@ -5,7 +5,7 @@
     {
         var tabName = tab.ToString();
         var isActive = tab == ActiveTab;
-        <button class="px-3 border-b-2 transition-colors @(isActive ? "border-coral text-gray-100 font-semibold" : "border-transparent text-gray-400 hover:text-gray-100 hover:border-gray-700")"
+        <button class="px-3 border-b-2 @(isActive ? "border-coral text-gray-100 font-semibold" : "border-transparent text-gray-400 hover:text-gray-100 hover:border-gray-700")"
                 role="tab" aria-selected="@(isActive ? "true" : "false")"
                 @onclick="() => OnTabSelected.InvokeAsync(tab)">
             @tabName
