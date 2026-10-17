@@ -26,7 +26,19 @@ public static class Program
             throw new Win32Exception(Marshal.GetLastPInvokeError());
         }
 
-        var start = new ProcessStartInfo(args[1]) { UseShellExecute = false };
+        using var child = Process.Start(CreateChildStartInfo(args))
+            ?? throw new InvalidOperationException("Could not start the test process.");
+        await child.WaitForExitAsync().ConfigureAwait(false);
+        return child.ExitCode;
+    }
+
+    internal static ProcessStartInfo CreateChildStartInfo(string[] args)
+    {
+        var start = new ProcessStartInfo(args[1])
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
         if (args[2].Length > 0)
         {
             start.Arguments = args[2];
@@ -39,10 +51,7 @@ public static class Program
             }
         }
 
-        using var child = Process.Start(start)
-            ?? throw new InvalidOperationException("Could not start the test process.");
-        await child.WaitForExitAsync().ConfigureAwait(false);
-        return child.ExitCode;
+        return start;
     }
 
     [DllImport("libc", SetLastError = true)]

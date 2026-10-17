@@ -2,4 +2,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
   </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="Piston.Engine.Tests" />
+  </ItemGroup>
 </Project>

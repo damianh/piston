@@ -17,12 +17,13 @@ internal sealed class OwnedTestProcess : IDisposable
 
     internal OwnedTestProcess(ProcessStartInfo startInfo)
     {
+        var launcherHost = LauncherHostPath();
         var jobName = OperatingSystem.IsWindows() ? $"piston-tests-{Guid.NewGuid():N}" : string.Empty;
         _job = OperatingSystem.IsWindows() ? CreateJob(jobName) : null;
         var fileName = startInfo.FileName;
         var arguments = startInfo.Arguments;
         var argumentList = startInfo.ArgumentList.ToArray();
-        startInfo.FileName = "dotnet";
+        startInfo.FileName = launcherHost;
         startInfo.Arguments = string.Empty;
         startInfo.ArgumentList.Clear();
         startInfo.ArgumentList.Add("exec");
@@ -36,6 +37,17 @@ internal sealed class OwnedTestProcess : IDisposable
         }
 
         Process = new Process { StartInfo = startInfo };
+    }
+
+    private static string LauncherHostPath()
+    {
+        var runtimeDirectory = new DirectoryInfo(RuntimeEnvironment.GetRuntimeDirectory());
+        var runtimeRoot = runtimeDirectory.Parent?.Parent?.Parent
+            ?? throw new InvalidOperationException("Cannot determine Piston's .NET runtime installation.");
+        var host = Path.Combine(runtimeRoot.FullName, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+        return File.Exists(host)
+            ? host
+            : throw new InvalidOperationException($"Cannot find the .NET host for Piston's runtime installation: {host}");
     }
 
     internal Process Process { get; }
