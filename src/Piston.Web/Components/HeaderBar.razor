@@ -2,7 +2,7 @@
 @inject EngineClientService Client
 @implements IDisposable
 
-<div class="flex items-center gap-4 px-4 h-9 shrink-0 whitespace-nowrap overflow-hidden bg-gray-900 border-b border-gray-800 text-xs select-none">
+<div class="flex items-center gap-4 pl-4 h-9 shrink-0 whitespace-nowrap overflow-hidden bg-gray-900 border-b border-gray-800 text-xs select-none">
     @if (Snapshot is null)
     {
         <span class="text-gray-600">⬡ Piston</span>
@@ -14,9 +14,13 @@
             : "Piston";
         <span class="shrink-0 text-gray-400 font-semibold" title="@Snapshot.SolutionPath">⬡ @solutionName</span>
     }
+    <TabBar ActiveTab="@ActiveTab" OnTabSelected="OnTabSelected" />
 </div>
 
 @code {
+    [Parameter, EditorRequired] public DashboardTab ActiveTab { get; set; }
+    [Parameter, EditorRequired] public EventCallback<DashboardTab> OnTabSelected { get; set; }
+
     private StateSnapshotNotification? Snapshot { get; set; }
 
     protected override void OnInitialized()
