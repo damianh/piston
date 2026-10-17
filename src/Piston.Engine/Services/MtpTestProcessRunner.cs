@@ -229,22 +229,19 @@ internal static partial class MtpTestProcessRunner
 
         try
         {
-            await process.WaitForExitAsync(ct).ConfigureAwait(false);
+            _ = await RedirectedProcessDrain.WaitForExitAndDrainAsync(
+                process,
+                RedirectedProcessDrain.DefaultTimeout,
+                ct,
+                message => log.Write("MtpRunner", message)).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            try
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-            }
-            catch (InvalidOperationException) when (process.HasExited) { }
-            finally
-            {
-                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            }
+            await RedirectedProcessDrain.KillAndWaitAsync(
+                process,
+                RedirectedProcessDrain.DefaultTimeout,
+                CancellationToken.None,
+                message => log.Write("MtpRunner", message)).ConfigureAwait(false);
             log.Write("MtpRunner", "Cancelled — returning empty result");
             return new ProjectTestResult(projectPath, [], null, [], Crashed: false);
         }

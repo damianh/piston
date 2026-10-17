@@ -91,23 +91,19 @@ internal static class TestListProcess
             _ = process.Start();
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
-            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            _ = await RedirectedProcessDrain.WaitForExitAndDrainAsync(
+                process,
+                RedirectedProcessDrain.DefaultTimeout,
+                timeout.Token,
+                message => log?.Write(logCategory, message)).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            try
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-            }
-            catch (InvalidOperationException) { }
-            finally
-            {
-                // Don't report discovery over while the process is still exiting.
-                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            }
+            await RedirectedProcessDrain.KillAndWaitAsync(
+                process,
+                RedirectedProcessDrain.DefaultTimeout,
+                CancellationToken.None,
+                message => log?.Write(logCategory, message)).ConfigureAwait(false);
 
             log?.Write(logCategory, $"Discovery cancelled or timed out: {projectPath}");
             return [];

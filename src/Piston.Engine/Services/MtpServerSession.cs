@@ -24,7 +24,6 @@ internal static class MtpServerSession
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ExitTimeout = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan KillTimeout = TimeSpan.FromSeconds(10);
     private const int MaxStderrLines = 200;
 
     internal const string DiscoverMethod = "testing/discoverTests";
@@ -130,6 +129,7 @@ internal static class MtpServerSession
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
+        var processCleanedUp = false;
         try
         {
             using var client = await AcceptAsync(listener, process, ct).ConfigureAwait(false);
@@ -147,35 +147,42 @@ internal static class MtpServerSession
             switch (outcome)
             {
                 case Outcome.Completed:
-                    await WaitForExitOrKillAsync(process, ExitTimeout).ConfigureAwait(false);
+                    await WaitForExitOrKillAsync(process, ExitTimeout, log).ConfigureAwait(false);
+                    processCleanedUp = true;
                     return new Result(outcome, error, Snapshot(stderr));
                 case Outcome.Cancelled:
                 case Outcome.TimedOut:
                     // The host is unresponsive (or no longer wanted): there is nothing to wait for.
-                    await KillAndWaitAsync(process).ConfigureAwait(false);
+                    await KillAndWaitAsync(process, log).ConfigureAwait(false);
+                    processCleanedUp = true;
                     return new Result(outcome, error, Snapshot(stderr));
                 case Outcome.NotStarted:
                 case Outcome.Failed:
                 default:
-                    return new Result(outcome, error, await StderrAfterExitAsync(process, stderr).ConfigureAwait(false));
+                    var failedStderr = await StderrAfterExitAsync(process, stderr, log).ConfigureAwait(false);
+                    processCleanedUp = true;
+                    return new Result(outcome, error, failedStderr);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await KillAndWaitAsync(process).ConfigureAwait(false);
+            await KillAndWaitAsync(process, log).ConfigureAwait(false);
+            processCleanedUp = true;
             return new Result(Outcome.Cancelled, null, Snapshot(stderr));
         }
         catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
         {
             log?.Invoke("MtpServer", $"Session failed: {ex.Message}");
-            return new Result(Outcome.NotStarted,
-                $"Lost connection to the test host: {ex.Message}",
-                await StderrAfterExitAsync(process, stderr).ConfigureAwait(false));
+            var failedStderr = await StderrAfterExitAsync(process, stderr, log).ConfigureAwait(false);
+            processCleanedUp = true;
+            return new Result(Outcome.NotStarted, $"Lost connection to the test host: {ex.Message}", failedStderr);
         }
         finally
         {
-            // Never return while the host may still hold the outputs a subsequent build rewrites.
-            await KillAndWaitAsync(process).ConfigureAwait(false);
+            if (!processCleanedUp)
+            {
+                await KillAndWaitAsync(process, log).ConfigureAwait(false);
+            }
         }
     }
 
@@ -385,7 +392,7 @@ internal static class MtpServerSession
         using var acceptCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         acceptCts.CancelAfter(ConnectTimeout);
         var accept = listener.AcceptTcpClientAsync(acceptCts.Token).AsTask();
-        var exited = process.WaitForExitAsync(acceptCts.Token);
+        var exited = RedirectedProcessDrain.WaitForProcessExitAsync(process, acceptCts.Token);
         _ = await Task.WhenAny(accept, exited).ConfigureAwait(false);
         if (accept.IsCompletedSuccessfully)
         {
@@ -407,56 +414,29 @@ internal static class MtpServerSession
         }
     }
 
-    private static async Task<IReadOnlyList<string>> StderrAfterExitAsync(Process process, List<string> stderr)
+    private static async Task<IReadOnlyList<string>> StderrAfterExitAsync(
+        Process process,
+        List<string> stderr,
+        Action<string, string>? log)
     {
-        await WaitForExitOrKillAsync(process, ExitTimeout).ConfigureAwait(false);
+        await WaitForExitOrKillAsync(process, ExitTimeout, log).ConfigureAwait(false);
         return Snapshot(stderr);
     }
 
-    private static async Task WaitForExitOrKillAsync(Process process, TimeSpan timeout)
-    {
-        using var cts = new CancellationTokenSource(timeout);
-        try
-        {
-            await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            await KillAndWaitAsync(process).ConfigureAwait(false);
-        }
-    }
+    private static Task WaitForExitOrKillAsync(Process process, TimeSpan timeout, Action<string, string>? log) =>
+        RedirectedProcessDrain.WaitForExitAndDrainAsync(
+            process,
+            RedirectedProcessDrain.DefaultTimeout,
+            CancellationToken.None,
+            message => log?.Invoke("MtpServer", message),
+            timeout);
 
-    /// <summary>
-    /// Kills the host's process tree and waits for it to exit and for its redirected output to drain.
-    /// The wait is bounded so a stray grandchild holding the pipes cannot hang the caller.
-    /// </summary>
-    private static async Task KillAndWaitAsync(Process process)
-    {
-        try
-        {
-            if (!process.HasExited)
-            {
-                process.Kill(entireProcessTree: true);
-            }
-        }
-        catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
-            // Not started, or already exiting.
-        }
-
-        using var cts = new CancellationTokenSource(KillTimeout);
-        try
-        {
-            await process.WaitForExitAsync(cts.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            DiagnosticLog.Instance?.Write("MtpServer", "The test host did not exit after being killed.");
-        }
-        catch (InvalidOperationException)
-        {
-        }
-    }
+    private static Task KillAndWaitAsync(Process process, Action<string, string>? log) =>
+        RedirectedProcessDrain.KillAndWaitAsync(
+            process,
+            RedirectedProcessDrain.DefaultTimeout,
+            CancellationToken.None,
+            message => log?.Invoke("MtpServer", message));
 
     private static IReadOnlyList<string> Snapshot(List<string> stderr)
     {

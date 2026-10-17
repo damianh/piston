@@ -222,22 +222,19 @@ internal static class TestProcessRunner
 
             try
             {
-                await process.WaitForExitAsync(ct).ConfigureAwait(false);
+                _ = await RedirectedProcessDrain.WaitForExitAndDrainAsync(
+                    process,
+                    RedirectedProcessDrain.DefaultTimeout,
+                    ct,
+                    message => log.Write("VSTestRunner", message)).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
-                try
-                {
-                    if (!process.HasExited)
-                    {
-                        process.Kill(entireProcessTree: true);
-                    }
-                }
-                catch (InvalidOperationException) when (process.HasExited) { }
-                finally
-                {
-                    await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-                }
+                await RedirectedProcessDrain.KillAndWaitAsync(
+                    process,
+                    RedirectedProcessDrain.DefaultTimeout,
+                    CancellationToken.None,
+                    message => log.Write("VSTestRunner", message)).ConfigureAwait(false);
                 log.Write("VSTestRunner", "Cancelled — returning empty result");
                 log.Complete();
                 return new ProjectTestResult(projectPath, [], null, [], Crashed: false);
