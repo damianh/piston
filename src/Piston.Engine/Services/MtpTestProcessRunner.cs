@@ -233,18 +233,8 @@ internal static partial class MtpTestProcessRunner
         }
         catch (OperationCanceledException)
         {
-            try
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-            }
-            catch (InvalidOperationException) when (process.HasExited) { }
-            finally
-            {
-                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            }
+            await ProcessTermination.KillAndWaitAsync(process, message => log.Write("MtpRunner", message))
+                .ConfigureAwait(false);
             log.Write("MtpRunner", "Cancelled — returning empty result");
             return new ProjectTestResult(projectPath, [], null, [], Crashed: false);
         }

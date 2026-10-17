@@ -226,18 +226,8 @@ internal static class TestProcessRunner
             }
             catch (OperationCanceledException)
             {
-                try
-                {
-                    if (!process.HasExited)
-                    {
-                        process.Kill(entireProcessTree: true);
-                    }
-                }
-                catch (InvalidOperationException) when (process.HasExited) { }
-                finally
-                {
-                    await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-                }
+                await ProcessTermination.KillAndWaitAsync(process, message => log.Write("VSTestRunner", message))
+                    .ConfigureAwait(false);
                 log.Write("VSTestRunner", "Cancelled — returning empty result");
                 log.Complete();
                 return new ProjectTestResult(projectPath, [], null, [], Crashed: false);

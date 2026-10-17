@@ -151,18 +151,8 @@ public sealed class BuildService : IBuildService
         }
         catch (OperationCanceledException)
         {
-            try
-            {
-                if (!process.HasExited)
-                {
-                    process.Kill(entireProcessTree: true);
-                }
-            }
-            catch (InvalidOperationException) when (process.HasExited) { }
-            finally
-            {
-                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
-            }
+            await ProcessTermination.KillAndWaitAsync(process,
+                message => DiagnosticLog.Instance?.Write("BuildService", message)).ConfigureAwait(false);
             sw.Stop();
             return output.ToCancelledResult(sw.Elapsed);
         }
