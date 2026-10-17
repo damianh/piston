@@ -24,8 +24,9 @@ public sealed record SetFilterCommandParams(string? Filter);
 /// <summary>Parameters for <c>engine/runTests</c>: the tests to run.</summary>
 /// <param name="Projects">Names of the test projects to run, as reported in <see cref="Dtos.TestSuiteDto.Name"/>.</param>
 /// <param name="Tests">
-/// Fully qualified names of the tests to run within those projects; null runs every test in them. All
-/// cases of a parameterised test run.
+/// Fully qualified names of the tests to run within those projects, as reported in
+/// <see cref="Dtos.TestResultDto.FullyQualifiedName"/>; null runs every test in them. All cases of a
+/// parameterised test run. A name that, less its argument list, contains a double quote is rejected.
 /// </param>
 public sealed record RunTestsCommand(IReadOnlyList<string> Projects, IReadOnlyList<string>? Tests = null);
 

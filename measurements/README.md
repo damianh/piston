@@ -12,11 +12,13 @@ starts a real, isolated daemon from a prebuilt DLL. All harness code is under th
 Requires Linux and .NET SDK 10.0.401. The harness is a .NET console application
 with xUnit self-tests; Python is not required. Its separate `Measurements.slnx`
 does not build the Piston engine; its real-daemon tests are opt-in. Fixture configuration and NuGet lock
-files are independent of the root solution. No Docker is needed for these commands:
+files are independent of the root solution. The self-tests use VSTest, so run
+`dotnet test` from `measurements/`, whose `global.json` overrides the root's
+Microsoft Testing Platform runner. No Docker is needed for these commands:
 
 ```sh
 dotnet restore measurements/Measurements.slnx --locked-mode
-dotnet test measurements/Measurements.slnx --no-restore
+(cd measurements && dotnet test Measurements.slnx --no-restore)
 dotnet build measurements/Runner/Runner.csproj -c Release --no-restore
 dotnet restore measurements/fixtures/unit/Orders.slnx --locked-mode
 dotnet restore measurements/fixtures/integration/Persistence.slnx --locked-mode
@@ -247,9 +249,9 @@ Run it with:
 
 ```sh
 dotnet build Piston.slnx
-PISTON_DAEMON_DLL=$PWD/src/Piston/bin/Debug/net10.0/Piston.dll \
-  dotnet test measurements/Runner.Tests \
-    --filter 'FullyQualifiedName~PistonOracleSmokeTests|FullyQualifiedName~PistonTrialSmokeTests'
+export PISTON_DAEMON_DLL=$PWD/src/Piston/bin/Debug/net10.0/Piston.dll
+(cd measurements && dotnet test Runner.Tests \
+  --filter 'FullyQualifiedName~PistonOracleSmokeTests|FullyQualifiedName~PistonTrialSmokeTests')
 ```
 
 The trial smokes exercise the actual harness with a regression plus a distinct

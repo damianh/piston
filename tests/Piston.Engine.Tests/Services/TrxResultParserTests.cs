@@ -128,6 +128,34 @@ public sealed class TrxResultParserTests
     }
 
     [Fact]
+    public void Parse_KeepsTheMethodOfATestWithACustomDisplayName()
+    {
+        const string trx = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <Results>
+                <UnitTestResult testId="t1" testName="nice name" outcome="Passed" duration="00:00:00.001" />
+              </Results>
+              <TestDefinitions>
+                <UnitTest id="t1"><TestMethod className="Shop.Tests.PriceTests" name="Boundary" /></UnitTest>
+              </TestDefinitions>
+            </TestRun>
+            """;
+        var path = Path.Combine(Path.GetTempPath(), $"piston-trx-{Guid.NewGuid():N}.trx");
+        File.WriteAllText(path, trx);
+        try
+        {
+            var test = Assert.Single(new TrxResultParser().Parse(path)[0].Tests);
+            Assert.Equal("Shop.Tests.PriceTests.nice name", test.FullyQualifiedName);
+            Assert.Equal("Shop.Tests.PriceTests.Boundary", test.Method);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Parse_CombinesStdOutStdErrAndDebugTrace()
     {
         const string trx = """

@@ -23,6 +23,13 @@ public sealed record TestResult(
     public string? TargetFramework { get; init; }
 
     /// <summary>
+    /// The fully qualified name of the test method (<c>Ns.Class.Method</c>), when the runner reported it. It
+    /// differs from <see cref="FullyQualifiedName"/> when the test has a custom display name, and is what a
+    /// <c>FullyQualifiedName</c> filter matches.
+    /// </summary>
+    public string? Method { get; init; }
+
+    /// <summary>
     /// Identifies this result among a run's results: the fully qualified name, qualified with the
     /// target framework when it is known.
     /// </summary>

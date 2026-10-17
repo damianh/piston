@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Piston.Engine.Models;
 using Piston.Engine.Services;
 using Xunit;
 
@@ -30,6 +31,38 @@ public sealed class TestSelectionFilterTests
 
         Assert.Equal(@"FullyQualifiedName=Ns.C<T>.A\!\=B\~C\\D", filter);
     }
+
+    [Fact]
+    public void CustomDisplayName_IsMatchedByItsMethod()
+    {
+        static TestResult T(string identity, string? method) =>
+            new(identity, identity, TestStatus.Passed, TimeSpan.Zero, null, null, null, null) { Method = method };
+
+        var known = new[]
+        {
+            T("Ns.C.nice name", "Ns.C.M"),
+            T("Ns.C.Theory(x: 1)", "Ns.C.Theory"),
+            T("Ns.C.Other", null),
+        };
+
+        var filter = TestSelectionFilter.Build(["Ns.C.nice name", "Ns.C.Theory", "Ns.C.Unknown"], known);
+
+        Assert.Equal("FullyQualifiedName=Ns.C.M|FullyQualifiedName=Ns.C.Theory|FullyQualifiedName=Ns.C.Unknown", filter);
+    }
+
+    [Theory]
+    [InlineData("X\" --settings \"/tmp/extra.runsettings")]
+    [InlineData("Ns.C.say \"hi\"")]
+    public void DoubleQuote_IsRejected(string test)
+    {
+        var ex = Assert.Throws<ArgumentException>(() => TestSelectionFilter.Build([test]));
+
+        Assert.Contains("double quote", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DoubleQuoteInArguments_IsIgnoredWithThem() =>
+        Assert.Equal("FullyQualifiedName=Ns.C.M", TestSelectionFilter.Build(["Ns.C.M(s: \"a\")"]));
 
     [Fact]
     public void ManyMethods_AreMatchedByClass()

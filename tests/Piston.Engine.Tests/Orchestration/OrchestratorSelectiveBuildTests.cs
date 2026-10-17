@@ -171,6 +171,47 @@ public sealed class OrchestratorSelectiveBuildTests
     }
 
     [Fact]
+    public async Task RunSelected_TestWithACustomDisplayName_IsFilteredByItsMethod()
+    {
+        var state = new PistonState();
+        var runner = new RecordingTestRunner();
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), new RecordingBuildService(),
+            runner, new FixedImpactAnalyzer(new([], [], false, false)), state);
+        await orchestrator.StartAsync("/repo/All.slnx");
+        await runner.WaitForCallsAsync(1);
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+        while (state.LastRun is null && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10, _ct);
+        }
+
+        state.TestSuites =
+        [
+            new TestSuite("Lib.Tests",
+                [new("Lib.T.nice name", "nice name", TestStatus.Passed, TimeSpan.Zero, null, null, null, null) { Method = "Lib.T.M" }],
+                DateTimeOffset.UtcNow, TimeSpan.Zero),
+        ];
+
+        var run = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"], ["Lib.T.nice name"]));
+
+        Assert.Equal("FullyQualifiedName=Lib.T.M", run.Context!.EffectiveFilter);
+    }
+
+    [Fact]
+    public async Task RunSelected_TestNameWithADoubleQuote_IsRejected()
+    {
+        var runner = new RecordingTestRunner();
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), new RecordingBuildService(),
+            runner, new FixedImpactAnalyzer(new([], [], false, false)), new PistonState());
+        await orchestrator.StartAsync("/repo/All.slnx");
+        await runner.WaitForCallsAsync(1);
+
+        _ = await Assert.ThrowsAsync<ArgumentException>(() => orchestrator.RunSelectedAsync(
+            new TestSelection(["Lib.Tests"], ["X\" --settings \"/tmp/extra.runsettings"])));
+        _ = Assert.Single(runner.Calls);
+    }
+
+    [Fact]
     public async Task RunSelected_WholeProject_RunsWithoutAFilter()
     {
         var runner = new RecordingTestRunner();

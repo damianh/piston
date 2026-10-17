@@ -296,7 +296,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     /// Starts a run of the selected tests and returns once it is requested; the returned task completes
     /// with the run's record. Unlike file-change and forced runs it never supersedes another run.
     /// </summary>
-    /// <exception cref="ArgumentException">The selection names no project, or a project that is not a test project.</exception>
+    /// <exception cref="ArgumentException">
+    /// The selection names no project, a project that is not a test project, or a test whose name contains a double quote.
+    /// </exception>
     /// <exception cref="InvalidOperationException">The engine is not ready, or a run is already in progress.</exception>
     public Task<TestRunRecord> RunSelectedAsync(TestSelection selection)
     {
@@ -314,7 +316,8 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         }
 
         var paths = new List<string>();
-        foreach (var name in selection.Projects.Distinct(StringComparer.Ordinal))
+        var projects = selection.Projects.Distinct(StringComparer.Ordinal).ToList();
+        foreach (var name in projects)
         {
             var path = allTestProjects.FirstOrDefault(p =>
                 string.Equals(TestProjectNames.SuiteName(p), name, StringComparison.Ordinal))
@@ -322,8 +325,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             paths.Add(path);
         }
 
+        var known = _state.TestSuites
+            .Where(s => projects.Contains(s.Name, StringComparer.Ordinal))
+            .SelectMany(s => s.Tests);
         return TriggerRunAsync(solutionPath, null, TestRunTrigger.Targeted,
-            new SelectedRun(paths, TestSelectionFilter.Build(selection.Tests)));
+            new SelectedRun(paths, TestSelectionFilter.Build(selection.Tests, known)));
     }
 
     /// <summary>

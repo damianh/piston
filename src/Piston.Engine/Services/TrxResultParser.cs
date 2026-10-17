@@ -20,21 +20,23 @@ public sealed class TrxResultParser : ITestResultParser
         var doc = XDocument.Load(trxFilePath);
         XNamespace ns = TrxNamespace;
 
-        // Build a lookup: testId -> className from TestDefinitions
-        var classNames = doc
+        // Build a lookup: testId -> (className, method name) from TestDefinitions
+        var methods = doc
             .Descendants(ns + "UnitTest")
             .Select(ut => new
             {
                 Id = (string?)ut.Attribute("id") ?? string.Empty,
-                ClassName = (string?)ut.Element(ns + "TestMethod")?.Attribute("className") ?? string.Empty,
+                Method = ut.Element(ns + "TestMethod"),
             })
             .Where(x => !string.IsNullOrEmpty(x.Id))
-            .ToDictionary(x => x.Id, x => x.ClassName);
+            .ToDictionary(
+                x => x.Id,
+                x => ((string?)x.Method?.Attribute("className") ?? string.Empty, (string?)x.Method?.Attribute("name")));
 
         // Parse UnitTestResult elements
         var results = doc
             .Descendants(ns + "UnitTestResult")
-            .Select(r => ParseTestResult(r, classNames, ns))
+            .Select(r => ParseTestResult(r, methods, ns))
             .ToList();
 
         // Prefer the TestRun/@name attribute (e.g. "MyProject.Tests@machine 2024-01-01 …")
@@ -61,7 +63,7 @@ public sealed class TrxResultParser : ITestResultParser
 
     private static TestResult ParseTestResult(
         XElement r,
-        Dictionary<string, string> classNames,
+        Dictionary<string, (string ClassName, string? MethodName)> methods,
         XNamespace ns)
     {
         var testId = (string?)r.Attribute("testId") ?? string.Empty;
@@ -69,7 +71,7 @@ public sealed class TrxResultParser : ITestResultParser
         var outcome = (string?)r.Attribute("outcome") ?? string.Empty;
         var durationStr = (string?)r.Attribute("duration") ?? "0";
 
-        var className = classNames.GetValueOrDefault(testId, string.Empty);
+        var (className, methodName) = methods.GetValueOrDefault(testId, (string.Empty, null));
         // Same identity live collector events resolve to (see TestIdentity).
         var fullyQualifiedName = TestIdentity.Qualify(className, testName);
 
@@ -100,7 +102,11 @@ public sealed class TrxResultParser : ITestResultParser
             ErrorMessage: string.IsNullOrWhiteSpace(errorMessage) ? null : errorMessage.Trim(),
             StackTrace: string.IsNullOrWhiteSpace(stackTrace) ? null : stackTrace.Trim(),
             Source: null
-        );
+        )
+        {
+            // The logger records the test case's fully qualified name less its class as the method name.
+            Method = string.IsNullOrEmpty(methodName) ? null : TestIdentity.Qualify(className, methodName),
+        };
     }
 
     private static DateTimeOffset? ParseDateTimeOffset(string? value)

@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Text;
+using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
 
@@ -15,19 +16,36 @@ internal static class TestSelectionFilter
     /// A filter matching <paramref name="tests"/> by method name, or by class when there are more than
     /// <see cref="MaxConditions"/> methods; null (run everything) when there are none or too many classes.
     /// </summary>
-    public static string? Build(IReadOnlyList<string>? tests)
+    /// <param name="tests">Identities (<see cref="TestResult.FullyQualifiedName"/>) of the tests to run.</param>
+    /// <param name="known">
+    /// Results for the selected tests' projects, which map an identity built from a custom display name to the
+    /// method a filter must name.
+    /// </param>
+    /// <exception cref="ArgumentException">A test name contains a double quote.</exception>
+    public static string? Build(IReadOnlyList<string>? tests, IEnumerable<TestResult>? known = null)
     {
         if (tests is null)
         {
             return null;
         }
 
+        var methodsByName = (known ?? [])
+            .Where(t => t.Method is not null)
+            .ToLookup(t => MethodName(t.FullyQualifiedName), t => MethodName(t.Method!), StringComparer.Ordinal);
+
         var methods = tests
             .Select(MethodName)
+            .SelectMany(m => methodsByName.Contains(m) ? methodsByName[m] : [m])
             .Where(m => m.Length > 0)
             .Distinct(StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToList();
+
+        // The filter is passed as one quoted command-line argument, which a quote would end.
+        if (methods.FirstOrDefault(m => m.Contains('"', StringComparison.Ordinal)) is { } quoted)
+        {
+            throw new ArgumentException($"Test name '{quoted}' contains a double quote.", nameof(tests));
+        }
 
         if (methods.Count == 0)
         {

@@ -77,6 +77,7 @@ public sealed class MtpServerNodeMappingTests
         var result = MtpTestProcessRunner.ToTestResult(node, "/bin/Mt.dll", TestStatus.Failed);
 
         Assert.Equal("Mt.Deep.A.Th(n: 1)", result.FullyQualifiedName);
+        Assert.Equal("Mt.Deep.A.Th", result.Method);
         Assert.Equal(TestStatus.Failed, result.Status);
         Assert.Equal(TimeSpan.FromMilliseconds(12.5), result.Duration);
         Assert.StartsWith("Assert.Equal() Failure", result.ErrorMessage, StringComparison.Ordinal);

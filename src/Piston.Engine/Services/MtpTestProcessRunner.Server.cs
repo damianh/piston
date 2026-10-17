@@ -295,8 +295,18 @@ internal static partial class MtpTestProcessRunner
             output.Length == 0 ? null : output,
             message,
             StringProperty(node, "error.stacktrace"),
-            appPath);
+            appPath)
+        {
+            Method = MethodOf(node),
+        };
     }
+
+    /// <summary>The node's test method, <c>location.type</c> and <c>location.method</c> less its parameter list.</summary>
+    private static string? MethodOf(JsonElement node) =>
+        StringProperty(node, "location.type") is { Length: > 0 } type
+        && StringProperty(node, "location.method") is { Length: > 0 } method
+            ? $"{type}.{(method.IndexOf('(', StringComparison.Ordinal) is var paren and >= 0 ? method[..paren] : method)}"
+            : null;
 
     private static bool IsAction(JsonElement node) => StringProperty(node, "node-type") == "action";
 
