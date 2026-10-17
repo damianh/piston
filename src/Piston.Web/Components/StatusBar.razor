@@ -2,11 +2,6 @@
 @using Piston.Protocol.Dtos
 
 <div class="flex items-center gap-4 px-4 py-1.5 shrink-0 bg-gray-900 border-t border-gray-800 text-xs text-gray-500 select-none">
-    <!-- Grouping mode -->
-    <button class="hover:text-gray-300 transition-colors" title="Cycle grouping mode (G)" @onclick="OnCycleGrouping">
-        @GroupingLabel(Grouping)
-    </button>
-
     <!-- Status filter toggles -->
     <div class="flex items-center gap-1">
         <button class="@(ShowFailed ? "text-red-400" : "text-gray-700") hover:opacity-80 transition-colors"
@@ -37,7 +32,6 @@
 </div>
 
 @code {
-    [Parameter] public GroupingMode Grouping { get; set; }
     [Parameter] public bool ShowFailed { get; set; } = true;
     [Parameter] public bool ShowPassed { get; set; } = true;
     [Parameter] public bool ShowSkipped { get; set; } = true;
@@ -45,20 +39,10 @@
     [Parameter] public string? Filter { get; set; }
     [Parameter] public int FailureCount { get; set; }
 
-    [Parameter] public EventCallback OnCycleGrouping { get; set; }
     [Parameter] public EventCallback OnToggleFailed { get; set; }
     [Parameter] public EventCallback OnTogglePassed { get; set; }
     [Parameter] public EventCallback OnToggleSkipped { get; set; }
     [Parameter] public EventCallback OnToggleNotRun { get; set; }
     [Parameter] public EventCallback OnPrevFailure { get; set; }
     [Parameter] public EventCallback OnNextFailure { get; set; }
-
-    private static string GroupingLabel(GroupingMode mode) =>
-        mode switch
-        {
-            GroupingMode.ProjectNamespaceClass => "group: project/ns/class",
-            GroupingMode.ByStatus              => "group: by status",
-            GroupingMode.Flat                  => "group: flat",
-            _                                  => "group: ?",
-        };
 }

@@ -20,8 +20,23 @@
         </button>
     </div>
 
+    <!-- Grouping mode -->
+    <div class="relative ml-2">
+        <select class="appearance-none [color-scheme:dark] bg-gray-800 border border-gray-700 rounded pl-2 pr-6 py-0.5 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
+                title="Group tests by (G to cycle)" aria-label="Group tests by"
+                value="@Grouping" @onchange="HandleGroupingChange">
+            <option value="@GroupingMode.ProjectNamespaceClass">Project tree</option>
+            <option value="@GroupingMode.ByStatus">By status</option>
+            <option value="@GroupingMode.Flat">Flat list</option>
+        </select>
+        <svg class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-gray-400"
+             viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+    </div>
+
     <!-- Filter input -->
-    <div class="flex items-center gap-1 ml-2">
+    <div class="flex items-center gap-1">
         <span class="text-gray-600">filter:</span>
         <input type="text"
                class="bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-gray-200 text-xs w-48 focus:outline-none focus:border-blue-500"
@@ -61,10 +76,17 @@
     [Parameter] public EventCallback OnExpandAll { get; set; }
     [Parameter] public EventCallback OnCollapseAll { get; set; }
     [Parameter] public EventCallback<string?> OnFilterChanged { get; set; }
+    [Parameter] public GroupingMode Grouping { get; set; }
+    [Parameter] public EventCallback<GroupingMode> OnGroupingChanged { get; set; }
     [Parameter] public DetailPosition DetailPosition { get; set; }
     [Parameter] public EventCallback OnToggleDetailPosition { get; set; }
 
     private System.Timers.Timer? _debounceTimer;
+
+    private Task HandleGroupingChange(ChangeEventArgs e) =>
+        Enum.TryParse<GroupingMode>(e.Value?.ToString(), out var mode)
+            ? OnGroupingChanged.InvokeAsync(mode)
+            : Task.CompletedTask;
 
     private void HandleFilterInput(ChangeEventArgs e)
     {
