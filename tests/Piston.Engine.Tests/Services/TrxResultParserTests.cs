@@ -126,4 +126,49 @@ public sealed class TrxResultParserTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public void Parse_CombinesStdOutStdErrAndDebugTrace()
+    {
+        const string trx = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <Results>
+                <UnitTestResult testId="t1" testName="Shop.Tests.PriceTests.Logs" outcome="Passed" duration="00:00:00.001">
+                  <Output>
+                    <StdOut>to stdout</StdOut>
+                    <StdErr>to stderr</StdErr>
+                    <DebugTrace>to trace</DebugTrace>
+                  </Output>
+                </UnitTestResult>
+                <UnitTestResult testId="t2" testName="Shop.Tests.PriceTests.ErrOnly" outcome="Passed" duration="00:00:00.001">
+                  <Output>
+                    <StdOut>   </StdOut>
+                    <StdErr>only stderr</StdErr>
+                  </Output>
+                </UnitTestResult>
+              </Results>
+              <TestDefinitions>
+                <UnitTest id="t1"><TestMethod className="Shop.Tests.PriceTests" name="Logs" /></UnitTest>
+                <UnitTest id="t2"><TestMethod className="Shop.Tests.PriceTests" name="ErrOnly" /></UnitTest>
+              </TestDefinitions>
+            </TestRun>
+            """;
+        var path = Path.Combine(Path.GetTempPath(), $"piston-trx-{Guid.NewGuid():N}.trx");
+        File.WriteAllText(path, trx);
+        try
+        {
+            var tests = new TrxResultParser().Parse(path)[0].Tests;
+            Assert.Equal(
+                string.Join(Environment.NewLine, "to stdout", "to stderr", "to trace"),
+                tests.Single(t => t.FullyQualifiedName.EndsWith(".Logs", StringComparison.Ordinal)).Output);
+            Assert.Equal(
+                "only stderr",
+                tests.Single(t => t.FullyQualifiedName.EndsWith(".ErrOnly", StringComparison.Ordinal)).Output);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

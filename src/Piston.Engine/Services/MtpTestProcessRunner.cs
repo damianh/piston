@@ -117,7 +117,7 @@ internal static partial class MtpTestProcessRunner
         MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
 
         var parser = new MtpStdoutParser();
-        var liveResults = new Dictionary<string, (TestStatus Status, string DisplayName, TimeSpan Duration, string? ErrorMessage, string? StackTrace, string? Source)>(StringComparer.Ordinal);
+        var liveResults = new Dictionary<string, MtpParsedResult>(StringComparer.Ordinal);
         var liveResultsLock = new object();
         var stderrLines = new System.Collections.Concurrent.ConcurrentBag<string>();
 
@@ -223,28 +223,20 @@ internal static partial class MtpTestProcessRunner
 
     private static void RecordResult(
         MtpParsedResult parsed,
-        Dictionary<string, (TestStatus Status, string DisplayName, TimeSpan Duration, string? ErrorMessage, string? StackTrace, string? Source)> liveResults,
+        Dictionary<string, MtpParsedResult> liveResults,
         object lockObj)
     {
-        var displayName = TestProcessRunner.DisplayNameOf(parsed.FullyQualifiedName);
-
         lock (lockObj)
         {
-            liveResults[parsed.FullyQualifiedName] = (
-                parsed.Status,
-                displayName,
-                parsed.Duration,
-                parsed.ErrorMessage,
-                parsed.StackTrace,
-                parsed.Source);
+            liveResults[parsed.FullyQualifiedName] = parsed;
         }
     }
 
     private static IReadOnlyList<TestSuite> BuildLiveSnapshot(
-        Dictionary<string, (TestStatus Status, string DisplayName, TimeSpan Duration, string? ErrorMessage, string? StackTrace, string? Source)> liveResults,
+        Dictionary<string, MtpParsedResult> liveResults,
         object lockObj)
     {
-        List<KeyValuePair<string, (TestStatus Status, string DisplayName, TimeSpan Duration, string? ErrorMessage, string? StackTrace, string? Source)>> snapshot;
+        List<KeyValuePair<string, MtpParsedResult>> snapshot;
         lock (lockObj)
         {
             snapshot = [.. liveResults];
@@ -258,10 +250,10 @@ internal static partial class MtpTestProcessRunner
         var results = snapshot
             .Select(kvp => new TestResult(
                 FullyQualifiedName: kvp.Key,
-                DisplayName: kvp.Value.DisplayName,
+                DisplayName: TestProcessRunner.DisplayNameOf(kvp.Key),
                 Status: kvp.Value.Status,
                 Duration: kvp.Value.Duration,
-                Output: null,
+                Output: kvp.Value.Output,
                 ErrorMessage: kvp.Value.ErrorMessage,
                 StackTrace: kvp.Value.StackTrace,
                 Source: kvp.Value.Source))
@@ -276,7 +268,7 @@ internal static partial class MtpTestProcessRunner
     /// </summary>
     private static IReadOnlyList<TestSuite> BuildSuitesFromLiveResults(
         string projectPath,
-        Dictionary<string, (TestStatus Status, string DisplayName, TimeSpan Duration, string? ErrorMessage, string? StackTrace, string? Source)> liveResults,
+        Dictionary<string, MtpParsedResult> liveResults,
         object lockObj)
     {
         var tests = BuildLiveSnapshot(liveResults, lockObj).SelectMany(s => s.Tests).ToList();

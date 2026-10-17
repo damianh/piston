@@ -87,7 +87,10 @@ public sealed class TrxResultParser : ITestResultParser
         var duration = TimeSpan.TryParse(durationStr, out var d) ? d : TimeSpan.Zero;
 
         var output = r.Element(ns + "Output");
-        var stdOut = (string?)output?.Element(ns + "StdOut");
+        var capturedOutput = string.Join(Environment.NewLine,
+            new[] { "StdOut", "StdErr", "DebugTrace" }
+                .Select(name => ((string?)output?.Element(ns + name))?.Trim())
+                .Where(text => !string.IsNullOrEmpty(text)));
         var errorMessage = (string?)output?.Element(ns + "ErrorInfo")?.Element(ns + "Message");
         var stackTrace = (string?)output?.Element(ns + "ErrorInfo")?.Element(ns + "StackTrace");
 
@@ -96,7 +99,7 @@ public sealed class TrxResultParser : ITestResultParser
             DisplayName: testName,
             Status: status,
             Duration: duration,
-            Output: string.IsNullOrWhiteSpace(stdOut) ? null : stdOut.Trim(),
+            Output: capturedOutput.Length == 0 ? null : capturedOutput,
             ErrorMessage: string.IsNullOrWhiteSpace(errorMessage) ? null : errorMessage.Trim(),
             StackTrace: string.IsNullOrWhiteSpace(stackTrace) ? null : stackTrace.Trim(),
             Source: null
