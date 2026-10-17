@@ -2,6 +2,7 @@
 @implements IDisposable
 
 <div class="flex flex-col flex-1 overflow-hidden">
+    <HeaderBar />
     <TabBar ActiveTab="@_activeTab" OnTabSelected="SetTab" />
 
     <div class="flex-1 min-h-0 overflow-hidden">

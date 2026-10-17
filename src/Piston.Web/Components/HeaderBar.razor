@@ -1,4 +1,6 @@
 @using Piston.Protocol.Dtos
+@inject EngineClientService Client
+@implements IDisposable
 
 @if (Snapshot is null)
 {
@@ -44,7 +46,10 @@ else
 
         <!-- Test counts -->
         @{
-            var allTests = (Suites ?? Snapshot.Suites).SelectMany(s => s.Tests).ToList();
+            var suites = phase == PistonPhaseDto.Testing
+                ? TestTreeBuilder.WithLiveOverlay(Snapshot.Suites, Snapshot.InProgressSuites)
+                : Snapshot.Suites;
+            var allTests = suites.SelectMany(s => s.Tests).ToList();
             var passed  = allTests.Count(t => t.Status == TestStatusDto.Passed);
             var failed  = allTests.Count(t => t.Status == TestStatusDto.Failed);
             var skipped = allTests.Count(t => t.Status == TestStatusDto.Skipped);
@@ -92,10 +97,21 @@ else
 }
 
 @code {
-    [Parameter] public StateSnapshotNotification? Snapshot { get; set; }
+    private StateSnapshotNotification? Snapshot { get; set; }
 
-    /// <summary>Suites currently displayed (including any live overlay); defaults to the snapshot's results.</summary>
-    [Parameter] public IReadOnlyList<TestSuiteDto>? Suites { get; set; }
+    protected override void OnInitialized()
+    {
+        Client.StateChanged += OnStateChanged;
+        Snapshot = Client.CurrentSnapshot;
+    }
+
+    private void OnStateChanged(StateSnapshotNotification snapshot)
+    {
+        Snapshot = snapshot;
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose() => Client.StateChanged -= OnStateChanged;
 
     private static List<string> RunningProjects(StateSnapshotNotification snapshot) =>
         snapshot.ProjectStatuses?
