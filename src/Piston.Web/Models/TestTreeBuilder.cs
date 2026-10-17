@@ -496,6 +496,24 @@ public static class TestTreeBuilder
         return classKey == fqn ? fqn : $"{SimpleSegment(classKey)}.{MethodLabel(fqn)}";
     }
 
+    /// <summary>
+    /// Detail-pane heading and secondary line. The default display name (the FQN or the bare method) becomes the
+    /// method label over its class; a custom display name keeps the FQN beneath it so the test can be located.
+    /// </summary>
+    internal static (string Title, string? Subtitle) DetailNames(TestResultDto test)
+    {
+        var fqn = test.FullyQualifiedName;
+        var method = MethodLabel(fqn);
+        var custom = !string.IsNullOrWhiteSpace(test.DisplayName) && test.DisplayName != fqn && test.DisplayName != method;
+        if (custom)
+        {
+            return (test.DisplayName, fqn);
+        }
+
+        var classKey = ClassKey(fqn);
+        return (method, classKey == fqn ? null : classKey);
+    }
+
     private static string SimpleSegment(string key)
     {
         var idx = key.LastIndexOf('.');
