@@ -78,21 +78,6 @@ else
                 <span class="text-gray-500">◌ @notRun</span>
             }
         </div>
-
-        <!-- Timings -->
-        @if (Snapshot.LastBuildDurationMs.HasValue || Snapshot.LastTestDurationMs.HasValue)
-        {
-            <div class="flex items-center gap-2 shrink-0 tabular-nums text-gray-600">
-                @if (Snapshot.LastBuildDurationMs.HasValue)
-                {
-                    <span>build @FormatDuration(Snapshot.LastBuildDurationMs.Value)</span>
-                }
-                @if (Snapshot.LastTestDurationMs.HasValue)
-                {
-                    <span>tests @FormatDuration(Snapshot.LastTestDurationMs.Value)</span>
-                }
-            </div>
-        }
     </div>
 }
 
@@ -131,7 +116,4 @@ else
             PistonPhaseDto.Error     => ("✗", "text-red-400"),
             _                        => ("?", "text-gray-500"),
         };
-
-    private static string FormatDuration(double ms) =>
-        ms < 1000 ? $"{(int)ms}ms" : $"{ms / 1000.0:F1}s";
 }
