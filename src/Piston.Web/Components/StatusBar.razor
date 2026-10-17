@@ -1,19 +1,7 @@
 @using Piston.Web.Models
 @using Piston.Protocol.Dtos
 
-<div class="flex items-center gap-4 px-4 py-1.5 shrink-0 bg-gray-900 border-t border-gray-800 text-xs text-gray-500 select-none">
-    <!-- Status filter toggles -->
-    <div class="flex items-center gap-1">
-        <button class="@(ShowFailed ? "text-red-400" : "text-gray-700") hover:opacity-80 transition-colors"
-                title="Toggle failed (1)" @onclick="OnToggleFailed">✗ F</button>
-        <button class="@(ShowPassed ? "text-green-400" : "text-gray-700") hover:opacity-80 transition-colors"
-                title="Toggle passed (2)" @onclick="OnTogglePassed">✓ P</button>
-        <button class="@(ShowSkipped ? "text-yellow-400" : "text-gray-700") hover:opacity-80 transition-colors"
-                title="Toggle skipped (3)" @onclick="OnToggleSkipped">● S</button>
-        <button class="@(ShowNotRun ? "text-gray-400" : "text-gray-700") hover:opacity-80 transition-colors"
-                title="Toggle not-run (4)" @onclick="OnToggleNotRun">◌ N</button>
-    </div>
-
+<div class="flex items-center gap-4 px-4 py-1.5 min-h-7 shrink-0 bg-gray-900 border-t border-gray-800 text-xs text-gray-500 select-none">
     <!-- Filter indicator -->
     @if (!string.IsNullOrEmpty(Filter))
     {
@@ -32,17 +20,9 @@
 </div>
 
 @code {
-    [Parameter] public bool ShowFailed { get; set; } = true;
-    [Parameter] public bool ShowPassed { get; set; } = true;
-    [Parameter] public bool ShowSkipped { get; set; } = true;
-    [Parameter] public bool ShowNotRun { get; set; } = true;
     [Parameter] public string? Filter { get; set; }
     [Parameter] public int FailureCount { get; set; }
 
-    [Parameter] public EventCallback OnToggleFailed { get; set; }
-    [Parameter] public EventCallback OnTogglePassed { get; set; }
-    [Parameter] public EventCallback OnToggleSkipped { get; set; }
-    [Parameter] public EventCallback OnToggleNotRun { get; set; }
     [Parameter] public EventCallback OnPrevFailure { get; set; }
     [Parameter] public EventCallback OnNextFailure { get; set; }
 }

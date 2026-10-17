@@ -20,6 +20,18 @@
         </button>
     </div>
 
+    <!-- Status visibility toggles -->
+    <div class="flex items-center gap-0.5 ml-2 p-0.5 bg-gray-800 rounded" role="group" aria-label="Show tests by status">
+        <button class="@ToggleClass(ShowFailed, "text-red-400")" title="Show failed (1)" aria-label="Show failed"
+                aria-pressed="@(ShowFailed ? "true" : "false")" @onclick="OnToggleFailed">✗</button>
+        <button class="@ToggleClass(ShowPassed, "text-green-400")" title="Show passed (2)" aria-label="Show passed"
+                aria-pressed="@(ShowPassed ? "true" : "false")" @onclick="OnTogglePassed">✓</button>
+        <button class="@ToggleClass(ShowSkipped, "text-yellow-400")" title="Show skipped (3)" aria-label="Show skipped"
+                aria-pressed="@(ShowSkipped ? "true" : "false")" @onclick="OnToggleSkipped">●</button>
+        <button class="@ToggleClass(ShowNotRun, "text-gray-300")" title="Show not run (4)" aria-label="Show not run"
+                aria-pressed="@(ShowNotRun ? "true" : "false")" @onclick="OnToggleNotRun">◌</button>
+    </div>
+
     <!-- Grouping mode -->
     <div class="relative ml-2">
         <select class="appearance-none [color-scheme:dark] bg-gray-800 border border-gray-700 rounded pl-2 pr-6 py-0.5 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
@@ -81,8 +93,20 @@
     [Parameter] public EventCallback<GroupingMode> OnGroupingChanged { get; set; }
     [Parameter] public DetailPosition DetailPosition { get; set; }
     [Parameter] public EventCallback OnToggleDetailPosition { get; set; }
+    [Parameter] public bool ShowFailed { get; set; } = true;
+    [Parameter] public bool ShowPassed { get; set; } = true;
+    [Parameter] public bool ShowSkipped { get; set; } = true;
+    [Parameter] public bool ShowNotRun { get; set; } = true;
+    [Parameter] public EventCallback OnToggleFailed { get; set; }
+    [Parameter] public EventCallback OnTogglePassed { get; set; }
+    [Parameter] public EventCallback OnToggleSkipped { get; set; }
+    [Parameter] public EventCallback OnToggleNotRun { get; set; }
 
     private System.Timers.Timer? _debounceTimer;
+
+    private static string ToggleClass(bool on, string onColor) =>
+        "w-6 py-0.5 rounded text-center transition-colors " +
+        (on ? $"bg-gray-700 {onColor} hover:bg-gray-600" : "text-gray-600 hover:text-gray-400 hover:bg-gray-700/50");
 
     private Task HandleGroupingChange(ChangeEventArgs e) =>
         Enum.TryParse<GroupingMode>(e.Value?.ToString(), out var mode)
