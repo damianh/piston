@@ -8,6 +8,8 @@ namespace Piston.Engine.Tests.Execution;
 
 public sealed class WorktreeOwnershipTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"piston-ownership-{Guid.NewGuid():N}");
     private readonly ExecutionCoordinationDirectory _directory;
 
@@ -158,7 +160,7 @@ public sealed class WorktreeOwnershipTests : IDisposable
         // Models `status`/`stop` probing the lock at the instant a new owner starts.
         var solution = CreateSolution(CreateWorktree("wt"));
         var holder = WorktreeOwnership.Acquire(_directory, solution, "probe");
-        var release = Task.Delay(100).ContinueWith(_ => holder.Dispose(), TaskScheduler.Default);
+        var release = Task.Delay(100, _ct).ContinueWith(_ => holder.Dispose(), TaskScheduler.Default);
 
         using var owner = WorktreeOwnership.Acquire(_directory, solution, "mcp", TimeSpan.FromSeconds(5));
         await release;

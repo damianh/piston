@@ -8,5 +8,8 @@ public enum BuildStatus
     None,
     Building,
     Succeeded,
-    Failed
+    Failed,
+
+    /// <summary>Not built: the outputs of the last successful build were reused because no source changed since.</summary>
+    Skipped
 }

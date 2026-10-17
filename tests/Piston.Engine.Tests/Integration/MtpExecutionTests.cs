@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Models;
+using Piston.Engine.Orchestration;
 using Piston.Engine.Services;
 using Xunit;
 
@@ -25,8 +26,9 @@ public sealed class MtpExecutionTests : IAsyncLifetime
     private string _root = string.Empty;
     private string _testCsproj = string.Empty;
     private bool _available;
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         _root = Directory.CreateTempSubdirectory("piston-mtp-e2e-").FullName;
 
@@ -45,11 +47,13 @@ public sealed class MtpExecutionTests : IAsyncLifetime
               <PropertyGroup>
                 <TargetFramework>net10.0</TargetFramework>
                 <Nullable>enable</Nullable>
+                <OutputType>Exe</OutputType>
                 <IsTestingPlatformApplication>true</IsTestingPlatformApplication>
                 <NoWarn>$(NoWarn);NU1507</NoWarn>
               </PropertyGroup>
               <ItemGroup>
-                <PackageReference Include="xunit.v3" Version="3.2.2" />
+                <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
+                <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" />
               </ItemGroup>
             </Project>
             """);
@@ -57,12 +61,28 @@ public sealed class MtpExecutionTests : IAsyncLifetime
         await File.WriteAllTextAsync(Path.Combine(_root, "Tests.cs"), """
             namespace MtpE2E;
 
+            internal static class LaunchDirectory
+            {
+                internal static string Value = "";
+
+                // Runs before the test framework starts (and may change the current directory).
+                [System.Runtime.CompilerServices.ModuleInitializer]
+                internal static void Capture() => Value = System.Environment.CurrentDirectory;
+            }
+
             public class SampleTests
             {
                 [Xunit.Fact]
                 public void PassingTest()
                 {
-                    // This test should pass.
+                    Xunit.TestContext.Current.TestOutputHelper?.WriteLine("hello from PassingTest");
+
+                    // Server mode and dotnet test must both start the app in the solution directory, so
+                    // solution-relative paths resolve identically on either path.
+                    if (!System.IO.File.Exists(System.IO.Path.Combine(LaunchDirectory.Value, "global.json")))
+                    {
+                        throw new System.InvalidOperationException($"Started in {LaunchDirectory.Value}, not the solution directory.");
+                    }
                 }
 
                 [Xunit.Fact]
@@ -89,29 +109,25 @@ public sealed class MtpExecutionTests : IAsyncLifetime
         _available = true;
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         try { Directory.Delete(_root, recursive: true); } catch { /* ignore */ }
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     // ── Tests ──────────────────────────────────────────────────────────────────
 
-    [Fact]
-    public async Task RunAsync_ReturnsOnePassAndOneFail()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_ReturnsOnePassAndOneFail(bool serverMode)
     {
         if (!_available)
         {
             return; // packages unavailable — skip gracefully
         }
 
-        var result = await MtpTestProcessRunner.RunAsync(
-            projectPath: _testCsproj,
-            solutionDirectory: _root,
-            filter: null,
-            collectCoverage: false,
-            onProgress: null,
-            ct: CancellationToken.None);
+        var result = await RunAsync(serverMode, filter: null);
 
         Assert.NotNull(result);
         Assert.False(result.Crashed);
@@ -128,21 +144,17 @@ public sealed class MtpExecutionTests : IAsyncLifetime
         Assert.Contains(failing, t => t.FullyQualifiedName.Contains("FailingTest", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public async Task RunAsync_FailingTest_HasNonEmptyErrorMessage()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_FailingTest_HasNonEmptyErrorMessage(bool serverMode)
     {
         if (!_available)
         {
             return; // packages unavailable — skip gracefully
         }
 
-        var result = await MtpTestProcessRunner.RunAsync(
-            projectPath: _testCsproj,
-            solutionDirectory: _root,
-            filter: null,
-            collectCoverage: false,
-            onProgress: null,
-            ct: CancellationToken.None);
+        var result = await RunAsync(serverMode, filter: null);
 
         var failing = result.Suites
             .SelectMany(s => s.Tests)
@@ -152,21 +164,17 @@ public sealed class MtpExecutionTests : IAsyncLifetime
         Assert.False(string.IsNullOrWhiteSpace(failing.ErrorMessage));
     }
 
-    [Fact]
-    public async Task RunAsync_AllTests_HaveNonNegativeDuration()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_AllTests_HaveNonNegativeDuration(bool serverMode)
     {
         if (!_available)
         {
             return; // packages unavailable — skip gracefully
         }
 
-        var result = await MtpTestProcessRunner.RunAsync(
-            projectPath: _testCsproj,
-            solutionDirectory: _root,
-            filter: null,
-            collectCoverage: false,
-            onProgress: null,
-            ct: CancellationToken.None);
+        var result = await RunAsync(serverMode, filter: null);
 
         var allTests = result.Suites.SelectMany(s => s.Tests).ToList();
         Assert.NotEmpty(allTests);
@@ -179,29 +187,206 @@ public sealed class MtpExecutionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task RunAsync_WithFilter_RunsOnlyMatchingTest()
+    public async Task RunAsync_ServerModeWithFilter_RunsOnlyMatchingTest()
     {
         if (!_available)
         {
             return; // packages unavailable — skip gracefully
         }
 
+        var result = await RunAsync(serverMode: true, filter: "PassingTest");
+
+        var test = Assert.Single(result.Suites.SelectMany(s => s.Tests));
+        Assert.Contains("PassingTest", test.FullyQualifiedName, StringComparison.Ordinal);
+        Assert.Equal(TestStatus.Passed, test.Status);
+    }
+
+    [Fact]
+    public async Task RunAsync_ServerModeFilterMatchingNothing_RunsNoTests()
+    {
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
+
+        var result = await RunAsync(serverMode: true, filter: "FullyQualifiedName=Nope");
+
+        Assert.Empty(result.Suites.SelectMany(s => s.Tests));
+        Assert.Null(result.RunnerError);
+    }
+
+    [Fact]
+    public async Task RunAsync_ServerMode_StreamsProgressAndEndsWithNoRunningTests()
+    {
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
+
+        var snapshots = new List<IReadOnlyList<TestResult>>();
         var result = await MtpTestProcessRunner.RunAsync(
             projectPath: _testCsproj,
+            appPath: AppPath,
             solutionDirectory: _root,
-            filter: "PassingTest",
-            collectCoverage: false,
-            onProgress: null,
+            filter: null,
+            onProgress: suites =>
+            {
+                lock (snapshots)
+                {
+                    snapshots.Add([.. suites.SelectMany(s => s.Tests)]);
+                }
+            },
             ct: CancellationToken.None);
 
-        var allTests = result.Suites.SelectMany(s => s.Tests).ToList();
+        Assert.Equal(2, result.Suites.SelectMany(s => s.Tests).Count());
+        Assert.NotEmpty(snapshots);
+        Assert.All(snapshots[^1], t => Assert.NotEqual(TestStatus.Running, t.Status));
+    }
 
-        // Only the passing test should be in results when filtered
-        Assert.All(allTests,
-            t => Assert.Contains("PassingTest", t.FullyQualifiedName, StringComparison.Ordinal));
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task DiscoverAsync_ListsTheSameNamesTheRunReports(bool serverMode)
+    {
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
+
+        Assert.True(!serverMode || File.Exists(AppPath), $"Test app not found: {AppPath}");
+        var partials = new List<int>();
+        var discovered = await MtpTestProcessRunner.DiscoverAsync(
+            _testCsproj, serverMode ? AppPath : null, _root, filter: null, tests => partials.Add(tests.Count), CancellationToken.None);
+        var result = await RunAsync(serverMode, filter: null);
+
+        Assert.Equal(2, discovered.Count);
+        Assert.NotEmpty(partials);
+        Assert.All(discovered, t => Assert.Equal(TestStatus.NotRun, t.Status));
+        Assert.Equal(
+            result.Suites.SelectMany(s => s.Tests).Select(t => t.FullyQualifiedName).Order(StringComparer.Ordinal),
+            discovered.Select(t => t.FullyQualifiedName).Order(StringComparer.Ordinal));
+
+        var suite = Assert.Single(result.Suites);
+        Assert.Equal("MtpE2E", suite.Name);
+    }
+
+    [Fact]
+    public async Task DiscoverAsync_ServerModeWithFilter_ListsOnlyMatchingTests()
+    {
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
+
+        var discovered = await MtpTestProcessRunner.DiscoverAsync(
+            _testCsproj, AppPath, _root, filter: "Name=FailingTest", onPartial: null, CancellationToken.None);
+
+        var test = Assert.Single(discovered);
+        Assert.Contains("FailingTest", test.FullyQualifiedName, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_CapturesTestOutput(bool serverMode)
+    {
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
+
+        var result = await RunAsync(serverMode, filter: null);
+
+        var passing = result.Suites.SelectMany(s => s.Tests).Single(t => t.Status == TestStatus.Passed);
+        Assert.Contains("hello from PassingTest", passing.Output, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(true, "MTP server")]
+    [InlineData(false, "MTP dotnet test")]
+    public async Task RunAsync_AttachesTheRunLogToTheSuite(bool serverMode, string runner)
+    {
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
+
+        var result = await RunAsync(serverMode, filter: null);
+
+        var log = Assert.Single(result.Suites).ExecutionLog;
+        Assert.NotNull(log);
+        Assert.Equal(runner, log.Runner);
+        Assert.Equal(_testCsproj, log.ProjectPath);
+        _ = Assert.NotNull(log.CompletedAt);
+        Assert.Contains(log.Entries, e => e.Message.Contains(_testCsproj, StringComparison.Ordinal));
+        if (!serverMode)
+        {
+            _ = Assert.NotNull(log.ExitCode);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_WithCoverage_WritesCoberturaReports(bool serverMode)
+    {
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
+
+        Assert.True(MtpTestExecutionStrategy.HasCoverageExtension(AppPath));
+        var result = await RunAsync(serverMode, filter: null, MtpCoverage.Collect);
+        try
+        {
+            Assert.Equal(2, result.Suites.SelectMany(s => s.Tests).Count());
+            Assert.Equal("MTP dotnet test", Assert.Single(result.Suites).ExecutionLog!.Runner);
+            var report = Assert.Single(result.CoverageReportPaths);
+            Assert.Contains("<coverage", await File.ReadAllTextAsync(report, _ct), StringComparison.Ordinal);
+            Assert.NotNull(PistonOrchestrator.CoverageResultsDirectory(report));
+        }
+        finally
+        {
+            foreach (var dir in result.CoverageReportPaths.Select(PistonOrchestrator.CoverageResultsDirectory).OfType<string>().Distinct())
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { /* ignore */ }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_CoverageExtensionMissing_RunsWithoutCoverageAndSaysWhy()
+    {
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
+
+        var result = await RunAsync(serverMode: true, filter: null, MtpCoverage.ExtensionMissing);
+
+        Assert.Empty(result.CoverageReportPaths);
+        Assert.Equal(2, result.Suites.SelectMany(s => s.Tests).Count());
+        Assert.Contains(Assert.Single(result.Suites).ExecutionLog!.Entries,
+            e => e.Message.Contains("Coverage not collected", StringComparison.Ordinal));
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
+
+    private string AppPath => Path.Combine(_root, "bin", "Debug", "net10.0", "MtpE2E.dll");
+
+    // Server mode needs the built test app; without it the runner falls back to dotnet test.
+    private Task<ProjectTestResult> RunAsync(bool serverMode, string? filter, MtpCoverage coverage = MtpCoverage.Off)
+    {
+        Assert.True(!serverMode || File.Exists(AppPath), $"Test app not found: {AppPath}");
+        return MtpTestProcessRunner.RunAsync(
+            projectPath: _testCsproj,
+            appPath: serverMode ? AppPath : null,
+            solutionDirectory: _root,
+            filter: filter,
+            onProgress: null,
+            ct: CancellationToken.None,
+            coverage);
+    }
 
     private static async Task<bool> TryRunDotnetAsync(string args, string workDir)
     {

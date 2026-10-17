@@ -8,6 +8,8 @@ namespace Piston.Engine.Tests;
 
 public sealed class TestProcessTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     [Fact]
     public async Task RunAsyncDrainsBothStreamsAndBoundsCapturedOutput()
     {
@@ -91,7 +93,7 @@ public sealed class TestProcessTests
                         <Message Text="{name} completed" Importance="high" />
                       </Target>
                     </Project>
-                    """);
+                    """, _ct);
             }
             await File.WriteAllTextAsync(Path.Combine(root, "All.proj"), """
                 <Project>
@@ -99,7 +101,7 @@ public sealed class TestProcessTests
                     <MSBuild Projects="First.proj;Second.proj" BuildInParallel="true" />
                   </Target>
                 </Project>
-                """);
+                """, _ct);
 
             for (var run = 0; run < 2; run++)
             {

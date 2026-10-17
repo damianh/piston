@@ -90,8 +90,8 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
 
         var run = await _orchestrator.RequestRunAsync();
 
-        Assert.Equal(Environment.CurrentDirectory, run!.Context!.WorkingDirectory);
-        Assert.Equal(Environment.CurrentDirectory, run.Context.TestWorkingDirectories![Projects[0]]);
+        Assert.Equal(_root, run!.Context!.WorkingDirectory);
+        Assert.Equal(TestProcessRunner.WorkingDirectoryFor(Projects[0]) ?? Environment.CurrentDirectory, run.Context.TestWorkingDirectories![Projects[0]]);
         Assert.Equal(_root, run.Context.TestWorkingDirectories[Projects[1]]);
     }
 

@@ -9,6 +9,9 @@ namespace Piston.Protocol.JsonRpc;
 /// </summary>
 public static class MessageFramer
 {
+    /// <summary>Largest message, in bytes, <see cref="ReadMessageAsync"/> accepts by default.</summary>
+    public const int DefaultMaxMessageSize = 4 * 1024 * 1024;
+
     private const byte Newline = (byte)'\n';
 
     /// <summary>
@@ -32,7 +35,7 @@ public static class MessageFramer
     public static async Task<ReadOnlyMemory<byte>?> ReadMessageAsync(
         Stream stream,
         CancellationToken ct,
-        int maxMessageSize = 4 * 1024 * 1024)
+        int maxMessageSize = DefaultMaxMessageSize)
     {
         var buffer = new List<byte>(4096);
         var singleByte = new byte[1];

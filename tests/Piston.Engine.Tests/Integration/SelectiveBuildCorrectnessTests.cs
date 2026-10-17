@@ -24,6 +24,8 @@ namespace Piston.Engine.Tests.Integration;
 /// </remarks>
 public sealed class SelectiveBuildCorrectnessTests : IAsyncLifetime
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private static readonly TimeSpan RunTimeout = TimeSpan.FromMinutes(4);
 
     private string _root = string.Empty;
@@ -32,7 +34,7 @@ public sealed class SelectiveBuildCorrectnessTests : IAsyncLifetime
     private string _libTestsCsproj = string.Empty;
     private string _otherTestsCsproj = string.Empty;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         MsBuildLocatorGuard.EnsureRegistered();
         _root = Directory.CreateTempSubdirectory("piston-selective-build-").FullName;
@@ -84,10 +86,10 @@ public sealed class SelectiveBuildCorrectnessTests : IAsyncLifetime
             """);
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         try { Directory.Delete(_root, recursive: true); } catch { /* ignore */ }
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Theory]
@@ -113,7 +115,7 @@ public sealed class SelectiveBuildCorrectnessTests : IAsyncLifetime
         Assert.Null(build.Calls[^1]); // full run builds the whole solution
 
         // Edit the referenced library only. The test must now fail.
-        await File.WriteAllTextAsync(_libCode, LibSource(2));
+        await File.WriteAllTextAsync(_libCode, LibSource(2), _ct);
         await RunAndWaitAsync(state, () => TriggerChange(watcher, _libCode));
 
         var libEditTargets = build.Calls[^1];
@@ -124,7 +126,7 @@ public sealed class SelectiveBuildCorrectnessTests : IAsyncLifetime
         Assert.True(LibTestStatus(state) == TestStatus.Failed, Describe(state));
 
         // Test-only edit: selective build of just the test project, which now passes.
-        await File.WriteAllTextAsync(_libTestCode, LibTestSource(2));
+        await File.WriteAllTextAsync(_libTestCode, LibTestSource(2), _ct);
         await RunAndWaitAsync(state, () => TriggerChange(watcher, _libTestCode));
 
         var testEditTargets = build.Calls[^1];

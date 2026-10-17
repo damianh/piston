@@ -1,0 +1,9 @@
+@* A result's target framework, when its project targets several. *@
+@if (!string.IsNullOrEmpty(Framework))
+{
+    <span class="shrink-0 rounded border border-gray-800 px-1 text-[10px] leading-4 text-gray-500 font-mono">@Framework</span>
+}
+
+@code {
+    [Parameter] public string? Framework { get; set; }
+}

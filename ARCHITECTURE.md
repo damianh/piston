@@ -54,9 +54,9 @@ in that process; it is not a per-user hub with isolated worktree workers.
 ## Transports and clients
 
 The daemon routes JSON-RPC requests and notifications over named pipes, stdio,
-and WebSocket. The browser uses `/ws`. HTTP MCP is a separate, optional agent
-endpoint enabled with `--mcp-port` or `mcpPort` in `.piston.json`.
-For port 5200, its URL is `http://localhost:5200`, not `/mcp`.
+and WebSocket. The browser uses `/ws`. HTTP MCP is a separate, always-on agent
+endpoint on port 5200, overridable with `--mcp-port` or `mcpPort` in `.piston.json`.
+Its URL is the root, `http://localhost:5200`, not `/mcp`.
 
 Implemented protocol operations include stop, force run, set filter, clear
 results, state retrieval, and MCP call-log retrieval. `engine/start` is rejected

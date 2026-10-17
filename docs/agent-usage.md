@@ -98,10 +98,10 @@ was deleted (`[worktree missing]`).
 ### HTTP daemon (humans and the dashboard)
 
 For a dashboard, or to share one engine between a human and an agent, run the HTTP
-daemon instead. Set a unique `"mcpPort": 5200` in `.piston.json`, then:
+daemon instead. MCP is always on, at port 5200 by default:
 
 ```sh
-piston daemon            # add --web-port <port> if 5199 is taken
+piston daemon            # add --web-port / --mcp-port if 5199 / 5200 are taken
 ```
 
 Connect with an entry such as `{"type": "http", "url": "http://localhost:5200/"}`.

@@ -11,6 +11,19 @@ public sealed record TestRunResult(
     string? RunnerError,
     IReadOnlyList<string> CoverageReportPaths);
 
+/// <summary>Per-project callbacks raised while a test run is in flight. All members are optional.</summary>
+public sealed record TestRunCallbacks
+{
+    /// <summary>Raised when a project's test process starts (after any pool queueing).</summary>
+    public Action<string>? OnProjectStarted { get; init; }
+
+    /// <summary>Raised with a live snapshot of a single project's results so far.</summary>
+    public Action<string, IReadOnlyList<TestSuite>>? OnProjectProgress { get; init; }
+
+    /// <summary>Raised with a project's authoritative results when its test process exits.</summary>
+    public Action<ProjectTestResult>? OnProjectCompleted { get; init; }
+}
+
 public interface ITestRunnerService
 {
     /// <summary>
@@ -61,5 +74,39 @@ public interface ITestRunnerService
         Action<IReadOnlyList<TestSuite>>? onProgress,
         Action<ProjectTestResult>? onProjectCompleted,
         CancellationToken ct);
+
+    /// <summary>
+    /// Runs tests reporting start, live progress and completion per project.
+    /// When <paramref name="testProjectPaths"/> is null, progress is attributed to <paramref name="solutionPath"/>.
+    /// </summary>
+    Task<TestRunResult> RunTestsAsync(
+        string solutionPath,
+        IReadOnlyList<string>? testProjectPaths,
+        string? filter,
+        bool collectCoverage,
+        TestRunCallbacks callbacks,
+        CancellationToken ct) =>
+        RunTestsAsync(
+            solutionPath,
+            testProjectPaths,
+            filter,
+            collectCoverage,
+            callbacks.OnProjectProgress is { } onProjectProgress
+                ? suites => onProjectProgress(solutionPath, suites)
+                : null,
+            callbacks.OnProjectCompleted,
+            ct);
+
+    /// <summary>
+    /// Lists the tests in each project without running them, restricted to <paramref name="filter"/>
+    /// when given. <paramref name="onDiscovered"/> is invoked per project as tests are listed, each time
+    /// with the project's cumulative list (replacing the previous one). Projects whose runner cannot
+    /// list tests are skipped.
+    /// </summary>
+    Task DiscoverTestsAsync(
+        IReadOnlyList<string> testProjectPaths,
+        string? filter,
+        Action<string, IReadOnlyList<TestResult>> onDiscovered,
+        CancellationToken ct) => Task.CompletedTask;
 }
 

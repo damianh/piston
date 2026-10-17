@@ -4,6 +4,7 @@
 using Piston.Engine;
 using Piston.Engine.Models;
 using Piston.Protocol.Dtos;
+using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 
 namespace Piston.Hosting.Mapping;
@@ -45,6 +46,7 @@ public static class DtoMapper
         BuildStatus.Building => BuildStatusDto.Building,
         BuildStatus.Succeeded => BuildStatusDto.Succeeded,
         BuildStatus.Failed => BuildStatusDto.Failed,
+        BuildStatus.Skipped => BuildStatusDto.Skipped,
         _ => BuildStatusDto.None,
     };
 
@@ -78,7 +80,8 @@ public static class DtoMapper
             result.Output,
             result.ErrorMessage,
             result.StackTrace,
-            result.Source
+            result.Source,
+            result.TargetFramework
         );
 
     public static TestSuiteDto ToDto(this TestSuite suite) =>
@@ -89,6 +92,133 @@ public static class DtoMapper
             suite.TotalDuration.TotalMilliseconds,
             suite.RunId
         );
+
+    /// <summary>
+    /// Most bytes a run log's entries may take once serialized. Half the named-pipe message limit leaves room
+    /// for the rest of the response and its JSON-RPC envelope.
+    /// </summary>
+    private const long RunLogEntriesBudget = MessageFramer.DefaultMaxMessageSize / 2;
+
+    // Upper bound for an entry's timestamp, property names and punctuation, and for an omitted marker.
+    private const long LogEntryOverhead = 96;
+    private const long OmittedMarkerAllowance = 256;
+
+    public static ExecutionLogDto ToDto(this ExecutionLog log, string? runId)
+    {
+        var (entries, omitted) = FitToBudget(log.Entries, log.OmittedEntries, RunLogEntriesBudget);
+        return new(
+            log.ProjectPath,
+            log.Runner,
+            log.ExitCode,
+            log.StartedAt,
+            log.CompletedAt,
+            omitted,
+            [.. entries.Select(e => new ExecutionLogEntryDto(e.Timestamp, e.Category, e.Message))],
+            runId
+        );
+    }
+
+    /// <summary>
+    /// Keeps as much of the start and end of <paramref name="entries"/> as fits in <paramref name="budget"/>
+    /// serialized bytes, replacing the dropped middle, and any existing omitted marker, with one marker.
+    /// </summary>
+    private static (IReadOnlyList<ExecutionLogEntry> Entries, int Omitted) FitToBudget(
+        IReadOnlyList<ExecutionLogEntry> entries, int omitted, long budget)
+    {
+        var sizes = new long[entries.Count];
+        long total = 0;
+        for (var i = 0; i < entries.Count; i++)
+        {
+            sizes[i] = EstimateJsonSize(entries[i]);
+            total += sizes[i];
+        }
+
+        if (total <= budget)
+        {
+            return (entries, omitted);
+        }
+
+        budget -= OmittedMarkerAllowance;
+
+        // The dropped range must cover an existing marker so the result has only one.
+        var marker = -1;
+        for (var i = 0; i < entries.Count && marker < 0; i++)
+        {
+            if (string.Equals(entries[i].Category, ExecutionLog.OmittedCategory, StringComparison.Ordinal))
+            {
+                marker = i;
+            }
+        }
+
+        var headLimit = marker >= 0 ? marker : entries.Count;
+        var tailLimit = marker + 1;
+
+        // Half the budget for the head, the rest for the tail, then any left over back to the head.
+        long used = 0;
+        var head = 0;
+        while (head < headLimit && used + sizes[head] <= budget / 2)
+        {
+            used += sizes[head++];
+        }
+
+        var tail = entries.Count;
+        while (tail > Math.Max(head, tailLimit) && used + sizes[tail - 1] <= budget)
+        {
+            used += sizes[--tail];
+        }
+
+        while (head < Math.Min(tail, headLimit) && used + sizes[head] <= budget)
+        {
+            used += sizes[head++];
+        }
+
+        // The existing marker in the dropped range stands for the entries it already counted.
+        var dropped = tail - head + (marker >= 0 ? omitted - 1 : 0);
+        var timestamp = entries[Math.Min(tail, entries.Count - 1)].Timestamp;
+
+        List<ExecutionLogEntry> kept = new(head + 1 + entries.Count - tail);
+        for (var i = 0; i < head; i++)
+        {
+            kept.Add(entries[i]);
+        }
+
+        kept.Add(ExecutionLog.OmittedMarker(timestamp, dropped));
+        for (var i = tail; i < entries.Count; i++)
+        {
+            kept.Add(entries[i]);
+        }
+
+        return (kept, dropped);
+    }
+
+    private static long EstimateJsonSize(ExecutionLogEntry entry) =>
+        LogEntryOverhead + EstimateJsonSize(entry.Category) + EstimateJsonSize(entry.Message);
+
+    // Worst case: anything but plain printable ASCII may be written as a six-byte \uXXXX escape.
+    private static long EstimateJsonSize(string value)
+    {
+        long size = 0;
+        foreach (var c in value)
+        {
+            size += c is >= ' ' and <= '~' and not ('"' or '\\' or '<' or '>' or '&' or '\'' or '+' or '`') ? 1 : 6;
+        }
+
+        return size;
+    }
+
+    /// <summary>
+    /// The log of the latest run of the test project named <paramref name="project"/> (one process covers
+    /// all of its target frameworks), or <see langword="null"/> when none was recorded.
+    /// </summary>
+    public static ExecutionLogDto? FindRunLog(this PistonState state, string project)
+    {
+        // A selective run leaves the project's untouched results in the previous suite, so take the latest.
+        var latest = state.TestSuites
+            .Where(s => s.ExecutionLog is not null && string.Equals(s.Name, project, StringComparison.Ordinal))
+            .MaxBy(s => s.Timestamp);
+
+        return latest?.ExecutionLog!.ToDto(latest.RunId);
+    }
 
     public static SourceFingerprintDto ToDto(this SourceFingerprint fingerprint) =>
         new(fingerprint.Algorithm, fingerprint.Value, fingerprint.FileCount);
@@ -179,6 +309,9 @@ public static class DtoMapper
                     kvp => kvp.Value.ToDto())
                 : null,
             LastRun: state.LastRun?.ToDto(),
-            ActiveRun: state.CurrentRun?.ToDto()
+            ActiveRun: state.CurrentRun?.ToDto(),
+            TotalBuildProjects: state.TotalBuildProjects,
+            CompletedBuildProjects: state.CompletedBuildProjects,
+            LastBuiltProject: state.LastBuiltProject
         );
 }

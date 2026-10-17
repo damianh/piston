@@ -19,9 +19,15 @@ namespace Piston.Engine.Services;
 ///   from C:\path\to.dll (net10.0|x64)
 ///   Error message here
 ///   at Namespace.Class.Method() in File.cs:line 42
+///   Standard output
+///     captured stdout line
+///   Error output
+///     captured stderr line
 /// </code>
 /// Status is lowercase. Duration is in parentheses. An optional "from" line provides the
-/// source DLL. For failed tests, subsequent indented lines contain error info.
+/// source DLL. For failed tests, subsequent indented lines contain error info. Captured
+/// output follows any error info under "Standard output" / "Error output" headings, with
+/// every line (blank lines included) indented by four spaces.
 /// </remarks>
 internal sealed class MtpStdoutParser
 {
@@ -30,9 +36,9 @@ internal sealed class MtpStdoutParser
         @"^\s*(passed|failed|skipped)\s+(.+?)\s+\((.+?)\)\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    // Matches: "  from C:\path\to.dll (net10.0|x64)"
+    // Matches: "  from C:\path\to.dll (net10.0|x64)"; the parenthesised part starts with the target framework.
     private static readonly Regex SourceLineRegex = new(
-        @"^\s+from\s+(.+?)\s+\(.+?\)\s*$",
+        @"^\s+from\s+(.+?)\s+\(([^|)]+).*?\)\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Matches stack trace line like "  at Ns.Class.Method() in file.cs:line 42"
@@ -41,11 +47,19 @@ internal sealed class MtpStdoutParser
         @"^\s*at\s+",
         RegexOptions.Compiled);
 
+    private const string StandardOutputHeading = "  Standard output";
+    private const string ErrorOutputHeading = "  Error output";
+    private const string OutputIndentation = "    ";
+
     private string? _pendingFqn;
     private TestStatus _pendingStatus;
     private TimeSpan _pendingDuration;
     private string? _pendingSource;
+    private string? _pendingTargetFramework;
     private readonly List<string> _pendingExtraLines = [];
+    private readonly List<string> _pendingStdOut = [];
+    private readonly List<string> _pendingStdErr = [];
+    private List<string>? _currentOutputSection;
 
     /// <summary>
     /// Processes a single stdout line. Returns a completed <see cref="MtpParsedResult"/>
@@ -54,6 +68,19 @@ internal sealed class MtpStdoutParser
     /// </summary>
     public MtpParsedResult? ProcessLine(string line)
     {
+        // Captured output is indented under its heading; check it first so output text that
+        // happens to look like a status or stack-trace line is not misread.
+        if (_currentOutputSection is not null)
+        {
+            if (line.StartsWith(OutputIndentation, StringComparison.Ordinal))
+            {
+                _currentOutputSection.Add(line[OutputIndentation.Length..]);
+                return null;
+            }
+
+            _currentOutputSection = null;
+        }
+
         var statusMatch = StatusLineRegex.Match(line);
 
         if (statusMatch.Success)
@@ -65,7 +92,7 @@ internal sealed class MtpStdoutParser
             _pendingStatus = ParseStatus(statusMatch.Groups[1].Value);
             _pendingDuration = ParseDuration(statusMatch.Groups[3].Value);
             _pendingSource = null;
-            _pendingExtraLines.Clear();
+            _pendingTargetFramework = null;
 
             return completed;
         }
@@ -75,10 +102,21 @@ internal sealed class MtpStdoutParser
             return null; // Haven't seen a test header yet
         }
 
+        switch (line.TrimEnd())
+        {
+            case StandardOutputHeading:
+                _currentOutputSection = _pendingStdOut;
+                return null;
+            case ErrorOutputHeading:
+                _currentOutputSection = _pendingStdErr;
+                return null;
+        }
+
         var sourceMatch = SourceLineRegex.Match(line);
         if (sourceMatch.Success)
         {
             _pendingSource = sourceMatch.Groups[1].Value.Trim();
+            _pendingTargetFramework = sourceMatch.Groups[2].Value.Trim();
             return null;
         }
 
@@ -136,12 +174,27 @@ internal sealed class MtpStdoutParser
             Duration: _pendingDuration,
             Source: _pendingSource,
             ErrorMessage: errorMessage,
-            StackTrace: stackTrace);
+            StackTrace: stackTrace,
+            Output: JoinOutput(_pendingStdOut, _pendingStdErr),
+            TargetFramework: _pendingTargetFramework);
 
         _pendingFqn = null;
         _pendingExtraLines.Clear();
+        _pendingStdOut.Clear();
+        _pendingStdErr.Clear();
+        _currentOutputSection = null;
 
         return result;
+    }
+
+    private static string? JoinOutput(List<string> stdOut, List<string> stdErr)
+    {
+        var output = string.Join(Environment.NewLine,
+            new[] { string.Join(Environment.NewLine, stdOut), string.Join(Environment.NewLine, stdErr) }
+                .Select(s => s.TrimEnd())
+                .Where(s => s.Length > 0));
+
+        return output.Length == 0 ? null : output;
     }
 
     private static TestStatus ParseStatus(string value) =>
@@ -200,4 +253,10 @@ internal sealed record MtpParsedResult(
     TimeSpan Duration,
     string? Source,
     string? ErrorMessage,
-    string? StackTrace);
+    string? StackTrace,
+    string? Output = null,
+    string? TargetFramework = null)
+{
+    /// <summary>Identifies the result within one run: a multi-targeted project reports each test once per framework.</summary>
+    public string Key => TargetFramework is null ? FullyQualifiedName : $"{FullyQualifiedName} [{TargetFramework}]";
+}

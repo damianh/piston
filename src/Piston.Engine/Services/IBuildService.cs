@@ -18,4 +18,15 @@ public interface IBuildService
     /// (their ProjectReferences are built too); other projects are built individually.
     /// </summary>
     Task<BuildResult> BuildAsync(string solutionPath, IReadOnlyList<string>? projectPaths, CancellationToken ct);
+
+    /// <summary>
+    /// As <see cref="BuildAsync(string, IReadOnlyList{string}?, CancellationToken)"/>, invoking
+    /// <paramref name="onProjectBuilt"/> with each project's name as its build output is produced.
+    /// </summary>
+    Task<BuildResult> BuildAsync(
+        string solutionPath,
+        IReadOnlyList<string>? projectPaths,
+        Action<string>? onProjectBuilt,
+        CancellationToken ct) =>
+        BuildAsync(solutionPath, projectPaths, ct);
 }

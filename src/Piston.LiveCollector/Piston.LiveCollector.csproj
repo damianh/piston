@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    VSTest data collector loaded by dotnet test with the PistonLive collector to stream test start/end events
+    to Piston. VSTest only loads data collectors from assemblies whose name ends in "Collector".
+  -->
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Supplied by the VSTest data collector host at run time. -->
+    <PackageReference Include="Microsoft.TestPlatform.ObjectModel" PrivateAssets="all" />
+  </ItemGroup>
+</Project>

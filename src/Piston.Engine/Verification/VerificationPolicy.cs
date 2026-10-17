@@ -139,7 +139,7 @@ public static class VerificationPolicy
     internal static bool IsAwaitable(TestRunRecord active) =>
         !active.IsFiltered
         && (active.Scope == TestRunScope.Full
-            || (active.Scope is null && active.Trigger != TestRunTrigger.FileChange));
+            || (active.Scope is null && active.Trigger is not (TestRunTrigger.FileChange or TestRunTrigger.Targeted)));
 
     private static bool IsReusable(TestRunRecord run) =>
         run.IsCurrentFullResult

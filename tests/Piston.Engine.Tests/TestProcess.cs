@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Xunit;
 
 namespace Piston.Engine.Tests;
 
@@ -34,6 +35,7 @@ internal static class TestProcess
         };
         // Reused MSBuild nodes can outlive dotnet and keep its redirected pipes open.
         startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+        Piston.Engine.Impact.MsBuildLocatorGuard.RestoreOriginalEnvironment(startInfo);
         return RunAsync(startInfo, DefaultTimeout);
     }
 
@@ -69,6 +71,9 @@ internal static class TestProcess
         process.OutputDataReceived += (_, e) => Capture(stdout, "stdout", e.Data);
         process.ErrorDataReceived += (_, e) => Capture(stderr, "stderr", e.Data);
 
+        var command = $"{startInfo.FileName} {(startInfo.ArgumentList.Count > 0 ? string.Join(" ", startInfo.ArgumentList) : startInfo.Arguments)}";
+        Log($"> {command}  (in {startInfo.WorkingDirectory})");
+        var stopwatch = Stopwatch.StartNew();
         _ = process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
@@ -112,11 +117,17 @@ internal static class TestProcess
                 cleanup = $"Process cleanup failed: {ex.Message}";
             }
 
+            Log($"  timed out after {timeout.TotalSeconds:g}s; {cleanup}");
             throw new TimeoutException(
-                $"Process timed out after {timeout.TotalSeconds:g}s: {startInfo.FileName} " +
-                $"{(startInfo.ArgumentList.Count > 0 ? string.Join(" ", startInfo.ArgumentList) : startInfo.Arguments)}\n" +
+                $"Process timed out after {timeout.TotalSeconds:g}s: {command}\n" +
                 $"PID: {process.Id}; Working directory: {startInfo.WorkingDirectory}; Exit state: {exitState}\n" +
                 $"{cleanup}\nLast output:\n{GetOutput()}");
+        }
+
+        Log($"  exit {process.ExitCode} after {stopwatch.Elapsed.TotalSeconds:F1}s");
+        if (process.ExitCode != 0)
+        {
+            Log(GetOutput());
         }
 
         return new TestProcessResult(process.ExitCode, GetOutput());
@@ -137,6 +148,9 @@ internal static class TestProcess
             }
         }
     }
+
+    // Shows up in the test's output (and Piston's test details), so a slow or failing fixture step is visible.
+    private static void Log(string message) => TestContext.Current.TestOutputHelper?.WriteLine(message);
 
     [DllImport("libc", SetLastError = true)]
     private static extern int kill(int pid, int signal);

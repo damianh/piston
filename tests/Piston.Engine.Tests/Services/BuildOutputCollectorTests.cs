@@ -126,4 +126,26 @@ public sealed class BuildOutputCollectorTests
         Assert.Equal(BuildStatus.Failed, result.Status);
         Assert.Empty(result.Errors);
     }
+
+    [Theory]
+    [InlineData("  Piston.Engine -> /w/src/Piston.Engine/bin/Debug/net10.0/Piston.Engine.dll", "Piston.Engine")]
+    [InlineData("My-Lib.Core -> C:\\w\\bin\\My-Lib.Core.dll", "My-Lib.Core")]
+    [InlineData("  My App.Tests -> /w/bin/My App.Tests.dll", "My App.Tests")]
+    public void BuiltProjectLines_YieldProjectName(string line, string expected)
+    {
+        Assert.True(BuildOutputCollector.TryParseBuiltProject(line, out var name));
+        Assert.Equal(expected, name);
+    }
+
+    [Theory]
+    [InlineData("  Piston.Web (Blazor output) -> /w/src/Piston.Web/bin/Debug/net10.0/wwwroot")]
+    [InlineData("  My App (Blazor output) -> /w/src/My App/bin/Debug/net10.0/wwwroot")]
+    [InlineData("  /w/A.cs(3,5): error CS0103: x -> y [/w/A.csproj]")]
+    [InlineData("  CSC : warning CS1234: a -> b")]
+    [InlineData("  MSBUILD : error MSB1009: a -> b")]
+    [InlineData("  Determining projects to restore...")]
+    [InlineData("")]
+    [InlineData(null)]
+    public void OtherLines_AreNotBuiltProjects(string? line) =>
+        Assert.False(BuildOutputCollector.TryParseBuiltProject(line, out _));
 }

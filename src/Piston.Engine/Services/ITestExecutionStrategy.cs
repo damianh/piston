@@ -23,4 +23,17 @@ public interface ITestExecutionStrategy
     /// Returns true if this strategy is capable of executing the given project.
     /// </summary>
     bool CanExecute(string projectPath);
+
+    /// <summary>
+    /// Lists the tests in a project without running them (status <see cref="TestStatus.NotRun"/>),
+    /// restricted to <paramref name="filter"/> (VSTest filter syntax) when given. The cumulative list
+    /// so far may be reported to <paramref name="onPartial"/> while discovery is in progress.
+    /// Returns an empty list when the backend does not support discovery.
+    /// </summary>
+    Task<IReadOnlyList<TestResult>> DiscoverAsync(
+        string projectPath,
+        string? filter,
+        Action<IReadOnlyList<TestResult>>? onPartial,
+        CancellationToken ct) =>
+        Task.FromResult<IReadOnlyList<TestResult>>([]);
 }

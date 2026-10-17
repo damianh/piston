@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 
@@ -22,13 +23,28 @@ public sealed class EngineClientService : IAsyncDisposable
     private CancellationTokenSource? _cts;
 
     private readonly List<ActivityEvent> _activityLog = [];
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonNode?>> _pendingRequests = new();
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonRpcResponse?>> _pendingRequests = new();
+
+    // ClientWebSocket allows only one outstanding SendAsync at a time.
+    private readonly SemaphoreSlim _sendGate = new(1, 1);
 
     public event Action<StateSnapshotNotification>? StateChanged;
     public event Action? ConnectionStateChanged;
     public event Action<ActivityEvent>? ActivityEventReceived;
 
+    /// <summary>Raised when <see cref="ActivityLog"/> is replaced wholesale (history backfill on connect).</summary>
+    public event Action? ActivityLogReset;
+
+    /// <summary>Raised when machine-wide user settings are fetched (on every connect) or saved.</summary>
+    public event Action? SettingsChanged;
+
     public StateSnapshotNotification? CurrentSnapshot { get; private set; }
+
+    /// <summary>Machine-wide user settings as last read from or written to the daemon.</summary>
+    public UserSettings Settings { get; private set; } = new();
+
+    /// <summary>The daemon's settings file; null until loaded or when the daemon has no settings store.</summary>
+    public string? SettingsFilePath { get; private set; }
     public bool IsConnected => _webSocket?.State == WebSocketState.Open;
     public bool IsConnecting { get; private set; }
 
@@ -72,6 +88,8 @@ public sealed class EngineClientService : IAsyncDisposable
                 backoffMs = 500;
                 ConnectionStateChanged?.Invoke();
 
+                _ = BackfillActivityLogAsync();
+                _ = LoadSettingsAsync();
                 await ReceiveLoopAsync(_webSocket, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -178,7 +196,7 @@ public sealed class EngineClientService : IAsyncDisposable
     {
         if (_pendingRequests.TryRemove(response.Id, out var tcs))
         {
-            _ = tcs.TrySetResult(response.Result);
+            _ = tcs.TrySetResult(response);
         }
     }
 
@@ -210,6 +228,11 @@ public sealed class EngineClientService : IAsyncDisposable
     {
         lock (_activityLog)
         {
+            if (evt.Id is not null && _activityLog.Exists(e => e.Id == evt.Id))
+            {
+                return;
+            }
+
             if (_activityLog.Count >= ActivityLogCapacity)
             {
                 _activityLog.RemoveAt(0);
@@ -238,8 +261,7 @@ public sealed class EngineClientService : IAsyncDisposable
 
         try
         {
-            await _webSocket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, CancellationToken.None)
-                .ConfigureAwait(false);
+            await SendSerializedAsync(_webSocket, bytes).ConfigureAwait(false);
         }
         catch
         {
@@ -247,9 +269,30 @@ public sealed class EngineClientService : IAsyncDisposable
         }
     }
 
+    private async Task SendSerializedAsync(ClientWebSocket ws, ReadOnlyMemory<byte> bytes)
+    {
+        var ct = _cts?.Token ?? CancellationToken.None;
+        await _sendGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await ws.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            _ = _sendGate.Release();
+        }
+    }
+
     public Task<JsonNode?> SendRequestAsync(string method) => SendRequestAsync(method, null);
 
-    public async Task<JsonNode?> SendRequestAsync(string method, object? @params)
+    public async Task<JsonNode?> SendRequestAsync(string method, object? @params) =>
+        (await SendForResponseAsync(method, @params).ConfigureAwait(false))?.Result;
+
+    /// <summary>
+    /// Sends a request and returns its response, including any error, or <see langword="null"/> when the
+    /// daemon is unreachable or does not reply in time.
+    /// </summary>
+    private async Task<JsonRpcResponse?> SendForResponseAsync(string method, object? @params)
     {
         if (_webSocket?.State != WebSocketState.Open)
         {
@@ -264,13 +307,12 @@ public sealed class EngineClientService : IAsyncDisposable
         var request = new JsonRpcRequest(id, method, paramsNode);
         var bytes = JsonRpcSerializer.Serialize(request);
 
-        var tcs = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new TaskCompletionSource<JsonRpcResponse?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pendingRequests[id] = tcs;
 
         try
         {
-            await _webSocket.SendAsync(bytes, WebSocketMessageType.Text, endOfMessage: true, CancellationToken.None)
-                .ConfigureAwait(false);
+            await SendSerializedAsync(_webSocket, bytes).ConfigureAwait(false);
         }
         catch
         {
@@ -283,18 +325,122 @@ public sealed class EngineClientService : IAsyncDisposable
         return await tcs.Task.ConfigureAwait(false);
     }
 
-    public async Task<McpCallLogResponse?> GetMcpCallLogAsync()
+    /// <summary>
+    /// Starts a run of the given tests. Returns <see langword="null"/> once the run is requested, or why it
+    /// could not start (for example, another run is in progress).
+    /// </summary>
+    public async Task<string?> RunTestsAsync(RunTestsCommand command)
     {
-        var result = await SendRequestAsync(ProtocolMethods.McpGetCallLog).ConfigureAwait(false);
-        if (result is null)
+        var response = await SendForResponseAsync(ProtocolMethods.EngineRunTests, command).ConfigureAwait(false);
+        return response switch
         {
-            return null;
+            null => "Piston did not respond. Check that the daemon is running.",
+            { Error: { } error } => error.Message,
+            _ => null,
+        };
+    }
+
+    public async Task<ActivityLogResponse?> GetActivityLogAsync()
+    {
+        var result = await SendRequestAsync(ProtocolMethods.ActivityGetLog).ConfigureAwait(false);
+        return result?.Deserialize<ActivityLogResponse>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>
+    /// The log of a test project's latest run, or <see langword="null"/> when none was recorded or the
+    /// daemon is unreachable.
+    /// </summary>
+    public async Task<ExecutionLogDto?> GetRunLogAsync(string project)
+    {
+        var result = await SendRequestAsync(ProtocolMethods.TestsGetRunLog, new GetRunLogCommand(project))
+            .ConfigureAwait(false);
+        return result?.Deserialize<RunLogResponse>(JsonRpcSerializer.Options)?.Log;
+    }
+
+    /// <summary>
+    /// Merges the daemon's retained activity history into the local log so events that
+    /// happened before this page connected (e.g. agent MCP calls) appear in the timeline.
+    /// </summary>
+    private async Task BackfillActivityLogAsync()
+    {
+        IReadOnlyList<ActivityEvent>? history;
+        try
+        {
+            history = (await GetActivityLogAsync().ConfigureAwait(false))?.Events;
+        }
+        catch
+        {
+            return;
         }
 
-        return result.Deserialize<McpCallLogResponse>(JsonRpcSerializer.Options);
+        if (history is null || history.Count == 0)
+        {
+            return;
+        }
+
+        lock (_activityLog)
+        {
+            var merged = ActivityLogMerger.Merge(history, _activityLog, ActivityLogCapacity);
+            _activityLog.Clear();
+            _activityLog.AddRange(merged);
+        }
+
+        ActivityLogReset?.Invoke();
     }
-    public Task ForceRunAsync() => SendCommandAsync(ProtocolMethods.EngineForceRun);
-    public Task ClearResultsAsync() => SendCommandAsync(ProtocolMethods.EngineClearResults);
+
+    private async Task LoadSettingsAsync()
+    {
+        UserSettingsResponse? response;
+        try
+        {
+            var result = await SendRequestAsync(ProtocolMethods.SettingsGet).ConfigureAwait(false);
+            response = result?.Deserialize<UserSettingsResponse>(JsonRpcSerializer.Options);
+        }
+        catch
+        {
+            return;
+        }
+
+        if (response is not null)
+        {
+            ApplySettings(response);
+        }
+    }
+
+    /// <summary>
+    /// Saves the non-null fields of <paramref name="patch"/> to the machine-wide user settings.
+    /// Returns false when the daemon is unreachable or could not save them.
+    /// </summary>
+    public async Task<bool> UpdateSettingsAsync(UserSettings patch)
+    {
+        UserSettingsResponse? response;
+        try
+        {
+            var result = await SendRequestAsync(ProtocolMethods.SettingsUpdate, patch).ConfigureAwait(false);
+            response = result?.Deserialize<UserSettingsResponse>(JsonRpcSerializer.Options);
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (response is null)
+        {
+            return false;
+        }
+
+        ApplySettings(response);
+        return true;
+    }
+
+    private void ApplySettings(UserSettingsResponse response)
+    {
+        Settings = response.Settings;
+        SettingsFilePath = response.FilePath;
+        SettingsChanged?.Invoke();
+    }
+
+    public Task ResetAsync() => SendCommandAsync(ProtocolMethods.EngineReset);
     public Task SetFilterAsync(string? filter) => SendCommandAsync(ProtocolMethods.EngineSetFilter, new SetFilterCommand(filter));
 
     public async ValueTask DisposeAsync()
@@ -306,5 +452,6 @@ public sealed class EngineClientService : IAsyncDisposable
         }
 
         _webSocket?.Dispose();
+        _sendGate.Dispose();
     }
 }

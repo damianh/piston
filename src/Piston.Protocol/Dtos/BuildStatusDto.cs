@@ -8,5 +8,6 @@ public enum BuildStatusDto
     None,
     Building,
     Succeeded,
-    Failed
+    Failed,
+    Skipped
 }

@@ -17,14 +17,14 @@ public sealed class McpCallTrackerTests
         var events = new List<ActivityEvent>();
         var tracker = new McpCallTracker(events.Add, "/repo/Test.slnx");
 
-        tracker.Record("RunTests", null, "passed", 12.5, true);
+        tracker.Record("run_tests", null, "passed", 12.5, true);
 
         var activity = Assert.Single(events);
         Assert.Equal(ActivityEventTypes.McpToolCall, activity.Type);
         Assert.Equal("/repo/Test.slnx", activity.SolutionPath);
         Assert.NotNull(activity.Data);
         var data = activity.Data.Deserialize<McpToolCallData>(JsonRpcSerializer.Options)!;
-        Assert.Equal(new McpToolCallData("RunTests", null, "passed", 12.5, true), data);
+        Assert.Equal(new McpToolCallData("run_tests", null, "passed", 12.5, true), data);
         Assert.Equal(data, Assert.Single(tracker.GetCallLog()));
         Assert.Null(activity.Data["paramsSummary"]);
     }

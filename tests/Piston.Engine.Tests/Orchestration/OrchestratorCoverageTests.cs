@@ -9,6 +9,19 @@ namespace Piston.Engine.Tests.Orchestration;
 
 public sealed class OrchestratorCoverageTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
+    [Fact]
+    public void CoverageResultsDirectory_FindsThePistonTempDirectoryAtAnyDepth()
+    {
+        var results = Path.Combine(Path.GetTempPath(), "piston-abc");
+
+        Assert.Equal(results, PistonOrchestrator.CoverageResultsDirectory(Path.Combine(results, "r.cobertura.xml")));
+        Assert.Equal(results, PistonOrchestrator.CoverageResultsDirectory(Path.Combine(results, "guid", "coverage.cobertura.xml")));
+        Assert.Null(PistonOrchestrator.CoverageResultsDirectory(Path.Combine(Path.GetTempPath(), "other", "r.cobertura.xml")));
+        Assert.Null(PistonOrchestrator.CoverageResultsDirectory(Path.Combine(results, "..", "r.cobertura.xml")));
+    }
+
     [Fact]
     public async Task ClearResultsSerializesWithCommittedCoverageBeforeAvailabilityPublication()
     {
@@ -26,7 +39,7 @@ public sealed class OrchestratorCoverageTests
                 state, store, processor, true);
 
             var processing = orchestrator.ProcessCoverageAsync(store.CreateRunId(), [], ["Tests.Pass"]);
-            await processor.Committed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await processor.Committed.Task.WaitAsync(TimeSpan.FromSeconds(5), _ct);
             Assert.True(store.HasCoverageData(file));
 
             var clearingStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -34,16 +47,16 @@ public sealed class OrchestratorCoverageTests
             {
                 clearingStarted.SetResult();
                 orchestrator.ClearResults(root);
-            });
+            }, _ct);
             try
             {
-                await clearingStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
-                Assert.NotSame(clearing, await Task.WhenAny(clearing, Task.Delay(100)));
+                await clearingStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), _ct);
+                Assert.NotSame(clearing, await Task.WhenAny(clearing, Task.Delay(100, _ct)));
             }
             finally
             {
                 _ = processor.Release.TrySetResult();
-                await Task.WhenAll(processing, clearing).WaitAsync(TimeSpan.FromSeconds(5));
+                await Task.WhenAll(processing, clearing).WaitAsync(TimeSpan.FromSeconds(5), _ct);
             }
 
             Assert.False(state.HasCoverageData);

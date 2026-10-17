@@ -16,6 +16,19 @@ public interface IImpactAnalyzer
     string? GetMtpOutputPath(string projectPath);
 
     /// <summary>
+    /// Whether the project builds more than one target framework, so <see cref="GetMtpOutputPath"/>
+    /// names only one of its outputs.
+    /// </summary>
+    bool IsMultiTargeted(string projectPath) => false;
+
+    /// <summary>
+    /// Projects a build of <paramref name="buildTargets"/> compiles: the targets and their references,
+    /// or every project in the solution when <paramref name="buildTargets"/> is null or empty.
+    /// Empty when the solution graph is unavailable.
+    /// </summary>
+    IReadOnlyList<string> GetBuildProjectPaths(IReadOnlyList<string>? buildTargets) => buildTargets ?? [];
+
+    /// <summary>
     /// Refreshes the graph used for run selection. Returns null only when evaluated project inputs
     /// are covered by the source fingerprint.
     /// </summary>

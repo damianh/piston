@@ -1,8 +1,11 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Piston.Engine;
+using Piston.Hosting.Configuration;
+using Piston.Hosting.Mapping;
 using Piston.Hosting.Services;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
@@ -20,6 +23,8 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
     private readonly IEngine _engine;
     private McpCallTracker? _mcpCallTracker;
     private DaemonControl? _daemonControl;
+    private ActivityHistory? _activityHistory;
+    private UserSettingsStore? _userSettings;
 
     public EngineCommandDispatcher(IEngine engine) => _engine = engine;
 
@@ -31,6 +36,12 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
 
     public void SetMcpCallTracker(McpCallTracker tracker) =>
         _mcpCallTracker = tracker;
+
+    public void SetActivityHistory(ActivityHistory history) =>
+        _activityHistory = history;
+
+    public void SetUserSettingsStore(UserSettingsStore store) =>
+        _userSettings = store;
 
     public async Task<JsonNode?> HandleCommandAsync(string method, JsonNode? @params, CancellationToken ct)
     {
@@ -64,6 +75,10 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                 _engine.ClearResults();
                 return null;
 
+            case ProtocolMethods.EngineReset:
+                await _engine.ResetAsync().ConfigureAwait(false);
+                return null;
+
             case ProtocolMethods.CoverageGetForFile:
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<GetFileCoverageCommand>(@params);
@@ -77,6 +92,61 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                 {
                     var calls = _mcpCallTracker?.GetCallLog() ?? [];
                     var response = new McpCallLogResponse(calls);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.ActivityGetLog:
+                {
+                    var response = new ActivityLogResponse(_activityHistory?.Snapshot() ?? []);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.EngineRunTests:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<RunTestsCommand>(@params);
+                    if (cmd?.Projects is not { Count: > 0 } projects || projects.Any(string.IsNullOrWhiteSpace))
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "projects is required.");
+                    }
+
+                    // Clients follow the run through state notifications; only a rejection is reported here.
+                    Task run;
+                    try
+                    {
+                        run = _engine.RunSelectedAsync(new Engine.Models.TestSelection(projects, cmd.Tests));
+                        if (run.IsFaulted)
+                        {
+                            await run.ConfigureAwait(false);
+                        }
+                    }
+                    catch (ArgumentException ex)
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, ex.Message);
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, ex.Message);
+                    }
+
+                    _ = run.ContinueWith(
+                        static t => _ = t.Exception,
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                    return null;
+                }
+
+            case ProtocolMethods.TestsGetRunLog:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<GetRunLogCommand>(@params);
+                    if (string.IsNullOrWhiteSpace(cmd?.Project))
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "project is required.");
+                    }
+
+                    var response = new RunLogResponse(_engine.State.FindRunLog(cmd.Project));
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
                 }
@@ -99,6 +169,39 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                     return null;
                 }
 
+            case ProtocolMethods.SettingsGet:
+                {
+                    var store = RequireUserSettings(method);
+                    return SerializeSettings(store, store.Get());
+                }
+
+            case ProtocolMethods.SettingsUpdate:
+                {
+                    var store = RequireUserSettings(method);
+                    UserSettings? patch;
+                    try
+                    {
+                        patch = JsonRpcSerializer.DeserializeParams<UserSettings>(@params);
+                    }
+                    catch (JsonException ex)
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, $"Invalid settings: {ex.Message}");
+                    }
+
+                    try
+                    {
+                        return SerializeSettings(store, store.Update(patch ?? new UserSettings()));
+                    }
+                    catch (ArgumentException ex)
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, $"Invalid settings: {ex.Message}");
+                    }
+                    catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InternalError, ex.Message);
+                    }
+                }
+
             default:
                 throw new JsonRpcException(
                     JsonRpcErrorCodes.MethodNotFound,
@@ -109,6 +212,13 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
     private DaemonControl RequireDaemonControl(string method) =>
         _daemonControl ?? throw new JsonRpcException(
             JsonRpcErrorCodes.MethodNotFound, $"Method not available in this host: {method}");
+
+    private UserSettingsStore RequireUserSettings(string method) =>
+        _userSettings ?? throw new JsonRpcException(
+            JsonRpcErrorCodes.MethodNotFound, $"Method not available in this host: {method}");
+
+    private static JsonNode? SerializeSettings(UserSettingsStore store, UserSettings settings) =>
+        JsonSerializer.SerializeToNode(new UserSettingsResponse(settings, store.FilePath), JsonRpcSerializer.Options);
 
     private static void ValidateFilter(string? filter)
     {

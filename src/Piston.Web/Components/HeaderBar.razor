@@ -1,102 +1,73 @@
 @using Piston.Protocol.Dtos
+@inject EngineClientService Client
+@implements IDisposable
 
-@if (Snapshot is null)
-{
-    <div class="flex items-center gap-3 px-4 py-2 bg-gray-900 border-b border-gray-800 text-gray-500 text-xs">
+<div class="flex items-center gap-4 pl-4 h-9 shrink-0 whitespace-nowrap overflow-hidden bg-gray-900 border-b border-gray-800 text-xs select-none">
+    @if (Snapshot is null)
+    {
         <span class="text-gray-600">⬡ Piston</span>
-        <span>Connecting...</span>
+    }
+    else
+    {
+        var solutionName = Snapshot.SolutionPath is not null
+            ? Path.GetFileNameWithoutExtension(Snapshot.SolutionPath)
+            : "Piston";
+        <span class="shrink-0 text-gray-400 font-semibold" title="@Snapshot.SolutionPath">⬡ @solutionName</span>
+    }
+    <TabBar ActiveTab="@ActiveTab" OnTabSelected="OnTabSelected" />
+    <div class="ml-auto mr-2 flex items-center gap-0.5">
+        <ThemeToggle />
+        <button @ref="_settingsButton" class="p-1.5 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800"
+                title="Settings" aria-label="Settings" aria-haspopup="dialog" @onclick="OpenSettings">
+            <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" aria-hidden="true">
+                <path d="M12.72 6.35 L12.81 6.62 L14.48 6.74 L14.48 9.26 L12.81 9.38 L12.51 10.17 L12.37 10.42 L13.47 11.69 L11.69 13.47 L10.42 12.37 L9.65 12.72 L9.38 12.81 L9.26 14.48 L6.74 14.48 L6.62 12.81 L5.83 12.51 L5.58 12.37 L4.31 13.47 L2.53 11.69 L3.63 10.42 L3.28 9.65 L3.19 9.38 L1.52 9.26 L1.52 6.74 L3.19 6.62 L3.49 5.83 L3.63 5.58 L2.53 4.31 L4.31 2.53 L5.58 3.63 L6.35 3.28 L6.62 3.19 L6.74 1.52 L9.26 1.52 L9.38 3.19 L10.17 3.49 L10.42 3.63 L11.69 2.53 L13.47 4.31 L12.37 5.58Z" />
+                <circle cx="8" cy="8" r="2" />
+            </svg>
+        </button>
     </div>
-}
-else
-{
-    var phase = Snapshot.Phase;
-    var (phaseIcon, phaseColor) = PhaseDisplay(phase);
-    var solutionName = Snapshot.SolutionPath is not null
-        ? Path.GetFileNameWithoutExtension(Snapshot.SolutionPath)
-        : "Piston";
+</div>
 
-    <div class="flex items-center gap-4 px-4 py-2 bg-gray-900 border-b border-gray-800 text-xs select-none">
-        <!-- Solution name + phase -->
-        <span class="text-gray-400 font-semibold">⬡ @solutionName</span>
-        <span class="@phaseColor font-mono">@phaseIcon @phase</span>
-
-        <!-- Progress bar (only during testing) -->
-        @if (phase == PistonPhaseDto.Testing && Snapshot.TotalExpectedTests > 0)
-        {
-            var pct = (double)Snapshot.CompletedTests / Snapshot.TotalExpectedTests * 100;
-            <div class="flex items-center gap-2">
-                <div class="w-32 h-1.5 bg-gray-700 rounded-full overflow-hidden">
-                    <div class="h-full bg-cyan-500 rounded-full transition-all duration-200"
-                         style="width: @pct.ToString("F0")%"></div>
-                </div>
-                <span class="text-gray-400">@Snapshot.CompletedTests/@Snapshot.TotalExpectedTests</span>
-            </div>
-        }
-
-        <!-- Test counts -->
-        @{
-            var allTests = Snapshot.Suites.SelectMany(s => s.Tests).ToList();
-            var passed  = allTests.Count(t => t.Status == TestStatusDto.Passed);
-            var failed  = allTests.Count(t => t.Status == TestStatusDto.Failed);
-            var skipped = allTests.Count(t => t.Status == TestStatusDto.Skipped);
-            var notRun  = allTests.Count(t => t.Status == TestStatusDto.NotRun);
-            var running = allTests.Count(t => t.Status == TestStatusDto.Running);
-        }
-        <div class="flex items-center gap-2 ml-auto">
-            @if (running > 0)
-            {
-                <span class="text-cyan-400">⟳ @running</span>
-            }
-            @if (failed > 0)
-            {
-                <span class="text-red-400">✗ @failed</span>
-            }
-            @if (passed > 0)
-            {
-                <span class="text-green-400">✓ @passed</span>
-            }
-            @if (skipped > 0)
-            {
-                <span class="text-yellow-400">● @skipped</span>
-            }
-            @if (notRun > 0)
-            {
-                <span class="text-gray-500">◌ @notRun</span>
-            }
-        </div>
-
-        <!-- Timings -->
-        @if (Snapshot.LastBuildDurationMs.HasValue || Snapshot.LastTestDurationMs.HasValue)
-        {
-            <div class="flex items-center gap-2 text-gray-600">
-                @if (Snapshot.LastBuildDurationMs.HasValue)
-                {
-                    <span>build @FormatDuration(Snapshot.LastBuildDurationMs.Value)</span>
-                }
-                @if (Snapshot.LastTestDurationMs.HasValue)
-                {
-                    <span>tests @FormatDuration(Snapshot.LastTestDurationMs.Value)</span>
-                }
-            </div>
-        }
-    </div>
-}
+<SettingsDialog IsOpen="@_settingsOpen" OnClose="CloseSettings" />
 
 @code {
-    [Parameter] public StateSnapshotNotification? Snapshot { get; set; }
+    [Parameter, EditorRequired] public DashboardTab ActiveTab { get; set; }
+    [Parameter, EditorRequired] public EventCallback<DashboardTab> OnTabSelected { get; set; }
 
-    private static (string icon, string color) PhaseDisplay(PistonPhaseDto phase) =>
-        phase switch
+    private StateSnapshotNotification? Snapshot { get; set; }
+
+    private ElementReference _settingsButton;
+    private bool _settingsOpen;
+    private bool _returnFocus;
+
+    private void OpenSettings() => _settingsOpen = true;
+
+    // The modal keeps the page inert until it leaves the DOM, so focus the gear after re-render.
+    private void CloseSettings()
+    {
+        _settingsOpen = false;
+        _returnFocus = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_returnFocus)
         {
-            PistonPhaseDto.Idle      => ("◌", "text-gray-500"),
-            PistonPhaseDto.Watching  => ("◉", "text-gray-400"),
-            PistonPhaseDto.Analyzing => ("⟳", "text-blue-400"),
-            PistonPhaseDto.Building  => ("⚙", "text-yellow-400"),
-            PistonPhaseDto.Testing   => ("⟳", "text-cyan-400"),
-            PistonPhaseDto.Error     => ("✗", "text-red-400"),
-            _                        => ("?", "text-gray-500"),
-        };
+            _returnFocus = false;
+            await _settingsButton.FocusAsync();
+        }
+    }
 
-    private static string FormatDuration(double ms) =>
-        ms < 1000 ? $"{(int)ms}ms" : $"{ms / 1000.0:F1}s";
+    protected override void OnInitialized()
+    {
+        Client.StateChanged += OnStateChanged;
+        Snapshot = Client.CurrentSnapshot;
+    }
+
+    private void OnStateChanged(StateSnapshotNotification snapshot)
+    {
+        Snapshot = snapshot;
+        InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose() => Client.StateChanged -= OnStateChanged;
 }

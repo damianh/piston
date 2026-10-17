@@ -64,7 +64,7 @@ var configDirectoryOpt = new Option<string?>("--config-directory")
 
 var mcpPortOpt = new Option<int?>(
     name: "--mcp-port",
-    description: "Enable MCP server on the specified port.");
+    description: $"Port for the MCP server (default: {DaemonHostOptions.DefaultMcpPort}, or mcpPort in .piston.json).");
 
 var webPortOpt = new Option<int>(
     name: "--web-port",
@@ -330,7 +330,7 @@ static async Task RunDaemonAsync(
     }
 
     var pipeName = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
-    var mcpPort = cliMcpPort ?? config.McpPort;
+    var mcpPort = cliMcpPort ?? config.McpPort ?? DaemonHostOptions.DefaultMcpPort;
 
     using var cts = new CancellationTokenSource();
     Console.CancelKeyPress += (_, e) =>
@@ -801,7 +801,7 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
         Console.WriteLine($"  Started  : {info.StartedAt:u}");
         Console.WriteLine($"  Version  : {info.Version ?? "unknown"}");
         Console.WriteLine($"  Web      : {info.WebUrl}");
-        Console.WriteLine($"  MCP      : {info.McpUrl ?? "disabled (set mcpPort in .piston.json or pass --mcp-port)"}");
+        Console.WriteLine($"  MCP      : {info.McpUrl ?? "unknown"}");
     }
 
     Console.WriteLine($"  Pipe     : {pipeName}");

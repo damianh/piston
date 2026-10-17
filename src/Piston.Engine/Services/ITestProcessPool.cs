@@ -11,6 +11,14 @@ public interface ITestProcessPool : IDisposable
     int ActiveCount { get; }
 
     /// <summary>
+    /// Waits for a pool slot and holds it until the returned handle is disposed, so test processes
+    /// started outside <see cref="RunProjectsAsync(IReadOnlyList{ProjectTestRequest}, TestRunCallbacks, CancellationToken)"/>
+    /// (discovery, single-project runs) share the same capacity. Throws
+    /// <see cref="OperationCanceledException"/> when <paramref name="ct"/> is cancelled while waiting.
+    /// </summary>
+    Task<IDisposable> AcquireSlotAsync(CancellationToken ct);
+
+    /// <summary>
     /// Runs a single test project, blocking on the pool semaphore until a slot is available.
     /// Returns the result for that project.
     /// </summary>
@@ -26,5 +34,14 @@ public interface ITestProcessPool : IDisposable
     Task<IReadOnlyList<ProjectTestResult>> RunProjectsAsync(
         IReadOnlyList<ProjectTestRequest> requests,
         Action<ProjectTestResult>? onProjectCompleted,
+        CancellationToken ct);
+
+    /// <summary>
+    /// Runs multiple test projects concurrently (up to PoolSize), reporting each project's
+    /// start (once it holds a slot), live progress, and completion via <paramref name="callbacks"/>.
+    /// </summary>
+    Task<IReadOnlyList<ProjectTestResult>> RunProjectsAsync(
+        IReadOnlyList<ProjectTestRequest> requests,
+        TestRunCallbacks callbacks,
         CancellationToken ct);
 }

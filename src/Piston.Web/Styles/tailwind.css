@@ -1,3 +1,81 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * GitHub Primer palette (as used by the GitHub Copilot app), as RGB channels.
+ * The gray scale is semantic: 950 = page canvas, 900 = raised chrome, 800 = controls and
+ * hairlines, 700 = selected/strong borders, 600..100 = foreground from faintest to strongest.
+ * Light mode inverts it so the same classes read correctly on a white canvas.
+ */
+@layer base {
+    :root {
+        --gray-950: 255 255 255;  /* bgColor-default */
+        --gray-900: 246 248 250;  /* bgColor-muted */
+        --gray-800: 225 230 235;
+        --gray-700: 209 217 224;  /* borderColor-default */
+        --gray-600: 110 119 129;
+        --gray-500: 101 109 118;
+        --gray-400: 89 99 110;    /* fgColor-muted */
+        --gray-300: 37 41 46;
+        --gray-200: 31 35 40;
+        --gray-100: 31 35 40;     /* fgColor-default */
+
+        --red-300: 207 34 46;
+        --red-400: 209 36 47;     /* fgColor-danger */
+        --red-600: 207 34 46;     /* bgColor-danger-emphasis */
+        --red-900: 255 206 203;   /* borderColor-danger-muted */
+        --yellow-300: 125 78 0;
+        --yellow-400: 154 103 0;  /* fgColor-attention */
+        --yellow-500: 191 135 0;
+        --yellow-600: 154 103 0;
+        --yellow-900: 240 220 160;
+        --green-400: 26 127 55;   /* fgColor-success */
+        --blue-400: 9 105 218;    /* fgColor-accent */
+        --blue-500: 9 105 218;
+        --cyan-400: 9 105 218;
+        --cyan-500: 9 105 218;
+        --violet-400: 130 80 223; /* fgColor-done */
+        --sky-400: 5 80 174;
+        --coral: 253 140 115;     /* underlineNav-borderColor-active */
+    }
+
+    .dark {
+        --gray-950: 13 17 23;     /* bgColor-default */
+        --gray-900: 21 27 35;     /* bgColor-muted */
+        --gray-800: 42 49 60;
+        --gray-700: 61 68 77;     /* borderColor-default */
+        --gray-600: 101 108 118;
+        --gray-500: 125 133 144;
+        --gray-400: 145 152 161;  /* fgColor-muted */
+        --gray-300: 209 215 224;
+        --gray-200: 230 237 243;
+        --gray-100: 240 246 252;  /* fgColor-default */
+
+        --red-300: 255 123 114;
+        --red-400: 248 81 73;     /* fgColor-danger */
+        --red-600: 218 54 51;     /* bgColor-danger-emphasis */
+        --red-900: 110 30 32;
+        --yellow-300: 227 179 65;
+        --yellow-400: 210 153 34; /* fgColor-attention */
+        --yellow-500: 187 128 9;
+        --yellow-600: 210 153 34;
+        --yellow-900: 92 66 12;
+        --green-400: 63 185 80;   /* fgColor-success */
+        --blue-400: 68 147 248;   /* fgColor-accent */
+        --blue-500: 31 111 235;
+        --cyan-400: 68 147 248;
+        --cyan-500: 31 111 235;
+        --violet-400: 171 125 248; /* fgColor-done */
+        --sky-400: 108 182 255;
+        --coral: 247 129 102;     /* underlineNav-borderColor-active */
+    }
+
+    html {
+        color-scheme: light;
+    }
+
+    html.dark {
+        color-scheme: dark;
+    }
+}

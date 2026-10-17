@@ -21,6 +21,21 @@ public interface IEngine : IDisposable
     void Stop();
 
     /// <summary>
+    /// Runs the selected tests; the task completes with the run's record. The selection is validated
+    /// before the run starts, so an invalid selection or a run already in progress fails the call (or
+    /// the returned task) without superseding the active run.
+    /// </summary>
+    Task<Models.TestRunRecord> RunSelectedAsync(Models.TestSelection selection) =>
+        throw new NotSupportedException("Running selected tests is not supported by this engine.");
+
+    /// <summary>
+    /// Re-initialises the engine without restarting the process: cancels the active run, clears results
+    /// and coverage, reloads the solution graph, restarts file monitoring and starts a full run that
+    /// re-discovers all tests. Returns once the run is requested.
+    /// </summary>
+    Task ResetAsync() => throw new NotSupportedException("Reset is not supported by this engine.");
+
+    /// <summary>
     /// Produces current full verification for the present source, reusing or awaiting qualifying runs
     /// before requesting a forced full run. See <see cref="Verification.VerificationPolicy"/>.
     /// </summary>

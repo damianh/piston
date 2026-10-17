@@ -1,6 +1,8 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Piston.Protocol.Dtos;
+
 namespace Piston.Protocol.Messages;
 
 public sealed record StartCommand(string SolutionPath);
@@ -19,8 +21,27 @@ public sealed record StartCommandParams(string SolutionPath);
 /// <summary>Params payload for the set-filter JSON-RPC command.</summary>
 public sealed record SetFilterCommandParams(string? Filter);
 
+/// <summary>Parameters for <c>engine/runTests</c>: the tests to run.</summary>
+/// <param name="Projects">Names of the test projects to run, as reported in <see cref="Dtos.TestSuiteDto.Name"/>.</param>
+/// <param name="Tests">
+/// Fully qualified names of the tests to run within those projects, as reported in
+/// <see cref="Dtos.TestResultDto.FullyQualifiedName"/>; null runs every test in them. All cases of a
+/// parameterised test run. A name that, less its argument list, contains a double quote is rejected.
+/// </param>
+public sealed record RunTestsCommand(IReadOnlyList<string> Projects, IReadOnlyList<string>? Tests = null);
+
+/// <summary>Parameters for <c>tests/getRunLog</c>: the test project whose latest run log to fetch.</summary>
+/// <param name="Project">The project's name, as reported in <see cref="Dtos.TestSuiteDto.Name"/>.</param>
+public sealed record GetRunLogCommand(string Project);
+
+/// <summary>Response for <c>tests/getRunLog</c>; <see cref="Log"/> is null when none was recorded for the project.</summary>
+public sealed record RunLogResponse(ExecutionLogDto? Log);
+
 /// <summary>Response for <c>mcp/getCallLog</c>.</summary>
 public sealed record McpCallLogResponse(IReadOnlyList<McpToolCallData> Calls);
+
+/// <summary>Response for <c>activity/getLog</c>: retained activity events, oldest first.</summary>
+public sealed record ActivityLogResponse(IReadOnlyList<ActivityEvent> Events);
 
 /// <summary>Response to <c>daemon/info</c>.</summary>
 /// <param name="ProcessId">Daemon process ID.</param>

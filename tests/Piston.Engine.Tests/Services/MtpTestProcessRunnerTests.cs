@@ -18,7 +18,7 @@ public sealed class MtpTestProcessRunnerTests
             projectPath: "nonexistent.csproj",
             solutionDirectory: Path.GetTempPath(),
             filter: null,
-            collectCoverage: false,
+            appPath: null,
             onProgress: null,
             ct: cts.Token);
 
@@ -36,7 +36,7 @@ public sealed class MtpTestProcessRunnerTests
             projectPath: Path.Combine(Path.GetTempPath(), "piston-test-nonexistent.csproj"),
             solutionDirectory: Path.GetTempPath(),
             filter: null,
-            collectCoverage: false,
+            appPath: null,
             onProgress: null,
             ct: CancellationToken.None);
 
@@ -57,7 +57,7 @@ public sealed class MtpTestProcessRunnerTests
             projectPath: projectPath,
             solutionDirectory: Path.GetTempPath(),
             filter: null,
-            collectCoverage: false,
+            appPath: null,
             onProgress: null,
             ct: cts.Token);
 

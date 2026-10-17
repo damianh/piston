@@ -9,6 +9,8 @@ namespace Piston.Engine.Tests.Services;
 
 public sealed class BuildServiceOutputParsingTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     // We test the parsing logic indirectly by running a real dotnet build
     // against a minimal in-memory project written to a temp directory.
 
@@ -26,7 +28,7 @@ public sealed class BuildServiceOutputParsingTests
                         <Error Condition="'$(MSBUILDDISABLENODEREUSE)' != '1'" Text="Node reuse guard is missing." />
                       </Target>
                     </Project>
-                    """);
+                    """, _ct);
             }
             var project = Path.Combine(root, "All.proj");
             await File.WriteAllTextAsync(project, """
@@ -36,10 +38,40 @@ public sealed class BuildServiceOutputParsingTests
                     <MSBuild Projects="First.proj;Second.proj" BuildInParallel="true" />
                   </Target>
                 </Project>
-                """);
+                """, _ct);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
             var result = await new BuildService().BuildAsync(project, cts.Token);
+
+            Assert.Equal(BuildStatus.Succeeded, result.Status);
+            Assert.Empty(result.Errors);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BuildAsync_RelativeSolutionPathWithDirectory_BuildsTheSolution()
+    {
+        // Relative to the test process, and including directories, unlike the build's own working directory.
+        var relativeRoot = $"piston-build-relative-path-test-{Guid.NewGuid():N}";
+        var root = Path.GetFullPath(relativeRoot);
+        try
+        {
+            var sub = Directory.CreateDirectory(Path.Combine(root, "sub")).FullName;
+            var project = Path.Combine(sub, "All.proj");
+            await File.WriteAllTextAsync(project, """
+                <Project>
+                  <Target Name="Restore" />
+                  <Target Name="Build" />
+                </Project>
+                """, _ct);
+            var relativePath = Path.Combine(relativeRoot, "sub", "All.proj");
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+            var result = await new BuildService().BuildAsync(relativePath, cts.Token);
 
             Assert.Equal(BuildStatus.Succeeded, result.Status);
             Assert.Empty(result.Errors);
@@ -66,8 +98,8 @@ public sealed class BuildServiceOutputParsingTests
                     <ImplicitUsings>enable</ImplicitUsings>
                   </PropertyGroup>
                 </Project>
-                """);
-            await File.WriteAllTextAsync(Path.Combine(dir.FullName, "Program.cs"), "Console.WriteLine(\"hello\");");
+                """, _ct);
+            await File.WriteAllTextAsync(Path.Combine(dir.FullName, "Program.cs"), "Console.WriteLine(\"hello\");", _ct);
 
             // Restore first
             var restoreResult = await RunDotnetAsync("restore", dir.FullName);
@@ -102,9 +134,9 @@ public sealed class BuildServiceOutputParsingTests
                     <ImplicitUsings>enable</ImplicitUsings>
                   </PropertyGroup>
                 </Project>
-                """);
+                """, _ct);
             // Deliberate compile error
-            await File.WriteAllTextAsync(Path.Combine(dir.FullName, "Program.cs"), "this is not valid csharp!!!;");
+            await File.WriteAllTextAsync(Path.Combine(dir.FullName, "Program.cs"), "this is not valid csharp!!!;", _ct);
 
             var restoreResult = await RunDotnetAsync("restore", dir.FullName);
             Assert.Equal(0, restoreResult);
@@ -138,8 +170,8 @@ public sealed class BuildServiceOutputParsingTests
                     <ImplicitUsings>enable</ImplicitUsings>
                   </PropertyGroup>
                 </Project>
-                """);
-            await File.WriteAllTextAsync(Path.Combine(dir.FullName, "Program.cs"), "Console.WriteLine(\"hello\");");
+                """, _ct);
+            await File.WriteAllTextAsync(Path.Combine(dir.FullName, "Program.cs"), "Console.WriteLine(\"hello\");", _ct);
 
             var restoreResult = await RunDotnetAsync("restore", dir.FullName);
             Assert.Equal(0, restoreResult);
@@ -177,8 +209,8 @@ public sealed class BuildServiceOutputParsingTests
                     <ImplicitUsings>enable</ImplicitUsings>
                   </PropertyGroup>
                 </Project>
-                """);
-            await File.WriteAllTextAsync(Path.Combine(dir.FullName, "Program.cs"), "Console.WriteLine(\"hi\");");
+                """, _ct);
+            await File.WriteAllTextAsync(Path.Combine(dir.FullName, "Program.cs"), "Console.WriteLine(\"hi\");", _ct);
 
             _ = await RunDotnetAsync("restore", dir.FullName);
 
@@ -209,8 +241,8 @@ public sealed class BuildServiceOutputParsingTests
                     <ImplicitUsings>enable</ImplicitUsings>
                   </PropertyGroup>
                 </Project>
-                """);
-            await File.WriteAllTextAsync(Path.Combine(dir.FullName, "Program.cs"), "Console.WriteLine(\"hi\");");
+                """, _ct);
+            await File.WriteAllTextAsync(Path.Combine(dir.FullName, "Program.cs"), "Console.WriteLine(\"hi\");", _ct);
 
             _ = await RunDotnetAsync("restore", dir.FullName);
 
@@ -257,8 +289,8 @@ public sealed class BuildServiceOutputParsingTests
                     <ImplicitUsings>enable</ImplicitUsings>
                   </PropertyGroup>
                 </Project>
-                """);
-            await File.WriteAllTextAsync(Path.Combine(goodDir.FullName, "Program.cs"), "Console.WriteLine(\"good\");");
+                """, _ct);
+            await File.WriteAllTextAsync(Path.Combine(goodDir.FullName, "Program.cs"), "Console.WriteLine(\"good\");", _ct);
             _ = await RunDotnetAsync("restore", goodDir.FullName);
             _ = await RunDotnetAsync("build --no-restore", goodDir.FullName);
 
@@ -272,8 +304,8 @@ public sealed class BuildServiceOutputParsingTests
                     <ImplicitUsings>enable</ImplicitUsings>
                   </PropertyGroup>
                 </Project>
-                """);
-            await File.WriteAllTextAsync(Path.Combine(badDir.FullName, "Program.cs"), "this is not valid;");
+                """, _ct);
+            await File.WriteAllTextAsync(Path.Combine(badDir.FullName, "Program.cs"), "this is not valid;", _ct);
             _ = await RunDotnetAsync("restore", badDir.FullName);
 
             var sut = new BuildService();
@@ -305,7 +337,7 @@ public sealed class BuildServiceOutputParsingTests
                     <Error Text="Codeless failure from target." />
                   </Target>
                 </Project>
-                """);
+                """, _ct);
             using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
             var result = await new BuildService().BuildAsync(project, cts.Token);

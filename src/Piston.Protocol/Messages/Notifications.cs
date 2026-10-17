@@ -34,7 +34,10 @@ public sealed record StateSnapshotNotification(
     int CompletedTestProjects,
     IReadOnlyDictionary<string, ProjectRunStatusDto>? ProjectStatuses,
     TestRunDto? LastRun = null,
-    TestRunDto? ActiveRun = null
+    TestRunDto? ActiveRun = null,
+    int TotalBuildProjects = 0,
+    int CompletedBuildProjects = 0,
+    string? LastBuiltProject = null
 );
 
 public sealed record TestProgressNotification(

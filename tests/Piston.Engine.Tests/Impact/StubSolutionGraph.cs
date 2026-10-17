@@ -14,6 +14,7 @@ internal sealed class StubSolutionGraph : ISolutionGraph
     private readonly Dictionary<string, IReadOnlyList<string>> _projectToFiles;
     private readonly HashSet<string> _mtpProjects;
     private readonly Dictionary<string, string> _mtpOutputPaths;
+    private readonly Dictionary<string, IReadOnlySet<string>> _transitiveDependencies;
 
     public StubSolutionGraph(
         IEnumerable<string> allProjects,
@@ -22,7 +23,8 @@ internal sealed class StubSolutionGraph : ISolutionGraph
         Dictionary<string, string>? fileToProject = null,
         Dictionary<string, IReadOnlyList<string>>? projectToFiles = null,
         HashSet<string>? mtpProjects = null,
-        Dictionary<string, string>? mtpOutputPaths = null)
+        Dictionary<string, string>? mtpOutputPaths = null,
+        Dictionary<string, IReadOnlySet<string>>? transitiveDependencies = null)
     {
         _allProjects = allProjects.ToList();
         _testProjects = testProjects.ToList();
@@ -31,6 +33,7 @@ internal sealed class StubSolutionGraph : ISolutionGraph
         _projectToFiles = projectToFiles ?? [];
         _mtpProjects = mtpProjects ?? [];
         _mtpOutputPaths = mtpOutputPaths ?? [];
+        _transitiveDependencies = transitiveDependencies ?? [];
     }
 
     public IReadOnlyList<string> AllProjectPaths => _allProjects;
@@ -41,6 +44,11 @@ internal sealed class StubSolutionGraph : ISolutionGraph
 
     public IReadOnlySet<string> GetTransitiveDependents(string projectPath) =>
         _transitiveDependents.TryGetValue(projectPath, out var deps)
+            ? deps
+            : (IReadOnlySet<string>)new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlySet<string> GetTransitiveDependencies(string projectPath) =>
+        _transitiveDependencies.TryGetValue(projectPath, out var deps)
             ? deps
             : (IReadOnlySet<string>)new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 

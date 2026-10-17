@@ -21,6 +21,8 @@ namespace Piston.Engine.Tests.Integration;
 /// </remarks>
 public sealed class SelectivePipelineTests : IAsyncLifetime
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private string _root = string.Empty;
     private string _slnPath = string.Empty;
     private string _libCsproj = string.Empty;
@@ -29,7 +31,7 @@ public sealed class SelectivePipelineTests : IAsyncLifetime
     private string _otherTestsCsproj = string.Empty;
     private string _libCodeFile = string.Empty;
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         MsBuildLocatorGuard.EnsureRegistered();
 
@@ -125,10 +127,10 @@ public sealed class SelectivePipelineTests : IAsyncLifetime
         _ = await RunDotnetAsync("restore", _root);
     }
 
-    public Task DisposeAsync()
+    public ValueTask DisposeAsync()
     {
         try { Directory.Delete(_root, recursive: true); } catch { /* ignore */ }
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 
     [Fact]
@@ -212,7 +214,7 @@ public sealed class SelectivePipelineTests : IAsyncLifetime
 
         var libDir = Path.GetDirectoryName(_libCodeFile)!;
         var secondFile = Path.Combine(libDir, "Another.cs");
-        await File.WriteAllTextAsync(secondFile, "namespace Lib; public class Another {}");
+        await File.WriteAllTextAsync(secondFile, "namespace Lib; public class Another {}", _ct);
 
         var changes = new[]
         {

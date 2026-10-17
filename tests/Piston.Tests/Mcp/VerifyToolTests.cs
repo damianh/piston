@@ -11,6 +11,8 @@ namespace Piston.Tests.Mcp;
 
 public sealed class VerifyToolTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private static readonly SourceFingerprint Source = new("piston-source-v2", new string('a', 64), 3);
 
     private static TestRunRecord Run(TestRunStatus status = TestRunStatus.Completed, BuildResult? build = null,
@@ -136,7 +138,7 @@ public sealed class VerifyToolTests
                 Run(tests: [Test("Private.Test", TestStatus.Failed, "private assertion input")]), Source),
         };
 
-        var result = await new TestTools(engine, recorder).VerifyAsync();
+        var result = await new TestTools(engine, recorder).VerifyAsync(ct: _ct);
 
         Assert.Contains("private assertion input", result);
         Assert.Equal("Verdict: TestsFailed; source: Forced; attempts: 1", recorder.ResultSummary);

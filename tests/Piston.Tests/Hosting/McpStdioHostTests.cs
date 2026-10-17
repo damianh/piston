@@ -14,6 +14,8 @@ namespace Piston.Tests.Hosting;
 
 public sealed class McpStdioHostTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"piston-mcp-host-{Guid.NewGuid():N}");
     private readonly Pipe _toServer = new();
     private readonly Pipe _toClient = new();
@@ -78,7 +80,7 @@ public sealed class McpStdioHostTests : IDisposable
         }, cts.Token);
 
         Assert.True(cts.IsCancellationRequested);
-        Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(30), _ct));
         Assert.Equal(EngineAvailabilityState.Stopped, host.Availability.State);
         Assert.Empty(WorktreeOwnership.ListOwners(new ExecutionCoordinationDirectory(coordination)));
     }
@@ -86,10 +88,10 @@ public sealed class McpStdioHostTests : IDisposable
     [Fact]
     public async Task StartupError_EveryToolReportsIt_AndInputEofExits()
     {
-        var (_, run) = Start(new McpStdioHostOptions { StartupError = "No solution found in '/nowhere'." });
+        var (_, run) = Start(new McpStdioHostOptions { StartupError = "No solution found in '/nowhere'." }, _ct);
         var client = await ConnectAsync();
 
-        var tools = await client.ListToolsAsync();
+        var tools = await client.ListToolsAsync(cancellationToken: _ct);
         Assert.Contains(tools, t => t.Name == "verify");
 
         var (isError, text) = await CallAsync(client, "verify");
@@ -99,7 +101,7 @@ public sealed class McpStdioHostTests : IDisposable
 
         await client.DisposeAsync();
         await _toServer.Writer.CompleteAsync();
-        Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(15)));
+        Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(15), _ct));
     }
 
     [Fact]
@@ -115,7 +117,7 @@ public sealed class McpStdioHostTests : IDisposable
         {
             SolutionPath = solution,
             EngineOptions = new PistonOptions { SolutionPath = solution, ExecutionCoordinationDirectory = coordination },
-        });
+        }, _ct);
         var client = await ConnectAsync();
 
         foreach (var tool in new[] { "verify", "run_tests", "get_test_run", "get_test_results", "clear_results" })
@@ -130,7 +132,7 @@ public sealed class McpStdioHostTests : IDisposable
 
         await client.DisposeAsync();
         await _toServer.Writer.CompleteAsync();
-        Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(15)));
+        Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(15), _ct));
 
         // The rejected server never took (or released) ownership: the original owner still holds it.
         Assert.Equal(OwnershipLiveness.Live, Assert.Single(WorktreeOwnership.ListOwners(directory)).Liveness);
@@ -156,7 +158,7 @@ public sealed class McpStdioHostTests : IDisposable
         {
             SolutionPath = solution,
             EngineOptions = new PistonOptions { SolutionPath = solution, ExecutionCoordinationDirectory = coordination },
-        });
+        }, _ct);
         var client = await ConnectAsync();
         var (isError, _) = await CallAsync(client, "verify");
         Assert.True(isError);
@@ -164,7 +166,7 @@ public sealed class McpStdioHostTests : IDisposable
 
         await client.DisposeAsync();
         await _toServer.Writer.CompleteAsync();
-        Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(15)));
+        Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(15), _ct));
 
         Assert.Equal("owner log\n", File.ReadAllText(log));
         Assert.Equal(before, Snapshot(worktree));
@@ -195,7 +197,7 @@ public sealed class McpStdioHostTests : IDisposable
             },
             PresenceCheckInterval = TimeSpan.FromMilliseconds(50),
             DeletionGracePeriod = TimeSpan.FromSeconds(2),
-        });
+        }, _ct);
         var client = await ConnectAsync();
         Assert.Equal("mcp", Assert.Single(WorktreeOwnership.ListOwners(directory)).Owner!.Host);
 
@@ -203,14 +205,14 @@ public sealed class McpStdioHostTests : IDisposable
         var deadline = DateTime.UtcNow.AddSeconds(10);
         while (host.Availability.State != EngineAvailabilityState.WorktreeDeleted && DateTime.UtcNow < deadline)
         {
-            await Task.Delay(25);
+            await Task.Delay(25, _ct);
         }
 
         var (isError, text) = await CallAsync(client, "get_test_run");
         Assert.True(isError);
         Assert.Contains("no longer exists", text);
 
-        Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(30)));
+        Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(30), _ct));
         Assert.Empty(WorktreeOwnership.ListOwners(directory));
         await client.DisposeAsync();
     }

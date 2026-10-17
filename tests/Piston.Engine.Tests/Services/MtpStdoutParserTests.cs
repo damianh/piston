@@ -208,4 +208,157 @@ public sealed class MtpStdoutParserTests
         Assert.Null(result.ErrorMessage);
         Assert.Null(result.StackTrace);
     }
+
+    // ── Captured output ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void PassedTest_StandardAndErrorOutput_Captured()
+    {
+        var sut = new MtpStdoutParser();
+        _ = sut.ProcessLine("passed Ns.Class.Method (7ms)");
+        _ = sut.ProcessLine("  from tests.dll (net10.0|x64)");
+        _ = sut.ProcessLine("  Standard output");
+        _ = sut.ProcessLine("    first line");
+        _ = sut.ProcessLine("    ");
+        _ = sut.ProcessLine("      indented line");
+        _ = sut.ProcessLine("  Error output");
+        _ = sut.ProcessLine("    to stderr");
+        var result = sut.Flush();
+
+        Assert.NotNull(result);
+        Assert.Equal(
+            string.Join(Environment.NewLine, "first line", "", "  indented line", "to stderr"),
+            result.Output);
+        Assert.Null(result.ErrorMessage);
+    }
+
+    [Fact]
+    public void FailedTest_OutputKeptSeparateFromErrorInfo()
+    {
+        var sut = new MtpStdoutParser();
+        _ = sut.ProcessLine("failed Ns.Class.Fails (12ms)");
+        _ = sut.ProcessLine("  Expected true but got false");
+        _ = sut.ProcessLine("  at Ns.Class.Fails() in Tests.cs:line 42");
+        _ = sut.ProcessLine("  Standard output");
+        _ = sut.ProcessLine("    at the start of output");
+        _ = sut.ProcessLine("    passed Fake.Name (1ms)");
+        var result = sut.Flush();
+
+        Assert.NotNull(result);
+        Assert.Equal("Expected true but got false", result.ErrorMessage);
+        Assert.Equal("at Ns.Class.Fails() in Tests.cs:line 42", result.StackTrace);
+        Assert.Equal(
+            string.Join(Environment.NewLine, "at the start of output", "passed Fake.Name (1ms)"),
+            result.Output);
+    }
+
+    [Fact]
+    public void Output_EndsAtNextTestHeader()
+    {
+        var sut = new MtpStdoutParser();
+        _ = sut.ProcessLine("passed Ns.Class.First (1ms)");
+        _ = sut.ProcessLine("  Standard output");
+        _ = sut.ProcessLine("    from first");
+        var first = sut.ProcessLine("passed Ns.Class.Second (1ms)");
+        var second = sut.Flush();
+
+        Assert.Equal("from first", first?.Output);
+        Assert.NotNull(second);
+        Assert.Null(second.Output);
+    }
+
+    [Fact]
+    public void Output_EndsAtLessIndentedLine()
+    {
+        var sut = new MtpStdoutParser();
+        _ = sut.ProcessLine("passed Ns.Class.Method (1ms)");
+        _ = sut.ProcessLine("  Standard output");
+        _ = sut.ProcessLine("    captured");
+        _ = sut.ProcessLine("Test run summary: Passed!");
+        var result = sut.Flush();
+
+        Assert.Equal("captured", result?.Output);
+    }
+
+    [Fact]
+    public void DotnetTestDetailedTranscript_ParsesErrorsAndOutput()
+    {
+        // Captured from `dotnet test --output Detailed` (.NET 10 SDK, xunit.v3 3.2.2 with CaptureConsole).
+        string[] lines =
+        [
+            "Running tests from /tmp/p/bin/Debug/net10.0/MtpOut.dll (net10.0|x64)",
+            "failed MtpOut.T.Fails (11ms)",
+            "  System.InvalidOperationException : boom",
+            "  from /tmp/p/bin/Debug/net10.0/MtpOut.dll (net10.0|x64)",
+            "  Xunit.MicrosoftTestingPlatform.XunitException: System.InvalidOperationException : boom",
+            "    at MtpOut.T.Fails() in /tmp/p/Tests.cs:6",
+            "    at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)",
+            "  Standard output",
+            "    before failing",
+            "    ",
+            "  Error output",
+            "passed MtpOut.T.Passes (0ms)",
+            "  from /tmp/p/bin/Debug/net10.0/MtpOut.dll (net10.0|x64)",
+            "  Standard output",
+            "    helper line",
+            "    console line",
+            "    ",
+            "  Error output",
+            "/tmp/p/bin/Debug/net10.0/MtpOut.dll (net10.0|x64) failed with 1 error(s) (267ms)",
+            "Exit code: 2",
+            "  Standard output: xUnit.net v3 Microsoft.Testing.Platform v1 Runner v3.2.2+728c1dce01 (64-bit .NET 10.0.13)",
+            "  ",
+            "",
+            "Test run summary: Failed!",
+            "  total: 2",
+        ];
+
+        var sut = new MtpStdoutParser();
+        var results = lines.Select(sut.ProcessLine).ToList();
+        results.Add(sut.Flush());
+        var parsed = results.OfType<MtpParsedResult>().ToList();
+
+        Assert.Equal(2, parsed.Count);
+        var failed = parsed[0];
+        Assert.Equal("MtpOut.T.Fails", failed.FullyQualifiedName);
+        Assert.Contains("boom", failed.ErrorMessage);
+        Assert.Contains("at MtpOut.T.Fails()", failed.StackTrace);
+        Assert.Equal("before failing", failed.Output);
+
+        var passed = parsed[1];
+        Assert.Equal("MtpOut.T.Passes", passed.FullyQualifiedName);
+        Assert.Equal(string.Join(Environment.NewLine, "helper line", "console line"), passed.Output);
+    }
+
+    // ── Target framework ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void SourceLine_CapturesTargetFramework_AndQualifiesTheKey()
+    {
+        var sut = new MtpStdoutParser();
+        _ = sut.ProcessLine("passed Ns.Class.Method (3ms)");
+        _ = sut.ProcessLine("  from /src/Multi/bin/Debug/net8.0/Multi.dll (net8.0|x64)");
+        var first = sut.ProcessLine("passed Ns.Class.Method (2ms)");
+        _ = sut.ProcessLine("  from /src/Multi/bin/Debug/net10.0/Multi.dll (net10.0|x64)");
+        var second = sut.Flush();
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.Equal("net8.0", first.TargetFramework);
+        Assert.Equal("Ns.Class.Method [net8.0]", first.Key);
+        Assert.Equal("net10.0", second.TargetFramework);
+        Assert.Equal("Ns.Class.Method [net10.0]", second.Key);
+    }
+
+    [Fact]
+    public void NoSourceLine_LeavesTargetFrameworkUnknown()
+    {
+        var sut = new MtpStdoutParser();
+        _ = sut.ProcessLine("passed Ns.Class.Method (3ms)");
+        var result = sut.Flush();
+
+        Assert.NotNull(result);
+        Assert.Null(result.TargetFramework);
+        Assert.Equal("Ns.Class.Method", result.Key);
+    }
 }

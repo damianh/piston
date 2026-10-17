@@ -39,6 +39,26 @@ internal sealed class StubEngine : IEngine
 
     public void Stop() { }
 
+    /// <summary>Selection passed to the last <see cref="RunSelectedAsync"/> call.</summary>
+    public TestSelection? LastSelection { get; private set; }
+
+    /// <summary>Thrown by <see cref="RunSelectedAsync"/> instead of starting a run.</summary>
+    public Exception? RunSelectedError { get; set; }
+
+    /// <summary>The run returned by <see cref="RunSelectedAsync"/>; never completes by default.</summary>
+    public Task<TestRunRecord> RunSelectedRun { get; set; } = new TaskCompletionSource<TestRunRecord>().Task;
+
+    public Task<TestRunRecord> RunSelectedAsync(TestSelection selection)
+    {
+        if (RunSelectedError is { } error)
+        {
+            throw error;
+        }
+
+        LastSelection = selection;
+        return RunSelectedRun;
+    }
+
     /// <summary>Result returned by <see cref="VerifyAsync"/>.</summary>
     public VerificationResult? NextVerification { get; set; }
 

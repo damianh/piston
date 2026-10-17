@@ -4,6 +4,11 @@
 
 - Run `dotnet tool restore` before starting work; it installs the pinned local tools (including `roslynk`) from `dotnet-tools.json`.
 - The solution file is `Piston.slnx`. Build with `dotnet build Piston.slnx`, test with `dotnet test Piston.slnx`.
+- Tests use xUnit v3 on Microsoft.Testing.Platform (`xunit.v3.core.mtp-v2`; `global.json` sets the MTP test runner). Write test output via `TestContext.Current.TestOutputHelper`, and in test classes that need cancellation declare `private readonly CancellationToken _ct = TestContext.Current.CancellationToken;`.
+
+## Dogfooding the daemon and dashboard
+
+To run Piston against this repo or view its dashboard, follow the `piston-dashboard` skill (`.github/skills/piston-dashboard/SKILL.md`): run the daemon from the Release build, detached, and open `http://localhost:5199` in the browser canvas rather than letting `piston` launch a system browser.
 
 ## roslynk MCP server
 

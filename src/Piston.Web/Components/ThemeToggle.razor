@@ -1,0 +1,51 @@
+@inject ThemeService Theme
+@implements IDisposable
+
+<button class="p-1.5 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800 transition-colors"
+        title="@Title (click to change)" aria-label="@Title" @onclick="CycleAsync">
+    @switch (Theme.Preference)
+    {
+        case ThemeService.Light:
+            <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-hidden="true">
+                <circle cx="8" cy="8" r="3" />
+                <path d="M8 1v1.5M8 13.5V15M1 8h1.5M13.5 8H15M3.05 3.05l1.06 1.06M11.89 11.89l1.06 1.06M3.05 12.95l1.06-1.06M11.89 4.11l1.06-1.06" />
+            </svg>
+            break;
+        case ThemeService.Dark:
+            <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
+                <path d="M13.5 9.6A5.75 5.75 0 0 1 6.4 2.5a5.75 5.75 0 1 0 7.1 7.1Z" />
+            </svg>
+            break;
+        default:
+            <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="1.75" y="2.5" width="12.5" height="8.5" rx="1.5" />
+                <path d="M5.5 14h5M8 11v3" />
+            </svg>
+            break;
+    }
+</button>
+
+@code {
+    private string Title => Theme.Preference switch
+    {
+        ThemeService.Light => "Theme: light",
+        ThemeService.Dark  => "Theme: dark",
+        _                  => "Theme: match system",
+    };
+
+    protected override void OnInitialized() => Theme.Changed += OnThemeChanged;
+
+    protected override Task OnAfterRenderAsync(bool firstRender) =>
+        firstRender ? Theme.EnsureLoadedAsync() : Task.CompletedTask;
+
+    private void OnThemeChanged() => InvokeAsync(StateHasChanged);
+
+    private Task CycleAsync()
+    {
+        var order = ThemeService.Preferences;
+        var next = order[(order.ToList().IndexOf(Theme.Preference) + 1) % order.Count];
+        return Theme.SetAsync(next);
+    }
+
+    public void Dispose() => Theme.Changed -= OnThemeChanged;
+}

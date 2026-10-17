@@ -10,6 +10,8 @@ namespace Piston.Engine.Tests;
 
 public sealed class PistonEngineTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private readonly string _root = Directory.CreateTempSubdirectory("piston-clear-test-").FullName;
 
     [Fact]
@@ -39,19 +41,19 @@ public sealed class PistonEngineTests : IDisposable
                 throw new OperationCanceledException();
             }
         };
-        var starting = Task.Run(() => engine.StartAsync(solution));
+        var starting = Task.Run(() => engine.StartAsync(solution), _ct);
         Task? disposing = null;
         try
         {
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), _ct);
             disposing = engine.DisposeAsync().AsTask();
             Assert.False(disposing.IsCompleted);
             _ = Assert.Throws<WorktreeOwnershipConflictException>(() => WorktreeOwnership.Acquire(directory, solution));
             _ = Assert.Single(Directory.GetFiles(directory.LeasesDirectory));
 
             release.Set();
-            await starting.WaitAsync(TimeSpan.FromSeconds(30));
-            await disposing.WaitAsync(TimeSpan.FromSeconds(30));
+            await starting.WaitAsync(TimeSpan.FromSeconds(30), _ct);
+            await disposing.WaitAsync(TimeSpan.FromSeconds(30), _ct);
 
             Assert.Empty(Directory.GetFiles(directory.LeasesDirectory));
             using var free = WorktreeOwnership.Acquire(directory, solution);

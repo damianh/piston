@@ -13,6 +13,8 @@ namespace Piston.Tests.Protocol;
 
 public sealed class ProtocolRouterTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private static string UniquePipeName() =>
         $"piston-router-{Guid.NewGuid():N}";
 
@@ -44,6 +46,70 @@ public sealed class ProtocolRouterTests
         Assert.Equal("/repo/Test.slnx", notification.Params["solutionPath"]!.GetValue<string>());
         Assert.False(notification.Params["data"]!["succeeded"]!.GetValue<bool>());
         Assert.Equal("CS0001", notification.Params["data"]!["errors"]![0]!.GetValue<string>());
+
+        await cts.CancelAsync();
+        await routerTask;
+    }
+
+    [Fact]
+    public async Task ActivityGetLog_BackfillsEventsEmittedBeforeClientConnected()
+    {
+        var pipeName = UniquePipeName();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var router = new ProtocolRouter(new StubEngine(), new NamedPipeListener(pipeName));
+        var routerTask = router.RunAsync(cts.Token);
+        router.Emit(ActivityEventFactory.McpToolCall("/repo/Test.slnx", "get_test_results", null, "ok", 1.5, true));
+        router.Emit(ActivityEventFactory.BuildCompleted("/repo/Test.slnx", true, 900, []));
+
+        await using var client = new NamedPipeClientTransport(pipeName);
+        await client.ConnectAsync(cts.Token);
+        _ = await client.ReceiveAsync(cts.Token);
+        await client.SendAsync(JsonRpcSerializer.Serialize(new JsonRpcRequest("log-1", ProtocolMethods.ActivityGetLog)), cts.Token);
+
+        var response = JsonRpcSerializer.DeserializeResponse(await client.ReceiveAsync(cts.Token));
+
+        Assert.Null(response.Error);
+        var log = JsonRpcSerializer.DeserializeParams<ActivityLogResponse>(response.Result)!;
+        Assert.Equal(
+            [ActivityEventTypes.McpToolCall, ActivityEventTypes.BuildCompleted],
+            log.Events.Select(e => e.Type));
+        Assert.Equal("get_test_results", log.Events[0].Data!["toolName"]!.GetValue<string>());
+
+        await cts.CancelAsync();
+        await routerTask;
+    }
+
+    [Fact]
+    public async Task Emit_AssignsDistinctIds_AndHistoryReplaysSameIdsAsLiveEvents()
+    {
+        var pipeName = UniquePipeName();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var router = new ProtocolRouter(new StubEngine(), new NamedPipeListener(pipeName));
+        var routerTask = router.RunAsync(cts.Token);
+        await using var client = new NamedPipeClientTransport(pipeName);
+        await client.ConnectAsync(cts.Token);
+        _ = await client.ReceiveAsync(cts.Token);
+        var first = ActivityEventFactory.McpToolCall("/repo/Test.slnx", "get_test_results", null, "ok", 1.5, true);
+        var second = ActivityEventFactory.McpToolCall("/repo/Test.slnx", "run_tests", null, "ok", 2.5, true);
+        first = first with { Timestamp = DateTimeOffset.UnixEpoch };
+        second = second with { Timestamp = DateTimeOffset.UnixEpoch };
+
+        router.Emit(first);
+        router.Emit(second);
+
+        var liveIds = new List<string>();
+        for (var i = 0; i < 2; i++)
+        {
+            var notification = JsonRpcSerializer.DeserializeNotification(await client.ReceiveAsync(cts.Token));
+            liveIds.Add(notification.Params!["id"]!.GetValue<string>());
+        }
+
+        await client.SendAsync(JsonRpcSerializer.Serialize(new JsonRpcRequest("log-1", ProtocolMethods.ActivityGetLog)), cts.Token);
+        var response = JsonRpcSerializer.DeserializeResponse(await client.ReceiveAsync(cts.Token));
+        var log = JsonRpcSerializer.DeserializeParams<ActivityLogResponse>(response.Result)!;
+
+        Assert.NotEqual(liveIds[0], liveIds[1]);
+        Assert.Equal(liveIds, log.Events.Select(e => e.Id));
 
         await cts.CancelAsync();
         await routerTask;
@@ -107,10 +173,12 @@ public sealed class ProtocolRouterTests
         await router.DisposeAsync();
     }
 
-    // ── Client sends engine/forceRun → receives success response ────────────
+    // ── Client sends engine/forceRun or engine/reset → receives success response ──
 
-    [Fact]
-    public async Task ClientSendsForceRun_EngineForceRunCalled_ReceivesResponse()
+    [Theory]
+    [InlineData(ProtocolMethods.EngineForceRun)]
+    [InlineData(ProtocolMethods.EngineReset)]
+    public async Task ClientSendsEngineCommand_EngineMethodCalled_ReceivesResponse(string method)
     {
         var pipeName = UniquePipeName();
         var engine = new StubEngine();
@@ -126,8 +194,7 @@ public sealed class ProtocolRouterTests
         // Drain the initial snapshot
         _ = await client.ReceiveAsync(cts.Token);
 
-        // Send forceRun request
-        var request = new JsonRpcRequest("req-1", ProtocolMethods.EngineForceRun);
+        var request = new JsonRpcRequest("req-1", method);
         await client.SendAsync(JsonRpcSerializer.Serialize(request), cts.Token);
 
         // Read response
@@ -136,7 +203,8 @@ public sealed class ProtocolRouterTests
 
         Assert.Equal("req-1", response.Id);
         Assert.Null(response.Error);
-        Assert.True(engine.ForceRunCalled);
+        Assert.Equal(method == ProtocolMethods.EngineForceRun, engine.ForceRunCalled);
+        Assert.Equal(method == ProtocolMethods.EngineReset, engine.ResetCalled);
 
         await cts.CancelAsync();
         await client.DisposeAsync();
@@ -295,7 +363,7 @@ public sealed class ProtocolRouterTests
         await client1.DisposeAsync();
 
         // Small delay for cleanup
-        await Task.Delay(200);
+        await Task.Delay(200, _ct);
 
         var count2 = received2.Count;
 
@@ -342,6 +410,14 @@ public sealed class ProtocolRouterTests
         public Task ForceRunAsync()
         {
             ForceRunCalled = true;
+            return Task.CompletedTask;
+        }
+
+        public bool ResetCalled { get; private set; }
+
+        public Task ResetAsync()
+        {
+            ResetCalled = true;
             return Task.CompletedTask;
         }
 

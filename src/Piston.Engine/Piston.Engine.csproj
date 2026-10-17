@@ -10,4 +10,19 @@
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
   </ItemGroup>
+
+  <!-- Ship the VSTest live-events collector in a dedicated collectors/ folder (passed as the test adapter path). -->
+  <ItemGroup>
+    <ProjectReference Include="..\Piston.LiveCollector\Piston.LiveCollector.csproj"
+                      ReferenceOutputAssembly="false"
+                      OutputItemType="PistonLiveCollectorAssembly" />
+  </ItemGroup>
+  <Target Name="IncludePistonLiveCollector" AfterTargets="ResolveProjectReferences">
+    <ItemGroup>
+      <None Include="@(PistonLiveCollectorAssembly)"
+            Link="collectors\%(Filename)%(Extension)"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
 </Project>

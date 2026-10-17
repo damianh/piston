@@ -13,6 +13,8 @@ namespace Piston.Engine.Tests.Execution;
 /// <summary>Run lifecycle when machine-wide admission is in front of the pipeline.</summary>
 public sealed class OrchestratorAdmissionTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private static readonly string[] Projects = ["/src/A.Tests/A.Tests.csproj"];
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"piston-orch-admission-{Guid.NewGuid():N}");
@@ -83,19 +85,19 @@ public sealed class OrchestratorAdmissionTests : IDisposable
         try
         {
             await orchestrator.StartAsync(SolutionPath);
-            await runner.Started.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            await runner.Started.Task.WaitAsync(TimeSpan.FromSeconds(15), _ct);
             var replacement = orchestrator.RequestRunAsync();
-            await runner.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(15));
+            await runner.Cancelled.Task.WaitAsync(TimeSpan.FromSeconds(15), _ct);
 
-            disposal = synchronous ? Task.Run(orchestrator.Dispose) : orchestrator.DisposeAsync().AsTask();
-            var cancelledReplacement = await replacement.WaitAsync(TimeSpan.FromSeconds(15));
+            disposal = synchronous ? Task.Run(orchestrator.Dispose, _ct) : orchestrator.DisposeAsync().AsTask();
+            var cancelledReplacement = await replacement.WaitAsync(TimeSpan.FromSeconds(15), _ct);
             Assert.Equal(TestRunStatus.Cancelled, cancelledReplacement!.Status);
             Assert.Equal("Engine stopped before the run started.", cancelledReplacement.StatusReason);
             Assert.False(disposal.IsCompleted);
             Assert.Equal(1, Entries(_directory.LeasesDirectory));
 
             runner.Release.SetResult();
-            await disposal.WaitAsync(TimeSpan.FromSeconds(15));
+            await disposal.WaitAsync(TimeSpan.FromSeconds(15), _ct);
 
             Assert.Equal(0, Entries(_directory.LeasesDirectory));
             Assert.Equal(0, Entries(_directory.QueueDirectory));
@@ -219,7 +221,7 @@ public sealed class OrchestratorAdmissionTests : IDisposable
         Assert.Equal(1, Entries(_directory.QueueDirectory));
 
         other.Dispose();
-        var run = await forced.WaitAsync(TimeSpan.FromSeconds(15));
+        var run = await forced.WaitAsync(TimeSpan.FromSeconds(15), _ct);
         Assert.Equal(TestRunStatus.Completed, run!.Status);
         Assert.Equal(0, Entries(_directory.QueueDirectory));
     }

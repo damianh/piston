@@ -20,11 +20,12 @@ public static class TestRunJson
     {
         var tests = run.Tests.ToList();
         var testArray = new JsonArray();
-        foreach (var t in tests.OrderBy(t => t.FullyQualifiedName, StringComparer.Ordinal))
+        foreach (var t in tests.OrderBy(t => t.FullyQualifiedName, StringComparer.Ordinal).ThenBy(t => t.TargetFramework, StringComparer.Ordinal))
         {
             testArray.Add(new JsonObject
             {
                 ["fullyQualifiedName"] = t.FullyQualifiedName,
+                ["targetFramework"] = t.TargetFramework,
                 ["displayName"] = t.DisplayName,
                 ["status"] = t.Status.ToString(),
                 ["durationMs"] = Math.Round(t.Duration.TotalMilliseconds, 3),

@@ -11,6 +11,8 @@ namespace Piston.Engine.Tests.Impact;
 
 public sealed class ImpactAnalyzerTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     // ── Test fixture: temp directory with a synthetic project layout ──────────
     //
     //   Root/
@@ -67,6 +69,11 @@ public sealed class ImpactAnalyzerTests : IDisposable
                 [_libCsproj] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { _appCsproj, _testsCsproj },
                 [_appCsproj] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { _testsCsproj },
                 [_testsCsproj] = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+            },
+            transitiveDependencies: new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                [_appCsproj] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { _libCsproj },
+                [_testsCsproj] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { _appCsproj, _libCsproj },
             },
             fileToProject: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
@@ -364,7 +371,7 @@ public sealed class ImpactAnalyzerTests : IDisposable
         _ = analyzer.Analyze([Change(_libCode)]);
 
         // Allow any pending async MarkFileStaleAsync to complete
-        await Task.Delay(50);
+        await Task.Delay(50, _ct);
 
         Assert.Contains(libCodeFull, coverageStore.MarkedStaleFiles, StringComparer.OrdinalIgnoreCase);
     }
@@ -388,4 +395,28 @@ public sealed class ImpactAnalyzerTests : IDisposable
         // Empty FQN set → falls back to Tier 2 (null)
         Assert.Null(result.AffectedTestFqns);
     }
+
+    [Fact]
+    public void BuildProjectPaths_ForFullBuild_AreAllProjects()
+    {
+        var analyzer = CreateInitialized();
+
+        Assert.Equal(
+            new[] { _libCsproj, _appCsproj, _testsCsproj }.Order(),
+            analyzer.GetBuildProjectPaths(null).Order());
+    }
+
+    [Fact]
+    public void BuildProjectPaths_ForTargets_IncludeTheirReferences()
+    {
+        var analyzer = CreateInitialized();
+
+        Assert.Equal(
+            new[] { _libCsproj, _appCsproj }.Order(),
+            analyzer.GetBuildProjectPaths([_appCsproj]).Order());
+    }
+
+    [Fact]
+    public void BuildProjectPaths_WithoutGraph_AreEmpty() =>
+        Assert.Empty(new ImpactAnalyzer(_factory).GetBuildProjectPaths(null));
 }

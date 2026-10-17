@@ -1,4 +1,6 @@
 @using Piston.Protocol.Dtos
+@using Piston.Protocol.Messages
+@inject IJSRuntime JS
 
 @if (Test is null)
 {
@@ -25,14 +27,36 @@ else
         _                     => "◌",
     };
 
+    var (title, subtitle) = TestTreeBuilder.DetailNames(Test);
+
     <div class="flex flex-col h-full overflow-y-auto p-4 gap-4 text-xs">
         <!-- Test name + status -->
         <div>
-            <div class="flex items-center gap-2 mb-1">
-                <span class="@statusColor text-base">@statusIcon</span>
-                <span class="text-gray-200 font-semibold break-all">@Test.DisplayName</span>
+            <div class="flex items-start gap-3 mb-1">
+                <div class="flex items-center gap-2 min-w-0 flex-1 pt-0.5">
+                    <span class="@statusColor text-base">@statusIcon</span>
+                    <span class="text-gray-200 font-semibold break-all" title="@Test.FullyQualifiedName">@title</span>
+                </div>
+                <RunTestsButton Command="@RunCommand" Count="1" CanRun="@CanRun" Note="@RunNote" />
             </div>
-            <div class="text-gray-600 break-all">@Test.FullyQualifiedName</div>
+            @if (subtitle is not null)
+            {
+                <div class="text-gray-500 break-all">@subtitle</div>
+            }
+            @if (Project is not null)
+            {
+                <div class="text-gray-500 mt-1">
+                    Project:
+                    <button type="button"
+                            class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300 focus-visible:decoration-gray-300 focus:outline-none"
+                            title="Show project details and its run log"
+                            @onclick="() => OnShowProject.InvokeAsync(Project)">@Project</button>
+                </div>
+            }
+            @if (Test.TargetFramework is { } framework)
+            {
+                <div class="text-gray-500 mt-1">Framework: <span class="font-mono">@framework</span></div>
+            }
             @if (Test.DurationMs > 0)
             {
                 <div class="text-gray-500 mt-1">Duration: @FormatDuration(Test.DurationMs)</div>
@@ -58,18 +82,67 @@ else
         }
 
         <!-- Output -->
-        @if (!string.IsNullOrEmpty(Test.Output))
-        {
-            <div>
-                <div class="text-gray-400 font-semibold mb-1">Output</div>
-                <pre class="bg-gray-900 border border-gray-800 rounded p-3 text-gray-400 text-xs overflow-x-auto whitespace-pre-wrap break-all">@Test.Output</pre>
+        <div>
+            <div class="flex items-center justify-between mb-1">
+                <div class="text-gray-400 font-semibold">Output</div>
+                @if (!string.IsNullOrEmpty(Test.Output))
+                {
+                    <button type="button" class="text-gray-500 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none"
+                            @onclick="() => CopyAsync(Test.Output)">Copy</button>
+                }
             </div>
-        }
+            @if (string.IsNullOrEmpty(Test.Output))
+            {
+                <div class="text-gray-600">No output captured for this result.</div>
+            }
+            else
+            {
+                <pre class="bg-gray-900 border border-gray-800 rounded p-3 text-gray-400 text-xs max-h-64 overflow-auto whitespace-pre-wrap break-all">@Test.Output</pre>
+            }
+        </div>
     </div>
 }
 
 @code {
     [Parameter] public TestResultDto? Test { get; set; }
+
+    /// <summary>The project that produced <see cref="Test"/>'s result.</summary>
+    [Parameter] public string? Project { get; set; }
+
+    /// <summary>Shows a project's details, including its run log.</summary>
+    [Parameter] public EventCallback<string> OnShowProject { get; set; }
+
+    /// <summary>False while a run is in progress or the daemon is unreachable.</summary>
+    [Parameter] public bool CanRun { get; set; }
+
+    private RunTestsCommand? RunCommand =>
+        Test is null || Project is null
+            ? null
+            : new RunTestsCommand([Project], [Test.FullyQualifiedName]);
+
+    // A filter selects by name, so every case of a theory and every target framework runs.
+    private string? RunNote =>
+        Test is null ? null
+        : Test.TargetFramework is not null ? "Build and run this test on every framework the project targets"
+        : TestTreeBuilder.NameHead(Test.FullyQualifiedName) != Test.FullyQualifiedName ? "Build and run every case of this test"
+        : "Build and run this test";
+
+    private async Task CopyAsync(string? text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", text);
+        }
+        catch (JSException)
+        {
+            // Clipboard access denied (e.g. insecure context); nothing to do.
+        }
+    }
 
     private static string FormatDuration(double ms) =>
         ms < 1000 ? $"{(int)ms}ms" : $"{ms / 1000.0:F1}s";

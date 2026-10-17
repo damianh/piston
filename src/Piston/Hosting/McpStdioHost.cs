@@ -238,6 +238,7 @@ public sealed class McpStdioHost
         public void Stop() { }
         public void SetFilter(string? filter) => throw Unavailable();
         public void ClearResults() => throw Unavailable();
+        public Task ResetAsync() => throw Unavailable();
         public void Dispose() { }
 
         private static InvalidOperationException Unavailable() => new("No Piston engine is running in this process.");

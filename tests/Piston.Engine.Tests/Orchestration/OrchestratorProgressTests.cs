@@ -15,6 +15,8 @@ namespace Piston.Engine.Tests.Orchestration;
 /// </summary>
 public sealed class OrchestratorProgressTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     [Fact]
     public async Task PipelineAndFileChanges_EmitEngineOwnedActivity()
     {
@@ -26,7 +28,7 @@ public sealed class OrchestratorProgressTests
             new StubImpactAnalyzer(projects), new PistonState(), null, null, false, sink);
 
         await orchestrator.StartAsync("/fake/solution.slnx");
-        await sink.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await sink.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5), _ct);
 
         var build = Assert.Single(sink.Events.OfType<BuildCompletedActivityEvent>());
         Assert.True(build.Succeeded);
@@ -44,6 +46,122 @@ public sealed class OrchestratorProgressTests
         var changed = Assert.Single(sink.Events.OfType<FileChangesDetectedActivityEvent>());
         Assert.Equal(new[] { "/fake/A.cs" }, changed.ChangedFiles);
         Assert.Equal("/fake/solution.slnx", changed.SolutionPath);
+    }
+
+    [Fact]
+    public async Task SupersededBuild_IsNotReportedAsBuildFailure()
+    {
+        var projects = new[] { "a.csproj" };
+        var watcher = new StubFileWatcherService();
+        var sink = new RecordingActivitySink();
+        var build = new FirstBuildBlocksUntilCancelledBuildService();
+        await using var orchestrator = new PistonOrchestrator(
+            watcher, build, new StubTestRunnerService(projects, TimeSpan.Zero),
+            new StubImpactAnalyzer(projects), new PistonState(), null, null, false, sink);
+
+        await orchestrator.StartAsync("/fake/solution.slnx");
+        await build.FirstBuildStarted.Task.WaitAsync(TimeSpan.FromSeconds(5), _ct);
+        watcher.TriggerChange(new FileChangeBatch(
+            [new FileChangeEvent("/fake/A.cs", WatcherChangeTypes.Changed, DateTimeOffset.UtcNow)],
+            DateTimeOffset.UtcNow));
+        await sink.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5), _ct);
+
+        var completed = Assert.Single(sink.Events.OfType<BuildCompletedActivityEvent>());
+        Assert.True(completed.Succeeded);
+    }
+
+    [Fact]
+    public async Task Build_ReportsProjectProgress()
+    {
+        var projects = new[] { "/w/Lib/Lib.csproj", "/w/App.Tests/App.Tests.csproj" };
+        var state = new PistonState();
+        var sink = new RecordingActivitySink();
+        var progress = new ConcurrentQueue<(int Completed, int Total, string? Last)>();
+        state.StateChanged += () =>
+        {
+            if (state.Phase == PistonPhase.Building)
+            {
+                progress.Enqueue((state.CompletedBuildProjects, state.TotalBuildProjects, state.LastBuiltProject));
+            }
+        };
+        await using var orchestrator = new PistonOrchestrator(
+            new StubFileWatcherService(),
+            new ReportingBuildService(["Lib", "Lib", "Unexpected", "App.Tests"]),
+            new StubTestRunnerService(projects, TimeSpan.Zero),
+            new BuildProjectsImpactAnalyzer(projects), state, null, null, false, sink);
+
+        await orchestrator.StartAsync("/fake/solution.slnx");
+        await sink.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5), _ct);
+
+        Assert.Equal(
+            new (int, int, string?)[] { (0, 2, null), (1, 2, "Lib"), (1, 2, "Unexpected"), (2, 2, "App.Tests") },
+            progress.Distinct().ToArray());
+    }
+
+    private sealed class ReportingBuildService(IReadOnlyList<string> builtProjects) : IBuildService
+    {
+        public Task<BuildResult> BuildAsync(string solutionPath, CancellationToken ct) =>
+            BuildAsync(solutionPath, null, ct);
+
+        public Task<BuildResult> BuildAsync(string solutionPath, IReadOnlyList<string>? projectPaths, CancellationToken ct) =>
+            BuildAsync(solutionPath, projectPaths, null, ct);
+
+        public Task<BuildResult> BuildAsync(
+            string solutionPath,
+            IReadOnlyList<string>? projectPaths,
+            Action<string>? onProjectBuilt,
+            CancellationToken ct)
+        {
+            foreach (var project in builtProjects)
+            {
+                onProjectBuilt?.Invoke(project);
+            }
+
+            return Task.FromResult(new BuildResult(BuildStatus.Succeeded, [], [], TimeSpan.FromMilliseconds(1)));
+        }
+    }
+
+    private sealed class BuildProjectsImpactAnalyzer(IReadOnlyList<string> projects) : IImpactAnalyzer
+    {
+        private readonly StubImpactAnalyzer _inner = new(projects);
+
+        public Task InitializeAsync(string solutionPath, CancellationToken ct) => Task.CompletedTask;
+        public ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes) => _inner.Analyze(changes);
+        public ImpactAnalysisResult AnalyzeFullRun() => _inner.AnalyzeFullRun();
+        public void InvalidateGraph() { }
+        public IReadOnlyList<string> GetAllTestProjectPaths() => projects;
+        public bool IsMtpProject(string projectPath) => false;
+        public string? GetMtpOutputPath(string projectPath) => null;
+        public IReadOnlyList<string> GetBuildProjectPaths(IReadOnlyList<string>? buildTargets) => projects;
+    }
+
+    private sealed class FirstBuildBlocksUntilCancelledBuildService : IBuildService
+    {
+        private int _calls;
+
+        public TaskCompletionSource FirstBuildStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public Task<BuildResult> BuildAsync(string solutionPath, CancellationToken ct) =>
+            BuildAsync(solutionPath, null, ct);
+
+        public async Task<BuildResult> BuildAsync(string solutionPath, IReadOnlyList<string>? projectPaths, CancellationToken ct)
+        {
+            if (Interlocked.Increment(ref _calls) > 1)
+            {
+                return new BuildResult(BuildStatus.Succeeded, [], [], TimeSpan.FromMilliseconds(1));
+            }
+
+            // Mirrors BuildService: a killed build reports Failed with no diagnostics.
+            _ = FirstBuildStarted.TrySetResult();
+            try
+            {
+                await Task.Delay(Timeout.Infinite, ct);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            return new BuildResult(BuildStatus.Failed, [], [], TimeSpan.FromMilliseconds(1));
+        }
     }
 
     private sealed class RecordingActivitySink : IActivityEventSink
@@ -205,7 +323,7 @@ internal sealed class StubTestRunnerService : ITestRunnerService
 {
     private readonly IReadOnlyList<string> _projectPaths;
     private readonly TimeSpan _delay;
-    private readonly TaskCompletionSource _completionSource = new();
+    private readonly TaskCompletionSource _completionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public StubTestRunnerService(IReadOnlyList<string> projectPaths, TimeSpan delay)
     {

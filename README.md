@@ -28,7 +28,7 @@ Build and install the local .NET tool:
 dotnet pack src/Piston/Piston.csproj -c Release -o packages
 dotnet tool install Piston --version 0.1.0 --tool-path ./tools --source ./packages --no-cache
 ./tools/piston --help
-./tools/piston daemon /path/to/solution.slnx --mcp-port 5200 --web-port 5199
+./tools/piston daemon /path/to/solution.slnx
 ```
 
 Use an actual solution path in the last command. On Windows, the executable is
@@ -76,12 +76,12 @@ piston status [<solution>] [--all]
 |---|---|
 | `--debounce <ms>` | File-change debounce interval in milliseconds. |
 | `--filter <pattern>` | Test filter passed to the selected test runner on startup; syntax depends on the runner. |
-| `--coverage` | Request coverage collection on the VSTest path; requires a compatible collector in the test project. |
+| `--coverage` | Request coverage collection. VSTest projects need a collector such as `coverlet.collector`; MTP projects need `Microsoft.Testing.Extensions.CodeCoverage`. |
 | `--parallelism <n>` | Max concurrent test processes. `0` = auto. |
 | `--stdio` | Use stdin/stdout for engine JSON-RPC transport, not MCP. |
 | `--no-stdio` | Force named-pipe transport, overriding `.piston.json`'s `stdio` setting. |
 | `--pipe-name <name>` | Override the named pipe name (default: derived from solution path). |
-| `--mcp-port <port>` | Enable the MCP server on the specified port. |
+| `--mcp-port <port>` | Port for the always-on HTTP MCP server (default: 5200). |
 | `--web-port <port>` | Port for the web UI and WebSocket server (default: 5199). |
 
 **Examples:**
@@ -93,13 +93,15 @@ piston
 # Explicit solution path
 piston ./src/MyApp.slnx
 
-# Foreground daemon with coverage and MCP enabled
-piston daemon --coverage --mcp-port 5200
+# Foreground daemon with coverage, MCP on a non-default port
+piston daemon --coverage --mcp-port 5300
 ```
 
 ## Web dashboard
 
 The daemon serves a Blazor WebAssembly dashboard (default `http://localhost:5199`) connected over WebSocket. It shows test results, build errors, engine activity, and MCP tool-call history. The Roslyn diagnostic view has been removed.
+
+Clicking any node in the tree shows its details; double-click or the chevron expands or collapses it. A test's details show its captured output (what the test wrote, e.g. via xUnit's `TestContext.Current.TestOutputHelper`) and link to its project. A project, framework, namespace, class, status or pinned node shows its result counts, failures, slowest tests and (for status and pinned groups) the projects they come from. Every details pane has a **Run** button that builds the affected projects and runs just those tests; it is disabled while another run is in progress. The build is skipped (status `Skipped`) when the last successful build covered those projects, its run finished `Current`, and since then the source fingerprint is unchanged, the watcher has seen no change and the test outputs still exist. A run selects tests by name, so a framework node or a multi-targeted test runs on every framework its project targets, and a theory runs all of its cases. Projects are named by file name, so test projects sharing one (e.g. `One/Tests.csproj` and `Two/Tests.csproj`) show as a single node and run together. A project's details also show the run log of its latest run, one process covering all of its target frameworks: the runner Piston chose (VSTest, MTP server or MTP `dotnet test`), the command line, fallbacks, the process's console output and its exit code. Each log keeps the first 1,500 and last 500 lines of a run.
 
 Dashboard styles are bundled locally; no CDN access is needed. After changing
 Tailwind classes in dashboard components, regenerate the checked-in stylesheet:
@@ -129,7 +131,7 @@ The agent host starts one `piston mcp` process per session, with the working dir
 
 If another Piston process already owns the worktree, or the engine cannot start, the server still answers. Every tool then returns an error that ends with ``Use `dotnet test` instead.``. To uninstall, run `dotnet tool uninstall -g Piston` and remove the config entry.
 
-With `--mcp-port` (or `mcpPort` in `.piston.json`), the daemon exposes an HTTP MCP endpoint backed by the running engine. For `--mcp-port 5200`, connect at `http://localhost:5200` (the root endpoint, not `/mcp`). The daemon retains current state, but runs still launch `dotnet build` and fresh `dotnet test` processes; there is no prewarmed test-process pool.
+The daemon always exposes an HTTP MCP endpoint backed by the running engine, on port 5200 unless `--mcp-port` (or `mcpPort` in `.piston.json`) says otherwise. Connect at `http://localhost:5200` (the root endpoint, not `/mcp`). The daemon retains current state, but runs still launch `dotnet build` and fresh `dotnet test` processes; there is no prewarmed test-process pool.
 
 To set up a coding agent, follow [docs/agent-usage.md](docs/agent-usage.md). It covers setup, the verification contract and a custom-instructions snippet.
 
@@ -163,8 +165,8 @@ Every run, including startup and file-change runs, gets a record in the
 - for runs that went through machine-wide admission, an `admission` object (see below);
 - the scope (`Full` or `Selective`), `isFiltered` and the effective filter;
 - the run context: solution, test projects, build targets, configuration, SDK, runtime and OS;
-- run-local `build` output (status, raw MSBuild errors/warnings including diagnostic IDs and locations, duration), or null if the build did not return;
-- per-project outcomes, duplicate test IDs, and every test's fully qualified name and status.
+- run-local `build` output (status, raw MSBuild errors/warnings including diagnostic IDs and locations, duration), or null if the build did not return. A targeted run that reused the last build reports status `Skipped`;
+- per-project outcomes, duplicate test IDs, and every test's fully qualified name and status. A multi-targeted project reports each test once per framework, with a `targetFramework` field (e.g. `net8.0`); test names in failure lists then carry the framework, as in `Ns.Class.Method [net8.0]`.
 
 The source fingerprint (`piston-source-v2`) is a SHA-256 over every file under the solution directory except `bin`, `obj`, `TestResults`, `.git`, `.vs`, `.idea`, `.piston` and `node_modules`. It also covers the nearest ancestor `global.json`, `Directory.Build.*`, `Directory.Packages.props` and `NuGet.config`. Paths and contents are length-prefixed (unsigned 64-bit big-endian byte lengths), so embedded NUL bytes cannot collide with file boundaries. Capture is attempted before and after every started run, including cancellation and faults; unavailable fingerprints are reported as `Unknown`. Queued requests cancelled before starting have no fingerprints. A run is `Stale` if the fingerprint changed or the file watcher saw a change during the run; a watcher change also cancels the run.
 
@@ -182,8 +184,8 @@ Limits:
 - The fingerprint does not cover sources outside the solution directory, installed SDKs, the NuGet cache, or merged user/machine NuGet configuration.
 - `verify` reevaluates project inputs and returns `NotFullScope` for user projects, imports or declared files outside the fingerprint (including excluded directories). SDK/workload files, packages and generated restore imports remain toolchain/cache exclusions. Evaluation failure is `Faulted`; neither verdict is a pass or a hidden fallback.
 - Full runs refresh the solution graph before selecting test projects. `verify` also rejects an otherwise current run if its selected projects omit a test project from the refreshed graph.
-- The SDK version is recorded from `dotnet --version` run in the daemon's working directory.
-- `context.workingDirectory` is the build/SDK-probe directory. `context.testWorkingDirectories` records each test target's actual directory: the solution directory for MTP, the daemon directory for VSTest.
+- The SDK version is recorded from `dotnet --version` run in the solution directory.
+- `context.workingDirectory` is the build/SDK-probe directory: the solution directory. `context.testWorkingDirectories` records each test target's actual directory: the solution directory for MTP, the project directory for VSTest. Builds and test processes start there, so the watched solution's `global.json` (SDK and test runner) applies, not the daemon's.
 
 ### Worktree ownership and machine execution budget
 
@@ -209,7 +211,7 @@ Limits: this is admission control by reservation. Piston does not cap the actual
 
 Project ownership and transitive dependencies determine affected test projects. The optional Tier 3 path adds a file-based test-FQN filter when usable coverage exists. It is **not verified per-test/changed-line selection**: `CoverageProcessor` unions covered lines across reports and attributes them to every test returned in that run. The analyzer queries whole files, not changed line ranges.
 
-Coverage associations persist in `.piston/piston.db`; test-result history and the project graph do not. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The current MTP runner does not request or return coverage reports. Fine-grained attribution and selection correctness are future experiments.
+Coverage associations persist in `.piston/piston.db`; test-result history and the project graph do not. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, running it through `dotnet test` rather than server mode (so without live per-test progress); without it, the project runs without coverage and its run log says why. Fine-grained attribution and selection correctness are future experiments.
 
 ### Selective builds
 
@@ -232,7 +234,8 @@ as errors rather than silently ignored.
 Supplied CLI values override corresponding config values, with two caveats:
 `--coverage` enables coverage but cannot disable a config-enabled value, and
 non-positive debounce/parallelism values fall back to config/defaults. There is
-no implemented `.piston/config.json` or user-global config hierarchy.
+no implemented `.piston/config.json` or user-global config hierarchy for daemon
+options; dashboard preferences live in the separate [user settings file](#user-settings).
 
 ```json
 {
@@ -249,14 +252,38 @@ no implemented `.piston/config.json` or user-global config hierarchy.
 | `solution` | `string` | Default solution path, relative to the config file (or absolute). An explicit CLI solution argument overrides it. |
 | `debounceMs` | `int` | File-change debounce interval in milliseconds. |
 | `testFilter` | `string` | Default filter passed to the selected test runner. |
-| `coverageEnabled` | `bool` | Request VSTest coverage collection. |
+| `coverageEnabled` | `bool` | Request coverage collection (see `--coverage`). |
 | `parallelism` | `int` | Max concurrent test processes. `0` = auto: half the logical processor count, at least one. |
 | `processRecycleAfter` | `int` | Runs after which a pool slot logs a recycling warning (default 50). |
 | `pipeName` | `string` | Override the named pipe name. |
 | `stdio` | `bool` | Use stdin/stdout JSON-RPC transport. |
-| `mcpPort` | `int` | Enable the MCP server on this port. |
+| `mcpPort` | `int` | Port for the daemon's MCP server (default 5200). |
 | `testExecutionMode` | `string` | `"Auto"` and `"Process"` currently both route between MTP and VSTest. `"InProcess"` is not implemented and throws at startup. |
 | `execution.memoryMb` | `int` | Memory in MiB each run reserves from the machine execution budget (see [Worktree ownership and machine execution budget](#worktree-ownership-and-machine-execution-budget)). Must be positive; required when the budget sets `memoryMb`. A reservation, not a cap. |
+
+### User settings
+
+Machine-wide preferences shared by every daemon and dashboard of the current user
+live in `$PISTON_SETTINGS_FILE` if set (must be absolute), otherwise
+`Piston/settings.json` under the roaming application-data folder
+(`~/.config/Piston/settings.json` on Linux, `%APPDATA%\Piston\settings.json` on
+Windows). Change them from the gear (Settings) button in the dashboard header,
+which also shows the file path. The dashboard writes the file when a preference
+changes and reads it each time it connects; you can also edit it by hand. The
+color theme is a per-browser preference and is not stored in this file. A missing file, invalid JSON or
+invalid values fall back to defaults. Unknown keys are preserved on write.
+
+```json
+{
+  "dashboard": {
+    "detailPane": "bottom"
+  }
+}
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `dashboard.detailPane` | `string` | Where the test details pane docks when a dashboard opens: `"right"` (default) or `"bottom"`. |
 
 ## Building from source
 
@@ -289,6 +316,23 @@ command's whole Unix session or Windows job, including descendants that
 outlive their parent. Setup
 commands and engine builds disable MSBuild node reuse in their child environment
 to prevent persistent nodes retaining redirected output pipes after `dotnet` exits.
+
+### Dogfooding Piston on itself
+
+Run the daemon from a Release build of this repo against `Piston.slnx`:
+
+```sh
+dotnet build Piston.slnx -c Release
+dotnet src/Piston/bin/Release/net10.0/Piston.dll daemon Piston.slnx
+```
+
+The daemon builds the watched solution in the default (Debug) configuration, so
+its own builds never overwrite the Release binaries it runs from. Stop it before
+rebuilding Release (`dotnet src/Piston/bin/Release/net10.0/Piston.dll stop`), then
+start it again. `.piston/diagnostics.log` records what the daemon did (runner choice,
+build skips, fallbacks) and is truncated on each start. Agents should follow the
+[`piston-dashboard` skill](.github/skills/piston-dashboard/SKILL.md), which also
+covers opening the dashboard in a Copilot browser canvas.
 
 ### AI agent tooling (roslynk)
 

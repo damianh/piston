@@ -9,6 +9,8 @@ namespace Piston.Tests.Hosting;
 
 public sealed class OwnerLookupTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"piston-owners-{Guid.NewGuid():N}");
     private readonly ExecutionCoordinationDirectory _directory;
 
@@ -183,7 +185,7 @@ public sealed class OwnerLookupTests : IDisposable
             RedirectStandardOutput = true,
             UseShellExecute = false,
         })!;
-        await process.WaitForExitAsync();
+        await process.WaitForExitAsync(_ct);
         Assert.True(await OwnerLookup.TerminateAsync(process, TimeSpan.FromSeconds(1)));
     }
 }

@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Diagnostics;
+using Piston.Engine.Impact;
 using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
@@ -9,16 +10,26 @@ namespace Piston.Engine.Services;
 public sealed class BuildService : IBuildService
 {
     public Task<BuildResult> BuildAsync(string solutionPath, CancellationToken ct) =>
-        BuildAsync(solutionPath, null, ct);
+        BuildAsync(solutionPath, null, null, ct);
+
+    public Task<BuildResult> BuildAsync(
+        string solutionPath,
+        IReadOnlyList<string>? projectPaths,
+        CancellationToken ct) =>
+        BuildAsync(solutionPath, projectPaths, null, ct);
 
     public async Task<BuildResult> BuildAsync(
         string solutionPath,
         IReadOnlyList<string>? projectPaths,
+        Action<string>? onProjectBuilt,
         CancellationToken ct)
     {
         if (projectPaths is null || projectPaths.Count == 0)
         {
-            return await RunBuildAsync($"build \"{solutionPath}\"", ct).ConfigureAwait(false);
+            // Absolute, since the build starts in the solution's directory: a relative path with a
+            // directory (sub/My.slnx) would otherwise resolve against it a second time.
+            var fullSolutionPath = Path.GetFullPath(solutionPath);
+            return await RunBuildAsync($"build \"{fullSolutionPath}\"", TestProcessRunner.WorkingDirectoryFor(fullSolutionPath), onProjectBuilt, ct).ConfigureAwait(false);
         }
 
         var targets = projectPaths
@@ -32,7 +43,7 @@ public sealed class BuildService : IBuildService
         var solution = SolutionFilterBuilder.ReadSolution(solutionPath);
         if (solution is null)
         {
-            return await BuildProjectsIndividuallyAsync(targets, ct).ConfigureAwait(false);
+            return await BuildProjectsIndividuallyAsync(targets, onProjectBuilt, ct).ConfigureAwait(false);
         }
 
         var members = targets.Where(solution.Value.Projects.Contains).ToList();
@@ -44,7 +55,7 @@ public sealed class BuildService : IBuildService
             var filterPath = SolutionFilterBuilder.WriteTemporaryFilter(solution.Value.SolutionPath, members);
             try
             {
-                results.Add(await RunBuildAsync($"build \"{filterPath}\"", ct).ConfigureAwait(false));
+                results.Add(await RunBuildAsync($"build \"{filterPath}\"", TestProcessRunner.WorkingDirectoryFor(solution.Value.SolutionPath), onProjectBuilt, ct).ConfigureAwait(false));
             }
             finally
             {
@@ -56,7 +67,7 @@ public sealed class BuildService : IBuildService
         // listed in a solution filter, so build them directly.
         if (outside.Count > 0 && !ct.IsCancellationRequested)
         {
-            results.Add(await BuildProjectsIndividuallyAsync(outside, ct).ConfigureAwait(false));
+            results.Add(await BuildProjectsIndividuallyAsync(outside, onProjectBuilt, ct).ConfigureAwait(false));
         }
 
         return Aggregate(results, ct.IsCancellationRequested);
@@ -64,6 +75,7 @@ public sealed class BuildService : IBuildService
 
     private static async Task<BuildResult> BuildProjectsIndividuallyAsync(
         IReadOnlyList<string> projectPaths,
+        Action<string>? onProjectBuilt,
         CancellationToken ct)
     {
         var results = new List<BuildResult>();
@@ -76,6 +88,8 @@ public sealed class BuildService : IBuildService
 
             results.Add(await RunBuildAsync(
                 $"build \"{projectPath}\" --no-restore",
+                TestProcessRunner.WorkingDirectoryFor(projectPath),
+                onProjectBuilt,
                 ct).ConfigureAwait(false));
         }
 
@@ -92,13 +106,19 @@ public sealed class BuildService : IBuildService
             results.Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration));
     }
 
-    private static async Task<BuildResult> RunBuildAsync(string args, CancellationToken ct)
+    /// <param name="workingDirectory">
+    /// Where <c>dotnet build</c> starts: the target's directory, so the SDK chosen by its <c>global.json</c> applies
+    /// rather than the one for Piston's own directory.
+    /// </param>
+    private static async Task<BuildResult> RunBuildAsync(
+        string args, string? workingDirectory, Action<string>? onProjectBuilt, CancellationToken ct)
     {
         var output = new BuildOutputCollector();
         var sw = Stopwatch.StartNew();
 
         var psi = new ProcessStartInfo("dotnet", args)
         {
+            WorkingDirectory = workingDirectory ?? string.Empty,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -107,10 +127,18 @@ public sealed class BuildService : IBuildService
         // Reused MSBuild nodes can retain the redirected pipes after dotnet exits,
         // leaving WaitForExitAsync waiting indefinitely for output EOF.
         psi.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+        MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
 
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
 
-        process.OutputDataReceived += (_, e) => output.AddOutputLine(e.Data);
+        process.OutputDataReceived += (_, e) =>
+        {
+            output.AddOutputLine(e.Data);
+            if (onProjectBuilt is not null && BuildOutputCollector.TryParseBuiltProject(e.Data, out var projectName))
+            {
+                onProjectBuilt(projectName);
+            }
+        };
         process.ErrorDataReceived += (_, e) => output.AddErrorLine(e.Data);
 
         _ = process.Start();

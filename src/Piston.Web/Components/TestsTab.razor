@@ -1,76 +1,133 @@
 @inject EngineClientService Client
-@implements IDisposable
+@inject ViewState _viewState
+@inject IJSRuntime JS
+@implements IAsyncDisposable
 
-<!-- Header bar -->
-<HeaderBar Snapshot="@_snapshot" />
+<div class="flex flex-col h-full overflow-hidden">
 
-<!-- Toolbar -->
-<Toolbar IsExpanded="@_viewState.TreeExpanded"
-         Filter="@_filter"
-         OnForceRun="ForceRun"
-         OnClearResults="ClearResults"
-         OnToggleExpand="ToggleExpand"
-         OnFilterChanged="SetFilter" />
+    <!-- Toolbar -->
+    <Toolbar Filter="@_filter"
+             OnReset="Reset"
+             OnExpandAll="() => SetExpanded(true)"
+             OnCollapseAll="() => SetExpanded(false)"
+             Grouping="@_viewState.Grouping"
+             OnGroupingChanged="SetGrouping"
+             DetailPosition="@_viewState.DetailPosition"
+             OnToggleDetailPosition="ToggleDetailPosition"
+             ShowFailed="@_viewState.ShowFailed"
+             ShowPassed="@_viewState.ShowPassed"
+             ShowSkipped="@_viewState.ShowSkipped"
+             ShowNotRun="@_viewState.ShowNotRun"
+             OnToggleFailed="() => ToggleStatus(s => s.ShowFailed = !s.ShowFailed)"
+             OnTogglePassed="() => ToggleStatus(s => s.ShowPassed = !s.ShowPassed)"
+             OnToggleSkipped="() => ToggleStatus(s => s.ShowSkipped = !s.ShowSkipped)"
+             OnToggleNotRun="() => ToggleStatus(s => s.ShowNotRun = !s.ShowNotRun)"
+             OnFilterChanged="SetFilter" />
 
-<!-- Main content area -->
-<div class="flex flex-1 overflow-hidden">
-    <!-- Test tree (left panel) -->
-    <div class="w-1/2 border-r border-gray-800 overflow-hidden flex flex-col">
-        <TestTree Nodes="@_treeNodes"
-                  SelectedFqn="@_viewState.SelectedTestFqn"
-                  PinnedFqns="@_viewState.PinnedTestFqns"
-                  OnSelectTest="SelectTest"
-                  OnTogglePin="TogglePin" />
+    <!-- Main content area: test tree, resizable splitter, detail panel (docked right or bottom) -->
+    <div class="@(_isBottom ? "flex flex-col" : "flex") flex-1 min-h-0 overflow-hidden"
+         data-orientation="@(_isBottom ? "bottom" : "right")" @ref="_splitContainer">
+        <div class="flex flex-col min-w-0 min-h-0 overflow-hidden" style="flex: 0 0 @(_splitPercentCss)%">
+            <TestTree Nodes="@_treeNodes"
+                      SelectedKey="@_viewState.SelectedTestKey"
+                      SelectedNodeKey="@_viewState.SelectedNodeKey"
+                      PinnedFqns="@_viewState.PinnedTestFqns"
+                      OnSelectTest="SelectTest"
+                      OnSelectNode="SelectNode"
+                      OnTogglePin="TogglePin"
+                      OnExpansionChanged="RememberExpansion" />
+        </div>
+
+        <div data-splitter
+             role="separator"
+             tabindex="0"
+             aria-label="Resize test list and details"
+             aria-orientation="@(_isBottom ? "horizontal" : "vertical")"
+             aria-valuemin="@ViewState.MinSplitPercent"
+             aria-valuemax="@ViewState.MaxSplitPercent"
+             aria-valuenow="@Math.Round(_viewState.SplitPercent)"
+             title="Drag to resize · double-click to reset"
+             class="@(_isBottom
+                 ? "h-px w-full cursor-row-resize before:-top-1 before:-bottom-1 before:inset-x-0"
+                 : "w-px h-full cursor-col-resize before:-left-1 before:-right-1 before:inset-y-0") relative z-10 shrink-0 bg-gray-800 transition-colors hover:bg-blue-500 focus-visible:bg-blue-500 focus:outline-none data-[dragging]:bg-blue-500 before:absolute before:content-['']"
+             @ondblclick="ResetSplit"
+             @onkeydown="HandleSplitterKeyDown"
+             @onkeydown:stopPropagation="true"></div>
+
+        <div class="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+            @if (_snapshot?.Phase == PistonPhaseDto.Error && _snapshot.LastBuild is not null)
+            {
+                <BuildErrors Build="@_snapshot.LastBuild" />
+            }
+            else if (_nodeDetail is not null)
+            {
+                <GroupDetail @key="_viewState.SelectedNodeKey"
+                             Detail="@_nodeDetail"
+                             CanRun="@CanRun"
+                             OnSelectTest="SelectTest"
+                             OnShowProject="SelectProject" />
+            }
+            else
+            {
+                <TestDetail @key="_selectedTest?.Key"
+                            Test="@_selectedTest"
+                            Project="@ProjectOf(_selectedTest)"
+                            CanRun="@CanRun"
+                            OnShowProject="SelectProject" />
+            }
+        </div>
     </div>
 
-    <!-- Detail panel (right panel) -->
-    <div class="w-1/2 overflow-hidden flex flex-col">
-        @if (_snapshot?.Phase == PistonPhaseDto.Error && _snapshot.LastBuild is not null)
-        {
-            <BuildErrors Build="@_snapshot.LastBuild" />
-        }
-        else
-        {
-            <TestDetail Test="@_selectedTest" />
-        }
-    </div>
+    <!-- Status bar -->
+    <SectionContent SectionName="@StatusBar.TabSection">
+        <TestsStatusItems Filter="@_filter"
+                          FailureCount="@_failureCount"
+                          OnPrevFailure="NavigatePrevFailure"
+                          OnNextFailure="NavigateNextFailure" />
+    </SectionContent>
+
 </div>
-
-<!-- Status bar -->
-<StatusBar Grouping="@_viewState.Grouping"
-           ShowFailed="@_viewState.ShowFailed"
-           ShowPassed="@_viewState.ShowPassed"
-           ShowSkipped="@_viewState.ShowSkipped"
-           ShowNotRun="@_viewState.ShowNotRun"
-           Filter="@_filter"
-           FailureCount="@_failureCount"
-           OnCycleGrouping="CycleGrouping"
-           OnToggleFailed="() => ToggleStatus(s => s.ShowFailed = !s.ShowFailed)"
-           OnTogglePassed="() => ToggleStatus(s => s.ShowPassed = !s.ShowPassed)"
-           OnToggleSkipped="() => ToggleStatus(s => s.ShowSkipped = !s.ShowSkipped)"
-           OnToggleNotRun="() => ToggleStatus(s => s.ShowNotRun = !s.ShowNotRun)"
-           OnPrevFailure="NavigatePrevFailure"
-           OnNextFailure="NavigateNextFailure" />
 
 @code {
     [Parameter] public KeyboardEventArgs? KeyboardEvent { get; set; }
 
-    private readonly ViewState _viewState = new();
     private StateSnapshotNotification? _snapshot;
     private List<TestNode> _treeNodes = [];
     private TestResultDto? _selectedTest;
-    private string? _filter;
+    private NodeDetail? _nodeDetail;
+    private string? _filter
+    {
+        get => _viewState.Filter;
+        set => _viewState.Filter = value;
+    }
     private int _failureCount;
+    private IReadOnlyList<TestSuiteDto> _displayedSuites = [];
+
+    // The parent keeps passing its last key event on every re-render, and a freshly mounted tab
+    // receives whatever was pressed before it existed; only act on events not seen yet.
+    private KeyboardEventArgs? _lastHandledKeyboardEvent;
 
     protected override void OnInitialized()
     {
+        _lastHandledKeyboardEvent = KeyboardEvent;
         Client.StateChanged += OnStateChanged;
+        Client.SettingsChanged += OnSettingsChanged;
+
+        // The tab may mount after the latest snapshot arrived (e.g. on tab switch); start from it.
+        if (Client.CurrentSnapshot is { } current)
+        {
+            _snapshot = current;
+            RebuildTree();
+        }
     }
 
     protected override void OnParametersSet()
     {
-        if (KeyboardEvent is not null)
-            HandleKeyDown(KeyboardEvent);
+        if (KeyboardEvent is null || ReferenceEquals(KeyboardEvent, _lastHandledKeyboardEvent))
+            return;
+
+        _lastHandledKeyboardEvent = KeyboardEvent;
+        HandleKeyDown(KeyboardEvent);
     }
 
     private void OnStateChanged(StateSnapshotNotification snapshot)
@@ -80,37 +137,80 @@
         InvokeAsync(StateHasChanged);
     }
 
+    // AppShell applies changed settings to the shared ViewState; re-render to reflect them.
+    private void OnSettingsChanged() => InvokeAsync(StateHasChanged);
+
     private void RebuildTree()
     {
         if (_snapshot is null)
         {
             _treeNodes = [];
+            _displayedSuites = [];
             _failureCount = 0;
+            _nodeDetail = null;
             return;
         }
 
+        _displayedSuites = _snapshot.Phase == PistonPhaseDto.Testing
+            ? TestTreeBuilder.WithLiveOverlay(_snapshot.Suites, _snapshot.InProgressSuites)
+            : _snapshot.Suites;
+
         _treeNodes = TestTreeBuilder.Build(
-            _snapshot.Suites,
+            _displayedSuites,
             _filter,
             _viewState,
-            _snapshot.LastFileChangeTime);
+            _snapshot.LastFileChangeTime,
+            TestTreeBuilder.IsDiscovering(_snapshot));
 
-        _failureCount = _snapshot.Suites
+        _failureCount = _displayedSuites
             .SelectMany(s => s.Tests)
             .Count(t => t.Status == TestStatusDto.Failed);
 
-        if (_viewState.SelectedTestFqn is not null)
+        if (_viewState.SelectedTestKey is not null)
         {
-            _selectedTest = _snapshot.Suites
-                .SelectMany(s => s.Tests)
-                .FirstOrDefault(t => t.FullyQualifiedName == _viewState.SelectedTestFqn);
+            // A live result gains its framework when final results arrive, so fall back to the name.
+            var tests = _displayedSuites.SelectMany(s => s.Tests).ToList();
+            _selectedTest = tests.FirstOrDefault(t => t.Key == _viewState.SelectedTestKey)
+                ?? tests.FirstOrDefault(t => t.FullyQualifiedName == _viewState.SelectedTestKey
+                    || _viewState.SelectedTestKey.StartsWith(t.FullyQualifiedName + " [", StringComparison.Ordinal));
+            if (_selectedTest is not null)
+            {
+                _viewState.SelectedTestKey = _selectedTest.Key;
+            }
         }
+
+        UpdateNodeDetail();
     }
+
+    // A targeted run is refused while another is in progress.
+    private bool CanRun =>
+        Client.IsConnected && _snapshot?.Phase is PistonPhaseDto.Idle or PistonPhaseDto.Watching or PistonPhaseDto.Error;
+
+    private void UpdateNodeDetail() =>
+        _nodeDetail = _viewState.SelectedNodeKey is { } key && _snapshot is not null
+            ? NodeDetail.For(key, _displayedSuites, _snapshot.Suites, _treeNodes)
+            : null;
+
+    private string? ProjectOf(TestResultDto? test) =>
+        test is null ? null : _displayedSuites.FirstOrDefault(s => s.Tests.Any(t => t.Key == test.Key))?.Name;
 
     private void SelectTest(TestResultDto test)
     {
-        _viewState.SelectedTestFqn = test.FullyQualifiedName;
+        _viewState.SelectedNodeKey = null;
+        _nodeDetail = null;
+        _viewState.SelectedTestKey = test.Key;
         _selectedTest = test;
+        StateHasChanged();
+    }
+
+    private void SelectProject(string project) => SelectNode($"suite:{project}");
+
+    private void SelectNode(string key)
+    {
+        _viewState.SelectedTestKey = null;
+        _selectedTest = null;
+        _viewState.SelectedNodeKey = key;
+        UpdateNodeDetail();
         StateHasChanged();
     }
 
@@ -122,14 +222,28 @@
         StateHasChanged();
     }
 
-    private async Task ForceRun() => await Client.ForceRunAsync();
-    private async Task ClearResults() => await Client.ClearResultsAsync();
-
-    private void ToggleExpand()
+    private async Task Reset()
     {
-        _viewState.TreeExpanded = !_viewState.TreeExpanded;
-        SetExpandedRecursive(_treeNodes, _viewState.TreeExpanded);
+        _selectedTest = null;
+        await Client.ResetAsync();
+    }
+
+    private void ToggleExpand() => SetExpanded(!_viewState.TreeExpanded);
+
+    private void SetExpanded(bool expanded)
+    {
+        _viewState.TreeExpanded = expanded;
+        _viewState.NodeExpansion.Clear();
+        SetExpandedRecursive(_treeNodes, expanded);
         StateHasChanged();
+    }
+
+    private void RememberExpansion(TestNode node)
+    {
+        if (node.ExpansionKey is { } key)
+        {
+            _viewState.NodeExpansion[key] = node.IsExpanded;
+        }
     }
 
     private static void SetExpandedRecursive(List<TestNode> nodes, bool expanded)
@@ -149,14 +263,17 @@
         await InvokeAsync(StateHasChanged);
     }
 
-    private void CycleGrouping()
-    {
-        _viewState.Grouping = _viewState.Grouping switch
+    private void CycleGrouping() =>
+        SetGrouping(_viewState.Grouping switch
         {
             GroupingMode.ProjectNamespaceClass => GroupingMode.ByStatus,
             GroupingMode.ByStatus              => GroupingMode.Flat,
             _                                  => GroupingMode.ProjectNamespaceClass,
-        };
+        });
+
+    private void SetGrouping(GroupingMode mode)
+    {
+        _viewState.Grouping = mode;
         RebuildTree();
         StateHasChanged();
     }
@@ -187,17 +304,15 @@
     }
 
     private List<TestResultDto> GetFailedTests() =>
-        _snapshot?.Suites
+        _displayedSuites
             .SelectMany(s => s.Tests)
             .Where(t => t.Status == TestStatusDto.Failed)
-            .ToList() ?? [];
+            .ToList();
 
     private void HandleKeyDown(KeyboardEventArgs e)
     {
         switch (e.Key.ToUpperInvariant())
         {
-            case "R": _ = ForceRun(); break;
-            case "C": _ = ClearResults(); break;
             case "G": CycleGrouping(); break;
             case "E": ToggleExpand(); break;
             case "1": ToggleStatus(s => s.ShowFailed  = !s.ShowFailed);  break;
@@ -209,8 +324,72 @@
         }
     }
 
-    public void Dispose()
+    // ── Split layout ──
+
+    private ElementReference _splitContainer;
+    private DotNetObjectReference<TestsTab>? _selfRef;
+    private bool _isBottom => _viewState.DetailPosition == DetailPosition.Bottom;
+    private string _splitPercentCss =>
+        _viewState.SplitPercent.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        _selfRef = DotNetObjectReference.Create(this);
+        await JS.InvokeVoidAsync("pistonSplitter.attach", _splitContainer, _selfRef,
+            ViewState.MinSplitPercent, ViewState.MaxSplitPercent);
+    }
+
+    [JSInvokable]
+    public void SetSplit(double percent)
+    {
+        _viewState.SplitPercent = percent;
+        StateHasChanged();
+    }
+
+    private void ResetSplit() => _viewState.ResetSplit();
+
+    private void ToggleDetailPosition()
+    {
+        _viewState.DetailPosition = _isBottom ? DetailPosition.Right : DetailPosition.Bottom;
+        _ = Client.UpdateSettingsAsync(new UserSettings(_viewState.ToSettings()));
+    }
+
+    private void HandleSplitterKeyDown(KeyboardEventArgs e)
+    {
+        var step = e.ShiftKey ? 1 : 5;
+        var delta = (e.Key, _isBottom) switch
+        {
+            ("ArrowLeft", false) or ("ArrowUp", true) => -step,
+            ("ArrowRight", false) or ("ArrowDown", true) => step,
+            _ => 0,
+        };
+
+        if (e.Key == "Home")
+            _viewState.SplitPercent = ViewState.MinSplitPercent;
+        else if (e.Key == "End")
+            _viewState.SplitPercent = ViewState.MaxSplitPercent;
+        else if (e.Key == "Enter")
+            _viewState.ResetSplit();
+        else if (delta != 0)
+            _viewState.SplitPercent += delta;
+    }
+
+    public async ValueTask DisposeAsync()
     {
         Client.StateChanged -= OnStateChanged;
+        Client.SettingsChanged -= OnSettingsChanged;
+
+        try
+        {
+            await JS.InvokeVoidAsync("pistonSplitter.detach", _splitContainer);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+
+        _selfRef?.Dispose();
     }
 }

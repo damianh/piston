@@ -22,6 +22,10 @@ public static class ProtocolMethods
 
     /// <summary>Clear all test results.</summary>
     public const string EngineClearResults = "engine/clearResults";
+    public const string EngineReset = "engine/reset";
+
+    /// <summary>Start a run of selected tests; replies once the run is requested, without awaiting it.</summary>
+    public const string EngineRunTests = "engine/runTests";
 
     /// <summary>Request per-file coverage data for the given source file.</summary>
     public const string CoverageGetForFile = "coverage/getForFile";
@@ -51,9 +55,21 @@ public static class ProtocolMethods
     /// <summary>Fetch the MCP tool call log (ring buffer).</summary>
     public const string McpGetCallLog = "mcp/getCallLog";
 
+    /// <summary>Fetch the daemon's retained activity timeline (oldest first), for backfilling late-joining clients.</summary>
+    public const string ActivityGetLog = "activity/getLog";
+
+    /// <summary>Fetch the log of the test process that produced a test's current result.</summary>
+    public const string TestsGetRunLog = "tests/getRunLog";
+
     /// <summary>Describe the daemon process: PID, solution, start time, version and endpoint URLs.</summary>
     public const string DaemonInfo = "daemon/info";
 
     /// <summary>Stop the engine and exit the daemon process, releasing its pipe, ports and worktree ownership.</summary>
     public const string DaemonShutdown = "daemon/shutdown";
+
+    /// <summary>Read the machine-wide user settings and the file they live in.</summary>
+    public const string SettingsGet = "settings/get";
+
+    /// <summary>Merge the non-null fields of a partial settings object into the machine-wide user settings; returns the result and the file path.</summary>
+    public const string SettingsUpdate = "settings/update";
 }

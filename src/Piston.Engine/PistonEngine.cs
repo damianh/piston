@@ -75,7 +75,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         var vsTestStrategy = new ProcessTestExecutionStrategy(trxParser);
         var mtpStrategy = new MtpTestExecutionStrategy(
             projectPath => impactAnalyzer.GetMtpOutputPath(projectPath),
-            solutionDir);
+            solutionDir,
+            impactAnalyzer.IsMultiTargeted);
 
         ITestExecutionStrategy strategy = options.TestExecutionMode switch
         {
@@ -111,17 +112,21 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             activitySink,
             _executionCoordinator);
 
-        var sdkVersion = new Lazy<string?>(ProbeSdkVersion);
-        _orchestrator.SdkVersionProvider = () => sdkVersion.Value;
+        var sdkVersions = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<string?>>(StringComparer.Ordinal);
+        _orchestrator.SdkVersionProvider = dir => sdkVersions.GetOrAdd(dir, d => new Lazy<string?>(() => ProbeSdkVersion(d))).Value;
     }
 
-    /// <summary>Runs <c>dotnet --version</c> in the daemon's working directory (same as build/test processes).</summary>
-    private static string? ProbeSdkVersion()
+    /// <summary>
+    /// Runs <c>dotnet --version</c> in <paramref name="workingDirectory"/>, the solution directory builds start in,
+    /// so it reports the SDK the solution's <c>global.json</c> selects.
+    /// </summary>
+    private static string? ProbeSdkVersion(string workingDirectory)
     {
         try
         {
             using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("dotnet", "--version")
             {
+                WorkingDirectory = workingDirectory,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -206,6 +211,17 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     public Task ForceRunAsync() => _orchestrator.ForceRunAsync();
 
     public Task<TestRunRecord?> RequestRunAsync() => _orchestrator.RequestRunAsync();
+
+    public Task<TestRunRecord> RunSelectedAsync(TestSelection selection) => _orchestrator.RunSelectedAsync(selection);
+
+    public async Task ResetAsync()
+    {
+        await _orchestrator.ResetAsync().ConfigureAwait(false);
+        if (_state.SolutionPath is { } solutionPath)
+        {
+            _activitySink.Emit(new SolutionLoadedActivityEvent(solutionPath, 0));
+        }
+    }
 
     public void Stop() => _orchestrator.Stop();
 

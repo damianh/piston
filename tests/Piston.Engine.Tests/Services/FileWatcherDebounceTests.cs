@@ -10,6 +10,8 @@ namespace Piston.Engine.Tests.Services;
 
 public sealed class FileWatcherDebounceTests
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
     [Fact]
     public void MultipleRapidChanges_FiresOnlyOnce()
     {
@@ -139,8 +141,8 @@ public sealed class FileWatcherDebounceTests
         {
             sut.Start(dir.FullName);
             var filePath = Path.Combine(dir.FullName, "Test.cs");
-            await File.WriteAllTextAsync(filePath, "// test");
-            var batch = await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            await File.WriteAllTextAsync(filePath, "// test", _ct);
+            var batch = await received.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
             Assert.Equal(filePath, Assert.Single(batch.Changes).FilePath);
         }
         finally
@@ -167,10 +169,10 @@ public sealed class FileWatcherDebounceTests
             foreach (var excluded in new[] { "bin", "obj", "TestResults", ".git", ".vs", ".idea", ".piston", "node_modules" })
             {
                 var excludedDir = Directory.CreateDirectory(Path.Combine(dir.FullName, excluded));
-                await File.WriteAllTextAsync(Path.Combine(excludedDir.FullName, "output.cs"), "// generated");
+                await File.WriteAllTextAsync(Path.Combine(excludedDir.FullName, "output.cs"), "// generated", _ct);
             }
 
-            await Task.Delay(debounce + TimeSpan.FromMilliseconds(100));
+            await Task.Delay(debounce + TimeSpan.FromMilliseconds(100), _ct);
 
             Assert.Empty(fired);
         }
@@ -195,10 +197,10 @@ public sealed class FileWatcherDebounceTests
         {
             sut.Start(dir.FullName);
 
-            await File.WriteAllTextAsync(Path.Combine(dir.FullName, "readme.txt"), "hello");
-            await File.WriteAllTextAsync(Path.Combine(dir.FullName, "data.json"), "{}");
+            await File.WriteAllTextAsync(Path.Combine(dir.FullName, "readme.txt"), "hello", _ct);
+            await File.WriteAllTextAsync(Path.Combine(dir.FullName, "data.json"), "{}", _ct);
 
-            await Task.Delay(debounce + TimeSpan.FromMilliseconds(100));
+            await Task.Delay(debounce + TimeSpan.FromMilliseconds(100), _ct);
 
             var changes = fired.SelectMany(batch => batch.Changes).Select(change => Path.GetFileName(change.FilePath)).ToArray();
             Assert.Contains("readme.txt", changes);
@@ -226,9 +228,9 @@ public sealed class FileWatcherDebounceTests
         {
             sut.Start(solution.FullName);
             var inputPath = Path.Combine(parent.FullName, "global.json");
-            await File.WriteAllTextAsync(inputPath, "{}");
+            await File.WriteAllTextAsync(inputPath, "{}", _ct);
 
-            var batch = await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var batch = await received.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
             Assert.Contains(batch.Changes, change => change.FilePath == inputPath);
         }
         finally
@@ -285,10 +287,10 @@ public sealed class FileWatcherDebounceTests
         var input = Path.Combine(parent.FullName, "global.json");
         try
         {
-            await File.WriteAllTextAsync(input, "{}");
+            await File.WriteAllTextAsync(input, "{}", _ct);
             sut.Start(solution.FullName);
             File.Delete(input);
-            var batch = await received.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            var batch = await received.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
             Assert.Contains(batch.Changes, change => change.FilePath == input);
         }
         finally

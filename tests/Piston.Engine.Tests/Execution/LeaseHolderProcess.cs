@@ -17,13 +17,20 @@ internal sealed class LeaseHolderProcess : IDisposable
         _process = process;
         _process.OutputDataReceived += (_, e) =>
         {
-            if (e.Data is null)
+            try
             {
-                _lines.CompleteAdding();
+                if (e.Data is null)
+                {
+                    _lines.CompleteAdding();
+                }
+                else
+                {
+                    _lines.Add(e.Data);
+                }
             }
-            else
+            catch (ObjectDisposedException)
             {
-                _lines.Add(e.Data);
+                // Output can still arrive after Dispose; throwing here would crash the test host.
             }
         };
         _process.BeginOutputReadLine();

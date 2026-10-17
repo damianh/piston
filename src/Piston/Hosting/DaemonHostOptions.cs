@@ -20,7 +20,13 @@ public sealed class DaemonHostOptions
     /// <summary>Port for the web dashboard (WebSocket + static Blazor WASM assets).</summary>
     public int WebPort { get; init; } = 5199;
 
-    /// <summary>Optional port for the MCP server. Null disables MCP.</summary>
+    /// <summary>MCP port the CLI uses when neither <c>--mcp-port</c> nor <c>mcpPort</c> is set.</summary>
+    public const int DefaultMcpPort = 5200;
+
+    /// <summary>
+    /// Port for the MCP server. The CLI always sets it (defaulting to <see cref="DefaultMcpPort"/>);
+    /// null, used only by in-process hosts, disables MCP.
+    /// </summary>
     public int? McpPort { get; init; }
 
     /// <summary>How often to check whether the worktree still exists; null uses the default.</summary>

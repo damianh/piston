@@ -46,4 +46,14 @@ internal sealed class CompositeTestExecutionStrategy : ITestExecutionStrategy
             ? _mtpStrategy.ExecuteAsync(request, onProgress, ct)
             : _vsTestStrategy.ExecuteAsync(request, onProgress, ct);
     }
+
+    /// <inheritdoc/>
+    public Task<IReadOnlyList<TestResult>> DiscoverAsync(
+        string projectPath,
+        string? filter,
+        Action<IReadOnlyList<TestResult>>? onPartial,
+        CancellationToken ct) =>
+        _mtpStrategy.CanExecute(projectPath)
+            ? _mtpStrategy.DiscoverAsync(projectPath, filter, onPartial, ct)
+            : _vsTestStrategy.DiscoverAsync(projectPath, filter, onPartial, ct);
 }

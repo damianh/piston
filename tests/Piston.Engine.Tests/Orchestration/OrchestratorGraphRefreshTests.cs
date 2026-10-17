@@ -39,14 +39,14 @@ public sealed class OrchestratorGraphRefreshTests : IAsyncLifetime
             }), _state);
     }
 
-    public async Task InitializeAsync()
+    public async ValueTask InitializeAsync()
     {
         await _orchestrator.StartAsync(Solution);
         _ = await WaitForRunAsync(TestRunTrigger.Startup);
         Assert.Equal([FirstProject], _state.LastRun!.Context!.TestProjects);
     }
 
-    public async Task DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         await _orchestrator.DisposeAsync();
         Directory.Delete(_root, recursive: true);
