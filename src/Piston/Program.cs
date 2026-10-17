@@ -761,28 +761,7 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
         return 1;
     }
 
-    // Wait briefly for the initial state snapshot that ProtocolRouter sends on connect
-    using var snapshotCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-    StateSnapshotNotification? snapshot = null;
-    client.StateChanged += _ => snapshot = client.CurrentSnapshot;
-
-    if (client.CurrentSnapshot is not null)
-    {
-        snapshot = client.CurrentSnapshot;
-    }
-    else
-    {
-        try { await Task.Delay(500, snapshotCts.Token); } catch (OperationCanceledException) { }
-        snapshot = client.CurrentSnapshot;
-    }
-
-    if (snapshot is null)
-    {
-        Console.WriteLine("Daemon is running but no state available yet.");
-        Console.WriteLine($"  Pipe: {pipeName}");
-        return 0;
-    }
-
+    var snapshotTask = StateSnapshotWaiter.WaitForSnapshotAsync(client, TimeSpan.FromSeconds(3));
     DaemonInfoResponse? info = null;
     try
     {
@@ -793,7 +772,11 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
         // Older daemon without daemon/info.
     }
 
-    Console.WriteLine($"Daemon running.");
+    var snapshot = await snapshotTask;
+    snapshot ??= client.CurrentSnapshot;
+    Console.WriteLine(snapshot is null
+        ? "Daemon is running but no state available yet."
+        : "Daemon running.");
     Console.WriteLine($"  Solution : {info?.SolutionPath ?? solutionPath}");
     if (info is not null)
     {
@@ -805,6 +788,11 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
     }
 
     Console.WriteLine($"  Pipe     : {pipeName}");
+    if (snapshot is null)
+    {
+        return 0;
+    }
+
     Console.WriteLine($"  Phase    : {snapshot.Phase}");
     Console.WriteLine($"  Tests    : {snapshot.CompletedTests}/{snapshot.TotalExpectedTests}");
     Console.WriteLine($"  Suites   : {snapshot.Suites.Count}");
