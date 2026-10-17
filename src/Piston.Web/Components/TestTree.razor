@@ -18,7 +18,8 @@
                               SelectedFqn="@SelectedFqn"
                               PinnedFqns="@PinnedFqns"
                               OnSelectTest="@OnSelectTest"
-                              OnTogglePin="@OnTogglePin" />
+                              OnTogglePin="@OnTogglePin"
+                              OnExpansionChanged="@OnExpansionChanged" />
             }
         </div>
     }
@@ -30,4 +31,5 @@
     [Parameter] public HashSet<string> PinnedFqns { get; set; } = [];
     [Parameter] public EventCallback<TestResultDto> OnSelectTest { get; set; }
     [Parameter] public EventCallback<string> OnTogglePin { get; set; }
+    [Parameter] public Action<TestNode>? OnExpansionChanged { get; set; }
 }

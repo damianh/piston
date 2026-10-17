@@ -15,6 +15,9 @@ public sealed class TestNode
     public TestResultDto? Test { get; init; }
     public TestSuiteDto? Suite { get; init; }
     public string? GroupKey { get; init; }
+
+    /// <summary>Stable identity used to remember this node's expansion across tree rebuilds.</summary>
+    public string? ExpansionKey { get; init; }
     public List<TestNode> Children { get; } = [];
     public bool IsExpanded { get; set; } = true;
     public bool IsStale { get; init; }

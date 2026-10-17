@@ -104,7 +104,8 @@ public static class TestTreeBuilder
                 Label = suite.Name,
                 Kind = TestNodeKind.Suite,
                 Suite = suite,
-                IsExpanded = viewState.TreeExpanded,
+                ExpansionKey = $"suite:{suite.Name}",
+                IsExpanded = viewState.IsNodeExpanded($"suite:{suite.Name}"),
             };
 
             var byNamespace = visibleTests
@@ -135,7 +136,8 @@ public static class TestTreeBuilder
                             Label = SimpleSegment(classKey),
                             Kind = TestNodeKind.Group,
                             GroupKey = classKey,
-                            IsExpanded = viewState.TreeExpanded,
+                            ExpansionKey = $"class:{suite.Name}|{classKey}",
+                            IsExpanded = viewState.IsNodeExpanded($"class:{suite.Name}|{classKey}"),
                         };
                         AddTestLeaves(classNode.Children, classTests, suite, viewState, lastFileChangeTime);
                         suiteNode.Children.Add(classNode);
@@ -148,7 +150,8 @@ public static class TestTreeBuilder
                         Label = SimpleSegment(nsGroup.Key),
                         Kind = TestNodeKind.Group,
                         GroupKey = nsGroup.Key,
-                        IsExpanded = viewState.TreeExpanded,
+                        ExpansionKey = $"ns:{suite.Name}|{nsGroup.Key}",
+                        IsExpanded = viewState.IsNodeExpanded($"ns:{suite.Name}|{nsGroup.Key}"),
                     };
 
                     foreach (var (classKey, classTests) in classGroups)
@@ -158,7 +161,8 @@ public static class TestTreeBuilder
                             Label = SimpleSegment(classKey),
                             Kind = TestNodeKind.Group,
                             GroupKey = classKey,
-                            IsExpanded = viewState.TreeExpanded,
+                            ExpansionKey = $"class:{suite.Name}|{classKey}",
+                            IsExpanded = viewState.IsNodeExpanded($"class:{suite.Name}|{classKey}"),
                         };
                         AddTestLeaves(classNode.Children, classTests, suite, viewState, lastFileChangeTime);
                         nsNode.Children.Add(classNode);
@@ -224,7 +228,8 @@ public static class TestTreeBuilder
                 Label = $"{label} ({grouped.Count})",
                 Kind = TestNodeKind.Group,
                 GroupKey = label,
-                IsExpanded = viewState.TreeExpanded,
+                ExpansionKey = $"status:{label}",
+                IsExpanded = viewState.IsNodeExpanded($"status:{label}"),
             };
 
             foreach (var (suite, test) in grouped.OrderBy(x => ClassMethodLabel(x.Test.FullyQualifiedName), StringComparer.Ordinal))
@@ -305,7 +310,8 @@ public static class TestTreeBuilder
             Label = $"★ Pinned ({pinnedTests.Count})",
             Kind = TestNodeKind.Group,
             GroupKey = "★ Pinned",
-            IsExpanded = true,
+            ExpansionKey = "pinned",
+            IsExpanded = viewState.IsNodeExpanded("pinned"),
         };
 
         foreach (var (suite, test) in pinnedTests)

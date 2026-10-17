@@ -20,6 +20,12 @@ public sealed class ViewState
     // ── Expand/collapse ──
     public bool TreeExpanded { get; set; } = true;
 
+    /// <summary>Per-node expansion chosen by the user, keyed by <see cref="TestNode.ExpansionKey"/>.</summary>
+    public Dictionary<string, bool> NodeExpansion { get; } = new(StringComparer.Ordinal);
+
+    public bool IsNodeExpanded(string key) =>
+        NodeExpansion.TryGetValue(key, out var expanded) ? expanded : TreeExpanded;
+
     // ── Pinned tests ──
     public HashSet<string> PinnedTestFqns { get; } = new(StringComparer.Ordinal);
 

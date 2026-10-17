@@ -20,7 +20,8 @@
                       SelectedFqn="@_viewState.SelectedTestFqn"
                       PinnedFqns="@_viewState.PinnedTestFqns"
                       OnSelectTest="SelectTest"
-                      OnTogglePin="TogglePin" />
+                      OnTogglePin="TogglePin"
+                      OnExpansionChanged="RememberExpansion" />
         </div>
 
         <!-- Detail panel (right panel) -->
@@ -151,8 +152,17 @@
     private void SetExpanded(bool expanded)
     {
         _viewState.TreeExpanded = expanded;
+        _viewState.NodeExpansion.Clear();
         SetExpandedRecursive(_treeNodes, expanded);
         StateHasChanged();
+    }
+
+    private void RememberExpansion(TestNode node)
+    {
+        if (node.ExpansionKey is { } key)
+        {
+            _viewState.NodeExpansion[key] = node.IsExpanded;
+        }
     }
 
     private static void SetExpandedRecursive(List<TestNode> nodes, bool expanded)
