@@ -1,4 +1,5 @@
 @inject EngineClientService Client
+@inject ViewState _viewState
 @implements IDisposable
 
 <div class="flex flex-col h-full overflow-hidden">
@@ -58,11 +59,14 @@
 @code {
     [Parameter] public KeyboardEventArgs? KeyboardEvent { get; set; }
 
-    private readonly ViewState _viewState = new();
     private StateSnapshotNotification? _snapshot;
     private List<TestNode> _treeNodes = [];
     private TestResultDto? _selectedTest;
-    private string? _filter;
+    private string? _filter
+    {
+        get => _viewState.Filter;
+        set => _viewState.Filter = value;
+    }
     private int _failureCount;
     private IReadOnlyList<TestSuiteDto> _displayedSuites = [];
 

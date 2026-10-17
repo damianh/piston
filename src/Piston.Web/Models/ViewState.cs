@@ -29,6 +29,9 @@ public sealed class ViewState
     // ── Pinned tests ──
     public HashSet<string> PinnedTestFqns { get; } = new(StringComparer.Ordinal);
 
+    // ── Filter ──
+    public string? Filter { get; set; }
+
     // ── Selected test ──
     public string? SelectedTestFqn { get; set; }
 
