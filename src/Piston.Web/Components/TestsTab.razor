@@ -96,7 +96,7 @@
     {
         _lastHandledKeyboardEvent = KeyboardEvent;
         Client.StateChanged += OnStateChanged;
-        Client.SettingsLoaded += OnSettingsLoaded;
+        Client.SettingsChanged += OnSettingsChanged;
 
         // The tab may mount after the latest snapshot arrived (e.g. on tab switch); start from it.
         if (Client.CurrentSnapshot is { } current)
@@ -122,8 +122,8 @@
         InvokeAsync(StateHasChanged);
     }
 
-    // AppShell applies loaded settings to the shared ViewState; re-render to reflect them.
-    private void OnSettingsLoaded() => InvokeAsync(StateHasChanged);
+    // AppShell applies changed settings to the shared ViewState; re-render to reflect them.
+    private void OnSettingsChanged() => InvokeAsync(StateHasChanged);
 
     private void RebuildTree()
     {
@@ -337,7 +337,7 @@
     public async ValueTask DisposeAsync()
     {
         Client.StateChanged -= OnStateChanged;
-        Client.SettingsLoaded -= OnSettingsLoaded;
+        Client.SettingsChanged -= OnSettingsChanged;
 
         try
         {

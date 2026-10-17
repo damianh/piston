@@ -1,0 +1,170 @@
+@inject EngineClientService Client
+@inject ThemeService Theme
+@inject ViewState ViewState
+@implements IDisposable
+
+@if (IsOpen)
+{
+    <div class="fixed inset-0 z-40 flex items-start justify-center pt-[12vh] px-4 bg-black/50 dark:bg-black/60"
+         @onclick="CloseAsync" @onkeydown="OnKeyDown" @onkeydown:stopPropagation>
+        <div @ref="_dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="-1"
+             class="w-full max-w-lg rounded-lg border border-gray-700 bg-gray-950 text-sm text-gray-100 shadow-[0_8px_24px_rgba(1,4,9,0.35)] outline-none"
+             @onclick:stopPropagation>
+
+            <div class="flex items-center justify-between pl-4 pr-2 h-11 border-b border-gray-800">
+                <h2 id="settings-title" class="font-semibold">Settings</h2>
+                <button class="p-1.5 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800"
+                        aria-label="Close settings" title="Close (Esc)" @onclick="CloseAsync">
+                    <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" aria-hidden="true">
+                        <path d="M4 4l8 8M12 4l-8 8" />
+                    </svg>
+                </button>
+            </div>
+
+            <div class="divide-y divide-gray-800">
+                <div class="flex items-center justify-between gap-6 px-4 py-3.5">
+                    <div id="settings-theme-label">
+                        <div class="font-medium">Theme</div>
+                        <div class="text-xs text-gray-400 mt-0.5">Saved in this browser.</div>
+                    </div>
+                    <div role="radiogroup" aria-labelledby="settings-theme-label" class="@GroupClass">
+                        @foreach (var preference in ThemeService.Preferences)
+                        {
+                            var value = preference;
+                            @Segment("settings-theme", value, ThemeLabel(value), null,
+                                Theme.Preference == value, disabled: false, () => Theme.SetAsync(value))
+                        }
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between gap-6 px-4 py-3.5">
+                    <div id="settings-pane-label">
+                        <div class="font-medium">Details pane</div>
+                        <div class="text-xs text-gray-400 mt-0.5">Where test details dock when a dashboard opens.</div>
+                    </div>
+                    <div role="radiogroup" aria-labelledby="settings-pane-label" class="@GroupClass" @key="_paneVersion">
+                        @Segment("settings-pane", "right", "Right", DockRightIcon,
+                            CurrentPane == DetailPanePosition.Right, !SettingsAvailable, () => SetPaneAsync(DetailPanePosition.Right))
+                        @Segment("settings-pane", "bottom", "Bottom", DockBottomIcon,
+                            CurrentPane == DetailPanePosition.Bottom, !SettingsAvailable, () => SetPaneAsync(DetailPanePosition.Bottom))
+                    </div>
+                </div>
+            </div>
+
+            <div class="px-4 py-3 border-t border-gray-800 rounded-b-lg bg-gray-900 text-xs text-gray-400" aria-live="polite">
+                @if (_saveError is not null)
+                {
+                    <p class="text-red-400">@_saveError</p>
+                }
+                else if (SettingsAvailable)
+                {
+                    <p>Layout is shared by every Piston dashboard for your user, saved in</p>
+                    <p class="mt-1 font-mono text-gray-300 break-all select-all">@Client.SettingsFilePath</p>
+                }
+                else
+                {
+                    <p>This daemon can't save machine-wide settings, so layout changes apply to this page only.</p>
+                }
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private const string GroupClass = "inline-flex shrink-0 gap-0.5 p-0.5 rounded-md border border-gray-700";
+
+    [Parameter] public bool IsOpen { get; set; }
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private ElementReference _dialog;
+    private bool _focusPending;
+    private string? _saveError;
+    private int _paneVersion;
+
+    private bool SettingsAvailable => Client.SettingsFilePath is not null;
+
+    private DetailPanePosition CurrentPane =>
+        Client.Settings.Dashboard?.DetailPane
+        ?? (ViewState.DetailPosition == DetailPosition.Bottom ? DetailPanePosition.Bottom : DetailPanePosition.Right);
+
+    protected override void OnInitialized()
+    {
+        Client.SettingsChanged += OnChanged;
+        Theme.Changed += OnChanged;
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (IsOpen && !_focusPending)
+        {
+            _focusPending = true;
+            _saveError = null;
+        }
+        else if (!IsOpen)
+        {
+            _focusPending = false;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (IsOpen && _focusPending)
+        {
+            _focusPending = false;
+            await Theme.EnsureLoadedAsync();
+            await _dialog.FocusAsync();
+        }
+    }
+
+    private void OnChanged() => InvokeAsync(StateHasChanged);
+
+    private async Task SetPaneAsync(DetailPanePosition pane)
+    {
+        _saveError = null;
+        if (!await Client.UpdateSettingsAsync(new UserSettings(new DashboardSettings(pane))))
+        {
+            _saveError = "Couldn't save the details pane setting. Check that the daemon is running and its settings file is valid JSON.";
+            _paneVersion++; // re-create the radios so the browser drops the unsaved selection
+        }
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+
+    private Task OnKeyDown(KeyboardEventArgs e) => e.Key == "Escape" ? CloseAsync() : Task.CompletedTask;
+
+    private static string ThemeLabel(string preference) => preference switch
+    {
+        ThemeService.Light => "Light",
+        ThemeService.Dark => "Dark",
+        _ => "System",
+    };
+
+    private RenderFragment Segment(
+        string group, string value, string label, RenderFragment? icon, bool isChecked, bool disabled, Func<Task> onSelect) =>
+        @<label class="@(disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer")">
+            <input type="radio" class="peer sr-only" name="@group" value="@value"
+                   checked="@isChecked" disabled="@disabled" @onchange="onSelect" />
+            <span class="flex items-center gap-1.5 px-2.5 py-1 rounded text-xs text-gray-400 hover:text-gray-100 peer-checked:bg-gray-800 peer-checked:text-gray-100 peer-checked:ring-1 peer-checked:ring-inset peer-checked:ring-gray-700 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-1 peer-focus-visible:outline-blue-500">
+                @icon
+                @label
+            </span>
+        </label>;
+
+    private readonly RenderFragment DockRightIcon =
+        @<svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" />
+            <rect x="8.5" y="3" width="5.5" height="10" rx="1" fill="currentColor" />
+        </svg>;
+
+    private readonly RenderFragment DockBottomIcon =
+        @<svg class="w-3.5 h-3.5" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+            <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" />
+            <rect x="2" y="8.5" width="12" height="4.5" rx="1" fill="currentColor" />
+        </svg>;
+
+    public void Dispose()
+    {
+        Client.SettingsChanged -= OnChanged;
+        Theme.Changed -= OnChanged;
+    }
+}

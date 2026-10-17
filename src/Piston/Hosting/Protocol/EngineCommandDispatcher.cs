@@ -121,7 +121,10 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                 }
 
             case ProtocolMethods.SettingsGet:
-                return SerializeSettings(RequireUserSettings(method).Get());
+                {
+                    var store = RequireUserSettings(method);
+                    return SerializeSettings(store, store.Get());
+                }
 
             case ProtocolMethods.SettingsUpdate:
                 {
@@ -138,7 +141,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
 
                     try
                     {
-                        return SerializeSettings(store.Update(patch ?? new UserSettings()));
+                        return SerializeSettings(store, store.Update(patch ?? new UserSettings()));
                     }
                     catch (Exception ex) when (ex is InvalidOperationException or IOException or UnauthorizedAccessException)
                     {
@@ -161,8 +164,8 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
         _userSettings ?? throw new JsonRpcException(
             JsonRpcErrorCodes.MethodNotFound, $"Method not available in this host: {method}");
 
-    private static JsonNode? SerializeSettings(UserSettings settings) =>
-        JsonSerializer.SerializeToNode(settings, JsonRpcSerializer.Options);
+    private static JsonNode? SerializeSettings(UserSettingsStore store, UserSettings settings) =>
+        JsonSerializer.SerializeToNode(new UserSettingsResponse(settings, store.FilePath), JsonRpcSerializer.Options);
 
     private static void ValidateFilter(string? filter)
     {

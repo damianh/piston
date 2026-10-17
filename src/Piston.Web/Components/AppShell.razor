@@ -20,7 +20,7 @@
     protected override async Task OnInitializedAsync()
     {
         Client.ConnectionStateChanged += OnConnectionStateChanged;
-        Client.SettingsLoaded += OnSettingsLoaded;
+        Client.SettingsChanged += OnSettingsChanged;
 
         var wsUrl = BuildWsUrl();
         await Client.StartAsync(wsUrl);
@@ -35,7 +35,7 @@
 
     private void OnConnectionStateChanged() => InvokeAsync(StateHasChanged);
 
-    private void OnSettingsLoaded() => InvokeAsync(() =>
+    private void OnSettingsChanged() => InvokeAsync(() =>
     {
         ViewState.ApplySettings(Client.Settings.Dashboard);
         StateHasChanged();
@@ -50,6 +50,6 @@
     public void Dispose()
     {
         Client.ConnectionStateChanged -= OnConnectionStateChanged;
-        Client.SettingsLoaded -= OnSettingsLoaded;
+        Client.SettingsChanged -= OnSettingsChanged;
     }
 }

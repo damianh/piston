@@ -31,13 +31,16 @@ public sealed class EngineClientService : IAsyncDisposable
     /// <summary>Raised when <see cref="ActivityLog"/> is replaced wholesale (history backfill on connect).</summary>
     public event Action? ActivityLogReset;
 
-    /// <summary>Raised when machine-wide user settings have been fetched from the daemon (on every connect).</summary>
-    public event Action? SettingsLoaded;
+    /// <summary>Raised when machine-wide user settings are fetched (on every connect) or saved.</summary>
+    public event Action? SettingsChanged;
 
     public StateSnapshotNotification? CurrentSnapshot { get; private set; }
 
     /// <summary>Machine-wide user settings as last read from or written to the daemon.</summary>
     public UserSettings Settings { get; private set; } = new();
+
+    /// <summary>The daemon's settings file; null until loaded or when the daemon has no settings store.</summary>
+    public string? SettingsFilePath { get; private set; }
     public bool IsConnected => _webSocket?.State == WebSocketState.Open;
     public bool IsConnecting { get; private set; }
 
@@ -338,39 +341,54 @@ public sealed class EngineClientService : IAsyncDisposable
 
     private async Task LoadSettingsAsync()
     {
+        UserSettingsResponse? response;
         try
         {
             var result = await SendRequestAsync(ProtocolMethods.SettingsGet).ConfigureAwait(false);
-            if (result is null)
-            {
-                return;
-            }
-
-            Settings = result.Deserialize<UserSettings>(JsonRpcSerializer.Options) ?? new UserSettings();
+            response = result?.Deserialize<UserSettingsResponse>(JsonRpcSerializer.Options);
         }
         catch
         {
             return;
         }
 
-        SettingsLoaded?.Invoke();
+        if (response is not null)
+        {
+            ApplySettings(response);
+        }
     }
 
-    /// <summary>Saves the non-null fields of <paramref name="patch"/> to the machine-wide user settings.</summary>
-    public async Task UpdateSettingsAsync(UserSettings patch)
+    /// <summary>
+    /// Saves the non-null fields of <paramref name="patch"/> to the machine-wide user settings.
+    /// Returns false when the daemon is unreachable or could not save them.
+    /// </summary>
+    public async Task<bool> UpdateSettingsAsync(UserSettings patch)
     {
+        UserSettingsResponse? response;
         try
         {
             var result = await SendRequestAsync(ProtocolMethods.SettingsUpdate, patch).ConfigureAwait(false);
-            if (result?.Deserialize<UserSettings>(JsonRpcSerializer.Options) is { } merged)
-            {
-                Settings = merged;
-            }
+            response = result?.Deserialize<UserSettingsResponse>(JsonRpcSerializer.Options);
         }
         catch
         {
-            // Best effort: the dashboard keeps working with its in-memory state.
+            return false;
         }
+
+        if (response is null)
+        {
+            return false;
+        }
+
+        ApplySettings(response);
+        return true;
+    }
+
+    private void ApplySettings(UserSettingsResponse response)
+    {
+        Settings = response.Settings;
+        SettingsFilePath = response.FilePath;
+        SettingsChanged?.Invoke();
     }
 
     public Task ResetAsync() => SendCommandAsync(ProtocolMethods.EngineReset);

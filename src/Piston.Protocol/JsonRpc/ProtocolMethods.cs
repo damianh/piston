@@ -61,9 +61,9 @@ public static class ProtocolMethods
     /// <summary>Stop the engine and exit the daemon process, releasing its pipe, ports and worktree ownership.</summary>
     public const string DaemonShutdown = "daemon/shutdown";
 
-    /// <summary>Read the machine-wide user settings.</summary>
+    /// <summary>Read the machine-wide user settings and the file they live in.</summary>
     public const string SettingsGet = "settings/get";
 
-    /// <summary>Merge the non-null fields of a partial settings object into the machine-wide user settings; returns the result.</summary>
+    /// <summary>Merge the non-null fields of a partial settings object into the machine-wide user settings; returns the result and the file path.</summary>
     public const string SettingsUpdate = "settings/update";
 }

@@ -12,6 +12,7 @@ builder.RootComponents.Add<App>("#app");
 builder.RootComponents.Add<HeadOutlet>("head::after");
 
 builder.Services.AddSingleton<EngineClientService>();
+builder.Services.AddSingleton<ThemeService>();
 
 // Tabs are re-created on switch; keep tree/selection UI state for the lifetime of the page.
 builder.Services.AddSingleton<ViewState>();

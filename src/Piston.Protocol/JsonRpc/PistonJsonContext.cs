@@ -65,6 +65,7 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(ActivityLogResponse))]
 [JsonSerializable(typeof(DaemonInfoResponse))]
 [JsonSerializable(typeof(UserSettings))]
+[JsonSerializable(typeof(UserSettingsResponse))]
 [JsonSerializable(typeof(DashboardSettings))]
 [JsonSerializable(typeof(DetailPanePosition))]
 

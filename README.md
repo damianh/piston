@@ -265,8 +265,10 @@ Machine-wide preferences shared by every daemon and dashboard of the current use
 live in `$PISTON_SETTINGS_FILE` if set (must be absolute), otherwise
 `Piston/settings.json` under the roaming application-data folder
 (`~/.config/Piston/settings.json` on Linux, `%APPDATA%\Piston\settings.json` on
-Windows). The dashboard writes it when a preference changes and reads it each
-time it connects; you can also edit it by hand. A missing file, invalid JSON or
+Windows). Change them from the gear (Settings) button in the dashboard header,
+which also shows the file path. The dashboard writes the file when a preference
+changes and reads it each time it connects; you can also edit it by hand. The
+color theme is a per-browser preference and is not stored in this file. A missing file, invalid JSON or
 invalid values fall back to defaults. Unknown keys are preserved on write.
 
 ```json

@@ -151,8 +151,9 @@ public sealed class UserSettingsStoreTests : IDisposable
             JsonNode.Parse("""{ "dashboard": { "detailPane": "bottom" } }"""),
             CancellationToken.None);
 
-        Assert.Equal("{}", initial?.ToJsonString());
-        Assert.Equal("bottom", updated?["dashboard"]?["detailPane"]?.GetValue<string>());
+        Assert.Equal("{}", initial?["settings"]?.ToJsonString());
+        Assert.Equal(SettingsPath, initial?["filePath"]?.GetValue<string>());
+        Assert.Equal("bottom", updated?["settings"]?["dashboard"]?["detailPane"]?.GetValue<string>());
     }
 
     [Fact]
