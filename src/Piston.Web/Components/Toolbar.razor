@@ -37,10 +37,11 @@
 
     <!-- Filter input -->
     <div class="flex items-center gap-1">
-        <span class="text-gray-600">filter:</span>
         <input type="text"
                class="bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-gray-200 text-xs w-48 focus:outline-none focus:border-blue-500"
-               placeholder="regex or substring..."
+               placeholder="filter…"
+               title="Filter tests by regex or substring"
+               aria-label="Filter tests"
                value="@Filter"
                @oninput="HandleFilterInput"
                @onkeydown="HandleFilterKeyDown" />
