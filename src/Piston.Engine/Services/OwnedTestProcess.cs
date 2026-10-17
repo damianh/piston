@@ -4,6 +4,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace Piston.Engine.Services;
@@ -18,9 +19,9 @@ internal sealed class OwnedTestProcess : IDisposable
     internal OwnedTestProcess(ProcessStartInfo startInfo)
     {
         var launcherHost = LauncherHostPath();
+        var fileName = ResolveTargetPath(startInfo.FileName);
         var jobName = OperatingSystem.IsWindows() ? $"piston-tests-{Guid.NewGuid():N}" : string.Empty;
         _job = OperatingSystem.IsWindows() ? CreateJob(jobName) : null;
-        var fileName = startInfo.FileName;
         var arguments = startInfo.Arguments;
         var argumentList = startInfo.ArgumentList.ToArray();
         startInfo.FileName = launcherHost;
@@ -48,6 +49,70 @@ internal sealed class OwnedTestProcess : IDisposable
         return File.Exists(host)
             ? host
             : throw new InvalidOperationException($"Cannot find the .NET host for Piston's runtime installation: {host}");
+    }
+
+    private static string ResolveTargetPath(string fileName)
+    {
+        if (Path.IsPathFullyQualified(fileName))
+        {
+            return fileName;
+        }
+
+        var executableDirectory = Path.GetDirectoryName(Environment.ProcessPath
+            ?? throw new InvalidOperationException("Cannot determine the original process executable."))!;
+        if (!OperatingSystem.IsWindows())
+        {
+            // Process.Start on Unix also searches the executable directory before PATH.
+            var candidate = Path.Combine(executableDirectory, fileName);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            candidate = Path.Combine(Environment.CurrentDirectory, fileName);
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            {
+                candidate = Path.Combine(Environment.CurrentDirectory, directory, fileName);
+                if (File.Exists(candidate) && access(candidate, 1) == 0)
+                {
+                    return candidate;
+                }
+            }
+
+            throw new Win32Exception(2, $"Cannot find the test executable: {fileName}");
+        }
+
+        // Match CreateProcess's search order in the original parent, not the dotnet launcher.
+        var windows = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        var searchPath = string.Join(Path.PathSeparator,
+            executableDirectory,
+            Environment.CurrentDirectory,
+            Environment.SystemDirectory,
+            Path.Combine(windows, "System"),
+            windows,
+            Environment.GetEnvironmentVariable("PATH"));
+        var path = new StringBuilder(260);
+        while (true)
+        {
+            var length = SearchPathW(searchPath, fileName, ".exe", (uint)path.Capacity, path, IntPtr.Zero);
+            if (length == 0)
+            {
+                throw new Win32Exception(Marshal.GetLastPInvokeError());
+            }
+
+            if (length < path.Capacity)
+            {
+                return path.ToString();
+            }
+
+            path.Capacity = checked((int)length + 1);
+        }
     }
 
     internal Process Process { get; }
@@ -221,4 +286,11 @@ internal sealed class OwnedTestProcess : IDisposable
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool QueryInformationJobObject(
         SafeFileHandle job, int informationClass, out JobAccounting information, uint length, out uint returnedLength);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern uint SearchPathW(
+        string path, string fileName, string extension, uint length, StringBuilder buffer, IntPtr filePart);
+
+    [DllImport("libc", SetLastError = true)]
+    private static extern int access(string path, int mode);
 }

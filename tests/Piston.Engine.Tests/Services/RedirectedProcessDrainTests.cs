@@ -4,6 +4,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using Piston.Engine.Services;
 using Xunit;
 
@@ -47,11 +48,96 @@ public sealed class RedirectedProcessDrainTests
         Assert.Equal(host, launcher.FileName);
         Assert.True(File.Exists(launcher.FileName));
         Assert.Equal(targetPath, launcher.Environment["PATH"]);
-        Assert.Equal("dotnet", child.FileName);
+        Assert.True(Path.IsPathFullyQualified(child.FileName));
+        Assert.True(File.Exists(child.FileName));
         Assert.Equal(targetArguments, child.Arguments);
         Assert.Equal(useArgumentList ? arguments : [], child.ArgumentList);
         Assert.True(child.CreateNoWindow);
         Assert.False(child.UseShellExecute);
+    }
+
+    [Theory]
+    [InlineData("", "\"\"")]
+    [InlineData("simple", "simple")]
+    [InlineData("with space", "\"with space\"")]
+    [InlineData("a\"b", "\"a\\\"b\"")]
+    [InlineData("C:\\path with spaces\\", "\"C:\\path with spaces\\\\\"")]
+    public void WindowsArgumentQuoting_PreservesArguments(string argument, string expected) =>
+        Assert.Equal(expected, ProcessHost.WindowsProcess.QuoteArgument(argument));
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Launcher_UsesTheTargetHostSelectedInTheOriginalParentContext(bool useArgumentList)
+    {
+        var root = Directory.CreateTempSubdirectory("piston target host ").FullName;
+        var extension = OperatingSystem.IsWindows() ? ".exe" : string.Empty;
+        var fixture = typeof(TestProcessHost.Program).Assembly.Location;
+        var fixtureDirectory = Path.GetDirectoryName(fixture)!;
+        var fixtureName = Path.GetFileNameWithoutExtension(fixture);
+        var coordinator = typeof(ExecutionLeaseHolder.Program).Assembly.Location;
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo(Path.Combine(
+                Path.GetDirectoryName(coordinator)!, Path.GetFileNameWithoutExtension(coordinator) + extension))
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            },
+        };
+        string[] arguments = ["", "simple", "with space", "a\"b", @"C:\path with spaces\"];
+        process.StartInfo.ArgumentList.Add(useArgumentList ? "run" : "run-raw");
+        process.StartInfo.ArgumentList.Add("dotnet");
+        if (useArgumentList)
+        {
+            process.StartInfo.ArgumentList.Add("--echo-arguments");
+            foreach (var argument in arguments)
+            {
+                process.StartInfo.ArgumentList.Add(argument);
+            }
+        }
+        else
+        {
+            process.StartInfo.ArgumentList.Add(
+                "--echo-arguments \"\" simple \"with space\" \"a\\\"b\" \"C:\\path with spaces\\\\\"");
+        }
+
+        process.StartInfo.Environment["PATH"] = root;
+        var started = false;
+        try
+        {
+            File.Copy(Path.Combine(fixtureDirectory, fixtureName + extension), Path.Combine(root, "dotnet" + extension));
+            foreach (var suffix in new[] { ".dll", ".deps.json", ".runtimeconfig.json" })
+            {
+                File.Copy(Path.Combine(fixtureDirectory, fixtureName + suffix), Path.Combine(root, fixtureName + suffix));
+            }
+
+            _ = process.Start();
+            started = true;
+            var stdout = process.StandardOutput.ReadToEndAsync(_ct);
+            var stderr = process.StandardError.ReadToEndAsync(_ct);
+            await process.WaitForExitAsync(_ct).WaitAsync(TimeSpan.FromSeconds(20), _ct);
+            var output = await stdout;
+            var error = await stderr;
+            TestContext.Current.TestOutputHelper?.WriteLine($"stdout: {output}{Environment.NewLine}stderr: {error}");
+
+            Assert.Equal(7, process.ExitCode);
+            Assert.Equal(arguments, JsonSerializer.Deserialize<string[]>(output));
+            Assert.Equal("stderr", error.Trim());
+        }
+        finally
+        {
+            if (started && !process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(CancellationToken.None)
+                    .WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+            }
+
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]

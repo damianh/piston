@@ -4,6 +4,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using Microsoft.Win32.SafeHandles;
 
 namespace Piston.TestProcessHost;
@@ -35,6 +36,18 @@ public static class Program
         {
             await Task.Delay(TimeSpan.FromMilliseconds(300));
             Console.WriteLine("stdout");
+            Console.Error.WriteLine("stderr");
+            return 7;
+        }
+
+        if (args[0] == "--echo-arguments")
+        {
+            if (OperatingSystem.IsWindows() && GetConsoleWindow() != IntPtr.Zero)
+            {
+                throw new InvalidOperationException("Test command unexpectedly has a console window.");
+            }
+
+            Console.WriteLine(JsonSerializer.Serialize(args[1..]));
             Console.Error.WriteLine("stderr");
             return 7;
         }
@@ -122,6 +135,9 @@ public static class Program
 
     [DllImport("libc", SetLastError = true)]
     private static extern int setsid();
+
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr GetConsoleWindow();
 
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeFileHandle CreateJobObjectW(IntPtr attributes, string? name);

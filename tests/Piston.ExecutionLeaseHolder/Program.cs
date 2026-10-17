@@ -1,7 +1,9 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Diagnostics;
 using Piston.Engine.Execution;
+using Piston.Engine.Services;
 
 namespace Piston.ExecutionLeaseHolder;
 
@@ -12,12 +14,57 @@ namespace Piston.ExecutionLeaseHolder;
 /// <item><c>own &lt;dir&gt; &lt;solution&gt;</c>: acquire ownership, print <c>READY</c>, wait.</item>
 /// <item><c>admit &lt;dir&gt; &lt;cpu&gt; &lt;memoryMb|0&gt;</c>: print <c>QUEUED n</c> while queued, <c>READY</c> once admitted, wait.</item>
 /// <item><c>probe &lt;dir&gt;</c>: prepare the directory and exit 0, or print the error and exit 2.</item>
+/// <item><c>run[-raw] &lt;command&gt; [args]</c>: launch an owned test command and forward its output and exit code.</item>
 /// </list>
 /// </summary>
 public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args[0] is "run" or "run-raw")
+        {
+            var start = new ProcessStartInfo(args[1])
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            };
+            if (args[0] == "run-raw")
+            {
+                start.Arguments = args[2];
+            }
+            else
+            {
+                foreach (var argument in args.Skip(2))
+                {
+                    start.ArgumentList.Add(argument);
+                }
+            }
+
+            using var owned = new OwnedTestProcess(start);
+            owned.Process.OutputDataReceived += (_, e) =>
+            {
+                if (e.Data is not null)
+                {
+                    Console.WriteLine(e.Data);
+                }
+            };
+            owned.Process.ErrorDataReceived += (_, e) =>
+            {
+                if (e.Data is not null)
+                {
+                    Console.Error.WriteLine(e.Data);
+                }
+            };
+            owned.Start();
+            owned.Process.BeginOutputReadLine();
+            owned.Process.BeginErrorReadLine();
+            _ = await RedirectedProcessDrain.WaitForExitAndDrainAsync(
+                owned, RedirectedProcessDrain.DefaultTimeout, CancellationToken.None, Console.Error.WriteLine);
+            return owned.Process.ExitCode;
+        }
+
         try
         {
             var directory = new ExecutionCoordinationDirectory(args[1]);

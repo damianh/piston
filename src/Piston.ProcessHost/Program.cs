@@ -26,7 +26,13 @@ public static class Program
             throw new Win32Exception(Marshal.GetLastPInvokeError());
         }
 
-        using var child = Process.Start(CreateChildStartInfo(args))
+        var start = CreateChildStartInfo(args);
+        if (OperatingSystem.IsWindows())
+        {
+            return WindowsProcess.Run(start);
+        }
+
+        using var child = Process.Start(start)
             ?? throw new InvalidOperationException("Could not start the test process.");
         await child.WaitForExitAsync().ConfigureAwait(false);
         return child.ExitCode;
