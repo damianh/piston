@@ -67,6 +67,30 @@ internal static class TestProcessRunner
         return dot >= 0 ? fqn[(dot + 1)..] : fqn;
     }
 
+    private const string TrxFilePrefix = "piston-results";
+
+    /// <summary>
+    /// The target framework in a TRX file name the logger derived from <see cref="TrxFilePrefix"/>
+    /// (<c>piston-results_net8.0_20261017140501.trx</c>), or <see langword="null"/> for any other name.
+    /// </summary>
+    internal static string? TargetFrameworkOfTrx(string trxPath)
+    {
+        var name = Path.GetFileNameWithoutExtension(trxPath);
+        if (!name.StartsWith(TrxFilePrefix + "_", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var rest = name[(TrxFilePrefix.Length + 1)..];
+        var end = rest.IndexOf('_', StringComparison.Ordinal);
+        return end > 0 ? rest[..end] : null;
+    }
+
+    private static IReadOnlyList<TestSuite> WithTargetFramework(IReadOnlyList<TestSuite> suites, string? targetFramework) =>
+        targetFramework is null
+            ? suites
+            : [.. suites.Select(s => s with { Tests = [.. s.Tests.Select(t => t with { TargetFramework = targetFramework })] })];
+
     internal static async Task<ProjectTestResult> RunAsync(
         string projectPath,
         string? filter,
@@ -80,8 +104,10 @@ internal static class TestProcessRunner
 
         try
         {
+            // A prefix, not a fixed file name: the logger then writes one file per target framework
+            // (<prefix>_<tfm>_<timestamp>.trx) instead of each framework overwriting the last.
             var args = $"test \"{projectPath}\" --no-build --verbosity normal " +
-                       $"--logger \"trx;LogFileName=piston-results.trx\" " +
+                       $"--logger \"trx;LogFilePrefix={TrxFilePrefix}\" " +
                        $"--results-directory \"{resultsDir}\"";
 
             if (collectCoverage)
@@ -215,10 +241,18 @@ internal static class TestProcessRunner
             var trxFiles = Directory.GetFiles(resultsDir, "*.trx", SearchOption.AllDirectories);
             log?.Write("VSTestRunner", $"TRX files found: {trxFiles.Length}");
 
+            // A multi-targeted project writes one TRX file per framework; only then are results told
+            // apart by framework.
+            var multiTargeted = trxFiles.Select(TargetFrameworkOfTrx).OfType<string>()
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1;
             var suites = new List<TestSuite>();
             foreach (var trx in trxFiles)
             {
-                try { suites.AddRange(parser.Parse(trx)); }
+                try
+                {
+                    var parsed = parser.Parse(trx);
+                    suites.AddRange(multiTargeted ? WithTargetFramework(parsed, TargetFrameworkOfTrx(trx)) : parsed);
+                }
                 catch { /* malformed TRX — skip */ }
             }
 

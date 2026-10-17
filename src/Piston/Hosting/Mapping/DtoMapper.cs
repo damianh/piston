@@ -78,7 +78,8 @@ public static class DtoMapper
             result.Output,
             result.ErrorMessage,
             result.StackTrace,
-            result.Source
+            result.Source,
+            result.TargetFramework
         );
 
     public static TestSuiteDto ToDto(this TestSuite suite) =>

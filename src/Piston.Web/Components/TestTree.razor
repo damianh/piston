@@ -15,7 +15,7 @@
             {
                 <TestTreeNode Node="node"
                               Depth="0"
-                              SelectedFqn="@SelectedFqn"
+                              SelectedKey="@SelectedKey"
                               PinnedFqns="@PinnedFqns"
                               OnSelectTest="@OnSelectTest"
                               OnTogglePin="@OnTogglePin"
@@ -27,7 +27,7 @@
 
 @code {
     [Parameter] public List<TestNode> Nodes { get; set; } = [];
-    [Parameter] public string? SelectedFqn { get; set; }
+    [Parameter] public string? SelectedKey { get; set; }
     [Parameter] public HashSet<string> PinnedFqns { get; set; } = [];
     [Parameter] public EventCallback<TestResultDto> OnSelectTest { get; set; }
     [Parameter] public EventCallback<string> OnTogglePin { get; set; }

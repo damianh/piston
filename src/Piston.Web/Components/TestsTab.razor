@@ -29,7 +29,7 @@
          data-orientation="@(_isBottom ? "bottom" : "right")" @ref="_splitContainer">
         <div class="flex flex-col min-w-0 min-h-0 overflow-hidden" style="flex: 0 0 @(_splitPercentCss)%">
             <TestTree Nodes="@_treeNodes"
-                      SelectedFqn="@_viewState.SelectedTestFqn"
+                      SelectedKey="@_viewState.SelectedTestKey"
                       PinnedFqns="@_viewState.PinnedTestFqns"
                       OnSelectTest="SelectTest"
                       OnTogglePin="TogglePin"
@@ -146,17 +146,23 @@
             .SelectMany(s => s.Tests)
             .Count(t => t.Status == TestStatusDto.Failed);
 
-        if (_viewState.SelectedTestFqn is not null)
+        if (_viewState.SelectedTestKey is not null)
         {
-            _selectedTest = _displayedSuites
-                .SelectMany(s => s.Tests)
-                .FirstOrDefault(t => t.FullyQualifiedName == _viewState.SelectedTestFqn);
+            // A live result gains its framework when final results arrive, so fall back to the name.
+            var tests = _displayedSuites.SelectMany(s => s.Tests).ToList();
+            _selectedTest = tests.FirstOrDefault(t => t.Key == _viewState.SelectedTestKey)
+                ?? tests.FirstOrDefault(t => t.FullyQualifiedName == _viewState.SelectedTestKey
+                    || _viewState.SelectedTestKey.StartsWith(t.FullyQualifiedName + " [", StringComparison.Ordinal));
+            if (_selectedTest is not null)
+            {
+                _viewState.SelectedTestKey = _selectedTest.Key;
+            }
         }
     }
 
     private void SelectTest(TestResultDto test)
     {
-        _viewState.SelectedTestFqn = test.FullyQualifiedName;
+        _viewState.SelectedTestKey = test.Key;
         _selectedTest = test;
         StateHasChanged();
     }

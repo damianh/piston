@@ -229,7 +229,7 @@ internal static partial class MtpTestProcessRunner
     {
         lock (lockObj)
         {
-            liveResults[parsed.FullyQualifiedName] = parsed;
+            liveResults[parsed.Key] = parsed;
         }
     }
 
@@ -248,16 +248,23 @@ internal static partial class MtpTestProcessRunner
             return [];
         }
 
+        // Results are only told apart by framework when the project ran under more than one.
+        var multiTargeted = snapshot.Select(kvp => kvp.Value.TargetFramework).OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1;
+
         var results = snapshot
             .Select(kvp => new TestResult(
-                FullyQualifiedName: kvp.Key,
-                DisplayName: TestProcessRunner.DisplayNameOf(kvp.Key),
+                FullyQualifiedName: kvp.Value.FullyQualifiedName,
+                DisplayName: TestProcessRunner.DisplayNameOf(kvp.Value.FullyQualifiedName),
                 Status: kvp.Value.Status,
                 Duration: kvp.Value.Duration,
                 Output: kvp.Value.Output,
                 ErrorMessage: kvp.Value.ErrorMessage,
                 StackTrace: kvp.Value.StackTrace,
-                Source: kvp.Value.Source))
+                Source: kvp.Value.Source)
+            {
+                TargetFramework = multiTargeted ? kvp.Value.TargetFramework : null,
+            })
             .ToList();
 
         return [new TestSuite("…", results, DateTimeOffset.UtcNow, TimeSpan.Zero)];

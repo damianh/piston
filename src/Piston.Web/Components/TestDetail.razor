@@ -33,6 +33,10 @@ else
                 <span class="text-gray-200 font-semibold break-all">@Test.DisplayName</span>
             </div>
             <div class="text-gray-600 break-all">@Test.FullyQualifiedName</div>
+            @if (Test.TargetFramework is { } framework)
+            {
+                <div class="text-gray-500 mt-1">Framework: <span class="font-mono">@framework</span></div>
+            }
             @if (Test.DurationMs > 0)
             {
                 <div class="text-gray-500 mt-1">Duration: @FormatDuration(Test.DurationMs)</div>

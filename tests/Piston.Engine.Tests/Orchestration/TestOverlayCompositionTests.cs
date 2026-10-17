@@ -197,4 +197,39 @@ public sealed class TestOverlayCompositionTests
         _ = tracker.ApplyCollectorEvent(new LiveTestEvent(displayName, status, fqn));
         return tracker.Snapshot().Single().Tests.Single();
     }
+
+    private static TestResult Test(string fqn, string framework, TestStatus status) =>
+        Test(fqn, status) with { TargetFramework = framework };
+
+    [Fact]
+    public void MultiTargeted_LiveResultWithoutFramework_StandsForEveryFrameworkRow()
+    {
+        var overlay = PistonOrchestrator.ComposeTestOverlay(
+            [Suite("A.Tests", Test("A.One", "net8.0", TestStatus.Passed), Test("A.One", "net10.0", TestStatus.Failed))],
+            new Dictionary<string, IReadOnlyList<TestResult>> { [ProjA] = [Test("A.One")] },
+            new Dictionary<string, IReadOnlyList<TestSuite>> { [ProjA] = [Suite("A.Tests", Test("A.One", TestStatus.Running))] },
+            filtered: false);
+
+        var tests = Assert.Single(overlay).Tests;
+        Assert.Equal(["A.One [net8.0]", "A.One [net10.0]"], tests.Select(t => t.ResultKey));
+        Assert.All(tests, t => Assert.Equal(TestStatus.Running, t.Status));
+    }
+
+    [Fact]
+    public void MultiTargeted_FrameworkResultsReplaceTheDiscoveredPlaceholder()
+    {
+        var overlay = PistonOrchestrator.ComposeTestOverlay(
+            [],
+            new Dictionary<string, IReadOnlyList<TestResult>> { [ProjA] = [Test("A.One"), Test("A.Two")] },
+            new Dictionary<string, IReadOnlyList<TestSuite>>
+            {
+                [ProjA] = [Suite("A.Tests", Test("A.One", "net8.0", TestStatus.Passed), Test("A.One", "net10.0", TestStatus.Failed))],
+            },
+            filtered: false);
+
+        var tests = Assert.Single(overlay).Tests;
+        Assert.Equal(["A.Two", "A.One [net8.0]", "A.One [net10.0]"], tests.Select(t => t.ResultKey));
+        Assert.Equal(TestStatus.NotRun, tests[0].Status);
+        Assert.Equal(TestStatus.Failed, tests[2].Status);
+    }
 }

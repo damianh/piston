@@ -164,7 +164,7 @@ Every run, including startup and file-change runs, gets a record in the
 - the scope (`Full` or `Selective`), `isFiltered` and the effective filter;
 - the run context: solution, test projects, build targets, configuration, SDK, runtime and OS;
 - run-local `build` output (status, raw MSBuild errors/warnings including diagnostic IDs and locations, duration), or null if the build did not return;
-- per-project outcomes, duplicate test IDs, and every test's fully qualified name and status.
+- per-project outcomes, duplicate test IDs, and every test's fully qualified name and status. A multi-targeted project reports each test once per framework, with a `targetFramework` field (e.g. `net8.0`); test names in failure lists then carry the framework, as in `Ns.Class.Method [net8.0]`.
 
 The source fingerprint (`piston-source-v2`) is a SHA-256 over every file under the solution directory except `bin`, `obj`, `TestResults`, `.git`, `.vs`, `.idea`, `.piston` and `node_modules`. It also covers the nearest ancestor `global.json`, `Directory.Build.*`, `Directory.Packages.props` and `NuGet.config`. Paths and contents are length-prefixed (unsigned 64-bit big-endian byte lengths), so embedded NUL bytes cannot collide with file boundaries. Capture is attempted before and after every started run, including cancellation and faults; unavailable fingerprints are reported as `Unknown`. Queued requests cancelled before starting have no fingerprints. A run is `Stale` if the fingerprint changed or the file watcher saw a change during the run; a watcher change also cancels the run.
 

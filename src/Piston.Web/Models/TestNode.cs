@@ -21,6 +21,9 @@ public sealed class TestNode
     public List<TestNode> Children { get; } = [];
     public bool IsExpanded { get; set; } = true;
     public bool IsStale { get; init; }
+
+    /// <summary>Target framework shown beside a test leaf in views without a framework level.</summary>
+    public string? Framework { get; init; }
 }
 
 public enum TestNodeKind

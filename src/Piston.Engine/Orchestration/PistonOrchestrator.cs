@@ -1198,7 +1198,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
             var duplicates = newSuites
                 .SelectMany(s => s.Tests)
-                .GroupBy(t => t.FullyQualifiedName, StringComparer.Ordinal)
+                .GroupBy(t => t.ResultKey, StringComparer.Ordinal)
                 .Where(g => g.Count() > 1)
                 .Select(g => g.Key)
                 .Order(StringComparer.Ordinal)
@@ -1399,7 +1399,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
         var failures = allTests
             .Where(t => t.Status == TestStatus.Failed)
-            .Select(t => new TestFailure(t.FullyQualifiedName, t.ErrorMessage))
+            .Select(t => new TestFailure(t.ResultKey, t.ErrorMessage))
             .ToList();
 
         _activitySink.Emit(new TestRunCompletedActivityEvent(
@@ -1477,8 +1477,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
     /// <summary>
     /// Merges new suite results from a selective run into the existing full suite list.
-    /// Tests are matched by fully-qualified name: re-run tests replace their previous results,
-    /// while tests that were not re-run are preserved. Suite names are not used for matching
+    /// Tests are matched by <see cref="TestResult.ResultKey"/> (name and target framework): re-run tests
+    /// replace their previous results, while tests that were not re-run are preserved. A result without a
+    /// known framework matches the test under any framework. Suite names are not used for matching
     /// because they are not guaranteed to identify a project (e.g. TRX run names).
     /// </summary>
     internal static IReadOnlyList<TestSuite> MergeTestSuites(
@@ -1495,13 +1496,21 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             return newResults;
         }
 
-        var rerun = newResults
-            .SelectMany(s => s.Tests)
+        var rerunTests = newResults.SelectMany(s => s.Tests).ToList();
+        var rerunKeys = rerunTests.Select(t => t.ResultKey).ToHashSet(StringComparer.Ordinal);
+        var rerunNames = rerunTests.Select(t => t.FullyQualifiedName).ToHashSet(StringComparer.Ordinal);
+        var rerunAnyFramework = rerunTests
+            .Where(t => t.TargetFramework is null)
             .Select(t => t.FullyQualifiedName)
             .ToHashSet(StringComparer.Ordinal);
 
+        bool Rerun(TestResult t) =>
+            rerunKeys.Contains(t.ResultKey)
+            || rerunAnyFramework.Contains(t.FullyQualifiedName)
+            || (t.TargetFramework is null && rerunNames.Contains(t.FullyQualifiedName));
+
         var merged = existing
-            .Select(s => s with { Tests = s.Tests.Where(t => !rerun.Contains(t.FullyQualifiedName)).ToList() })
+            .Select(s => s with { Tests = s.Tests.Where(t => !Rerun(t)).ToList() })
             .Where(s => s.Tests.Count > 0)
             .ToList();
 
@@ -1536,11 +1545,13 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         out int expectedTests,
         out int completedTests)
     {
-        // Duplicate identities are tolerated here (last wins) and reported on the run record.
-        var liveByFqn = new Dictionary<string, TestResult>(StringComparer.Ordinal);
+        // Duplicate identities are tolerated here (last wins) and reported on the run record. Live results
+        // are keyed by name and framework; one without a framework (VSTest console and collector progress)
+        // stands for the test under every framework until the final results tell them apart.
+        var liveByKey = new Dictionary<string, TestResult>(StringComparer.Ordinal);
         foreach (var test in liveByProject.Values.SelectMany(suites => suites).SelectMany(s => s.Tests))
         {
-            liveByFqn[test.FullyQualifiedName] = test;
+            liveByKey[test.ResultKey] = test;
         }
 
         var selected = filtered ? new HashSet<string>(StringComparer.Ordinal) : null;
@@ -1573,8 +1584,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
         TestResult Resolve(TestResult test)
         {
-            var resolved = liveByFqn.TryGetValue(test.FullyQualifiedName, out var live)
-                ? live
+            var resolved = liveByKey.TryGetValue(test.ResultKey, out var live)
+                || (test.TargetFramework is not null && liveByKey.TryGetValue(test.FullyQualifiedName, out live))
+                ? live with { TargetFramework = test.TargetFramework ?? live.TargetFramework }
                 : selected is not null && !selected.Contains(test.FullyQualifiedName)
                     ? null
                     : test with { Status = TestStatus.NotRun };
@@ -1596,13 +1608,18 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         var suites = new List<(string Name, DateTimeOffset Timestamp, TimeSpan Duration, List<TestResult> Tests)>();
         var suiteIndex = new Dictionary<string, int>(StringComparer.Ordinal);
         var placed = new HashSet<string>(StringComparer.Ordinal);
+        var placedNames = new HashSet<string>(StringComparer.Ordinal);
 
         void Add(string suiteName, TestResult test)
         {
-            if (!placed.Add(test.FullyQualifiedName))
+            // A result without a framework is already shown when the test is, under any framework.
+            if (test.TargetFramework is null ? placedNames.Contains(test.FullyQualifiedName) : !placed.Add(test.ResultKey))
             {
                 return;
             }
+
+            _ = placed.Add(test.ResultKey);
+            _ = placedNames.Add(test.FullyQualifiedName);
 
             if (!suiteIndex.TryGetValue(suiteName, out var index))
             {
@@ -1628,9 +1645,18 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             }
         }
 
+        // Discovery does not say which framework a test is listed for; once results for a test arrive
+        // per framework, they stand in for its placeholder.
+        var namesWithFrameworkResults = liveByKey.Values
+            .Where(t => t.TargetFramework is not null)
+            .Select(t => t.FullyQualifiedName)
+            .ToHashSet(StringComparer.Ordinal);
         foreach (var (suiteName, test) in placeholders)
         {
-            Add(suiteName, test);
+            if (!namesWithFrameworkResults.Contains(test.FullyQualifiedName))
+            {
+                Add(suiteName, test);
+            }
         }
 
         foreach (var (projectPath, projectSuites) in liveByProject)

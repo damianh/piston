@@ -33,7 +33,7 @@ public sealed class ViewState
     public string? Filter { get; set; }
 
     // ── Selected test ──
-    public string? SelectedTestFqn { get; set; }
+    public string? SelectedTestKey { get; set; }
 
     // ── Failure navigation ──
     public int CurrentFailureIndex { get; set; } = -1;

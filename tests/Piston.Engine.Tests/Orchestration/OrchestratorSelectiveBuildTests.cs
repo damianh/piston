@@ -61,6 +61,31 @@ public sealed class OrchestratorSelectiveBuildTests
         Assert.Contains(merged, t => t.FullyQualifiedName == "Other.T.C" && t.Status == TestStatus.Passed);
     }
 
+    [Fact]
+    public void MergeTestSuites_FrameworkResultReplacesOnlyThatFramework()
+    {
+        static TestResult T(string fqn, string? framework, TestStatus status) =>
+            new(fqn, fqn, status, TimeSpan.Zero, null, null, null, null) { TargetFramework = framework };
+
+        var existing = new[]
+        {
+            new TestSuite("Lib.Tests", [T("Lib.T.A", "net8.0", TestStatus.Passed), T("Lib.T.A", "net10.0", TestStatus.Passed)], DateTimeOffset.UtcNow, TimeSpan.Zero),
+        };
+
+        var oneFramework = PistonOrchestrator.MergeTestSuites(
+            existing,
+            [new TestSuite("Lib.Tests", [T("Lib.T.A", "net10.0", TestStatus.Failed)], DateTimeOffset.UtcNow, TimeSpan.Zero)])
+            .SelectMany(s => s.Tests).ToList();
+        Assert.Equal(TestStatus.Passed, Assert.Single(oneFramework, t => t.TargetFramework == "net8.0").Status);
+        Assert.Equal(TestStatus.Failed, Assert.Single(oneFramework, t => t.TargetFramework == "net10.0").Status);
+
+        var anyFramework = PistonOrchestrator.MergeTestSuites(
+            existing,
+            [new TestSuite("Lib.Tests", [T("Lib.T.A", null, TestStatus.Failed)], DateTimeOffset.UtcNow, TimeSpan.Zero)])
+            .SelectMany(s => s.Tests).ToList();
+        Assert.Equal(TestStatus.Failed, Assert.Single(anyFramework).Status);
+    }
+
     [Theory]
     [InlineData(new[] { Lib }, new[] { LibTests }, new[] { Lib, LibTests })]
     [InlineData(new string[0], new[] { LibTests }, new[] { LibTests })]

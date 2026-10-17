@@ -36,9 +36,9 @@ internal sealed class MtpStdoutParser
         @"^\s*(passed|failed|skipped)\s+(.+?)\s+\((.+?)\)\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
-    // Matches: "  from C:\path\to.dll (net10.0|x64)"
+    // Matches: "  from C:\path\to.dll (net10.0|x64)"; the parenthesised part starts with the target framework.
     private static readonly Regex SourceLineRegex = new(
-        @"^\s+from\s+(.+?)\s+\(.+?\)\s*$",
+        @"^\s+from\s+(.+?)\s+\(([^|)]+).*?\)\s*$",
         RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     // Matches stack trace line like "  at Ns.Class.Method() in file.cs:line 42"
@@ -55,6 +55,7 @@ internal sealed class MtpStdoutParser
     private TestStatus _pendingStatus;
     private TimeSpan _pendingDuration;
     private string? _pendingSource;
+    private string? _pendingTargetFramework;
     private readonly List<string> _pendingExtraLines = [];
     private readonly List<string> _pendingStdOut = [];
     private readonly List<string> _pendingStdErr = [];
@@ -91,6 +92,7 @@ internal sealed class MtpStdoutParser
             _pendingStatus = ParseStatus(statusMatch.Groups[1].Value);
             _pendingDuration = ParseDuration(statusMatch.Groups[3].Value);
             _pendingSource = null;
+            _pendingTargetFramework = null;
 
             return completed;
         }
@@ -114,6 +116,7 @@ internal sealed class MtpStdoutParser
         if (sourceMatch.Success)
         {
             _pendingSource = sourceMatch.Groups[1].Value.Trim();
+            _pendingTargetFramework = sourceMatch.Groups[2].Value.Trim();
             return null;
         }
 
@@ -172,7 +175,8 @@ internal sealed class MtpStdoutParser
             Source: _pendingSource,
             ErrorMessage: errorMessage,
             StackTrace: stackTrace,
-            Output: JoinOutput(_pendingStdOut, _pendingStdErr));
+            Output: JoinOutput(_pendingStdOut, _pendingStdErr),
+            TargetFramework: _pendingTargetFramework);
 
         _pendingFqn = null;
         _pendingExtraLines.Clear();
@@ -250,4 +254,9 @@ internal sealed record MtpParsedResult(
     string? Source,
     string? ErrorMessage,
     string? StackTrace,
-    string? Output = null);
+    string? Output = null,
+    string? TargetFramework = null)
+{
+    /// <summary>Identifies the result within one run: a multi-targeted project reports each test once per framework.</summary>
+    public string Key => TargetFramework is null ? FullyQualifiedName : $"{FullyQualifiedName} [{TargetFramework}]";
+}

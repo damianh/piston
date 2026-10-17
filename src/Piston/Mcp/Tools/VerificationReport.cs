@@ -61,7 +61,7 @@ internal static class VerificationReport
         if (result.Verdict is VerificationVerdict.TestsFailed)
         {
             AppendList(sb, "Failed tests", tests.Where(t => t.Status == TestStatus.Failed).ToList(),
-                t => t.ErrorMessage is { } message ? $"{t.FullyQualifiedName}: {Cap(message)}" : t.FullyQualifiedName);
+                t => t.ErrorMessage is { } message ? $"{t.ResultKey}: {Cap(message)}" : t.ResultKey);
         }
 
         if (result.Verdict is VerificationVerdict.Incomplete)
@@ -71,7 +71,7 @@ internal static class VerificationReport
                 p => $"{p.ProjectPath}: {(p.Status == ProjectRunStatus.Completed ? "no test results" : p.Status.ToString())}");
             AppendList(sb, "Tests without complete results",
                 tests.Where(t => t.Status is TestStatus.NotRun or TestStatus.Running).ToList(),
-                t => $"{t.FullyQualifiedName}: {t.Status}");
+                t => $"{t.ResultKey}: {t.Status}");
             AppendList(sb, "Duplicate test IDs", run.DuplicateTestIds, id => id);
         }
 

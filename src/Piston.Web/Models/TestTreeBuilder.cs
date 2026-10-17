@@ -108,68 +108,38 @@ public static class TestTreeBuilder
                 IsExpanded = viewState.IsNodeExpanded($"suite:{suite.Name}"),
             };
 
-            var byNamespace = visibleTests
-                .GroupBy(t => NamespaceKey(t.FullyQualifiedName))
-                .OrderBy(g => g.Key);
+            // A multi-targeted project runs each test once per framework: group by framework first, so a
+            // failure under one framework stays visible when the tree is collapsed.
+            var byFramework = visibleTests
+                .Where(t => t.TargetFramework is not null)
+                .GroupBy(t => t.TargetFramework!, StringComparer.OrdinalIgnoreCase)
+                .OrderBy(g => g.Key, FrameworkComparer.Instance)
+                .ToList();
 
-            foreach (var nsGroup in byNamespace)
+            if (byFramework.Count == 0)
             {
-                var nsTests = nsGroup.ToList();
-                var classGroups = nsGroup
-                    .GroupBy(t => ClassKey(t.FullyQualifiedName))
-                    .OrderBy(g => g.Key)
-                    .Select(g => (Key: g.Key, Tests: g.ToList()));
-
-                if (string.IsNullOrEmpty(nsGroup.Key))
+                AddNamespaceTree(suiteNode.Children, visibleTests, suite, suite.Name, viewState, lastFileChangeTime);
+            }
+            else
+            {
+                foreach (var frameworkGroup in byFramework)
                 {
-                    foreach (var (classKey, classTests) in classGroups)
+                    var scope = $"{suite.Name}|{frameworkGroup.Key}";
+                    var frameworkNode = new TestNode
                     {
-                        // Dot-less names (e.g. a custom DisplayName) have no class to group under.
-                        if (classTests.All(t => t.FullyQualifiedName == classKey))
-                        {
-                            AddTestLeaves(suiteNode.Children, classTests, suite, viewState, lastFileChangeTime);
-                            continue;
-                        }
-
-                        var classNode = new TestNode
-                        {
-                            Label = SimpleSegment(classKey),
-                            Kind = TestNodeKind.Group,
-                            GroupKey = classKey,
-                            ExpansionKey = $"class:{suite.Name}|{classKey}",
-                            IsExpanded = viewState.IsNodeExpanded($"class:{suite.Name}|{classKey}"),
-                        };
-                        AddTestLeaves(classNode.Children, classTests, suite, viewState, lastFileChangeTime);
-                        suiteNode.Children.Add(classNode);
-                    }
-                }
-                else
-                {
-                    var nsNode = new TestNode
-                    {
-                        Label = SimpleSegment(nsGroup.Key),
+                        Label = frameworkGroup.Key,
                         Kind = TestNodeKind.Group,
-                        GroupKey = nsGroup.Key,
-                        ExpansionKey = $"ns:{suite.Name}|{nsGroup.Key}",
-                        IsExpanded = viewState.IsNodeExpanded($"ns:{suite.Name}|{nsGroup.Key}"),
+                        GroupKey = frameworkGroup.Key,
+                        ExpansionKey = $"tfm:{scope}",
+                        IsExpanded = viewState.IsNodeExpanded($"tfm:{scope}"),
                     };
-
-                    foreach (var (classKey, classTests) in classGroups)
-                    {
-                        var classNode = new TestNode
-                        {
-                            Label = SimpleSegment(classKey),
-                            Kind = TestNodeKind.Group,
-                            GroupKey = classKey,
-                            ExpansionKey = $"class:{suite.Name}|{classKey}",
-                            IsExpanded = viewState.IsNodeExpanded($"class:{suite.Name}|{classKey}"),
-                        };
-                        AddTestLeaves(classNode.Children, classTests, suite, viewState, lastFileChangeTime);
-                        nsNode.Children.Add(classNode);
-                    }
-
-                    suiteNode.Children.Add(nsNode);
+                    AddNamespaceTree(frameworkNode.Children, [.. frameworkGroup], suite, scope, viewState, lastFileChangeTime);
+                    suiteNode.Children.Add(frameworkNode);
                 }
+
+                // Tests discovered but not yet run have no framework until their results arrive.
+                AddNamespaceTree(
+                    suiteNode.Children, [.. visibleTests.Where(t => t.TargetFramework is null)], suite, suite.Name, viewState, lastFileChangeTime);
             }
 
             roots.Add(suiteNode);
@@ -178,6 +148,115 @@ public static class TestTreeBuilder
         if (!anyVisible)
         {
             roots.Add(new TestNode { Label = "No tests match current filters", Kind = TestNodeKind.Group, GroupKey = "" });
+        }
+    }
+
+    /// <summary>Adds namespace and class nodes for <paramref name="tests"/>; <paramref name="scope"/> keeps their expansion keys unique.</summary>
+    private static void AddNamespaceTree(
+        List<TestNode> parent,
+        IReadOnlyList<TestResultDto> tests,
+        TestSuiteDto suite,
+        string scope,
+        ViewState viewState,
+        DateTimeOffset? lastFileChangeTime)
+    {
+        var byNamespace = tests
+            .GroupBy(t => NamespaceKey(t.FullyQualifiedName))
+            .OrderBy(g => g.Key);
+
+        foreach (var nsGroup in byNamespace)
+        {
+            var classGroups = nsGroup
+                .GroupBy(t => ClassKey(t.FullyQualifiedName))
+                .OrderBy(g => g.Key)
+                .Select(g => (Key: g.Key, Tests: g.ToList()));
+
+            if (string.IsNullOrEmpty(nsGroup.Key))
+            {
+                foreach (var (classKey, classTests) in classGroups)
+                {
+                    // Dot-less names (e.g. a custom DisplayName) have no class to group under.
+                    if (classTests.All(t => t.FullyQualifiedName == classKey))
+                    {
+                        AddTestLeaves(parent, classTests, suite, viewState, lastFileChangeTime);
+                        continue;
+                    }
+
+                    parent.Add(ClassNode(classKey, classTests, suite, scope, viewState, lastFileChangeTime));
+                }
+            }
+            else
+            {
+                var nsNode = new TestNode
+                {
+                    Label = SimpleSegment(nsGroup.Key),
+                    Kind = TestNodeKind.Group,
+                    GroupKey = nsGroup.Key,
+                    ExpansionKey = $"ns:{scope}|{nsGroup.Key}",
+                    IsExpanded = viewState.IsNodeExpanded($"ns:{scope}|{nsGroup.Key}"),
+                };
+
+                foreach (var (classKey, classTests) in classGroups)
+                {
+                    nsNode.Children.Add(ClassNode(classKey, classTests, suite, scope, viewState, lastFileChangeTime));
+                }
+
+                parent.Add(nsNode);
+            }
+        }
+    }
+
+    private static TestNode ClassNode(
+        string classKey,
+        List<TestResultDto> classTests,
+        TestSuiteDto suite,
+        string scope,
+        ViewState viewState,
+        DateTimeOffset? lastFileChangeTime)
+    {
+        var classNode = new TestNode
+        {
+            Label = SimpleSegment(classKey),
+            Kind = TestNodeKind.Group,
+            GroupKey = classKey,
+            ExpansionKey = $"class:{scope}|{classKey}",
+            IsExpanded = viewState.IsNodeExpanded($"class:{scope}|{classKey}"),
+        };
+        AddTestLeaves(classNode.Children, classTests, suite, viewState, lastFileChangeTime);
+        return classNode;
+    }
+
+    /// <summary>Orders target frameworks by version where they parse (net8.0 before net10.0), else by name.</summary>
+    private sealed class FrameworkComparer : IComparer<string?>
+    {
+        public static readonly FrameworkComparer Instance = new();
+
+        public int Compare(string? x, string? y)
+        {
+            var (xFamily, xVersion) = Parse(x ?? string.Empty);
+            var (yFamily, yVersion) = Parse(y ?? string.Empty);
+            var byFamily = StringComparer.OrdinalIgnoreCase.Compare(xFamily, yFamily);
+            if (byFamily != 0)
+            {
+                return byFamily;
+            }
+
+            var byVersion = Comparer<Version?>.Default.Compare(xVersion, yVersion);
+            return byVersion != 0 ? byVersion : StringComparer.OrdinalIgnoreCase.Compare(x, y);
+        }
+
+        // "net8.0-windows" -> ("net", 8.0); "netstandard2.0" -> ("netstandard", 2.0); "net481" -> ("net", 481).
+        private static (string Family, Version? Version) Parse(string tfm)
+        {
+            var head = tfm.Split('-')[0];
+            var digit = head.IndexOfAny("0123456789".ToCharArray());
+            if (digit < 0)
+            {
+                return (head, null);
+            }
+
+            var number = head[digit..];
+            return (head[..digit], Version.TryParse(number.Contains('.') ? number : number + ".0", out var v) ? v : null);
         }
     }
 
@@ -232,7 +311,9 @@ public static class TestTreeBuilder
                 IsExpanded = viewState.IsNodeExpanded($"status:{label}"),
             };
 
-            foreach (var (suite, test) in grouped.OrderBy(x => ClassMethodLabel(x.Test.FullyQualifiedName), StringComparer.Ordinal))
+            foreach (var (suite, test) in grouped
+                .OrderBy(x => ClassMethodLabel(x.Test.FullyQualifiedName), StringComparer.Ordinal)
+                .ThenBy(x => x.Test.TargetFramework, FrameworkComparer.Instance))
             {
                 var isStale = IsStale(suite, lastFileChangeTime);
                 groupNode.Children.Add(new TestNode
@@ -241,6 +322,7 @@ public static class TestTreeBuilder
                     Kind = TestNodeKind.Test,
                     Test = test,
                     IsStale = isStale,
+                    Framework = test.TargetFramework,
                 });
             }
 
@@ -262,6 +344,7 @@ public static class TestTreeBuilder
             .Where(x => matcher is null || matcher(x.Test.FullyQualifiedName))
             .Where(x => IsStatusVisible(x.Test.Status, viewState))
             .OrderBy(x => ClassMethodLabel(x.Test.FullyQualifiedName), StringComparer.Ordinal)
+            .ThenBy(x => x.Test.TargetFramework, FrameworkComparer.Instance)
             .ToList();
 
         if (allTests.Count == 0)
@@ -279,6 +362,7 @@ public static class TestTreeBuilder
                 Kind = TestNodeKind.Test,
                 Test = test,
                 IsStale = isStale,
+                Framework = test.TargetFramework,
             });
         }
     }
@@ -298,6 +382,7 @@ public static class TestTreeBuilder
             .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
             .Where(x => viewState.PinnedTestFqns.Contains(x.Test.FullyQualifiedName))
             .OrderBy(x => ClassMethodLabel(x.Test.FullyQualifiedName), StringComparer.Ordinal)
+            .ThenBy(x => x.Test.TargetFramework, FrameworkComparer.Instance)
             .ToList();
 
         if (pinnedTests.Count == 0)
@@ -323,6 +408,7 @@ public static class TestTreeBuilder
                 Kind = TestNodeKind.Test,
                 Test = test,
                 IsStale = isStale,
+                Framework = test.TargetFramework,
             });
         }
 

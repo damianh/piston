@@ -329,4 +329,36 @@ public sealed class MtpStdoutParserTests
         Assert.Equal("MtpOut.T.Passes", passed.FullyQualifiedName);
         Assert.Equal(string.Join(Environment.NewLine, "helper line", "console line"), passed.Output);
     }
+
+    // ── Target framework ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void SourceLine_CapturesTargetFramework_AndQualifiesTheKey()
+    {
+        var sut = new MtpStdoutParser();
+        _ = sut.ProcessLine("passed Ns.Class.Method (3ms)");
+        _ = sut.ProcessLine("  from /src/Multi/bin/Debug/net8.0/Multi.dll (net8.0|x64)");
+        var first = sut.ProcessLine("passed Ns.Class.Method (2ms)");
+        _ = sut.ProcessLine("  from /src/Multi/bin/Debug/net10.0/Multi.dll (net10.0|x64)");
+        var second = sut.Flush();
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.Equal("net8.0", first.TargetFramework);
+        Assert.Equal("Ns.Class.Method [net8.0]", first.Key);
+        Assert.Equal("net10.0", second.TargetFramework);
+        Assert.Equal("Ns.Class.Method [net10.0]", second.Key);
+    }
+
+    [Fact]
+    public void NoSourceLine_LeavesTargetFrameworkUnknown()
+    {
+        var sut = new MtpStdoutParser();
+        _ = sut.ProcessLine("passed Ns.Class.Method (3ms)");
+        var result = sut.Flush();
+
+        Assert.NotNull(result);
+        Assert.Null(result.TargetFramework);
+        Assert.Equal("Ns.Class.Method", result.Key);
+    }
 }
