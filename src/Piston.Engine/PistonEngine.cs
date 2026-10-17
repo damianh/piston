@@ -112,17 +112,21 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             activitySink,
             _executionCoordinator);
 
-        var sdkVersion = new Lazy<string?>(ProbeSdkVersion);
-        _orchestrator.SdkVersionProvider = () => sdkVersion.Value;
+        var sdkVersions = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<string?>>(StringComparer.Ordinal);
+        _orchestrator.SdkVersionProvider = dir => sdkVersions.GetOrAdd(dir, d => new Lazy<string?>(() => ProbeSdkVersion(d))).Value;
     }
 
-    /// <summary>Runs <c>dotnet --version</c> in the daemon's working directory (same as build/test processes).</summary>
-    private static string? ProbeSdkVersion()
+    /// <summary>
+    /// Runs <c>dotnet --version</c> in <paramref name="workingDirectory"/>, the solution directory builds start in,
+    /// so it reports the SDK the solution's <c>global.json</c> selects.
+    /// </summary>
+    private static string? ProbeSdkVersion(string workingDirectory)
     {
         try
         {
             using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("dotnet", "--version")
             {
+                WorkingDirectory = workingDirectory,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,

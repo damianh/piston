@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 
@@ -306,6 +307,17 @@ public sealed class EngineClientService : IAsyncDisposable
     {
         var result = await SendRequestAsync(ProtocolMethods.ActivityGetLog).ConfigureAwait(false);
         return result?.Deserialize<ActivityLogResponse>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>
+    /// The log of the test process that produced the current result of a test, or <see langword="null"/>
+    /// when none was recorded or the daemon is unreachable.
+    /// </summary>
+    public async Task<ExecutionLogDto?> GetRunLogAsync(string fullyQualifiedName, string? targetFramework)
+    {
+        var result = await SendRequestAsync(ProtocolMethods.TestsGetRunLog, new GetRunLogCommand(fullyQualifiedName, targetFramework))
+            .ConfigureAwait(false);
+        return result?.Deserialize<RunLogResponse>(JsonRpcSerializer.Options)?.Log;
     }
 
     /// <summary>

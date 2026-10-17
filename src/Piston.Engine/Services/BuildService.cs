@@ -26,7 +26,7 @@ public sealed class BuildService : IBuildService
     {
         if (projectPaths is null || projectPaths.Count == 0)
         {
-            return await RunBuildAsync($"build \"{solutionPath}\"", onProjectBuilt, ct).ConfigureAwait(false);
+            return await RunBuildAsync($"build \"{solutionPath}\"", TestProcessRunner.WorkingDirectoryFor(solutionPath), onProjectBuilt, ct).ConfigureAwait(false);
         }
 
         var targets = projectPaths
@@ -52,7 +52,7 @@ public sealed class BuildService : IBuildService
             var filterPath = SolutionFilterBuilder.WriteTemporaryFilter(solution.Value.SolutionPath, members);
             try
             {
-                results.Add(await RunBuildAsync($"build \"{filterPath}\"", onProjectBuilt, ct).ConfigureAwait(false));
+                results.Add(await RunBuildAsync($"build \"{filterPath}\"", TestProcessRunner.WorkingDirectoryFor(solution.Value.SolutionPath), onProjectBuilt, ct).ConfigureAwait(false));
             }
             finally
             {
@@ -85,6 +85,7 @@ public sealed class BuildService : IBuildService
 
             results.Add(await RunBuildAsync(
                 $"build \"{projectPath}\" --no-restore",
+                TestProcessRunner.WorkingDirectoryFor(projectPath),
                 onProjectBuilt,
                 ct).ConfigureAwait(false));
         }
@@ -102,13 +103,19 @@ public sealed class BuildService : IBuildService
             results.Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration));
     }
 
-    private static async Task<BuildResult> RunBuildAsync(string args, Action<string>? onProjectBuilt, CancellationToken ct)
+    /// <param name="workingDirectory">
+    /// Where <c>dotnet build</c> starts: the target's directory, so the SDK chosen by its <c>global.json</c> applies
+    /// rather than the one for Piston's own directory.
+    /// </param>
+    private static async Task<BuildResult> RunBuildAsync(
+        string args, string? workingDirectory, Action<string>? onProjectBuilt, CancellationToken ct)
     {
         var output = new BuildOutputCollector();
         var sw = Stopwatch.StartNew();
 
         var psi = new ProcessStartInfo("dotnet", args)
         {
+            WorkingDirectory = workingDirectory ?? string.Empty,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,

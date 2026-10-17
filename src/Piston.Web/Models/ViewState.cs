@@ -37,6 +37,9 @@ public sealed class ViewState
     // ── Selected test ──
     public string? SelectedTestKey { get; set; }
 
+    /// <summary>Whether the test details show the run log of the selected test's process.</summary>
+    public bool ShowRunLog { get; set; }
+
     // ── Failure navigation ──
     public int CurrentFailureIndex { get; set; } = -1;
 

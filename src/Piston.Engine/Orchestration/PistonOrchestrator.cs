@@ -50,7 +50,8 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     internal TimeSpan VerificationSettleTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
     /// <summary>Resolves the .NET SDK version recorded in run context; null when unknown.</summary>
-    internal Func<string?>? SdkVersionProvider { get; set; }
+    /// <summary>The SDK version <c>dotnet</c> selects in the given directory.</summary>
+    internal Func<string, string?>? SdkVersionProvider { get; set; }
 
     public PistonOrchestrator(
         IFileWatcherService fileWatcher,
@@ -779,14 +780,16 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                         : null,
                     CoverageEnabled: _coverageEnabled,
                     BuildConfiguration: "Debug",
-                    SdkVersion: SafeSdkVersion(),
+                    SdkVersion: SafeSdkVersion(solutionDir),
                     Runtime: System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
                     OperatingSystem: System.Runtime.InteropServices.RuntimeInformation.OSDescription,
-                    WorkingDirectory: Environment.CurrentDirectory,
+                    WorkingDirectory: solutionDir,
                     TestWorkingDirectories: (testTargets ?? [Path.GetFullPath(solutionPath)])
                         .ToDictionary(
                             path => path,
-                            path => _impactAnalyzer.GetMtpOutputPath(path) is not null ? solutionDir : Environment.CurrentDirectory,
+                            path => _impactAnalyzer.GetMtpOutputPath(path) is not null
+                                ? solutionDir
+                                : TestProcessRunner.WorkingDirectoryFor(path) ?? Environment.CurrentDirectory,
                             StringComparer.Ordinal)),
             };
             if (run.IsFullScope)
@@ -1163,6 +1166,10 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                     CleanUpCoverageResultsDirs(coverageReportPaths);
                 }
             }
+            else if (coverageReportPaths.Count > 0)
+            {
+                CleanUpCoverageResultsDirs(coverageReportPaths);
+            }
 
             // Merge selective results with preserved results from untouched test projects
             _state.TestSuites = impactResult.IsFullRun
@@ -1382,9 +1389,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         return problems.Count == 0 ? null : string.Join("; ", problems);
     }
 
-    private string? SafeSdkVersion()
+    private string? SafeSdkVersion(string workingDirectory)
     {
-        try { return SdkVersionProvider?.Invoke(); }
+        try { return SdkVersionProvider?.Invoke(workingDirectory); }
         catch { return null; }
     }
 
@@ -1439,10 +1446,8 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
     private static void CleanUpCoverageResultsDirs(IReadOnlyList<string> coverageReportPaths)
     {
-        // Each report is in a subdirectory under the results temp dir.
-        // Walk up two levels: coverage.cobertura.xml → guid subdir → results dir
         var resultsDirs = coverageReportPaths
-            .Select(p => Path.GetDirectoryName(Path.GetDirectoryName(p)))
+            .Select(CoverageResultsDirectory)
             .Where(d => d is not null)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -1451,6 +1456,26 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         {
             try { Directory.Delete(dir!, recursive: true); } catch { /* ignore */ }
         }
+    }
+
+    /// <summary>
+    /// The <c>piston-*</c> temp directory a runner wrote <paramref name="reportPath"/> under, or
+    /// <see langword="null"/> when it is not in one. Reports are at different depths: coverlet nests each in
+    /// a GUID directory, the MTP extension writes them directly in the results directory.
+    /// </summary>
+    internal static string? CoverageResultsDirectory(string reportPath)
+    {
+        var tempRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
+        for (var dir = Path.GetDirectoryName(Path.GetFullPath(reportPath)); dir is not null; dir = Path.GetDirectoryName(dir))
+        {
+            if (string.Equals(Path.GetDirectoryName(dir), tempRoot, StringComparison.OrdinalIgnoreCase)
+                && Path.GetFileName(dir).StartsWith("piston-", StringComparison.Ordinal))
+            {
+                return dir;
+            }
+        }
+
+        return null;
     }
 
     private void ScheduleGraphRebuildIfNeeded(ImpactAnalysisResult impactResult)

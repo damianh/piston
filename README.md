@@ -76,7 +76,7 @@ piston status [<solution>] [--all]
 |---|---|
 | `--debounce <ms>` | File-change debounce interval in milliseconds. |
 | `--filter <pattern>` | Test filter passed to the selected test runner on startup; syntax depends on the runner. |
-| `--coverage` | Request coverage collection on the VSTest path; requires a compatible collector in the test project. |
+| `--coverage` | Request coverage collection. VSTest projects need a collector such as `coverlet.collector`; MTP projects need `Microsoft.Testing.Extensions.CodeCoverage`. |
 | `--parallelism <n>` | Max concurrent test processes. `0` = auto. |
 | `--stdio` | Use stdin/stdout for engine JSON-RPC transport, not MCP. |
 | `--no-stdio` | Force named-pipe transport, overriding `.piston.json`'s `stdio` setting. |
@@ -100,6 +100,8 @@ piston daemon --coverage --mcp-port 5300
 ## Web dashboard
 
 The daemon serves a Blazor WebAssembly dashboard (default `http://localhost:5199`) connected over WebSocket. It shows test results, build errors, engine activity, and MCP tool-call history. The Roslyn diagnostic view has been removed.
+
+A test's details show its captured output (what the test wrote, e.g. via xUnit's `TestContext.Current.TestOutputHelper`) and, on demand, the run log of the process that produced the result: the runner Piston chose (VSTest, MTP server or MTP `dotnet test`), the command line, fallbacks, the process's console output and its exit code. Each log keeps the first 1,500 and last 500 lines of a run.
 
 Dashboard styles are bundled locally; no CDN access is needed. After changing
 Tailwind classes in dashboard components, regenerate the checked-in stylesheet:
@@ -182,8 +184,8 @@ Limits:
 - The fingerprint does not cover sources outside the solution directory, installed SDKs, the NuGet cache, or merged user/machine NuGet configuration.
 - `verify` reevaluates project inputs and returns `NotFullScope` for user projects, imports or declared files outside the fingerprint (including excluded directories). SDK/workload files, packages and generated restore imports remain toolchain/cache exclusions. Evaluation failure is `Faulted`; neither verdict is a pass or a hidden fallback.
 - Full runs refresh the solution graph before selecting test projects. `verify` also rejects an otherwise current run if its selected projects omit a test project from the refreshed graph.
-- The SDK version is recorded from `dotnet --version` run in the daemon's working directory.
-- `context.workingDirectory` is the build/SDK-probe directory. `context.testWorkingDirectories` records each test target's actual directory: the solution directory for MTP, the daemon directory for VSTest.
+- The SDK version is recorded from `dotnet --version` run in the solution directory.
+- `context.workingDirectory` is the build/SDK-probe directory: the solution directory. `context.testWorkingDirectories` records each test target's actual directory: the solution directory for MTP, the project directory for VSTest. Builds and test processes start there, so the watched solution's `global.json` (SDK and test runner) applies, not the daemon's.
 
 ### Worktree ownership and machine execution budget
 
@@ -209,7 +211,7 @@ Limits: this is admission control by reservation. Piston does not cap the actual
 
 Project ownership and transitive dependencies determine affected test projects. The optional Tier 3 path adds a file-based test-FQN filter when usable coverage exists. It is **not verified per-test/changed-line selection**: `CoverageProcessor` unions covered lines across reports and attributes them to every test returned in that run. The analyzer queries whole files, not changed line ranges.
 
-Coverage associations persist in `.piston/piston.db`; test-result history and the project graph do not. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The current MTP runner does not request or return coverage reports. Fine-grained attribution and selection correctness are future experiments.
+Coverage associations persist in `.piston/piston.db`; test-result history and the project graph do not. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, running it through `dotnet test` rather than server mode (so without live per-test progress); without it, the project runs without coverage and its run log says why. Fine-grained attribution and selection correctness are future experiments.
 
 ### Selective builds
 
@@ -250,7 +252,7 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `solution` | `string` | Default solution path, relative to the config file (or absolute). An explicit CLI solution argument overrides it. |
 | `debounceMs` | `int` | File-change debounce interval in milliseconds. |
 | `testFilter` | `string` | Default filter passed to the selected test runner. |
-| `coverageEnabled` | `bool` | Request VSTest coverage collection. |
+| `coverageEnabled` | `bool` | Request coverage collection (see `--coverage`). |
 | `parallelism` | `int` | Max concurrent test processes. `0` = auto: half the logical processor count, at least one. |
 | `processRecycleAfter` | `int` | Runs after which a pool slot logs a recycling warning (default 50). |
 | `pipeName` | `string` | Override the named pipe name. |

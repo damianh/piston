@@ -41,6 +41,8 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(TestRunDto))]
 [JsonSerializable(typeof(TestRunAdmissionDto))]
 [JsonSerializable(typeof(SourceFingerprintDto))]
+[JsonSerializable(typeof(ExecutionLogDto))]
+[JsonSerializable(typeof(ExecutionLogEntryDto))]
 
 // ── Message records ───────────────────────────────────────────────────────
 [JsonSerializable(typeof(StateSnapshotNotification))]
@@ -63,6 +65,8 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(GetFileCoverageCommand))]
 [JsonSerializable(typeof(McpCallLogResponse))]
 [JsonSerializable(typeof(ActivityLogResponse))]
+[JsonSerializable(typeof(GetRunLogCommand))]
+[JsonSerializable(typeof(RunLogResponse))]
 [JsonSerializable(typeof(DaemonInfoResponse))]
 [JsonSerializable(typeof(UserSettings))]
 [JsonSerializable(typeof(UserSettingsResponse))]
@@ -81,6 +85,7 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(List<CoverageLineDto>))]
 [JsonSerializable(typeof(Dictionary<string, ProjectRunStatusDto>))]
 [JsonSerializable(typeof(List<TestFailureData>))]
+[JsonSerializable(typeof(List<ExecutionLogEntryDto>))]
 
 internal sealed partial class PistonJsonContext : JsonSerializerContext
 {

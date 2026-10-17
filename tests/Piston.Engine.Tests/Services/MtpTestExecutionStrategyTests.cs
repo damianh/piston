@@ -93,4 +93,24 @@ public sealed class MtpTestExecutionStrategyTests
         Assert.Null(strategy.ServerAppPath("multi.csproj"));
         Assert.Equal("/path/to/tests.dll", strategy.ServerAppPath("single.csproj"));
     }
+
+    [Fact]
+    public void HasCoverageExtension_LooksForTheExtensionNextToTheTestApp()
+    {
+        var dir = Directory.CreateTempSubdirectory("piston-cov-ext-").FullName;
+        try
+        {
+            var app = Path.Combine(dir, "Tests.dll");
+            Assert.False(MtpTestExecutionStrategy.HasCoverageExtension(app));
+
+            File.WriteAllText(Path.Combine(dir, MtpTestExecutionStrategy.CoverageExtensionAssembly), "");
+
+            Assert.True(MtpTestExecutionStrategy.HasCoverageExtension(app));
+            Assert.False(MtpTestExecutionStrategy.HasCoverageExtension(null));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

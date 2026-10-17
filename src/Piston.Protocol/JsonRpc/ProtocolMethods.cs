@@ -55,6 +55,9 @@ public static class ProtocolMethods
     /// <summary>Fetch the daemon's retained activity timeline (oldest first), for backfilling late-joining clients.</summary>
     public const string ActivityGetLog = "activity/getLog";
 
+    /// <summary>Fetch the log of the test process that produced a test's current result.</summary>
+    public const string TestsGetRunLog = "tests/getRunLog";
+
     /// <summary>Describe the daemon process: PID, solution, start time, version and endpoint URLs.</summary>
     public const string DaemonInfo = "daemon/info";
 

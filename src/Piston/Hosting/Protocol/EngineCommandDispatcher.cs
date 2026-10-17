@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Piston.Engine;
 using Piston.Hosting.Configuration;
+using Piston.Hosting.Mapping;
 using Piston.Hosting.Services;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
@@ -98,6 +99,19 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
             case ProtocolMethods.ActivityGetLog:
                 {
                     var response = new ActivityLogResponse(_activityHistory?.Snapshot() ?? []);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.TestsGetRunLog:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<GetRunLogCommand>(@params);
+                    if (string.IsNullOrWhiteSpace(cmd?.FullyQualifiedName))
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "fullyQualifiedName is required.");
+                    }
+
+                    var response = new RunLogResponse(_engine.State.FindRunLog(cmd.FullyQualifiedName, cmd.TargetFramework));
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
                 }

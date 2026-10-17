@@ -16,4 +16,19 @@ public sealed class TestProcessRunnerTrxNameTests
     [InlineData("/tmp/r/other_net8.0_20261011101112.trx", null)]
     public void TargetFrameworkOfTrx_ReadsTheFrameworkFromTheLoggerFileName(string path, string? expected) =>
         Assert.Equal(expected, TestProcessRunner.TargetFrameworkOfTrx(path));
+
+    [Fact]
+    public void WorkingDirectoryFor_IsTheProjectDirectory_SoItsGlobalJsonApplies()
+    {
+        var dir = Directory.CreateTempSubdirectory("piston-wd-").FullName;
+        try
+        {
+            Assert.Equal(dir, TestProcessRunner.WorkingDirectoryFor(Path.Combine(dir, "A.Tests.csproj")));
+            Assert.Null(TestProcessRunner.WorkingDirectoryFor(Path.Combine(dir, "missing", "A.Tests.csproj")));
+        }
+        finally
+        {
+            Directory.Delete(dir, recursive: true);
+        }
+    }
 }

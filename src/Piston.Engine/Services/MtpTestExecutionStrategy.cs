@@ -56,7 +56,28 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
             _solutionDirectory,
             request.Filter,
             onProgress,
-            ct);
+            ct,
+            CoverageFor(request));
+
+    private MtpCoverage CoverageFor(ProjectTestRequest request)
+    {
+        if (!request.CollectCoverage)
+        {
+            return MtpCoverage.Off;
+        }
+
+        return HasCoverageExtension(_getMtpOutputPath(request.ProjectPath)) ? MtpCoverage.Collect : MtpCoverage.ExtensionMissing;
+    }
+
+    /// <summary>
+    /// Whether the test app at <paramref name="appPath"/> was built with Microsoft.Testing.Extensions.CodeCoverage.
+    /// Its <c>--coverage</c> options are unknown to, and fail, a test app without it.
+    /// </summary>
+    internal static bool HasCoverageExtension(string? appPath) =>
+        Path.GetDirectoryName(appPath) is { Length: > 0 } dir
+        && File.Exists(Path.Combine(dir, CoverageExtensionAssembly));
+
+    internal const string CoverageExtensionAssembly = "Microsoft.Testing.Extensions.CodeCoverage.dll";
 
     /// <inheritdoc/>
     public Task<IReadOnlyList<TestResult>> DiscoverAsync(
@@ -65,4 +86,14 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
         Action<IReadOnlyList<TestResult>>? onPartial,
         CancellationToken ct) =>
         MtpTestProcessRunner.DiscoverAsync(projectPath, ServerAppPath(projectPath), _solutionDirectory, filter, onPartial, ct);
+}
+
+/// <summary>Whether, and why not, an MTP test run collects code coverage.</summary>
+internal enum MtpCoverage
+{
+    Off,
+    Collect,
+
+    /// <summary>Coverage was requested but the test app cannot collect it.</summary>
+    ExtensionMissing,
 }

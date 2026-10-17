@@ -40,12 +40,19 @@ internal static class TestProcessRunner
         CancellationToken ct) =>
         TestListProcess.RunAsync(
             $"test \"{projectPath}\" --no-build --list-tests" + FilterArgument(filter),
-            workingDirectory: null,
+            WorkingDirectoryFor(projectPath),
             projectPath,
             "VSTestRunner",
             new TestListParser(IsListHeader),
             onPartial,
             ct);
+
+    /// <summary>
+    /// Where <c>dotnet test</c> starts for <paramref name="projectPath"/>: its directory, so the SDK and test
+    /// runner chosen by the project's own <c>global.json</c> apply rather than those of Piston's directory.
+    /// </summary>
+    internal static string? WorkingDirectoryFor(string projectPath) =>
+        Path.GetDirectoryName(Path.GetFullPath(projectPath)) is { Length: > 0 } dir && Directory.Exists(dir) ? dir : null;
 
     /// <summary>The <c>--filter</c> argument for <paramref name="filter"/>, or empty when there is none.</summary>
     internal static string FilterArgument(string? filter) =>
@@ -140,12 +147,13 @@ internal static class TestProcessRunner
                 args += $" --collect \"{LiveTestEventListener.CollectorFriendlyName}\" --test-adapter-path \"{collectorDir}\"";
             }
 
-            var log = DiagnosticLog.Instance;
-            log?.Write("VSTestRunner", $"Project: {projectPath}");
-            log?.Write("VSTestRunner", $"Args: dotnet {args}");
+            var log = new ExecutionLog(projectPath) { Runner = "VSTest" };
+            log.Write("VSTestRunner", $"Project: {projectPath}");
+            log.Write("VSTestRunner", $"Args: dotnet {args}");
 
             var psi = new ProcessStartInfo("dotnet", args)
             {
+                WorkingDirectory = WorkingDirectoryFor(projectPath) ?? string.Empty,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
@@ -169,6 +177,11 @@ internal static class TestProcessRunner
                 if (e.Data is null)
                 {
                     return;
+                }
+
+                if (e.Data.Length > 0)
+                {
+                    log.Append("stdout", e.Data);
                 }
 
                 var m = ResultLineRegex.Match(e.Data);
@@ -198,7 +211,7 @@ internal static class TestProcessRunner
             {
                 if (e.Data is not null && e.Data.Trim().Length > 0)
                 {
-                    log?.Write("VSTestRunner:stderr", e.Data.Trim());
+                    log.Write("VSTestRunner:stderr", e.Data.Trim());
                     stderrLines.Add(e.Data.Trim());
                 }
             };
@@ -225,11 +238,13 @@ internal static class TestProcessRunner
                 {
                     await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
                 }
-                log?.Write("VSTestRunner", "Cancelled — returning empty result");
+                log.Write("VSTestRunner", "Cancelled — returning empty result");
+                log.Complete();
                 return new ProjectTestResult(projectPath, [], null, [], Crashed: false);
             }
 
-            log?.Write("VSTestRunner", $"ExitCode: {process.ExitCode}");
+            log.ExitCode = process.ExitCode;
+            log.Write("VSTestRunner", $"ExitCode: {process.ExitCode}");
 
             // Deliver any buffered collector events, then one final progress update.
             if (liveEvents is not null)
@@ -241,7 +256,7 @@ internal static class TestProcessRunner
 
             // Parse TRX files for authoritative results (durations, error messages, stack traces)
             var trxFiles = Directory.GetFiles(resultsDir, "*.trx", SearchOption.AllDirectories);
-            log?.Write("VSTestRunner", $"TRX files found: {trxFiles.Length}");
+            log.Write("VSTestRunner", $"TRX files found: {trxFiles.Length}");
 
             // A multi-targeted project writes one TRX file per framework; only then are results told
             // apart by framework.
@@ -270,11 +285,11 @@ internal static class TestProcessRunner
             if (suites.Count == 0 && !stderrLines.IsEmpty)
             {
                 runnerError = string.Join(Environment.NewLine, stderrLines.OrderBy(x => x));
-                log?.Write("VSTestRunner", $"RunnerError: {runnerError}");
+                log.Write("VSTestRunner", $"RunnerError: {runnerError}");
             }
 
             var totalTests = suites.SelectMany(s => s.Tests).Count();
-            log?.Write("VSTestRunner",
+            log.Write("VSTestRunner",
                 $"Result: {totalTests} test(s) in {suites.Count} suite(s)");
 
             // Glob for Cobertura XML files if coverage was collected
@@ -285,7 +300,8 @@ internal static class TestProcessRunner
                     resultsDir, "coverage.cobertura.xml", SearchOption.AllDirectories);
             }
 
-            return new ProjectTestResult(projectPath, suites, runnerError, coverageReportPaths, Crashed: false);
+            log.Complete();
+            return new ProjectTestResult(projectPath, log.AttachTo(suites), runnerError, coverageReportPaths, Crashed: false);
         }
         finally
         {

@@ -1,6 +1,8 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Piston.Protocol.Dtos;
+
 namespace Piston.Protocol.Messages;
 
 public sealed record StartCommand(string SolutionPath);
@@ -18,6 +20,14 @@ public sealed record StartCommandParams(string SolutionPath);
 
 /// <summary>Params payload for the set-filter JSON-RPC command.</summary>
 public sealed record SetFilterCommandParams(string? Filter);
+
+/// <summary>Parameters for <c>tests/getRunLog</c>: the result whose run log to fetch.</summary>
+/// <param name="FullyQualifiedName">The test's fully qualified name.</param>
+/// <param name="TargetFramework">The result's target framework, when its project ran under more than one.</param>
+public sealed record GetRunLogCommand(string FullyQualifiedName, string? TargetFramework = null);
+
+/// <summary>Response for <c>tests/getRunLog</c>; <see cref="Log"/> is null when none was recorded for the result.</summary>
+public sealed record RunLogResponse(ExecutionLogDto? Log);
 
 /// <summary>Response for <c>mcp/getCallLog</c>.</summary>
 public sealed record McpCallLogResponse(IReadOnlyList<McpToolCallData> Calls);

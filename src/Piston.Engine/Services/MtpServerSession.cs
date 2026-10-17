@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Piston.Engine.Impact;
+using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
 
@@ -63,6 +64,7 @@ internal static class MtpServerSession
     /// Runs <paramref name="method"/> against the app at <paramref name="appPath"/> (a framework-dependent
     /// <c>.dll</c> or an executable), started in <paramref name="workingDirectory"/>. Each batch of updated
     /// nodes is passed to <paramref name="onNodes"/>; nodes are cloned and remain valid after the callback.
+    /// Diagnostics and the host's console output go to <paramref name="runLog"/> when given, otherwise to the diagnostics log.
     /// </summary>
     internal static async Task<Result> RunAsync(
         string appPath,
@@ -70,9 +72,11 @@ internal static class MtpServerSession
         string method,
         IReadOnlyList<JsonElement>? tests,
         Action<IReadOnlyList<JsonElement>> onNodes,
-        CancellationToken ct)
+        CancellationToken ct,
+        ExecutionLog? runLog = null)
     {
-        var log = DiagnosticLog.Instance;
+        Action<string, string>? log = runLog is not null ? runLog.Write
+            : DiagnosticLog.Instance is { } diagnostics ? diagnostics.Write : null;
         var stderr = new List<string>();
 
         using var listener = new TcpListener(IPAddress.Loopback, 0);
@@ -87,14 +91,14 @@ internal static class MtpServerSession
 
         var psi = CreateStartInfo(appPath, workingDirectory, ((IPEndPoint)listener.LocalEndpoint).Port);
 
-        log?.Write("MtpServer", $"{method}: {psi.FileName} {psi.Arguments}");
+        log?.Invoke("MtpServer", $"{method}: {psi.FileName} {psi.Arguments}");
 
         using var process = new Process { StartInfo = psi };
         process.OutputDataReceived += (_, e) =>
         {
             if (!string.IsNullOrWhiteSpace(e.Data))
             {
-                log?.Write("MtpServer:stdout", e.Data);
+                log?.Invoke("MtpServer:stdout", e.Data);
             }
         };
         process.ErrorDataReceived += (_, e) =>
@@ -104,7 +108,7 @@ internal static class MtpServerSession
                 return;
             }
 
-            log?.Write("MtpServer:stderr", e.Data);
+            log?.Invoke("MtpServer:stderr", e.Data);
             lock (stderr)
             {
                 if (stderr.Count < MaxStderrLines)
@@ -137,7 +141,7 @@ internal static class MtpServerSession
             var (outcome, error) = await ExchangeAsync(client.GetStream(), method, tests, onNodes, StageTimeouts.Default, ct).ConfigureAwait(false);
             if (error is not null)
             {
-                log?.Write("MtpServer", $"Session {outcome}: {error}");
+                log?.Invoke("MtpServer", $"Session {outcome}: {error}");
             }
 
             switch (outcome)
@@ -163,7 +167,7 @@ internal static class MtpServerSession
         }
         catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
         {
-            log?.Write("MtpServer", $"Session failed: {ex.Message}");
+            log?.Invoke("MtpServer", $"Session failed: {ex.Message}");
             return new Result(Outcome.NotStarted,
                 $"Lost connection to the test host: {ex.Message}",
                 await StderrAfterExitAsync(process, stderr).ConfigureAwait(false));

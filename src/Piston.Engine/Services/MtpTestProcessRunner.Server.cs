@@ -86,15 +86,17 @@ internal static partial class MtpTestProcessRunner
         string solutionDirectory,
         string? filter,
         Action<IReadOnlyList<TestSuite>>? onProgress,
-        CancellationToken ct)
+        CancellationToken ct,
+        ExecutionLog? runLog = null)
     {
-        var log = DiagnosticLog.Instance;
+        var log = runLog ?? new ExecutionLog(projectPath);
+        log.Runner = "MTP server";
         IReadOnlyList<JsonElement>? selection = null;
         if (!string.IsNullOrWhiteSpace(filter))
         {
             if (!TestFilterExpression.TryParse(filter, out var expression))
             {
-                log?.Write("MtpRunner", $"Unsupported filter for server mode, using dotnet test: {filter}");
+                log.Write("MtpRunner", $"Unsupported filter for server mode, using dotnet test: {filter}");
                 return null;
             }
 
@@ -102,7 +104,7 @@ internal static partial class MtpTestProcessRunner
             var discoveredKeys = new HashSet<string>(StringComparer.Ordinal);
             var discovery = await MtpServerSession.RunAsync(appPath, solutionDirectory, MtpServerSession.DiscoverMethod, tests: null,
                 nodes => discovered.AddRange(nodes.Where(n => IsAction(n) && NodeKey(n) is { } key && discoveredKeys.Add(key))),
-                ct).ConfigureAwait(false);
+                ct, log).ConfigureAwait(false);
             if (discovery.Outcome == MtpServerSession.Outcome.Cancelled)
             {
                 return new ProjectTestResult(projectPath, [], null, [], Crashed: false);
@@ -110,12 +112,12 @@ internal static partial class MtpTestProcessRunner
 
             if (discovery.Outcome != MtpServerSession.Outcome.Completed || discovery.Error is not null)
             {
-                log?.Write("MtpRunner", $"Server discovery {discovery.Outcome} ({discovery.Error}); using dotnet test");
+                log.Write("MtpRunner", $"Server discovery {discovery.Outcome} ({discovery.Error}); using dotnet test");
                 return null;
             }
 
             var matched = discovered.Where(n => Matches(expression, n)).ToList();
-            log?.Write("MtpRunner", $"Filter matched {matched.Count} of {discovered.Count} test(s): {filter}");
+            log.Write("MtpRunner", $"Filter matched {matched.Count} of {discovered.Count} test(s): {filter}");
             if (matched.Count == 0)
             {
                 return new ProjectTestResult(projectPath, [], null, [], Crashed: false);
@@ -153,9 +155,9 @@ internal static partial class MtpTestProcessRunner
             }
 
             progress?.Signal();
-        }, ct).ConfigureAwait(false);
+        }, ct, log).ConfigureAwait(false);
 
-        log?.Write("MtpRunner", $"Server run {run.Outcome}: {live.Count} test(s)" + (run.Error is null ? "" : $" | {run.Error}"));
+        log.Write("MtpRunner", $"Server run {run.Outcome}: {live.Count} test(s)" + (run.Error is null ? "" : $" | {run.Error}"));
 
         switch (run.Outcome)
         {
@@ -200,7 +202,7 @@ internal static partial class MtpTestProcessRunner
             runnerError = run.Stderr.Count == 0
                 ? run.Error
                 : run.Error + Environment.NewLine + string.Join(Environment.NewLine, run.Stderr);
-            log?.Write("MtpRunner", $"RunnerError: {runnerError}");
+            log.Write("MtpRunner", $"RunnerError: {runnerError}");
         }
 
         return new ProjectTestResult(projectPath, suites, runnerError, [],

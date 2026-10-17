@@ -70,7 +70,8 @@ internal static partial class MtpTestProcessRunner
     /// <summary>
     /// Runs an MTP project. Uses the test app's server mode when <paramref name="appPath"/> exists, which
     /// reports each test as it starts; falls back to <c>dotnet test</c> when server mode is unavailable or
-    /// the filter is unsupported. Coverage is not collected for MTP projects.
+    /// the filter is unsupported. With <see cref="MtpCoverage.Collect"/>, Cobertura reports are written to a
+    /// <c>piston-*</c> temp directory that the caller deletes once it has read them.
     /// </summary>
     internal static async Task<ProjectTestResult> RunAsync(
         string projectPath,
@@ -78,36 +79,93 @@ internal static partial class MtpTestProcessRunner
         string solutionDirectory,
         string? filter,
         Action<IReadOnlyList<TestSuite>>? onProgress,
-        CancellationToken ct)
+        CancellationToken ct,
+        MtpCoverage coverage = MtpCoverage.Off)
     {
-        if (appPath is not null && File.Exists(appPath))
+        var log = new ExecutionLog(projectPath);
+        log.Write("MtpRunner", $"Project: {projectPath}");
+
+        string? resultsDir = null;
+        if (coverage == MtpCoverage.Collect)
         {
-            var result = await RunWithServerAsync(projectPath, appPath, solutionDirectory, filter, onProgress, ct).ConfigureAwait(false);
-            if (result is not null)
-            {
-                return result;
-            }
+            resultsDir = Path.Combine(Path.GetTempPath(), $"piston-{Guid.NewGuid():N}");
+            _ = Directory.CreateDirectory(resultsDir);
+        }
+        else if (coverage == MtpCoverage.ExtensionMissing)
+        {
+            log.Write("MtpRunner",
+                "Coverage not collected: the project does not reference Microsoft.Testing.Extensions.CodeCoverage");
         }
 
-        return await RunWithDotnetTestAsync(projectPath, solutionDirectory, filter, onProgress, ct).ConfigureAwait(false);
+        var coverageArgs = resultsDir is null ? null : CoverageArguments(resultsDir);
+        IReadOnlyList<string> coverageReportPaths = [];
+        try
+        {
+            ProjectTestResult? result = null;
+            // Server mode does not complete with --coverage: the extension relaunches the test host under a
+            // controller process, so coverage runs use dotnet test.
+            if (appPath is not null && File.Exists(appPath) && coverageArgs is null)
+            {
+                result = await RunWithServerAsync(projectPath, appPath, solutionDirectory, filter, onProgress, ct, log)
+                    .ConfigureAwait(false);
+            }
+            else if (coverageArgs is not null)
+            {
+                log.Write("MtpRunner", "Collecting coverage, so running with dotnet test rather than server mode");
+            }
+
+            result ??= await RunWithDotnetTestAsync(projectPath, solutionDirectory, filter, onProgress, ct, log, coverageArgs)
+                .ConfigureAwait(false);
+
+            if (resultsDir is not null)
+            {
+                coverageReportPaths = Directory.GetFiles(resultsDir, "*.cobertura.xml", SearchOption.AllDirectories);
+                log.Write("MtpRunner", $"Coverage reports: {coverageReportPaths.Count}");
+            }
+
+            log.Complete();
+            return result with { Suites = log.AttachTo(result.Suites), CoverageReportPaths = coverageReportPaths };
+        }
+        finally
+        {
+            // With reports, the caller deletes the directory after reading them.
+            if (resultsDir is not null && coverageReportPaths.Count == 0)
+            {
+                try { Directory.Delete(resultsDir, recursive: true); } catch { /* ignore */ }
+            }
+        }
     }
+
+    /// <summary>
+    /// Microsoft.Testing.Extensions.CodeCoverage options writing Cobertura to <paramref name="resultsDir"/>.
+    /// The report name is left to the extension, which makes it unique per test app: a multi-targeted project
+    /// writes one per framework.
+    /// </summary>
+    internal static string CoverageArguments(string resultsDir) =>
+        $"--coverage --coverage-output-format cobertura --results-directory \"{resultsDir}\"";
 
     internal static async Task<ProjectTestResult> RunWithDotnetTestAsync(
         string projectPath,
         string solutionDirectory,
         string? filter,
         Action<IReadOnlyList<TestSuite>>? onProgress,
-        CancellationToken ct)
+        CancellationToken ct,
+        ExecutionLog? runLog = null,
+        string? extraArguments = null)
     {
         // Build CLI args: dotnet test --project <csproj> --no-build --output Detailed --no-ansi.
         // Without --no-ansi, CI environments (e.g. GitHub Actions) get coloured output even when redirected,
         // which the stdout parser cannot match.
         var args = $"test --project \"{projectPath}\" --no-build --output Detailed --no-ansi" + TestProcessRunner.FilterArgument(filter);
+        if (!string.IsNullOrWhiteSpace(extraArguments))
+        {
+            args += " " + extraArguments.Trim();
+        }
 
-        var log = DiagnosticLog.Instance;
-        log?.Write("MtpRunner", $"Project: {projectPath}");
-        log?.Write("MtpRunner", $"WorkDir: {solutionDirectory}");
-        log?.Write("MtpRunner", $"Args: dotnet {args}");
+        var log = runLog ?? new ExecutionLog(projectPath);
+        log.Runner = "MTP dotnet test";
+        log.Write("MtpRunner", $"WorkDir: {solutionDirectory}");
+        log.Write("MtpRunner", $"Args: dotnet {args}");
 
         var psi = new ProcessStartInfo("dotnet", args)
         {
@@ -139,7 +197,7 @@ internal static partial class MtpTestProcessRunner
                 return;
             }
 
-            log?.Write("MtpRunner:stdout", e.Data);
+            log.Write("MtpRunner:stdout", e.Data);
 
             MtpParsedResult? parsed;
             lock (liveResultsLock)
@@ -160,7 +218,7 @@ internal static partial class MtpTestProcessRunner
         {
             if (e.Data is not null && e.Data.Trim().Length > 0)
             {
-                log?.Write("MtpRunner:stderr", e.Data.Trim());
+                log.Write("MtpRunner:stderr", e.Data.Trim());
                 stderrLines.Add(e.Data.Trim());
             }
         };
@@ -187,11 +245,12 @@ internal static partial class MtpTestProcessRunner
             {
                 await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
             }
-            log?.Write("MtpRunner", "Cancelled — returning empty result");
+            log.Write("MtpRunner", "Cancelled — returning empty result");
             return new ProjectTestResult(projectPath, [], null, [], Crashed: false);
         }
 
-        log?.Write("MtpRunner", $"ExitCode: {process.ExitCode}");
+        log.ExitCode = process.ExitCode;
+        log.Write("MtpRunner", $"ExitCode: {process.ExitCode}");
 
         // Flush the last pending parsed result
         MtpParsedResult? last;
@@ -210,7 +269,7 @@ internal static partial class MtpTestProcessRunner
         var suites = BuildSuitesFromLiveResults(projectPath, liveResults, liveResultsLock);
 
         var totalTests = suites.SelectMany(s => s.Tests).Count();
-        log?.Write("MtpRunner",
+        log.Write("MtpRunner",
             $"Result: {totalTests} test(s) in {suites.Count} suite(s)");
 
         // Surface stderr when there are no results (likely a runner-level failure)
@@ -218,7 +277,7 @@ internal static partial class MtpTestProcessRunner
         if (suites.Count == 0 && !stderrLines.IsEmpty)
         {
             runnerError = string.Join(Environment.NewLine, stderrLines.OrderBy(x => x));
-            log?.Write("MtpRunner", $"RunnerError: {runnerError}");
+            log.Write("MtpRunner", $"RunnerError: {runnerError}");
         }
 
         return new ProjectTestResult(projectPath, suites, runnerError, [], Crashed: false);

@@ -91,6 +91,38 @@ public static class DtoMapper
             suite.RunId
         );
 
+    public static ExecutionLogDto ToDto(this ExecutionLog log, string? runId) =>
+        new(
+            log.ProjectPath,
+            log.Runner,
+            log.ExitCode,
+            log.StartedAt,
+            log.CompletedAt,
+            log.OmittedEntries,
+            [.. log.Entries.Select(e => new ExecutionLogEntryDto(e.Timestamp, e.Category, e.Message))],
+            runId
+        );
+
+    /// <summary>
+    /// The log of the process that produced the current result of the test with
+    /// <paramref name="fullyQualifiedName"/> under <paramref name="targetFramework"/>, or
+    /// <see langword="null"/> when there is no such result or no log was recorded for it.
+    /// </summary>
+    public static ExecutionLogDto? FindRunLog(this PistonState state, string fullyQualifiedName, string? targetFramework)
+    {
+        foreach (var suite in state.TestSuites)
+        {
+            if (suite.ExecutionLog is { } log && suite.Tests.Any(t =>
+                    string.Equals(t.FullyQualifiedName, fullyQualifiedName, StringComparison.Ordinal)
+                    && string.Equals(t.TargetFramework, targetFramework, StringComparison.OrdinalIgnoreCase)))
+            {
+                return log.ToDto(suite.RunId);
+            }
+        }
+
+        return null;
+    }
+
     public static SourceFingerprintDto ToDto(this SourceFingerprint fingerprint) =>
         new(fingerprint.Algorithm, fingerprint.Value, fingerprint.FileCount);
 

@@ -82,11 +82,11 @@ public sealed record SourceFingerprint(string Algorithm, string Value, int FileC
 /// <param name="CoverageSelectedTestCount">Number of tests selected by coverage impact analysis, when that narrowed the run.</param>
 /// <param name="CoverageEnabled">Whether coverage collection was enabled.</param>
 /// <param name="BuildConfiguration">Piston does not pass <c>-c</c>, so the .NET CLI default configuration applies.</param>
-/// <param name="SdkVersion">Output of <c>dotnet --version</c> in the daemon's working directory, when available.</param>
+/// <param name="SdkVersion">Output of <c>dotnet --version</c> in the solution directory, when available.</param>
 /// <param name="Runtime">Runtime hosting the Piston engine.</param>
 /// <param name="OperatingSystem">Host operating system description.</param>
 /// <param name="WorkingDirectory">Working directory of the build process and SDK version probe.</param>
-/// <param name="TestWorkingDirectories">Working directory per test target: solution directory for MTP, daemon directory for VSTest.</param>
+/// <param name="TestWorkingDirectories">Working directory per test target: solution directory for MTP, project directory for VSTest.</param>
 public sealed record TestRunContext(
     string SolutionPath,
     IReadOnlyList<string>? TestProjects,

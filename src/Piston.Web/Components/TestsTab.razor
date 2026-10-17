@@ -59,7 +59,7 @@
             }
             else
             {
-                <TestDetail Test="@_selectedTest" />
+                <TestDetail Test="@_selectedTest" RunId="@RunIdOf(_selectedTest)" />
             }
         </div>
     </div>
@@ -163,6 +163,10 @@
             }
         }
     }
+
+    // The run that produced the test's final result; live results are not attributed to a run yet.
+    private string? RunIdOf(TestResultDto? test) =>
+        test is null ? null : _snapshot?.Suites.FirstOrDefault(s => s.Tests.Any(t => t.Key == test.Key))?.RunId;
 
     private void SelectTest(TestResultDto test)
     {
