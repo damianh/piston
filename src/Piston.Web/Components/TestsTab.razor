@@ -7,8 +7,7 @@
 
     <!-- Toolbar -->
     <Toolbar Filter="@_filter"
-             OnForceRun="ForceRun"
-            OnReset="Reset"
+             OnReset="Reset"
              OnExpandAll="() => SetExpanded(true)"
              OnCollapseAll="() => SetExpanded(false)"
              DetailPosition="@_viewState.DetailPosition"
@@ -160,7 +159,6 @@
         StateHasChanged();
     }
 
-    private async Task ForceRun() => await Client.ForceRunAsync();
     private async Task Reset()
     {
         _selectedTest = null;
@@ -249,7 +247,6 @@
     {
         switch (e.Key.ToUpperInvariant())
         {
-            case "R": _ = ForceRun(); break;
             case "G": CycleGrouping(); break;
             case "E": ToggleExpand(); break;
             case "1": ToggleStatus(s => s.ShowFailed  = !s.ShowFailed);  break;

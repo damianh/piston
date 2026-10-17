@@ -293,7 +293,6 @@ public sealed class EngineClientService : IAsyncDisposable
 
         return result.Deserialize<McpCallLogResponse>(JsonRpcSerializer.Options);
     }
-    public Task ForceRunAsync() => SendCommandAsync(ProtocolMethods.EngineForceRun);
     public Task ResetAsync() => SendCommandAsync(ProtocolMethods.EngineReset);
     public Task SetFilterAsync(string? filter) => SendCommandAsync(ProtocolMethods.EngineSetFilter, new SetFilterCommand(filter));
 

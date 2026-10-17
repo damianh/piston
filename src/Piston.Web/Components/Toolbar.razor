@@ -1,19 +1,11 @@
 @using Piston.Protocol.Dtos
 
 <div class="flex items-center gap-2 px-4 py-1.5 shrink-0 bg-gray-900 border-b border-gray-800 text-xs select-none">
-    <!-- Force run -->
+    <!-- Reset -->
     <button class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
-            title="Force run (R)" @onclick="OnForceRun">
-        ▶ Run
-    </button>
-
-    <!-- Reset: two-step so a stray click doesn't discard results and restart discovery -->
-    <button class="@(_resetArmed
-                ? "px-2 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded transition-colors"
-                : "px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors")"
             title="Reset: reload the project graph, clear results and coverage, re-discover and run all tests"
-            @onclick="HandleResetClick" @onblur="DisarmReset">
-        @(_resetArmed ? "⟲ Confirm reset?" : "⟲ Reset")
+            @onclick="OnReset">
+        ⟲ Reset
     </button>
 
     <!-- Expand/collapse all -->
@@ -65,7 +57,6 @@
 
 @code {
     [Parameter] public string? Filter { get; set; }
-    [Parameter] public EventCallback OnForceRun { get; set; }
     [Parameter] public EventCallback OnReset { get; set; }
     [Parameter] public EventCallback OnExpandAll { get; set; }
     [Parameter] public EventCallback OnCollapseAll { get; set; }
@@ -74,32 +65,6 @@
     [Parameter] public EventCallback OnToggleDetailPosition { get; set; }
 
     private System.Timers.Timer? _debounceTimer;
-    private bool _resetArmed;
-    private CancellationTokenSource? _disarmCts;
-
-    private async Task HandleResetClick()
-    {
-        if (!_resetArmed)
-        {
-            _resetArmed = true;
-            _disarmCts?.Cancel();
-            _disarmCts = new CancellationTokenSource();
-            var token = _disarmCts.Token;
-            _ = Task.Delay(TimeSpan.FromSeconds(4), token).ContinueWith(
-                _ => InvokeAsync(() => { _resetArmed = false; StateHasChanged(); }),
-                token, TaskContinuationOptions.OnlyOnRanToCompletion, TaskScheduler.Default);
-            return;
-        }
-
-        DisarmReset();
-        await OnReset.InvokeAsync();
-    }
-
-    private void DisarmReset()
-    {
-        _disarmCts?.Cancel();
-        _resetArmed = false;
-    }
 
     private void HandleFilterInput(ChangeEventArgs e)
     {
@@ -132,6 +97,5 @@
     public void Dispose()
     {
         _debounceTimer?.Dispose();
-        _disarmCts?.Cancel();
     }
 }
