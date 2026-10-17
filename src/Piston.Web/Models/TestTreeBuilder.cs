@@ -487,7 +487,7 @@ public static class TestTreeBuilder
         lastFileChangeTime.HasValue && suite.Timestamp < lastFileChangeTime.Value;
 
     // Dots inside a parameterised test's argument list (e.g. "dotnet.exe") are not name separators.
-    private static string NameHead(string fqn)
+    internal static string NameHead(string fqn)
     {
         var paren = fqn.IndexOf('(');
         return paren < 0 ? fqn : fqn[..paren];
@@ -499,7 +499,7 @@ public static class TestTreeBuilder
         return parts.Length <= 2 ? string.Empty : string.Join('.', parts[..^2]);
     }
 
-    private static string ClassKey(string fqn)
+    internal static string ClassKey(string fqn)
     {
         var idx = NameHead(fqn).LastIndexOf('.');
         return idx < 0 ? fqn : fqn[..idx];
@@ -537,7 +537,7 @@ public static class TestTreeBuilder
         return (method, classKey == fqn ? null : classKey);
     }
 
-    private static string SimpleSegment(string key)
+    internal static string SimpleSegment(string key)
     {
         var idx = key.LastIndexOf('.');
         return idx < 0 ? key : key[(idx + 1)..];

@@ -1,0 +1,228 @@
+@using Piston.Protocol.Dtos
+@using Piston.Web.Models
+
+<div class="flex flex-col h-full overflow-y-auto p-4 gap-4 text-xs">
+    <!-- Name, run action and summary -->
+    <div>
+        <div class="flex items-start gap-3">
+            <div class="flex items-center gap-2 min-w-0 flex-1 pt-1">
+                <span class="@StatusColor(_overall) shrink-0">@StatusIcon(_overall)</span>
+                <NodeIcon Structure="@Detail.Structure" Class="w-4 h-4" />
+                <span class="text-gray-200 font-semibold break-all">@Detail.Title</span>
+            </div>
+            <RunTestsButton Command="@Detail.Run" Count="@Detail.Tests.Count" CanRun="@CanRun" Note="@RunNote" />
+        </div>
+        @if (Detail.Subtitle is { } subtitle)
+        {
+            <div class="text-gray-500 break-all mt-1">@subtitle</div>
+        }
+        @if (Detail.Structure is NodeStructure.Framework or NodeStructure.Namespace or NodeStructure.Class && Detail.Projects.Count == 1)
+        {
+            <div class="text-gray-500 mt-1">
+                Project:
+                <button type="button"
+                        class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300 focus-visible:decoration-gray-300 focus:outline-none"
+                        title="Show project details and its run log"
+                        @onclick="() => OnShowProject.InvokeAsync(Detail.Projects[0])">@Detail.Projects[0]</button>
+            </div>
+        }
+        <div class="flex flex-wrap gap-x-3 gap-y-1 text-gray-500 mt-2">
+            @foreach (var (status, count) in Counts())
+            {
+                <span><span class="@StatusColor(status) tabular-nums">@count.ToString("N0")</span> @StatusLabel(status)</span>
+            }
+        </div>
+        <div class="text-gray-500 mt-1">@string.Join(" · ", Facts())</div>
+    </div>
+
+    @if (Detail.Tests.Count == 0)
+    {
+        <div class="text-gray-600">No results yet.</div>
+    }
+
+    <!-- Results by project, for groups that span projects -->
+    @if (Detail.Structure is NodeStructure.Status or NodeStructure.Pinned && Detail.Projects.Count > 0)
+    {
+        <div>
+            <div class="text-gray-400 font-semibold mb-1">By project</div>
+            @foreach (var (project, count) in ByProject())
+            {
+                <button type="button" class="@RowClass" title="Show project details and its run log"
+                        @onclick="() => OnShowProject.InvokeAsync(project)">
+                    <NodeIcon Structure="NodeStructure.Project" Class="w-3.5 h-3.5" />
+                    <span class="flex-1 truncate text-left text-gray-300">@project</span>
+                    <span class="text-gray-500 tabular-nums">@count.ToString("N0")</span>
+                </button>
+            }
+        </div>
+    }
+
+    <!-- Failures first: they are what needs attention -->
+    @if (_failures.Count > 0)
+    {
+        <div>
+            <div class="text-red-400 font-semibold mb-1">Failed</div>
+            @foreach (var test in _failures.Take(MaxListed))
+            {
+                <button type="button" class="@RowClass" title="@test.FullyQualifiedName" @onclick="() => OnSelectTest.InvokeAsync(test)">
+                    <span class="text-red-400 w-3 text-center shrink-0">✗</span>
+                    <span class="flex-1 truncate text-left text-gray-200">@ListLabel(test)</span>
+                    <FrameworkBadge Framework="@test.TargetFramework" />
+                </button>
+            }
+            @if (_failures.Count > MaxListed)
+            {
+                <div class="text-gray-600 px-1 mt-1">and @((_failures.Count - MaxListed).ToString("N0")) more</div>
+            }
+        </div>
+    }
+
+    <!-- Slowest results -->
+    @if (_slowest.Count > 1)
+    {
+        <div>
+            <div class="text-gray-400 font-semibold mb-1">Slowest</div>
+            @foreach (var test in _slowest)
+            {
+                <button type="button" class="@RowClass" title="@test.FullyQualifiedName" @onclick="() => OnSelectTest.InvokeAsync(test)">
+                    <span class="@StatusColor(test.Status) w-3 text-center shrink-0">@StatusIcon(test.Status)</span>
+                    <span class="flex-1 truncate text-left text-gray-200">@ListLabel(test)</span>
+                    <FrameworkBadge Framework="@test.TargetFramework" />
+                    <span class="text-yellow-600 tabular-nums">@FormatDuration(test.DurationMs)</span>
+                </button>
+            }
+        </div>
+    }
+
+    @if (Detail.Structure == NodeStructure.Project)
+    {
+        <RunLog Project="@Detail.Title" RunId="@Detail.RunId" />
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public NodeDetail Detail { get; set; } = default!;
+
+    /// <summary>False while a run is in progress or the daemon is unreachable.</summary>
+    [Parameter] public bool CanRun { get; set; }
+
+    [Parameter] public EventCallback<TestResultDto> OnSelectTest { get; set; }
+
+    /// <summary>Shows a project's details, including its run log.</summary>
+    [Parameter] public EventCallback<string> OnShowProject { get; set; }
+
+    private const int MaxListed = 10;
+    private const int SlowestCount = 5;
+    private const string RowClass =
+        "w-full flex items-center gap-2 px-1 py-0.5 rounded hover:bg-gray-800 focus:outline-none focus-visible:bg-gray-800";
+
+    private static readonly TestStatusDto[] StatusOrder =
+        [TestStatusDto.Failed, TestStatusDto.Running, TestStatusDto.Passed, TestStatusDto.Skipped, TestStatusDto.NotRun];
+
+    private TestStatusDto? _overall;
+    private List<TestResultDto> _failures = [];
+    private List<TestResultDto> _slowest = [];
+
+    protected override void OnParametersSet()
+    {
+        var tests = Detail.Tests;
+        _overall = tests.Count == 0 ? null
+            : tests.Any(t => t.Status == TestStatusDto.Failed) ? TestStatusDto.Failed
+            : tests.Any(t => t.Status == TestStatusDto.Running) ? TestStatusDto.Running
+            : tests.Any(t => t.Status == TestStatusDto.Skipped) ? TestStatusDto.Skipped
+            : tests.All(t => t.Status == TestStatusDto.Passed) ? TestStatusDto.Passed
+            : TestStatusDto.NotRun;
+        _failures = [.. tests
+            .Where(t => t.Status == TestStatusDto.Failed)
+            .OrderBy(t => TestTreeBuilder.ClassMethodLabel(t.FullyQualifiedName), StringComparer.Ordinal)];
+        _slowest = [.. tests
+            .Where(t => t.DurationMs > 0 && t.Status != TestStatusDto.Running)
+            .OrderByDescending(t => t.DurationMs)
+            .Take(SlowestCount)];
+    }
+
+    // A class node's results all share its class, so lists show only the method.
+    private string ListLabel(TestResultDto test) =>
+        Detail.Structure == NodeStructure.Class
+            ? TestTreeBuilder.MethodLabel(test.FullyQualifiedName)
+            : TestTreeBuilder.ClassMethodLabel(test.FullyQualifiedName);
+
+    private string? RunNote => Detail.Structure switch
+    {
+        NodeStructure.Project   => "Build the project and run all of its tests",
+        NodeStructure.Framework => "Runs these tests on every framework the project targets",
+        _                       => Detail.Tests.Count == 0 ? null : "Build and run the tests shown under this node",
+    };
+
+    private IEnumerable<(TestStatusDto Status, int Count)> Counts() =>
+        StatusOrder
+            .Select(status => (status, Detail.Tests.Count(t => t.Status == status)))
+            .Where(c => c.Item2 > 0);
+
+    private IEnumerable<string> Facts()
+    {
+        var tests = Detail.Tests;
+        yield return tests.Count == 1 ? "1 result" : $"{tests.Count:N0} results";
+
+        if (Detail.Structure is NodeStructure.Project or NodeStructure.Framework or NodeStructure.Namespace)
+        {
+            var classes = tests.Select(t => TestTreeBuilder.ClassKey(t.FullyQualifiedName)).Distinct(StringComparer.Ordinal).Count();
+            yield return classes == 1 ? "1 class" : $"{classes:N0} classes";
+        }
+
+        if (Detail.Projects.Count > 1)
+        {
+            yield return $"{Detail.Projects.Count} projects";
+        }
+
+        var frameworks = tests.Select(t => t.TargetFramework).OfType<string>()
+            .Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToList();
+        if (frameworks.Count > 0 && Detail.Structure != NodeStructure.Framework)
+        {
+            yield return string.Join(", ", frameworks);
+        }
+
+        var totalMs = tests.Where(t => t.Status != TestStatusDto.Running).Sum(t => t.DurationMs);
+        if (totalMs > 0)
+        {
+            yield return $"{FormatDuration(totalMs)} total test time";
+        }
+    }
+
+    private IEnumerable<(string Project, int Count)> ByProject() =>
+        Detail.Tests
+            .GroupBy(t => Detail.ProjectOf.GetValueOrDefault(t), StringComparer.Ordinal)
+            .Where(g => g.Key is not null)
+            .Select(g => (g.Key!, g.Count()))
+            .OrderBy(g => g.Item1, StringComparer.Ordinal);
+
+    private static string StatusIcon(TestStatusDto? status) => status switch
+    {
+        TestStatusDto.Passed  => "✓",
+        TestStatusDto.Failed  => "✗",
+        TestStatusDto.Skipped => "●",
+        TestStatusDto.Running => "⟳",
+        _                     => "◌",
+    };
+
+    private static string StatusColor(TestStatusDto? status) => status switch
+    {
+        TestStatusDto.Passed  => "text-green-400",
+        TestStatusDto.Failed  => "text-red-400",
+        TestStatusDto.Skipped => "text-yellow-400",
+        TestStatusDto.Running => "text-cyan-400",
+        _                     => "text-gray-400",
+    };
+
+    private static string StatusLabel(TestStatusDto status) => status switch
+    {
+        TestStatusDto.Passed  => "passed",
+        TestStatusDto.Failed  => "failed",
+        TestStatusDto.Skipped => "skipped",
+        TestStatusDto.Running => "running",
+        _                     => "not run",
+    };
+
+    private static string FormatDuration(double ms) =>
+        ms < 1000 ? $"{(int)ms}ms" : ms < 60_000 ? $"{ms / 1000.0:F1}s" : $"{(int)(ms / 60_000)}m {(int)(ms % 60_000 / 1000)}s";
+}

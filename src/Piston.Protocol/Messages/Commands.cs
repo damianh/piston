@@ -21,6 +21,14 @@ public sealed record StartCommandParams(string SolutionPath);
 /// <summary>Params payload for the set-filter JSON-RPC command.</summary>
 public sealed record SetFilterCommandParams(string? Filter);
 
+/// <summary>Parameters for <c>engine/runTests</c>: the tests to run.</summary>
+/// <param name="Projects">Names of the test projects to run, as reported in <see cref="Dtos.TestSuiteDto.Name"/>.</param>
+/// <param name="Tests">
+/// Fully qualified names of the tests to run within those projects; null runs every test in them. All
+/// cases of a parameterised test run.
+/// </param>
+public sealed record RunTestsCommand(IReadOnlyList<string> Projects, IReadOnlyList<string>? Tests = null);
+
 /// <summary>Parameters for <c>tests/getRunLog</c>: the test project whose latest run log to fetch.</summary>
 /// <param name="Project">The project's name, as reported in <see cref="Dtos.TestSuiteDto.Name"/>.</param>
 public sealed record GetRunLogCommand(string Project);

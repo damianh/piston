@@ -14,6 +14,9 @@ public enum TestRunTrigger
 
     /// <summary>A file-watcher change batch (normally a selective run).</summary>
     FileChange,
+
+    /// <summary>A request to run selected tests, such as a node in the dashboard's test tree.</summary>
+    Targeted,
 }
 
 /// <summary>Lifecycle state of a single test run.</summary>

@@ -145,6 +145,75 @@ public sealed class OrchestratorSelectiveBuildTests
         _ = Assert.Single(runner.Calls); // only the initial full run executed tests
     }
 
+    [Fact]
+    public async Task RunSelected_BuildsAndRunsTheSelection_IgnoringTheUserFilter()
+    {
+        var state = new PistonState { TestFilter = "Category=Slow" };
+        var build = new RecordingBuildService();
+        var runner = new RecordingTestRunner();
+        var analyzer = new FixedImpactAnalyzer(
+            new ImpactAnalysisResult([], [], RequiresGraphRebuild: false, IsFullRun: false));
+
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), build, runner, analyzer, state);
+        await orchestrator.StartAsync("/repo/All.slnx");
+        await runner.WaitForCallsAsync(1);
+
+        var run = await orchestrator.RunSelectedAsync(
+            new TestSelection(["Lib.Tests"], ["Lib.T.A(x: 1)", "Lib.T.A(x: 2)", "Lib.T.B"]));
+
+        Assert.Equal(TestRunTrigger.Targeted, run.Trigger);
+        Assert.Equal(TestRunScope.Selective, run.Scope);
+        Assert.Null(run.Context!.UserFilter);
+        Assert.Equal("FullyQualifiedName=Lib.T.A|FullyQualifiedName=Lib.T.B", run.Context.EffectiveFilter);
+        Assert.Equal([LibTests], build.Calls[1]);
+        Assert.Equal([LibTests], runner.Calls[1]);
+        Assert.Equal(run.Context.EffectiveFilter, runner.Filters[1]);
+    }
+
+    [Fact]
+    public async Task RunSelected_WholeProject_RunsWithoutAFilter()
+    {
+        var runner = new RecordingTestRunner();
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), new RecordingBuildService(),
+            runner, new FixedImpactAnalyzer(new([], [], false, false)), new PistonState());
+        await orchestrator.StartAsync("/repo/All.slnx");
+        await runner.WaitForCallsAsync(1);
+
+        var run = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"]));
+
+        Assert.Null(run.Context!.EffectiveFilter);
+        Assert.Null(runner.Filters[1]);
+    }
+
+    [Fact]
+    public async Task RunSelected_UnknownProject_IsRejected()
+    {
+        var runner = new RecordingTestRunner();
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), new RecordingBuildService(),
+            runner, new FixedImpactAnalyzer(new([], [], false, false)), new PistonState());
+        await orchestrator.StartAsync("/repo/All.slnx");
+        await runner.WaitForCallsAsync(1);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => orchestrator.RunSelectedAsync(new TestSelection(["Nope.Tests"])));
+        Assert.Contains("Nope.Tests", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunSelected_WhileARunIsActive_IsRejectedWithoutCancellingIt()
+    {
+        var runner = new RecordingTestRunner { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), new RecordingBuildService(),
+            runner, new FixedImpactAnalyzer(new([], [], false, false)), new PistonState());
+        await orchestrator.StartAsync("/repo/All.slnx");
+        await runner.WaitForCallsAsync(1);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"])));
+        Assert.Contains("already in progress", ex.Message, StringComparison.Ordinal);
+        Assert.False(runner.LastToken.IsCancellationRequested);
+
+        runner.Gate.SetResult();
+    }
+
     private sealed class FixedImpactAnalyzer(ImpactAnalysisResult selective) : IImpactAnalyzer
     {
         public Task InitializeAsync(string solutionPath, CancellationToken ct) => Task.CompletedTask;
@@ -182,6 +251,9 @@ public sealed class OrchestratorSelectiveBuildTests
     {
         private readonly CallCounter _counter = new();
         public List<IReadOnlyList<string>?> Calls { get; } = [];
+        public List<string?> Filters { get; } = [];
+        public TaskCompletionSource? Gate { get; init; }
+        public CancellationToken LastToken { get; private set; }
 
         public Task WaitForCallsAsync(int count) => _counter.WaitForAsync(count);
 
@@ -200,10 +272,14 @@ public sealed class OrchestratorSelectiveBuildTests
             lock (Calls)
             {
                 Calls.Add(testProjectPaths?.ToList());
+                Filters.Add(filter);
+                LastToken = ct;
             }
 
             _counter.Increment();
-            return Task.FromResult(new TestRunResult([], null, []));
+            return Gate is { } gate
+                ? gate.Task.ContinueWith(_ => new TestRunResult([], null, []), TaskScheduler.Default)
+                : Task.FromResult(new TestRunResult([], null, []));
         }
     }
 

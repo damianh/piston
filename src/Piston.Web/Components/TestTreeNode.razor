@@ -3,23 +3,22 @@
 
 @{
     var indent = Depth * 16;
-    var isProject = Node.Kind == TestNodeKind.Suite && Node.Suite is not null;
-    var isSelected = Node.Kind == TestNodeKind.Test
+    var isTest = Node.Kind == TestNodeKind.Test;
+    var isSelected = isTest
         ? Node.Test?.Key == SelectedKey
-        : isProject && Node.Suite!.Name == SelectedProject;
-    var isPinned = Node.Kind == TestNodeKind.Test && Node.Test is not null && PinnedFqns.Contains(Node.Test.FullyQualifiedName);
+        : Node.ExpansionKey is { } key && key == SelectedNodeKey;
+    var isPinned = isTest && Node.Test is not null && PinnedFqns.Contains(Node.Test.FullyQualifiedName);
 }
 
 <div>
-    <!-- Node row -->
+    <!-- Node row: a click shows the node's details; the chevron or a double-click expands or collapses it -->
     <div class="flex items-center gap-1 px-2 py-0.5 cursor-pointer hover:bg-gray-800 @(isSelected ? "bg-gray-700" : "") @(Node.IsStale ? "opacity-50" : "")"
          style="padding-left: @(indent + 8)px"
-         title="@(isProject ? "Show project details and run log · double-click to expand or collapse" : null)"
+         title="@(isTest ? null : "Show details · double-click to expand or collapse")"
          @onclick="HandleClick"
          @ondblclick="HandleDoubleClick">
 
-        <!-- Expand/collapse toggle for non-leaf nodes; a project row's click selects it instead -->
-        @if (Node.Children.Count > 0 && isProject)
+        @if (Node.Children.Count > 0)
         {
             <button type="button"
                     class="text-gray-600 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none w-3 text-center text-xs select-none"
@@ -29,10 +28,6 @@
                     @onclick:stopPropagation="true"
                     @ondblclick:stopPropagation="true">@(Node.IsExpanded ? "▾" : "▸")</button>
         }
-        else if (Node.Children.Count > 0)
-        {
-            <span class="text-gray-600 w-3 text-center text-xs select-none">@(Node.IsExpanded ? "▾" : "▸")</span>
-        }
         else
         {
             <span class="w-3"></span>
@@ -41,33 +36,10 @@
         <!-- Status icon -->
         <span class="@StatusColor(Node) w-4 text-center">@StatusIcon(Node)</span>
 
-        <!-- Structural icon: project / namespace / class -->
-        @switch (StructureOf(Node))
+        <!-- Structural icon: project / framework / namespace / class -->
+        @if (Node.Structure is not (NodeStructure.Status or NodeStructure.Pinned))
         {
-            case NodeStructure.Project:
-                <svg class="w-3.5 h-3.5 shrink-0 text-violet-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-label="Project">
-                    <path d="M8 1.5 14 4.5v7L8 14.5 2 11.5v-7z" />
-                    <path d="M2 4.5 8 7.5 14 4.5M8 7.5v7" />
-                </svg>
-                break;
-            case NodeStructure.Framework:
-                <svg class="w-3.5 h-3.5 shrink-0 text-gray-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-label="Target framework">
-                    <rect x="4" y="4" width="8" height="8" rx="1.5" />
-                    <path d="M6.5 1.5v2.5M9.5 1.5v2.5M6.5 12v2.5M9.5 12v2.5M1.5 6.5H4M1.5 9.5H4M12 6.5h2.5M12 9.5h2.5" />
-                </svg>
-                break;
-            case NodeStructure.Namespace:
-                <svg class="w-3.5 h-3.5 shrink-0 text-sky-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-label="Namespace">
-                    <path d="M6 2.5c-1.4 0-2 .6-2 2V6c0 1-.5 2-1.5 2 1 0 1.5 1 1.5 2v1.5c0 1.4.6 2 2 2" />
-                    <path d="M10 2.5c1.4 0 2 .6 2 2V6c0 1 .5 2 1.5 2-1 0-1.5 1-1.5 2v1.5c0 1.4-.6 2-2 2" />
-                </svg>
-                break;
-            case NodeStructure.Class:
-                <svg class="w-3.5 h-3.5 shrink-0 text-gray-400" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" aria-label="Class">
-                    <rect x="2" y="2" width="12" height="12" rx="2.5" />
-                    <path d="M10.2 6.1a2.6 2.6 0 1 0 0 3.8" />
-                </svg>
-                break;
+            <NodeIcon Structure="@Node.Structure" />
         }
 
         <!-- Label -->
@@ -80,10 +52,7 @@
             @Node.Label
         </span>
 
-        @if (Node.Framework is { } framework)
-        {
-            <span class="shrink-0 rounded border border-gray-800 px-1 text-[10px] leading-4 text-gray-500 font-mono">@framework</span>
-        }
+        <FrameworkBadge Framework="@Node.Framework" />
 
         <!-- Duration for test nodes -->
         @if (Node.Kind == TestNodeKind.Test && Node.Test?.DurationMs > 0 && Node.Test.Status != TestStatusDto.Running)
@@ -111,10 +80,10 @@
             <TestTreeNode Node="child"
                           Depth="@(Depth + 1)"
                           SelectedKey="@SelectedKey"
-                          SelectedProject="@SelectedProject"
+                          SelectedNodeKey="@SelectedNodeKey"
                           PinnedFqns="@PinnedFqns"
                           OnSelectTest="@OnSelectTest"
-                          OnSelectProject="@OnSelectProject"
+                          OnSelectNode="@OnSelectNode"
                           OnTogglePin="@OnTogglePin"
                           OnExpansionChanged="@OnExpansionChanged" />
         }
@@ -125,10 +94,14 @@
     [Parameter] public required TestNode Node { get; set; }
     [Parameter] public int Depth { get; set; }
     [Parameter] public string? SelectedKey { get; set; }
-    [Parameter] public string? SelectedProject { get; set; }
+
+    /// <summary>The expansion key of the selected non-test node.</summary>
+    [Parameter] public string? SelectedNodeKey { get; set; }
     [Parameter] public HashSet<string> PinnedFqns { get; set; } = [];
     [Parameter] public EventCallback<TestResultDto> OnSelectTest { get; set; }
-    [Parameter] public EventCallback<string> OnSelectProject { get; set; }
+
+    /// <summary>Selects a non-test node by its expansion key.</summary>
+    [Parameter] public EventCallback<string> OnSelectNode { get; set; }
     [Parameter] public EventCallback<string> OnTogglePin { get; set; }
     [Parameter] public Action<TestNode>? OnExpansionChanged { get; set; }
 
@@ -138,11 +111,11 @@
         {
             OnSelectTest.InvokeAsync(Node.Test);
         }
-        else if (Node.Kind == TestNodeKind.Suite && Node.Suite is not null)
+        else if (Node.ExpansionKey is { } key)
         {
-            OnSelectProject.InvokeAsync(Node.Suite.Name);
+            OnSelectNode.InvokeAsync(key);
         }
-        else
+        else if (Node.Children.Count > 0)
         {
             ToggleExpanded();
         }
@@ -150,7 +123,7 @@
 
     private void HandleDoubleClick()
     {
-        if (Node.Kind == TestNodeKind.Suite && Node.Children.Count > 0)
+        if (Node.Kind != TestNodeKind.Test && Node.ExpansionKey is not null && Node.Children.Count > 0)
         {
             ToggleExpanded();
         }
@@ -161,18 +134,6 @@
         Node.IsExpanded = !Node.IsExpanded;
         OnExpansionChanged?.Invoke(Node);
     }
-
-    private enum NodeStructure { None, Project, Framework, Namespace, Class }
-
-    // TestTreeBuilder encodes the node's structural level in its expansion-key prefix.
-    private static NodeStructure StructureOf(TestNode node) => node.ExpansionKey switch
-    {
-        { } k when k.StartsWith("suite:", StringComparison.Ordinal) => NodeStructure.Project,
-        { } k when k.StartsWith("tfm:", StringComparison.Ordinal)   => NodeStructure.Framework,
-        { } k when k.StartsWith("ns:", StringComparison.Ordinal)    => NodeStructure.Namespace,
-        { } k when k.StartsWith("class:", StringComparison.Ordinal) => NodeStructure.Class,
-        _                                                           => NodeStructure.None,
-    };
 
     private static string StatusIcon(TestNode node)
     {

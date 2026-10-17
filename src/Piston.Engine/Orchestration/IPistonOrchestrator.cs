@@ -8,5 +8,6 @@ public interface IPistonOrchestrator : IDisposable
     Task StartAsync(string solutionPath);
     Task ForceRunAsync();
     Task<Models.TestRunRecord?> RequestRunAsync();
+    Task<Models.TestRunRecord> RunSelectedAsync(Models.TestSelection selection);
     void Stop();
 }

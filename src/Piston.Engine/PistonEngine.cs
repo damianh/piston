@@ -212,6 +212,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
     public Task<TestRunRecord?> RequestRunAsync() => _orchestrator.RequestRunAsync();
 
+    public Task<TestRunRecord> RunSelectedAsync(TestSelection selection) => _orchestrator.RunSelectedAsync(selection);
+
     public async Task ResetAsync()
     {
         await _orchestrator.ResetAsync().ConfigureAwait(false);

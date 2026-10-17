@@ -24,6 +24,53 @@ public sealed class TestNode
 
     /// <summary>Target framework shown beside a test leaf in views without a framework level.</summary>
     public string? Framework { get; init; }
+
+    /// <summary>What a non-test node groups, which <see cref="TestTreeBuilder"/> encodes in its expansion key.</summary>
+    public NodeStructure Structure => StructureOf(ExpansionKey);
+
+    public static NodeStructure StructureOf(string? expansionKey) => expansionKey switch
+    {
+        { } k when k.StartsWith("suite:", StringComparison.Ordinal) => NodeStructure.Project,
+        { } k when k.StartsWith("tfm:", StringComparison.Ordinal) => NodeStructure.Framework,
+        { } k when k.StartsWith("ns:", StringComparison.Ordinal) => NodeStructure.Namespace,
+        { } k when k.StartsWith("class:", StringComparison.Ordinal) => NodeStructure.Class,
+        { } k when k.StartsWith("status:", StringComparison.Ordinal) => NodeStructure.Status,
+        "pinned" => NodeStructure.Pinned,
+        _ => NodeStructure.None,
+    };
+
+    /// <summary>The tests under this node, or the node's own test.</summary>
+    public IEnumerable<TestResultDto> Tests()
+    {
+        if (Test is not null)
+        {
+            yield return Test;
+        }
+
+        foreach (var test in Children.SelectMany(c => c.Tests()))
+        {
+            yield return test;
+        }
+    }
+
+    /// <summary>The node with <paramref name="expansionKey"/> in <paramref name="nodes"/> or their descendants.</summary>
+    public static TestNode? Find(IEnumerable<TestNode> nodes, string expansionKey)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.ExpansionKey == expansionKey)
+            {
+                return node;
+            }
+
+            if (Find(node.Children, expansionKey) is { } found)
+            {
+                return found;
+            }
+        }
+
+        return null;
+    }
 }
 
 public enum TestNodeKind
@@ -31,4 +78,15 @@ public enum TestNodeKind
     Suite,
     Group,
     Test,
+}
+
+public enum NodeStructure
+{
+    None,
+    Project,
+    Framework,
+    Namespace,
+    Class,
+    Status,
+    Pinned,
 }

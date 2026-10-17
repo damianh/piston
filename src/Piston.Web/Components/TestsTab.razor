@@ -30,10 +30,10 @@
         <div class="flex flex-col min-w-0 min-h-0 overflow-hidden" style="flex: 0 0 @(_splitPercentCss)%">
             <TestTree Nodes="@_treeNodes"
                       SelectedKey="@_viewState.SelectedTestKey"
-                      SelectedProject="@_viewState.SelectedProject"
+                      SelectedNodeKey="@_viewState.SelectedNodeKey"
                       PinnedFqns="@_viewState.PinnedTestFqns"
                       OnSelectTest="SelectTest"
-                      OnSelectProject="SelectProject"
+                      OnSelectNode="SelectNode"
                       OnTogglePin="TogglePin"
                       OnExpansionChanged="RememberExpansion" />
         </div>
@@ -59,15 +59,21 @@
             {
                 <BuildErrors Build="@_snapshot.LastBuild" />
             }
-            else if (_viewState.SelectedProject is { } project)
+            else if (_nodeDetail is not null)
             {
-                <ProjectDetail Project="@project"
-                               Suite="@TestTreeBuilder.ForProject(_displayedSuites, project)"
-                               RunId="@(_snapshot is null ? null : TestTreeBuilder.ForProject(_snapshot.Suites, project)?.RunId)" />
+                <GroupDetail @key="_viewState.SelectedNodeKey"
+                             Detail="@_nodeDetail"
+                             CanRun="@CanRun"
+                             OnSelectTest="SelectTest"
+                             OnShowProject="SelectProject" />
             }
             else
             {
-                <TestDetail Test="@_selectedTest" Project="@ProjectOf(_selectedTest)" OnShowProject="SelectProject" />
+                <TestDetail @key="_selectedTest?.Key"
+                            Test="@_selectedTest"
+                            Project="@ProjectOf(_selectedTest)"
+                            CanRun="@CanRun"
+                            OnShowProject="SelectProject" />
             }
         </div>
     </div>
@@ -88,6 +94,7 @@
     private StateSnapshotNotification? _snapshot;
     private List<TestNode> _treeNodes = [];
     private TestResultDto? _selectedTest;
+    private NodeDetail? _nodeDetail;
     private string? _filter
     {
         get => _viewState.Filter;
@@ -140,6 +147,7 @@
             _treeNodes = [];
             _displayedSuites = [];
             _failureCount = 0;
+            _nodeDetail = null;
             return;
         }
 
@@ -170,24 +178,39 @@
                 _viewState.SelectedTestKey = _selectedTest.Key;
             }
         }
+
+        UpdateNodeDetail();
     }
+
+    // A targeted run is refused while another is in progress.
+    private bool CanRun =>
+        Client.IsConnected && _snapshot?.Phase is PistonPhaseDto.Idle or PistonPhaseDto.Watching or PistonPhaseDto.Error;
+
+    private void UpdateNodeDetail() =>
+        _nodeDetail = _viewState.SelectedNodeKey is { } key && _snapshot is not null
+            ? NodeDetail.For(key, _displayedSuites, _snapshot.Suites, _treeNodes)
+            : null;
 
     private string? ProjectOf(TestResultDto? test) =>
         test is null ? null : _displayedSuites.FirstOrDefault(s => s.Tests.Any(t => t.Key == test.Key))?.Name;
 
     private void SelectTest(TestResultDto test)
     {
-        _viewState.SelectedProject = null;
+        _viewState.SelectedNodeKey = null;
+        _nodeDetail = null;
         _viewState.SelectedTestKey = test.Key;
         _selectedTest = test;
         StateHasChanged();
     }
 
-    private void SelectProject(string project)
+    private void SelectProject(string project) => SelectNode($"suite:{project}");
+
+    private void SelectNode(string key)
     {
         _viewState.SelectedTestKey = null;
         _selectedTest = null;
-        _viewState.SelectedProject = project;
+        _viewState.SelectedNodeKey = key;
+        UpdateNodeDetail();
         StateHasChanged();
     }
 

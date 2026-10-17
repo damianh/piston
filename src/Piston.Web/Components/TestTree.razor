@@ -16,10 +16,10 @@
                 <TestTreeNode Node="node"
                               Depth="0"
                               SelectedKey="@SelectedKey"
-                              SelectedProject="@SelectedProject"
+                              SelectedNodeKey="@SelectedNodeKey"
                               PinnedFqns="@PinnedFqns"
                               OnSelectTest="@OnSelectTest"
-                              OnSelectProject="@OnSelectProject"
+                              OnSelectNode="@OnSelectNode"
                               OnTogglePin="@OnTogglePin"
                               OnExpansionChanged="@OnExpansionChanged" />
             }
@@ -30,10 +30,10 @@
 @code {
     [Parameter] public List<TestNode> Nodes { get; set; } = [];
     [Parameter] public string? SelectedKey { get; set; }
-    [Parameter] public string? SelectedProject { get; set; }
+    [Parameter] public string? SelectedNodeKey { get; set; }
     [Parameter] public HashSet<string> PinnedFqns { get; set; } = [];
     [Parameter] public EventCallback<TestResultDto> OnSelectTest { get; set; }
-    [Parameter] public EventCallback<string> OnSelectProject { get; set; }
+    [Parameter] public EventCallback<string> OnSelectNode { get; set; }
     [Parameter] public EventCallback<string> OnTogglePin { get; set; }
     [Parameter] public Action<TestNode>? OnExpansionChanged { get; set; }
 }

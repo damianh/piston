@@ -24,6 +24,9 @@ public static class ProtocolMethods
     public const string EngineClearResults = "engine/clearResults";
     public const string EngineReset = "engine/reset";
 
+    /// <summary>Start a run of selected tests; replies once the run is requested, without awaiting it.</summary>
+    public const string EngineRunTests = "engine/runTests";
+
     /// <summary>Request per-file coverage data for the given source file.</summary>
     public const string CoverageGetForFile = "coverage/getForFile";
 

@@ -23,7 +23,7 @@ public sealed class EngineClientService : IAsyncDisposable
     private CancellationTokenSource? _cts;
 
     private readonly List<ActivityEvent> _activityLog = [];
-    private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonNode?>> _pendingRequests = new();
+    private readonly ConcurrentDictionary<string, TaskCompletionSource<JsonRpcResponse?>> _pendingRequests = new();
 
     public event Action<StateSnapshotNotification>? StateChanged;
     public event Action? ConnectionStateChanged;
@@ -193,7 +193,7 @@ public sealed class EngineClientService : IAsyncDisposable
     {
         if (_pendingRequests.TryRemove(response.Id, out var tcs))
         {
-            _ = tcs.TrySetResult(response.Result);
+            _ = tcs.TrySetResult(response);
         }
     }
 
@@ -269,7 +269,14 @@ public sealed class EngineClientService : IAsyncDisposable
 
     public Task<JsonNode?> SendRequestAsync(string method) => SendRequestAsync(method, null);
 
-    public async Task<JsonNode?> SendRequestAsync(string method, object? @params)
+    public async Task<JsonNode?> SendRequestAsync(string method, object? @params) =>
+        (await SendForResponseAsync(method, @params).ConfigureAwait(false))?.Result;
+
+    /// <summary>
+    /// Sends a request and returns its response, including any error, or <see langword="null"/> when the
+    /// daemon is unreachable or does not reply in time.
+    /// </summary>
+    private async Task<JsonRpcResponse?> SendForResponseAsync(string method, object? @params)
     {
         if (_webSocket?.State != WebSocketState.Open)
         {
@@ -284,7 +291,7 @@ public sealed class EngineClientService : IAsyncDisposable
         var request = new JsonRpcRequest(id, method, paramsNode);
         var bytes = JsonRpcSerializer.Serialize(request);
 
-        var tcs = new TaskCompletionSource<JsonNode?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tcs = new TaskCompletionSource<JsonRpcResponse?>(TaskCreationOptions.RunContinuationsAsynchronously);
         _pendingRequests[id] = tcs;
 
         try
@@ -301,6 +308,21 @@ public sealed class EngineClientService : IAsyncDisposable
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         _ = timeoutCts.Token.Register(() => tcs.TrySetResult(null));
         return await tcs.Task.ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Starts a run of the given tests. Returns <see langword="null"/> once the run is requested, or why it
+    /// could not start (for example, another run is in progress).
+    /// </summary>
+    public async Task<string?> RunTestsAsync(RunTestsCommand command)
+    {
+        var response = await SendForResponseAsync(ProtocolMethods.EngineRunTests, command).ConfigureAwait(false);
+        return response switch
+        {
+            null => "Piston did not respond. Check that the daemon is running.",
+            { Error: { } error } => error.Message,
+            _ => null,
+        };
     }
 
     public async Task<ActivityLogResponse?> GetActivityLogAsync()

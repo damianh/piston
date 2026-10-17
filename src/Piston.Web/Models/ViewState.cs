@@ -34,11 +34,14 @@ public sealed class ViewState
     // ── Filter ──
     public string? Filter { get; set; }
 
-    // ── Selection: a test or a project, never both ──
+    // ── Selection: a test or another tree node, never both ──
     public string? SelectedTestKey { get; set; }
 
-    /// <summary>The project shown in the details pane, by <c>TestSuiteDto.Name</c>.</summary>
-    public string? SelectedProject { get; set; }
+    /// <summary>
+    /// The project, framework, namespace, class or group shown in the details pane, by its
+    /// <see cref="TestNode.ExpansionKey"/>.
+    /// </summary>
+    public string? SelectedNodeKey { get; set; }
 
     // ── Failure navigation ──
     public int CurrentFailureIndex { get; set; } = -1;

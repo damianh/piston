@@ -293,6 +293,40 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     }
 
     /// <summary>
+    /// Starts a run of the selected tests and returns once it is requested; the returned task completes
+    /// with the run's record. Unlike file-change and forced runs it never supersedes another run.
+    /// </summary>
+    /// <exception cref="ArgumentException">The selection names no project, or a project that is not a test project.</exception>
+    /// <exception cref="InvalidOperationException">The engine is not ready, or a run is already in progress.</exception>
+    public Task<TestRunRecord> RunSelectedAsync(TestSelection selection)
+    {
+        ArgumentNullException.ThrowIfNull(selection);
+        var solutionPath = _solutionPath ?? throw new InvalidOperationException("The engine has not been started.");
+        if (selection.Projects.Count == 0)
+        {
+            throw new ArgumentException("Select at least one test project.", nameof(selection));
+        }
+
+        var allTestProjects = _impactAnalyzer.GetAllTestProjectPaths();
+        if (allTestProjects.Count == 0)
+        {
+            throw new InvalidOperationException("Test projects are still loading.");
+        }
+
+        var paths = new List<string>();
+        foreach (var name in selection.Projects.Distinct(StringComparer.Ordinal))
+        {
+            var path = allTestProjects.FirstOrDefault(p =>
+                string.Equals(TestProjectNames.SuiteName(p), name, StringComparison.Ordinal))
+                ?? throw new ArgumentException($"'{name}' is not a test project in this solution.", nameof(selection));
+            paths.Add(path);
+        }
+
+        return TriggerRunAsync(solutionPath, null, TestRunTrigger.Targeted,
+            new SelectedRun(paths, TestSelectionFilter.Build(selection.Tests)));
+    }
+
+    /// <summary>
     /// Waits for the run with <paramref name="runId"/> to reach a terminal state. Returns the retained
     /// record immediately when already terminal, or null when the run is neither active nor retained.
     /// </summary>
@@ -572,7 +606,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         _ = TriggerRunAsync(_solutionPath, batch, TestRunTrigger.FileChange);
     }
 
-    private Task<TestRunRecord> TriggerRunAsync(string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger)
+    /// <summary>The test projects and filter of a <see cref="TestRunTrigger.Targeted"/> run.</summary>
+    private sealed record SelectedRun(IReadOnlyList<string> TestProjectPaths, string? Filter);
+
+    private Task<TestRunRecord> TriggerRunAsync(
+        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, SelectedRun? selection = null)
     {
         CancellationTokenSource cts;
         lock (_lifecycleLock)
@@ -580,6 +618,12 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             if (_disposed)
             {
                 return Task.FromResult(CompleteRun(CreateRunRecord(trigger), TestRunStatus.Cancelled, "Engine is shutting down."));
+            }
+
+            // Checked under the lock so a selected run cannot cancel a run that started meanwhile.
+            if (selection is not null && _activePipelines > 0)
+            {
+                throw new InvalidOperationException("A test run is already in progress.");
             }
 
             if (_activePipelines++ == 0)
@@ -592,15 +636,15 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             _cts = cts;
             oldCts?.Cancel();
         }
-        return RunTrackedAsync(solutionPath, batch, trigger, cts);
+        return RunTrackedAsync(solutionPath, batch, trigger, selection, cts);
     }
 
     private async Task<TestRunRecord> RunTrackedAsync(
-        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, CancellationTokenSource cts)
+        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, SelectedRun? selection, CancellationTokenSource cts)
     {
         try
         {
-            return await RunPipelineAsync(solutionPath, batch, trigger, cts).ConfigureAwait(false);
+            return await RunPipelineAsync(solutionPath, batch, trigger, selection, cts).ConfigureAwait(false);
         }
         finally
         {
@@ -621,7 +665,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     }
 
     private async Task<TestRunRecord> RunPipelineAsync(
-        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, CancellationTokenSource newCts)
+        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, SelectedRun? selection, CancellationTokenSource newCts)
     {
         var run = CreateRunRecord(trigger);
 
@@ -710,16 +754,23 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             _state.NotifyChanged();
 
             var log = DiagnosticLog.Instance;
-            log?.Write("Orchestrator", batch is not null
-                ? $"TriggerRun: {batch.Changes.Count} file change(s)"
-                : "TriggerRun: full run (no batch)");
+            log?.Write("Orchestrator", (batch, selection) switch
+            {
+                ({ } b, _) => $"TriggerRun: {b.Changes.Count} file change(s)",
+                (_, { } s) => $"TriggerRun: {s.TestProjectPaths.Count} selected test project(s)",
+                _ => "TriggerRun: full run (no batch)",
+            });
 
             ImpactAnalysisResult impactResult;
             try
             {
-                impactResult = batch is not null
-                    ? _impactAnalyzer.Analyze(batch.Changes)
-                    : _impactAnalyzer.AnalyzeFullRun();
+                // Building a test project also builds the projects it references.
+                impactResult = (batch, selection) switch
+                {
+                    ({ } b, _) => _impactAnalyzer.Analyze(b.Changes),
+                    (_, { } s) => new ImpactAnalysisResult([], s.TestProjectPaths, RequiresGraphRebuild: false, IsFullRun: false),
+                    _ => _impactAnalyzer.AnalyzeFullRun(),
+                };
             }
             catch (OperationCanceledException)
             {
@@ -761,10 +812,13 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             }
 
             // Build the effective test filter:
+            //   - A selected run runs exactly its selection, ignoring the user's TestFilter
             //   - If Tier 3 produced FQNs, build a dotnet-test filter expression
             //   - If the user also has a TestFilter, AND the two together
-            var userFilter = _state.TestFilter;
-            var effectiveFilter = BuildEffectiveFilter(impactResult, userFilter);
+            var userFilter = selection is null ? _state.TestFilter : null;
+            var effectiveFilter = selection is null
+                ? BuildEffectiveFilter(impactResult, userFilter)
+                : selection.Filter;
 
             run = run with
             {

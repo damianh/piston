@@ -66,6 +66,7 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(McpCallLogResponse))]
 [JsonSerializable(typeof(ActivityLogResponse))]
 [JsonSerializable(typeof(GetRunLogCommand))]
+[JsonSerializable(typeof(RunTestsCommand))]
 [JsonSerializable(typeof(RunLogResponse))]
 [JsonSerializable(typeof(DaemonInfoResponse))]
 [JsonSerializable(typeof(UserSettings))]

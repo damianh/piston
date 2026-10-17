@@ -103,6 +103,41 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                         System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
                 }
 
+            case ProtocolMethods.EngineRunTests:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<RunTestsCommand>(@params);
+                    if (cmd?.Projects is not { Count: > 0 } projects || projects.Any(string.IsNullOrWhiteSpace))
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "projects is required.");
+                    }
+
+                    // Clients follow the run through state notifications; only a rejection is reported here.
+                    Task run;
+                    try
+                    {
+                        run = _engine.RunSelectedAsync(new Engine.Models.TestSelection(projects, cmd.Tests));
+                        if (run.IsFaulted)
+                        {
+                            await run.ConfigureAwait(false);
+                        }
+                    }
+                    catch (ArgumentException ex)
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, ex.Message);
+                    }
+                    catch (InvalidOperationException ex)
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, ex.Message);
+                    }
+
+                    _ = run.ContinueWith(
+                        static t => _ = t.Exception,
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                    return null;
+                }
+
             case ProtocolMethods.TestsGetRunLog:
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<GetRunLogCommand>(@params);
