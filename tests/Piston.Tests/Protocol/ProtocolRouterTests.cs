@@ -77,6 +77,42 @@ public sealed class ProtocolRouterTests
         await routerTask;
     }
 
+    [Fact]
+    public async Task Emit_AssignsDistinctIds_AndHistoryReplaysSameIdsAsLiveEvents()
+    {
+        var pipeName = UniquePipeName();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await using var router = new ProtocolRouter(new StubEngine(), new NamedPipeListener(pipeName));
+        var routerTask = router.RunAsync(cts.Token);
+        await using var client = new NamedPipeClientTransport(pipeName);
+        await client.ConnectAsync(cts.Token);
+        _ = await client.ReceiveAsync(cts.Token);
+        var first = ActivityEventFactory.McpToolCall("/repo/Test.slnx", "get_test_results", null, "ok", 1.5, true);
+        var second = ActivityEventFactory.McpToolCall("/repo/Test.slnx", "run_tests", null, "ok", 2.5, true);
+        first = first with { Timestamp = DateTimeOffset.UnixEpoch };
+        second = second with { Timestamp = DateTimeOffset.UnixEpoch };
+
+        router.Emit(first);
+        router.Emit(second);
+
+        var liveIds = new List<string>();
+        for (var i = 0; i < 2; i++)
+        {
+            var notification = JsonRpcSerializer.DeserializeNotification(await client.ReceiveAsync(cts.Token));
+            liveIds.Add(notification.Params!["id"]!.GetValue<string>());
+        }
+
+        await client.SendAsync(JsonRpcSerializer.Serialize(new JsonRpcRequest("log-1", ProtocolMethods.ActivityGetLog)), cts.Token);
+        var response = JsonRpcSerializer.DeserializeResponse(await client.ReceiveAsync(cts.Token));
+        var log = JsonRpcSerializer.DeserializeParams<ActivityLogResponse>(response.Result)!;
+
+        Assert.NotEqual(liveIds[0], liveIds[1]);
+        Assert.Equal(liveIds, log.Events.Select(e => e.Id));
+
+        await cts.CancelAsync();
+        await routerTask;
+    }
+
     private static async Task<(NamedPipeClientTransport client, Task readerTask, List<object> received)>
         ConnectClientAsync(string pipeName, CancellationToken ct)
     {

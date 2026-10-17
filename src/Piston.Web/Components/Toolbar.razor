@@ -106,7 +106,7 @@
 
     private static string ToggleClass(bool on, string onColor) =>
         "w-6 py-0.5 rounded text-center transition-colors " +
-        (on ? $"bg-gray-700 {onColor} hover:bg-gray-600" : "text-gray-600 hover:text-gray-400 hover:bg-gray-700/50");
+        (on ? $"bg-gray-900 ring-1 ring-gray-700 {onColor} hover:bg-gray-800" : "text-gray-500 hover:text-gray-400 hover:bg-gray-700/50");
 
     private Task HandleGroupingChange(ChangeEventArgs e) =>
         Enum.TryParse<GroupingMode>(e.Value?.ToString(), out var mode)

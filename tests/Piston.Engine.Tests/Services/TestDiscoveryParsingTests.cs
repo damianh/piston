@@ -98,6 +98,35 @@ public sealed class TestDiscoveryParsingTests
         Assert.Equal(["A.B.One", "A.B.Two"], parser.Results.Select(t => t.FullyQualifiedName));
     }
 
+    [Fact]
+    public async Task TestListProcess_DisablesMsBuildNodeReuse()
+    {
+        var root = Directory.CreateTempSubdirectory("piston-discovery-node-reuse-test-").FullName;
+        try
+        {
+            var project = Path.Combine(root, "List.proj");
+            await File.WriteAllTextAsync(project, """
+                <Project>
+                  <Target Name="Build" Condition="'$(MSBUILDDISABLENODEREUSE)' == '1'">
+                    <Message Text="PISTON-HEADER" Importance="high" />
+                    <Message Text="Sample.Test" Importance="high" />
+                  </Target>
+                </Project>
+                """);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+            var tests = await TestListProcess.RunAsync(
+                $"msbuild \"{project}\" -nologo -tl:off -v:m", root, project, "Test",
+                new TestListParser(line => line.Trim() == "PISTON-HEADER"), null, cts.Token);
+
+            Assert.Equal(["Sample.Test"], tests.Select(t => t.FullyQualifiedName));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData("Ns.Class.Method", "Method")]
     [InlineData("Method", "Method")]

@@ -214,6 +214,11 @@ public sealed class EngineClientService : IAsyncDisposable
     {
         lock (_activityLog)
         {
+            if (evt.Id is not null && _activityLog.Exists(e => e.Id == evt.Id))
+            {
+                return;
+            }
+
             if (_activityLog.Count >= ActivityLogCapacity)
             {
                 _activityLog.RemoveAt(0);
@@ -316,12 +321,7 @@ public sealed class EngineClientService : IAsyncDisposable
 
         lock (_activityLog)
         {
-            var merged = history
-                .Concat(_activityLog)
-                .DistinctBy(e => (e.Type, e.Timestamp))
-                .OrderBy(e => e.Timestamp)
-                .TakeLast(ActivityLogCapacity)
-                .ToList();
+            var merged = ActivityLogMerger.Merge(history, _activityLog, ActivityLogCapacity);
             _activityLog.Clear();
             _activityLog.AddRange(merged);
         }

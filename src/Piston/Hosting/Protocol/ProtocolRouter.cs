@@ -198,6 +198,7 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
 
     public void Emit(ActivityEvent activity)
     {
+        activity = activity.Id is null ? activity with { Id = Guid.NewGuid().ToString("N") } : activity;
         _activityHistory.Add(activity);
         BroadcastNotification(ToNotification(ProtocolMethods.ActivityEvent, activity));
     }

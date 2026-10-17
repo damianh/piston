@@ -115,6 +115,8 @@ internal static partial class MtpTestProcessRunner
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        // Reused MSBuild nodes can retain the redirected pipes after dotnet exits.
+        psi.Environment["MSBUILDDISABLENODEREUSE"] = "1";
         MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
 
         var parser = new MtpStdoutParser();
