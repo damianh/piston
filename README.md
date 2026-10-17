@@ -317,6 +317,23 @@ outlive their parent. Setup
 commands and engine builds disable MSBuild node reuse in their child environment
 to prevent persistent nodes retaining redirected output pipes after `dotnet` exits.
 
+### Dogfooding Piston on itself
+
+Run the daemon from a Release build of this repo against `Piston.slnx`:
+
+```sh
+dotnet build Piston.slnx -c Release
+dotnet src/Piston/bin/Release/net10.0/Piston.dll daemon Piston.slnx
+```
+
+The daemon builds the watched solution in the default (Debug) configuration, so
+its own builds never overwrite the Release binaries it runs from. Stop it before
+rebuilding Release (`dotnet src/Piston/bin/Release/net10.0/Piston.dll stop`), then
+start it again. `.piston/diagnostics.log` records what the daemon did (runner choice,
+build skips, fallbacks) and is truncated on each start. Agents should follow the
+[`piston-dashboard` skill](.github/skills/piston-dashboard/SKILL.md), which also
+covers opening the dashboard in a Copilot browser canvas.
+
 ### AI agent tooling (roslynk)
 
 The repo pins [roslynk](https://www.nuget.org/packages/roslynk) as a local .NET tool and registers it in `.mcp.json`, so Copilot CLI / agent sessions get semantic C# intelligence (diagnostics, find references, rename, code fixes) over `Piston.slnx`. Run `dotnet tool restore` once after cloning.
