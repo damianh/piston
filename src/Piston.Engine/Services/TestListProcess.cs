@@ -62,7 +62,19 @@ internal static class TestListProcess
                 },
                 TestProcessRunner.ProgressInterval);
 
-        using var process = new Process { StartInfo = psi };
+        OwnedTestProcess ownedProcess;
+        try
+        {
+            ownedProcess = new OwnedTestProcess(psi);
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            log?.Write(logCategory, $"Discovery failed to start for {projectPath}: {ex.Message}");
+            return [];
+        }
+
+        using var processLifetime = ownedProcess;
+        var process = ownedProcess.Process;
         process.OutputDataReceived += (_, e) =>
         {
             if (e.Data is null)
@@ -88,15 +100,21 @@ internal static class TestListProcess
 
         try
         {
-            _ = process.Start();
+            ownedProcess.Start();
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
-            await process.WaitForExitAsync(timeout.Token).ConfigureAwait(false);
+            _ = await RedirectedProcessDrain.WaitForExitAndDrainAsync(
+                ownedProcess,
+                RedirectedProcessDrain.DefaultTimeout,
+                timeout.Token,
+                message => log?.Write(logCategory, message)).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            await ProcessTermination.KillAndWaitAsync(process, message => log?.Write(logCategory, message))
-                .ConfigureAwait(false);
+            await RedirectedProcessDrain.KillAndWaitAsync(
+                ownedProcess,
+                CancellationToken.None,
+                message => log?.Write(logCategory, message)).ConfigureAwait(false);
 
             log?.Write(logCategory, $"Discovery cancelled or timed out: {projectPath}");
             return [];

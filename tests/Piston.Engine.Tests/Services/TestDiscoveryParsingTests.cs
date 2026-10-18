@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Diagnostics;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
 using Xunit;
@@ -98,6 +99,55 @@ public sealed class TestDiscoveryParsingTests
         Assert.False(parser.ProcessLine("    Not.A.Test"));
 
         Assert.Equal(["A.B.One", "A.B.Two"], parser.Results.Select(t => t.FullyQualifiedName));
+    }
+
+    [Fact]
+    public async Task TestListProcess_MissingDotnet_ReturnsEmpty()
+    {
+        var root = Directory.CreateTempSubdirectory("piston-discovery-no-dotnet-").FullName;
+        var helper = typeof(ExecutionLeaseHolder.Program).Assembly.Location;
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo(Path.Combine(
+                Path.GetDirectoryName(helper)!,
+                Path.GetFileNameWithoutExtension(helper) + (OperatingSystem.IsWindows() ? ".exe" : string.Empty)))
+            {
+                WorkingDirectory = root,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+            },
+        };
+        process.StartInfo.ArgumentList.Add("discover");
+        process.StartInfo.Environment["PATH"] = root;
+        var started = false;
+        try
+        {
+            _ = process.Start();
+            started = true;
+            var stdout = process.StandardOutput.ReadToEndAsync(_ct);
+            var stderr = process.StandardError.ReadToEndAsync(_ct);
+            await process.WaitForExitAsync(_ct).WaitAsync(TimeSpan.FromSeconds(20), _ct);
+            var output = await stdout;
+            var error = await stderr;
+            TestContext.Current.TestOutputHelper?.WriteLine(error);
+
+            Assert.Equal(0, process.ExitCode);
+            Assert.Equal("0", output.Trim());
+            Assert.Empty(error);
+        }
+        finally
+        {
+            if (started && !process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(CancellationToken.None)
+                    .WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None);
+            }
+
+            Directory.Delete(root, recursive: true);
+        }
     }
 
     [Fact]
