@@ -94,7 +94,27 @@ public sealed class StatusCommandTests
                 await process.WaitForExitAsync(CancellationToken.None);
             }
 
-            Directory.Delete(root, recursive: true);
+            await DeleteDirectoryWithRetryAsync(root);
+        }
+    }
+
+    private static async Task DeleteDirectoryWithRetryAsync(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (IOException) when (attempt < 20)
+            {
+                await Task.Delay(100);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 20)
+            {
+                await Task.Delay(100);
+            }
         }
     }
 }
