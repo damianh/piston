@@ -11,6 +11,12 @@ using Xunit;
 
 namespace Piston.Tests;
 
+[CollectionDefinition("Status command tests", DisableParallelization = true)]
+public sealed class StatusCommandTestCollection
+{
+}
+
+[Collection("Status command tests")]
 public sealed class StatusCommandTests
 {
     private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
