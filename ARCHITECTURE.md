@@ -95,10 +95,12 @@ Startup initializes the solution graph and, when coverage is enabled, the SQLite
 coverage store, starts watching, and triggers an initial build/test run. The
 pipeline awaits graph initialization before choosing per-project test targets.
 
-The watcher batches changes to `.cs`, `.csproj`, `.props`, and `.targets`, excluding
-build outputs and other directories such as `.git` and `node_modules`. Although
-the analyzer recognizes solution-file changes, the watcher's filters do not
-currently include `.sln`, `.slnx`, or `.slnf`.
+The watcher batches changes to every source-fingerprint input: any file under the
+solution directory except build outputs and directories such as `.git` and
+`node_modules`, plus the nearest ancestor `global.json`, `Directory.Build.*`,
+`Directory.Packages.props` and `NuGet.config`. Changes to `.sln`, `.slnx`, `.slnf`,
+`.csproj`, `.props` or `.targets` refresh the solution graph; solution, `.props`
+and `.targets` changes trigger a full run.
 
 A new trigger cancels the preceding pipeline, and a semaphore serializes runs.
 Each run then waits for machine-wide admission (see

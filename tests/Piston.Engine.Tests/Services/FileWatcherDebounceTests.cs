@@ -213,6 +213,33 @@ public sealed class FileWatcherDebounceTests
         }
     }
 
+    [Theory]
+    [InlineData("App.sln")]
+    [InlineData("App.slnx")]
+    [InlineData("App.slnf")]
+    [InlineData("Directory.Build.props")]
+    [InlineData("Directory.Packages.props")]
+    public async Task SolutionAndBuildFiles_AreWatched(string fileName)
+    {
+        using var sut = new FileWatcherService(TimeSpan.FromMilliseconds(50));
+        var received = new TaskCompletionSource<FileChangeBatch>(TaskCreationOptions.RunContinuationsAsynchronously);
+        sut.FileChanged += batch => received.TrySetResult(batch);
+        var dir = Directory.CreateTempSubdirectory("piston-test-");
+        try
+        {
+            sut.Start(dir.FullName);
+            var filePath = Path.Combine(dir.FullName, fileName);
+            await File.WriteAllTextAsync(filePath, "<Solution />", _ct);
+            var batch = await received.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            Assert.Contains(batch.Changes, change => change.FilePath == filePath);
+        }
+        finally
+        {
+            sut.Stop();
+            dir.Delete(recursive: true);
+        }
+    }
+
     [Fact]
     public async Task FingerprintedAncestorInput_IsWatched()
     {
