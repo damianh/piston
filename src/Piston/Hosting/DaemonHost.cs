@@ -177,6 +177,7 @@ public sealed class DaemonHost : IAsyncDisposable
 
         _webApp = webBuilder.Build();
         _webApp.Urls.Add(WebUrl);
+        _ = _webApp.UseRequestGuard(securityHeaders: true);
         _ = _webApp.UseWebSockets();
 
         // Serve Blazor WASM framework files (handles content negotiation for .br/.gz compressed
@@ -212,6 +213,7 @@ public sealed class DaemonHost : IAsyncDisposable
             _ = mcpBuilder.Services.AddSingleton<IEngine>(engine);
             _ = mcpBuilder.Services.AddPistonMcp(mcpCallTracker);
             _mcpApp = mcpBuilder.Build();
+            _ = _mcpApp.UseRequestGuard(securityHeaders: false);
             _ = _mcpApp.MapMcp();
             _mcpApp.Urls.Add($"http://localhost:{_options.McpPort}");
 
