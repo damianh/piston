@@ -142,9 +142,13 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
         _ = await RequestAsync(method, @params).ConfigureAwait(false);
 
     /// <summary>Describes the connected daemon process.</summary>
-    public async Task<DaemonInfoResponse?> GetDaemonInfoAsync()
+    public Task<DaemonInfoResponse?> GetDaemonInfoAsync() =>
+        GetDaemonInfoAsync(CancellationToken.None);
+
+    /// <summary>Describes the connected daemon process, honoring cancellation while sending and awaiting the reply.</summary>
+    public async Task<DaemonInfoResponse?> GetDaemonInfoAsync(CancellationToken ct)
     {
-        var result = await RequestAsync(ProtocolMethods.DaemonInfo, null).ConfigureAwait(false);
+        var result = await RequestAsync(ProtocolMethods.DaemonInfo, null, ct).ConfigureAwait(false);
         return result?.Deserialize<DaemonInfoResponse>(JsonRpcSerializer.Options);
     }
 
@@ -152,7 +156,7 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
     public Task ShutdownDaemonAsync() =>
         SendCommandAsync(ProtocolMethods.DaemonShutdown, null);
 
-    private async Task<JsonNode?> RequestAsync(string method, JsonNode? @params)
+    private async Task<JsonNode?> RequestAsync(string method, JsonNode? @params, CancellationToken ct = default)
     {
         if (ConnectionState != ConnectionState.Connected)
         {
@@ -166,12 +170,12 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
 
         _pending[id] = tcs;
 
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(30));
+        using var registration = cts.Token.Register(() => tcs.TrySetCanceled(cts.Token));
         try
         {
-            await _transport!.SendAsync(bytes, CancellationToken.None).ConfigureAwait(false);
-
-            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-            _ = cts.Token.Register(() => tcs.TrySetCanceled());
+            await _transport!.SendAsync(bytes, cts.Token).ConfigureAwait(false);
 
             var response = await tcs.Task.ConfigureAwait(false);
 
