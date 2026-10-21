@@ -66,10 +66,7 @@ public sealed class ChildProcessEnvironmentTests
     }
 
     [Fact]
-    public void ParsePassThrough_IgnoresKeepEverything()
-    {
-        Assert.Equal(["A", "B*"], ChildProcessEnvironment.ParsePassThrough(" A ,*; B* ;a"));
-    }
+    public void ParsePassThrough_IgnoresKeepEverything() => Assert.Equal(["A", "B*"], ChildProcessEnvironment.ParsePassThrough(" A ,*; B* ;a"));
 
     [Fact]
     public void Sanitize_DropsOnlyTheHotReloadStartupHook()

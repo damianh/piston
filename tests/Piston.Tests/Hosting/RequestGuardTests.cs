@@ -25,20 +25,14 @@ public sealed class RequestGuardTests
     [InlineData("127.0.0.1:5199")]
     [InlineData("127.0.0.2")]
     [InlineData("[::1]:5199")]
-    public void LocalHosts_AreAllowed(string host)
-    {
-        Assert.Null(RequestGuard.Check(Request("GET", host), []));
-    }
+    public void LocalHosts_AreAllowed(string host) => Assert.Null(RequestGuard.Check(Request("GET", host), []));
 
     [Theory]
     [InlineData("evil.example:5199")]
     [InlineData("192.168.1.10:5199")]
     [InlineData("localhost.evil.example")]
     [InlineData("")]
-    public void OtherHosts_AreRejected(string host)
-    {
-        Assert.Equal(StatusCodes.Status400BadRequest, RequestGuard.Check(Request("GET", host), [])?.StatusCode);
-    }
+    public void OtherHosts_AreRejected(string host) => Assert.Equal(StatusCodes.Status400BadRequest, RequestGuard.Check(Request("GET", host), [])?.StatusCode);
 
     [Fact]
     public void ConfiguredHosts_AreAllowed()
@@ -53,10 +47,7 @@ public sealed class RequestGuardTests
     [InlineData("GET", "http://localhost:5199")]
     [InlineData("POST", "http://localhost:5199")]
     [InlineData("POST", null)]
-    public void SameOriginAndOriginlessRequests_AreAllowed(string method, string? origin)
-    {
-        Assert.Null(RequestGuard.Check(Request(method, "localhost:5199", origin), []));
-    }
+    public void SameOriginAndOriginlessRequests_AreAllowed(string method, string? origin) => Assert.Null(RequestGuard.Check(Request(method, "localhost:5199", origin), []));
 
     [Theory]
     [InlineData("GET", "https://evil.example")]
@@ -65,10 +56,7 @@ public sealed class RequestGuardTests
     [InlineData("POST", "http://127.0.0.1:5199")]
     [InlineData("POST", "null")]
     [InlineData("POST", "file://")]
-    public void CrossOriginRequests_AreRejected(string method, string origin)
-    {
-        Assert.Equal(StatusCodes.Status403Forbidden, RequestGuard.Check(Request(method, "localhost:5199", origin), [])?.StatusCode);
-    }
+    public void CrossOriginRequests_AreRejected(string method, string origin) => Assert.Equal(StatusCodes.Status403Forbidden, RequestGuard.Check(Request(method, "localhost:5199", origin), [])?.StatusCode);
 
     [Fact]
     public void CrossSiteRequestsWithoutOrigin_AreRejectedUnlessSafe()

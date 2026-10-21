@@ -2,7 +2,6 @@
 // See LICENSE in the project root for license information.
 
 using System.Diagnostics;
-using Piston.Engine.Impact;
 using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
