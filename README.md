@@ -287,6 +287,21 @@ invalid values fall back to defaults. Unknown keys are preserved on write.
 |---|---|---|
 | `dashboard.detailPane` | `string` | Where the test details pane docks when a dashboard opens: `"right"` (default) or `"bottom"`. |
 
+### Child process environment
+
+Builds, test discovery and test hosts get the daemon's environment except for
+variables that describe how the daemon itself was started, so that a test sees what `dotnet test`
+in a terminal would:
+
+- listen addresses: `ASPNETCORE_URLS`, `ASPNETCORE_HTTP(S)_PORTS`, `ASPNETCORE_HTTPS_PORT`, `DOTNET_URLS`, `DOTNET_HTTP(S)_PORTS`;
+- `dotnet watch` and hot reload: `DOTNET_WATCH*`, `DOTNET_HOTRELOAD_*`, `DOTNET_MODIFIABLE_ASSEMBLIES`, and the hot reload entry of `DOTNET_STARTUP_HOOKS` (other hooks are kept);
+- launch profiles and IDE debug sessions: `DOTNET_LAUNCH_PROFILE`, `DEBUG_SESSION_*`;
+- an Aspire AppHost run: `ASPIRE_*`, `DCP_*`, `DOTNET_DASHBOARD_*` and `DOTNET_RESOURCE_SERVICE_*`. Aspire user settings such as `ASPIRE_CONTAINER_RUNTIME` are kept.
+
+A test run's log lists the variables it did not inherit. To keep some, set
+`PISTON_TEST_ENV_PASSTHROUGH` on the daemon to names or `PREFIX*` patterns separated
+by `;` or `,` (for example `ASPNETCORE_URLS;ASPIRE_DASHBOARD_*`).
+
 ## Building from source
 
 Production code lives in four projects under `src/`: `Piston`, `Piston.Engine`,

@@ -88,9 +88,13 @@ internal static class MtpServerSession
             return new Result(Outcome.NotStarted, $"Could not listen for the test host: {ex.Message}", stderr);
         }
 
-        var psi = CreateStartInfo(appPath, workingDirectory, ((IPEndPoint)listener.LocalEndpoint).Port);
+        var psi = CreateStartInfo(appPath, workingDirectory, ((IPEndPoint)listener.LocalEndpoint).Port, out var removedEnvironment);
 
         log?.Invoke("MtpServer", $"{method}: {psi.FileName} {psi.Arguments}");
+        if (ChildProcessEnvironment.Describe(removedEnvironment) is { } environmentNote)
+        {
+            log?.Invoke("MtpServer", environmentNote);
+        }
 
         OwnedTestProcess ownedProcess;
         try
@@ -203,7 +207,11 @@ internal static class MtpServerSession
     /// The host process. It starts in <paramref name="workingDirectory"/> (the solution directory), as
     /// <c>dotnet test</c> starts it in the fallback, so relative paths resolve the same on either path.
     /// </summary>
-    internal static ProcessStartInfo CreateStartInfo(string appPath, string workingDirectory, int port)
+    internal static ProcessStartInfo CreateStartInfo(string appPath, string workingDirectory, int port) =>
+        CreateStartInfo(appPath, workingDirectory, port, out _);
+
+    private static ProcessStartInfo CreateStartInfo(
+        string appPath, string workingDirectory, int port, out IReadOnlyList<string> removedEnvironment)
     {
         var serverArgs = $"--server --client-host 127.0.0.1 --client-port {port.ToString(CultureInfo.InvariantCulture)}";
         var isDll = appPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
@@ -215,7 +223,7 @@ internal static class MtpServerSession
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
+        removedEnvironment = ChildProcessEnvironment.Prepare(psi);
         return psi;
     }
 
