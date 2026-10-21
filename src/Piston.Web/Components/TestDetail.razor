@@ -72,6 +72,29 @@ else
             </div>
         }
 
+        <!-- Expected vs actual, with the differing part highlighted -->
+        @if (AssertionDiff.Parse(Test.ErrorMessage) is { } diff)
+        {
+            var (prefix, expectedMiddle, actualMiddle, suffix) = diff.Split();
+            <div>
+                <div class="text-gray-400 font-semibold mb-1">Difference</div>
+                @if (diff.Summary.Length > 0)
+                {
+                    <div class="text-gray-500 mb-1 whitespace-pre-wrap">@diff.Summary</div>
+                }
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                        <div class="text-gray-500 mb-0.5">Expected</div>
+                        <pre class="bg-gray-900 border border-gray-800 rounded p-2 text-gray-300 text-xs overflow-x-auto whitespace-pre-wrap break-all">@prefix<mark class="bg-green-900/60 text-green-300 rounded-sm">@expectedMiddle</mark>@suffix</pre>
+                    </div>
+                    <div>
+                        <div class="text-gray-500 mb-0.5">Actual</div>
+                        <pre class="bg-gray-900 border border-gray-800 rounded p-2 text-gray-300 text-xs overflow-x-auto whitespace-pre-wrap break-all">@prefix<mark class="bg-red-900/60 text-red-300 rounded-sm">@actualMiddle</mark>@suffix</pre>
+                    </div>
+                </div>
+            </div>
+        }
+
         <!-- Stack trace -->
         @if (!string.IsNullOrEmpty(Test.StackTrace))
         {

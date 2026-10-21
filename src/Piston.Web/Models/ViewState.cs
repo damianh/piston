@@ -19,6 +19,9 @@ public sealed class ViewState
     // ── Grouping mode ──
     public GroupingMode Grouping { get; set; } = GroupingMode.ProjectNamespaceClass;
 
+    /// <summary>Lists tests slowest first instead of by name (within each class, status group or the flat list).</summary>
+    public bool SortByDuration { get; set; }
+
     // ── Expand/collapse ──
     public bool TreeExpanded { get; set; } = true;
 

@@ -205,7 +205,7 @@ public static class TestTreeBuilder
                     // Dot-less names (e.g. a custom DisplayName) have no class to group under.
                     if (classTests.All(t => t.FullyQualifiedName == classKey))
                     {
-                        AddTestLeaves(parent, classTests, isStale);
+                        AddTestLeaves(parent, classTests, isStale, viewState);
                         continue;
                     }
 
@@ -248,7 +248,7 @@ public static class TestTreeBuilder
             ExpansionKey = $"class:{scope}|{classKey}",
             IsExpanded = viewState.IsNodeExpanded($"class:{scope}|{classKey}"),
         };
-        AddTestLeaves(classNode.Children, classTests, isStale);
+        AddTestLeaves(classNode.Children, classTests, isStale, viewState);
         return classNode;
     }
 
@@ -337,8 +337,7 @@ public static class TestTreeBuilder
                 IsExpanded = viewState.IsNodeExpanded($"status:{label}"),
             };
 
-            foreach (var (suite, test) in grouped
-                .OrderBy(x => ClassMethodLabel(x.Test.FullyQualifiedName), StringComparer.Ordinal)
+            foreach (var (suite, test) in OrderTests(grouped, x => x.Test, ClassMethodLabel, viewState)
                 .ThenBy(x => x.Test.TargetFramework, FrameworkComparer.Instance))
             {
                 var isStale = IsStale(suite, lastFileChangeTime);
@@ -368,18 +367,18 @@ public static class TestTreeBuilder
         var allTests = suites
             .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
             .Where(x => matcher is null || matcher(x.Test.FullyQualifiedName))
-            .Where(x => IsStatusVisible(x.Test.Status, viewState))
-            .OrderBy(x => ClassMethodLabel(x.Test.FullyQualifiedName), StringComparer.Ordinal)
+            .Where(x => IsStatusVisible(x.Test.Status, viewState));
+        var ordered = OrderTests(allTests, x => x.Test, ClassMethodLabel, viewState)
             .ThenBy(x => x.Test.TargetFramework, FrameworkComparer.Instance)
             .ToList();
 
-        if (allTests.Count == 0)
+        if (ordered.Count == 0)
         {
             roots.Add(new TestNode { Label = "No tests match current filters", Kind = TestNodeKind.Group, GroupKey = "" });
             return;
         }
 
-        foreach (var (suite, test) in allTests)
+        foreach (var (suite, test) in ordered)
         {
             var isStale = IsStale(suite, lastFileChangeTime);
             roots.Add(new TestNode
@@ -441,12 +440,20 @@ public static class TestTreeBuilder
         roots.Add(pinnedRoot);
     }
 
+    private static IOrderedEnumerable<T> OrderTests<T>(
+        IEnumerable<T> items, Func<T, TestResultDto> test, Func<string, string> label, ViewState viewState) =>
+        viewState.SortByDuration
+            ? items.OrderByDescending(x => test(x).DurationMs)
+                .ThenBy(x => label(test(x).FullyQualifiedName), StringComparer.Ordinal)
+            : items.OrderBy(x => label(test(x).FullyQualifiedName), StringComparer.Ordinal);
+
     private static void AddTestLeaves(
         List<TestNode> parent,
         IEnumerable<TestResultDto> tests,
-        Func<TestResultDto, bool> isStale)
+        Func<TestResultDto, bool> isStale,
+        ViewState viewState)
     {
-        foreach (var test in tests.OrderBy(t => MethodLabel(t.FullyQualifiedName), StringComparer.Ordinal))
+        foreach (var test in OrderTests(tests, t => t, MethodLabel, viewState))
         {
             parent.Add(new TestNode
             {

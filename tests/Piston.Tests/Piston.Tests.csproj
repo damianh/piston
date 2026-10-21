@@ -18,4 +18,10 @@
     <ProjectReference Include="..\..\src\Piston\Piston.csproj" />
   </ItemGroup>
 
+  <!-- Pure dashboard models; Piston.Web is a WebAssembly app, so they are compiled in rather than referenced -->
+  <ItemGroup>
+    <Compile Include="..\..\src\Piston.Web\Models\AssertionDiff.cs" Link="Web\AssertionDiff.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\DashboardStatus.cs" Link="Web\DashboardStatus.cs" />
+  </ItemGroup>
+
 </Project>
