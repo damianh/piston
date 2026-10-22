@@ -39,7 +39,8 @@
     <div class="@(_isBottom ? "flex flex-col" : "flex") flex-1 min-h-0 overflow-hidden"
          data-orientation="@(_isBottom ? "bottom" : "right")" @ref="_splitContainer">
         <div class="flex flex-col min-w-0 min-h-0 overflow-hidden" style="flex: 0 0 @(_splitPercentCss)%">
-            <TestTree Nodes="@_treeNodes"
+            <TestTree @ref="_tree"
+                      Nodes="@_treeNodes"
                       SelectedKey="@_viewState.SelectedTestKey"
                       SelectedNodeKey="@_viewState.SelectedNodeKey"
                       PinnedFqns="@_viewState.PinnedTestFqns"
@@ -319,6 +320,13 @@
         StateHasChanged();
     }
 
+    /// <summary>Selects <paramref name="test"/>, expanding its ancestors and scrolling it into view.</summary>
+    private void RevealTest(TestResultDto test)
+    {
+        _scrollToSelected = ExpandAncestors(_treeNodes, test.Key);
+        SelectTest(test);
+    }
+
     private void SelectProject(string project) => SelectNode($"suite:{project}");
 
     private void SelectNode(string key)
@@ -407,7 +415,7 @@
         var failures = GetFailedTests();
         if (failures.Count == 0) return;
         _viewState.CurrentFailureIndex = (_viewState.CurrentFailureIndex - 1 + failures.Count) % failures.Count;
-        SelectTest(failures[_viewState.CurrentFailureIndex]);
+        RevealTest(failures[_viewState.CurrentFailureIndex]);
     }
 
     private void NavigateNextFailure()
@@ -416,7 +424,7 @@
         var failures = GetFailedTests();
         if (failures.Count == 0) return;
         _viewState.CurrentFailureIndex = (_viewState.CurrentFailureIndex + 1) % failures.Count;
-        SelectTest(failures[_viewState.CurrentFailureIndex]);
+        RevealTest(failures[_viewState.CurrentFailureIndex]);
     }
 
     private List<TestResultDto> GetFailedTests() =>
@@ -451,6 +459,7 @@
         _viewState.SplitPercent.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 
     private bool _scrollToSelected;
+    private TestTree? _tree;
 
     /// <summary>Expands every collapsed ancestor of the test with <paramref name="key"/>; false when it is not in the tree.</summary>
     private bool ExpandAncestors(IEnumerable<TestNode> nodes, string key)
@@ -482,7 +491,10 @@
         if (_scrollToSelected)
         {
             _scrollToSelected = false;
-            await JS.InvokeVoidAsync("pistonScroll.revealSelected", _splitContainer);
+            if (_tree is not null)
+            {
+                await _tree.RevealSelectedAsync();
+            }
         }
 
         if (!firstRender)

@@ -1,5 +1,7 @@
 @using Piston.Web.Models
 @using Piston.Protocol.Dtos
+@using Microsoft.AspNetCore.Components.Web.Virtualization
+@inject IJSRuntime JS
 
 <div class="flex flex-col h-full overflow-hidden">
     @if (Nodes.Count == 0)
@@ -10,19 +12,20 @@
     }
     else
     {
-        <div class="overflow-y-auto flex-1">
-            @foreach (var node in Nodes)
-            {
-                <TestTreeNode Node="node"
-                              Depth="0"
+        <!-- Only the rows in view are rendered, so large suites stay responsive -->
+        <div class="overflow-y-auto flex-1" @ref="_scroller">
+            <Virtualize Items="_rows" ItemSize="TreeRow.Height" OverscanCount="20" Context="row">
+                <TestTreeNode @key="row.Node"
+                              Node="row.Node"
+                              Depth="row.Depth"
                               SelectedKey="@SelectedKey"
                               SelectedNodeKey="@SelectedNodeKey"
                               PinnedFqns="@PinnedFqns"
                               OnSelectTest="@OnSelectTest"
                               OnSelectNode="@OnSelectNode"
                               OnTogglePin="@OnTogglePin"
-                              OnExpansionChanged="@OnExpansionChanged" />
-            }
+                              OnExpansionChanged="@ExpansionChanged" />
+            </Virtualize>
         </div>
     }
 </div>
@@ -36,4 +39,24 @@
     [Parameter] public EventCallback<string> OnSelectNode { get; set; }
     [Parameter] public EventCallback<string> OnTogglePin { get; set; }
     [Parameter] public Action<TestNode>? OnExpansionChanged { get; set; }
+
+    private ElementReference _scroller;
+    private List<TreeRow> _rows = [];
+
+    protected override void OnParametersSet() => _rows = TreeRow.Flatten(Nodes);
+
+    private void ExpansionChanged(TestNode node)
+    {
+        OnExpansionChanged?.Invoke(node);
+        _rows = TreeRow.Flatten(Nodes);
+        StateHasChanged();
+    }
+
+    /// <summary>Scrolls the selected row into view, including one outside the rendered window.</summary>
+    public async Task RevealSelectedAsync()
+    {
+        _rows = TreeRow.Flatten(Nodes);
+        var index = TreeRow.IndexOfSelected(_rows, SelectedKey, SelectedNodeKey);
+        await JS.InvokeVoidAsync("pistonScroll.revealRow", _scroller, index, TreeRow.Height);
+    }
 }
