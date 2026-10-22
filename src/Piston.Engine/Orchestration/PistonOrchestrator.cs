@@ -641,7 +641,8 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         await _coverageLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            await processor.ProcessCoverageAsync(runId, reportPaths, testFqns, store, isFullRun)
+            var solutionDir = _solutionPath is null ? null : Path.GetDirectoryName(_solutionPath);
+            await processor.ProcessCoverageAsync(runId, reportPaths, testFqns, store, isFullRun, solutionDir)
                 .ConfigureAwait(false);
             _state.HasCoverageData = true;
         }

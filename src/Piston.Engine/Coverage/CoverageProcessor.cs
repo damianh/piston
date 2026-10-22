@@ -19,7 +19,8 @@ internal sealed class CoverageProcessor : ICoverageProcessor
         IReadOnlyList<string> coberturaXmlPaths,
         IReadOnlyList<string> testFqns,
         ICoverageStore store,
-        bool isFullRun = false)
+        bool isFullRun = false,
+        string? sourceRoot = null)
     {
         if (coberturaXmlPaths.Count == 0)
         {
@@ -31,6 +32,7 @@ internal sealed class CoverageProcessor : ICoverageProcessor
         var coveredLines = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
         var reportFiles = new Dictionary<string, FileCoverage>(StringComparer.OrdinalIgnoreCase);
         var parsedAny = false;
+        var rootPrefix = sourceRoot is null ? null : Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourceRoot)) + Path.DirectorySeparatorChar;
 
         foreach (var xmlPath in coberturaXmlPaths)
         {
@@ -48,6 +50,12 @@ internal sealed class CoverageProcessor : ICoverageProcessor
             parsedAny = true;
             foreach (var fileCoverage in report.Files)
             {
+                if (rootPrefix is not null
+                    && !Path.GetFullPath(fileCoverage.FilePath).StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 reportFiles[fileCoverage.FilePath] = reportFiles.TryGetValue(fileCoverage.FilePath, out var seen)
                     ? MergeFile(seen, fileCoverage)
                     : fileCoverage;

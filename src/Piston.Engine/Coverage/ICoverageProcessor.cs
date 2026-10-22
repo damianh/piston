@@ -18,10 +18,15 @@ internal interface ICoverageProcessor
     /// <param name="testFqns">Fully-qualified names of tests that ran in this suite.</param>
     /// <param name="store">The coverage store to write into.</param>
     /// <param name="isFullRun">True when every test ran unfiltered, so the report replaces the stored one.</param>
+    /// <param name="sourceRoot">
+    /// When set, only files under this directory are recorded, so code the tests build and load from elsewhere
+    /// (e.g. fixture projects in a temp directory) does not count towards the solution's coverage.
+    /// </param>
     Task ProcessCoverageAsync(
         long runId,
         IReadOnlyList<string> coberturaXmlPaths,
         IReadOnlyList<string> testFqns,
         ICoverageStore store,
-        bool isFullRun = false);
+        bool isFullRun = false,
+        string? sourceRoot = null);
 }

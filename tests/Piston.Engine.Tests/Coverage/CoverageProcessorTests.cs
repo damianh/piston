@@ -80,6 +80,23 @@ public sealed class CoverageProcessorTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessCoverageAsync_SourceRoot_IgnoresFilesOutsideIt()
+    {
+        var store = new StubCoverageStore();
+        var processor = new CoverageProcessor(new CoberturaParser());
+        var inside = WriteCoberturaXml(SimpleXml("src/Lib/Code.cs", 1, 2));
+        var outside = WriteCoberturaXml(SimpleXml("/tmp/fixture/Fixture.cs", 3));
+
+        await processor.ProcessCoverageAsync(
+            store.CreateRunId(), [inside, outside], ["Lib.Tests.Test1"], store, sourceRoot: "/repo");
+
+        var report = Assert.Single(store.StoredReports);
+        Assert.Equal(["/repo/src/Lib/Code.cs"], report.Files.Select(f => f.Coverage.FilePath));
+        var (_, map) = Assert.Single(store.StoredCoverage);
+        Assert.All(map["Lib.Tests.Test1"], line => Assert.Equal("/repo/src/Lib/Code.cs", line.FilePath));
+    }
+
+    [Fact]
     public async Task ProcessCoverageAsync_MultipleReports_UnionOfCoverage()
     {
         var store = new StubCoverageStore();
