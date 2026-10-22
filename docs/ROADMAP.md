@@ -321,6 +321,48 @@ twice the comparable workload cost, with no observed attribution bleed in the
 serial validation fixtures. Cross-process service coverage is not an initial
 acceptance requirement.
 
+### Spike results
+
+Measured on `tests/Piston.Tests` (33 classes, 239 methods, 314 test cases;
+Linux, 16 cores, Microsoft.Testing.Extensions.CodeCoverage and
+`dotnet-coverage` 18.12):
+
+| Approach | Wall time | vs. one coverage run | Attribution |
+|----------|-----------|----------------------|-------------|
+| One run, no coverage | 4.9 s | 0.5× | none |
+| One run with `--coverage` | 9.1 s | 1× | run (shared) |
+| One `dotnet test --coverage` process per class, serial | 112 s | 12× | class, no bleed |
+| One process per test method, serial (25 sampled, extrapolated) | ~725 s | ~80× | test, no bleed |
+| Per-class processes, 4 or 8 concurrent | ~95 s | — | invalid: reports came back empty (line rate 0) and some tests failed |
+| `dotnet-coverage` server session, `snapshot --reset` at boundaries seen in the runner's live output | 11 s | 1.2× | unusable: see below |
+
+- A `dotnet-coverage snapshot --reset` costs about 200 ms and resets cleanly,
+  but the test host does not wait for it. With serial execution
+  (`-parallelMode none`) and boundaries taken from the verbose reporter, only
+  18 snapshots landed for 33 classes (8 spanned several classes), and
+  single-class snapshots had about 4× extra lines and missed 44% of the lines
+  from isolated runs. Per-test boundaries were worse (28 snapshots for 240
+  tests). Accurate snapshots need a blocking in-process hook. The MTP coverage
+  extension exposes no per-test hook (Labcoat reached the same conclusion), and
+  MTP server mode allows only one request per process, so Piston cannot request
+  one class at a time from a warm host.
+- Class-level sets over-select about 4× compared with isolated per-test runs on
+  the sample (mean 225 lines per test; 869 per class), and missed no line.
+  Run-level sets over-select about 350×.
+- Tests that drive child processes (stdio smoke tests) record only the in-process
+  lines; cross-process coverage stays out of scope.
+
+Decision: build the impact map on **class** granularity, backfilled one class
+process at a time when the daemon is idle. The backfill is cancellable,
+incremental (only classes whose recorded files changed, or that have no map
+entry, are re-measured) and never concurrent with another coverage run of the
+same test app. A full backfill exceeds the 2× goal, so it is amortised over idle
+time rather than run as part of verification. Per-test granularity stays
+optional (an on-demand refinement of one class) and is labelled as such. A
+blocking in-process hook (an injected xUnit `BeforeAfterTestAttribute` or MTP
+extension) could reach about 1.2× but modifies the user's test project; it is
+deferred.
+
 ### Implementation
 
 - Persist genuine per-test executable-line and, where available, branch hits,
