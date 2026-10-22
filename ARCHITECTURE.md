@@ -165,9 +165,9 @@ plus a content-addressed snapshot of the file as measured.
 
 This is a heuristic: code reached by reflection, static state or data files can
 affect a test without appearing in its spans, and a full or forced run remains
-authoritative. Theory display names that change between runs (for example ones
-containing timestamps) accumulate in `run` units and prevent their class from
-being measured alone.
+authoritative. Selective runs filter by method, so a merge that completed without
+a crash or runner error also removes recorded cases of the methods it ran that no
+longer exist (theory display names that change between runs).
 
 ## Builds and execution
 

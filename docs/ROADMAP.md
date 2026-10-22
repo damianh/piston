@@ -381,8 +381,7 @@ Implemented:
   details, backfill progress and the last run's scope in the status bar.
 
 Not yet done: branch-level attribution, the passing/failing/uncovered verdict per
-changed line, a coverage-aware diff view, method-level identity, and pruning test
-names that no longer exist (theories whose display names change each run).
+changed line, a coverage-aware diff view, and method-level identity.
 
 ### Implementation
 
