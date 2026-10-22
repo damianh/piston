@@ -300,7 +300,7 @@ internal static class TestProcessRunner
             }
 
             log.Complete();
-            return new ProjectTestResult(projectPath, log.AttachTo(suites), runnerError, coverageReportPaths, Crashed: false);
+            return new ProjectTestResult(projectPath, log.AttachTo(suites), runnerError, coverageReportPaths, Crashed: false) { Log = log };
         }
         finally
         {

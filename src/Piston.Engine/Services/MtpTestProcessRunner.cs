@@ -279,7 +279,7 @@ internal static partial class MtpTestProcessRunner
             log.Write("MtpRunner", $"RunnerError: {runnerError}");
         }
 
-        return new ProjectTestResult(projectPath, suites, runnerError, [], Crashed: false);
+        return new ProjectTestResult(projectPath, suites, runnerError, [], Crashed: false) { Log = log };
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

@@ -68,7 +68,7 @@ internal static class VerificationReport
         {
             var problems = run.Projects.Where(p => p.Status != ProjectRunStatus.Completed || p.TestCount == 0).ToList();
             AppendList(sb, "Projects without complete results", problems,
-                p => $"{p.ProjectPath}: {(p.Status == ProjectRunStatus.Completed ? "no test results" : p.Status.ToString())}");
+                p => $"{p.ProjectPath}: {(p.Status == ProjectRunStatus.Completed ? NoResults(p) : p.Status.ToString())}");
             AppendList(sb, "Tests without complete results",
                 tests.Where(t => t.Status is TestStatus.NotRun or TestStatus.Running).ToList(),
                 t => $"{t.ResultKey}: {t.Status}");
@@ -83,6 +83,9 @@ internal static class VerificationReport
         _ = sb.Append($"Details: get_test_run(\"{run.RunId}\")");
         return sb.ToString();
     }
+
+    private static string NoResults(TestRunProjectOutcome project) =>
+        project.NoTestsReason is { } reason ? $"no test results ({Cap(reason)})" : "no test results";
 
     private static void AppendList<T>(StringBuilder sb, string title, IReadOnlyList<T> items, Func<T, string> describe,
         Func<string, string>? cap = null)

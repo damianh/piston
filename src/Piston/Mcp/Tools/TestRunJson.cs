@@ -70,6 +70,7 @@ public static class TestRunJson
                     ["projectPath"] = p.ProjectPath,
                     ["status"] = p.Status.ToString(),
                     ["testCount"] = p.TestCount,
+                    ["noTestsReason"] = p.NoTestsReason,
                 })
                 .ToArray()),
             ["runnerError"] = run.RunnerError,

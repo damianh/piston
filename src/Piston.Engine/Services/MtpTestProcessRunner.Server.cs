@@ -206,7 +206,8 @@ internal static partial class MtpTestProcessRunner
         }
 
         return new ProjectTestResult(projectPath, suites, runnerError, [],
-            Crashed: run.Outcome == MtpServerSession.Outcome.Failed);
+            Crashed: run.Outcome == MtpServerSession.Outcome.Failed)
+        { Log = log };
     }
 
     // ── Test node mapping ───────────────────────────────────────────────────

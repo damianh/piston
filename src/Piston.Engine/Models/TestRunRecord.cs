@@ -154,7 +154,11 @@ public sealed record TestRunAdmission(
     DateTimeOffset? AdmittedAt);
 
 /// <summary>Outcome of one selected test project within a run.</summary>
-public sealed record TestRunProjectOutcome(string ProjectPath, ProjectRunStatus Status, int TestCount);
+/// <param name="ProjectPath">The test project.</param>
+/// <param name="Status">How its run ended.</param>
+/// <param name="TestCount">The tests it reported.</param>
+/// <param name="NoTestsReason">Why an unfiltered run of the project reported no tests, when it reported none.</param>
+public sealed record TestRunProjectOutcome(string ProjectPath, ProjectRunStatus Status, int TestCount, string? NoTestsReason = null);
 
 /// <summary>
 /// Provenance and results of exactly one test run. Unlike the aggregate

@@ -19,6 +19,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
     private readonly Dictionary<string, bool> _mtpProjects;
     private readonly Dictionary<string, string> _mtpOutputPaths;
     private readonly HashSet<string> _multiTargetedProjects;
+    private readonly Dictionary<string, TestProjectFacts> _testProjectFacts;
     private readonly string _solutionPath;
     private readonly ConcurrentBag<Project> _evaluated = [];
 
@@ -53,6 +54,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         _mtpProjects = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
         _mtpOutputPaths = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         _multiTargetedProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _testProjectFacts = new Dictionary<string, TestProjectFacts>(StringComparer.OrdinalIgnoreCase);
         _sortedProjectDirs = [];
 
         var log = DiagnosticLog.Instance;
@@ -79,6 +81,12 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
             if (isTest || isMtp)
             {
                 _testProjects.Add(projectPath);
+                _testProjectFacts[projectPath] = new TestProjectFacts(
+                    node.ProjectInstance.GetPropertyValue("OutputType"),
+                    isMtp,
+                    node.ProjectInstance.GetItems("PackageReference")
+                        .Select(item => item.EvaluatedInclude)
+                        .ToHashSet(StringComparer.OrdinalIgnoreCase));
             }
 
             // Determine if this is an MTP v2 project
@@ -186,6 +194,9 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
 
     public bool IsMultiTargeted(string projectPath) =>
         _multiTargetedProjects.Contains(Path.GetFullPath(projectPath));
+
+    public TestProjectFacts? GetTestProjectFacts(string projectPath) =>
+        _testProjectFacts.GetValueOrDefault(Path.GetFullPath(projectPath));
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 

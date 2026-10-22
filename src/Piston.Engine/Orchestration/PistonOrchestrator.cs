@@ -1282,8 +1282,17 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     projectStatuses[result.ProjectPath] = projectStatus;
                 }
 
+                var testCount = result.Suites.Sum(s => s.Tests.Count);
+                string? noTestsReason = null;
+                if (testCount == 0 && !filtered && !result.Crashed)
+                {
+                    noTestsReason = NoTestsDiagnosis.Diagnose(_impactAnalyzer.GetTestProjectFacts(result.ProjectPath), result.Log);
+                    DiagnosticLog.Instance?.Write("Orchestrator",
+                        $"{Path.GetFileNameWithoutExtension(result.ProjectPath)} reported no tests: {noTestsReason}");
+                }
+
                 projectOutcomes[result.ProjectPath] = new TestRunProjectOutcome(
-                    result.ProjectPath, projectStatus, result.Suites.Sum(s => s.Tests.Count));
+                    result.ProjectPath, projectStatus, testCount, noTestsReason);
 
                 if (result.Suites.Count > 0)
                 {
@@ -1665,7 +1674,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         var problems = outcomes
             .Where(o => o.Status != Models.ProjectRunStatus.Completed || (o.TestCount == 0 && !filtered))
             .Select(o => $"{Path.GetFileNameWithoutExtension(o.ProjectPath)}: " +
-                (o.Status == Models.ProjectRunStatus.Completed ? "no test results" : o.Status.ToString()))
+                (o.Status == Models.ProjectRunStatus.Completed ? "no test results" : o.Status.ToString()) +
+                (o.NoTestsReason is null ? "" : $" ({o.NoTestsReason})"))
             .ToList();
 
         if (solutionTarget && suites.Count == 0 && !filtered)

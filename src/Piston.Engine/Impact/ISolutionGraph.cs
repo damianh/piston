@@ -19,5 +19,8 @@ internal interface ISolutionGraph
 
     /// <summary>Whether the project builds more than one target framework.</summary>
     bool IsMultiTargeted(string projectPath) => false;
+
+    /// <summary>How a test project runs tests, or <see langword="null"/> when it is not a known test project.</summary>
+    TestProjectFacts? GetTestProjectFacts(string projectPath) => null;
     string? VerificationCoverageIssue => "Build-input coverage is unavailable.";
 }

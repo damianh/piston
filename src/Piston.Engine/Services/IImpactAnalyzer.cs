@@ -27,6 +27,9 @@ public interface IImpactAnalyzer
     /// </summary>
     bool IsMultiTargeted(string projectPath) => false;
 
+    /// <summary>How a test project runs tests, or <see langword="null"/> when the graph is unavailable.</summary>
+    Impact.TestProjectFacts? GetTestProjectFacts(string projectPath) => null;
+
     /// <summary>
     /// Projects a build of <paramref name="buildTargets"/> compiles: the targets and their references,
     /// or every project in the solution when <paramref name="buildTargets"/> is null or empty.

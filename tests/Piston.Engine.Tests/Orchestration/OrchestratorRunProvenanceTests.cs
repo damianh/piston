@@ -274,6 +274,8 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
 
         Assert.Equal(TestRunStatus.Incomplete, run!.Status);
         Assert.Contains("B.Tests", run.StatusReason);
+        Assert.Contains("diagnostics.log", run.StatusReason, StringComparison.Ordinal);
+        Assert.Contains(run.Projects, p => p.NoTestsReason is not null);
         Assert.False(run.IsCurrentFullResult);
     }
 

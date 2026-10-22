@@ -8,4 +8,8 @@ public sealed record ProjectTestResult(
     IReadOnlyList<TestSuite> Suites,
     string? RunnerError,
     IReadOnlyList<string> CoverageReportPaths,
-    bool Crashed);
+    bool Crashed)
+{
+    /// <summary>The log of the process that produced the result, when the runner kept one.</summary>
+    public ExecutionLog? Log { get; init; }
+}

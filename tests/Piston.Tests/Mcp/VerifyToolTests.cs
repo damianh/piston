@@ -160,7 +160,7 @@ public sealed class VerifyToolTests
             Projects =
             [
                 new("Failed.csproj", ProjectRunStatus.Failed, 0),
-                new("Empty.csproj", ProjectRunStatus.Completed, 0),
+                new("Empty.csproj", ProjectRunStatus.Completed, 0, "Add Microsoft.NET.Test.Sdk."),
                 new("Crashed.csproj", ProjectRunStatus.Crashed, 0),
                 new("Good.csproj", ProjectRunStatus.Completed, 1),
             ],
@@ -170,7 +170,7 @@ public sealed class VerifyToolTests
 
         Assert.Contains("Projects without complete results (3)", text);
         Assert.Contains("Failed.csproj: Failed", text);
-        Assert.Contains("Empty.csproj: no test results", text);
+        Assert.Contains("Empty.csproj: no test results (Add Microsoft.NET.Test.Sdk.)", text);
         Assert.Contains("Crashed.csproj: Crashed", text);
         Assert.DoesNotContain("Good.csproj", text);
         Assert.Contains("A.Pending: NotRun", text);
