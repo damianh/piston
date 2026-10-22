@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine;
+using Piston.Engine.Coverage;
 using Piston.Engine.Models;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
@@ -314,4 +315,69 @@ public static class DtoMapper
             CompletedBuildProjects: state.CompletedBuildProjects,
             LastBuiltProject: state.LastBuiltProject
         );
+
+    /// <summary>Largest source file whose text a coverage response carries, keeping it within message limits.</summary>
+    internal const long MaxCoverageSourceBytes = 1024 * 1024;
+
+    public static CoverageSummaryDto ToCoverageSummaryDto(CoverageReportSnapshot? report, string? solutionDirectory) =>
+        report is null
+            ? new CoverageSummaryDto(false, null, 0, 0, 0, 0, [])
+            : new CoverageSummaryDto(
+                Enabled: true,
+                GeneratedAt: report.GeneratedAt,
+                LinesTotal: report.LinesTotal,
+                LinesCovered: report.LinesCovered,
+                BranchesTotal: report.BranchesTotal,
+                BranchesCovered: report.BranchesCovered,
+                Files: [.. report.Files.Select(f => f.ToDto(solutionDirectory))]);
+
+    public static CoverageFileSummaryDto ToDto(this CoverageFileSummary file, string? solutionDirectory) => new(
+        FilePath: file.FilePath,
+        RelativePath: solutionDirectory is null
+            ? file.FilePath
+            : Path.GetRelativePath(solutionDirectory, file.FilePath).Replace('\\', '/'),
+        Module: file.Module,
+        LinesTotal: file.LinesTotal,
+        LinesCovered: file.LinesCovered,
+        BranchesTotal: file.BranchesTotal,
+        BranchesCovered: file.BranchesCovered,
+        IsStale: file.IsStale,
+        IsPartial: file.IsPartial,
+        UpdatedAt: file.UpdatedAt);
+
+    public static CoverageLineDto ToDto(this LineCoverage line) => new(
+        line.LineNumber,
+        line.HitCount,
+        line.HitCount == 0 ? "uncovered"
+            : line.BranchesTotal > 0 && line.BranchesCovered < line.BranchesTotal ? "partial"
+            : "covered",
+        line.BranchesCovered,
+        line.BranchesTotal);
+
+    public static FileCoverageDto ToFileCoverageDto(
+        string requestedPath, FileCoverageSnapshot? coverage, string? solutionDirectory, bool includeSource) =>
+        coverage is null
+            ? new FileCoverageDto(requestedPath, [])
+            : new FileCoverageDto(
+                coverage.File.FilePath,
+                [.. coverage.Lines.Select(l => l.ToDto())],
+                coverage.File.ToDto(solutionDirectory),
+                includeSource ? ReadSource(coverage.File.FilePath) : null);
+
+    private static string[]? ReadSource(string filePath)
+    {
+        try
+        {
+            var info = new FileInfo(filePath);
+            return info.Exists && info.Length <= MaxCoverageSourceBytes ? File.ReadAllLines(filePath) : null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 }

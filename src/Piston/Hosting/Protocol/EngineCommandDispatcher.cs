@@ -7,7 +7,6 @@ using Piston.Engine;
 using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
 using Piston.Hosting.Services;
-using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 
@@ -27,6 +26,9 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
     private UserSettingsStore? _userSettings;
 
     public EngineCommandDispatcher(IEngine engine) => _engine = engine;
+
+    private string? SolutionDirectory =>
+        _engine.State.SolutionPath is { } solutionPath ? Path.GetDirectoryName(Path.GetFullPath(solutionPath)) : null;
 
     /// <summary>Delay before a requested shutdown starts, so the reply reaches the client first.</summary>
     internal static TimeSpan ShutdownReplyGrace { get; set; } = TimeSpan.FromMilliseconds(100);
@@ -83,7 +85,16 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<GetFileCoverageCommand>(@params);
                     var filePath = cmd?.FilePath ?? string.Empty;
-                    var result = new FileCoverageDto(filePath, Array.Empty<CoverageLineDto>());
+                    var coverage = string.IsNullOrWhiteSpace(filePath) ? null : _engine.GetFileCoverage(filePath);
+                    var result = DtoMapper.ToFileCoverageDto(
+                        filePath, coverage, SolutionDirectory, cmd?.IncludeSource ?? false);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.CoverageGetSummary:
+                {
+                    var result = DtoMapper.ToCoverageSummaryDto(_engine.GetCoverageReport(), SolutionDirectory);
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
                 }

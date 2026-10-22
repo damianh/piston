@@ -575,6 +575,62 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         _state.NotifyChanged();
     }
 
+    /// <summary>Returns the coverage report, or null when coverage is disabled.</summary>
+    internal CoverageReportSnapshot? GetCoverageReport()
+    {
+        if (_coverageStore is null)
+        {
+            return null;
+        }
+
+        IReadOnlyList<CoverageFileSummary> files;
+        _coverageLock.Wait();
+        try
+        {
+            files = _coverageStore.GetReportFiles();
+        }
+        finally
+        {
+            _ = _coverageLock.Release();
+        }
+
+        return new CoverageReportSnapshot([.. files.Select(WithCurrentStaleness)]);
+    }
+
+    /// <summary>
+    /// Returns the coverage of <paramref name="filePath"/>, or null when coverage is disabled or the file
+    /// was not measured.
+    /// </summary>
+    internal FileCoverageSnapshot? GetFileCoverage(string filePath)
+    {
+        if (_coverageStore is null)
+        {
+            return null;
+        }
+
+        CoverageFileSummary? file;
+        IReadOnlyList<LineCoverage> lines;
+        _coverageLock.Wait();
+        try
+        {
+            file = _coverageStore.GetReportFile(filePath);
+            lines = file is null ? [] : _coverageStore.GetReportLines(filePath);
+        }
+        finally
+        {
+            _ = _coverageLock.Release();
+        }
+
+        return file is null ? null : new FileCoverageSnapshot(WithCurrentStaleness(file), lines);
+    }
+
+    /// <summary>Flags a file stale when its content no longer matches what was measured, e.g. after edits while stopped.</summary>
+    private static CoverageFileSummary WithCurrentStaleness(CoverageFileSummary file) =>
+        file.IsStale || file.ContentHash is null
+            || string.Equals(file.ContentHash, CoverageReportFile.ComputeContentHash(file.FilePath), StringComparison.Ordinal)
+            ? file
+            : file with { IsStale = true };
+
     internal async Task ProcessCoverageAsync(
         long runId, IReadOnlyList<string> reportPaths, IReadOnlyList<string> testFqns, bool isFullRun = false)
     {

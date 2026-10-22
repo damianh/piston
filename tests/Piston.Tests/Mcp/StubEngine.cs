@@ -84,5 +84,16 @@ internal sealed class StubEngine : IEngine
         State.TotalExpectedTests = 0;
     }
 
+    /// <summary>Coverage report returned by <see cref="GetCoverageReport"/>; null means coverage is disabled.</summary>
+    public Engine.Coverage.CoverageReportSnapshot? CoverageReport { get; set; }
+
+    /// <summary>Per-file coverage returned by <see cref="GetFileCoverage"/>, keyed by the requested path.</summary>
+    public Dictionary<string, Engine.Coverage.FileCoverageSnapshot> FileCoverage { get; } = [];
+
+    public Engine.Coverage.CoverageReportSnapshot? GetCoverageReport() => CoverageReport;
+
+    public Engine.Coverage.FileCoverageSnapshot? GetFileCoverage(string filePath) =>
+        FileCoverage.GetValueOrDefault(filePath);
+
     public void Dispose() { }
 }

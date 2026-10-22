@@ -23,4 +23,4 @@ internal sealed record FileCoverage(string FilePath, IReadOnlyList<LineCoverage>
 /// <param name="HitCount">Number of times the line was executed.</param>
 /// <param name="BranchesCovered">Branch outcomes taken on this line (0 when the line has no branches).</param>
 /// <param name="BranchesTotal">Branch outcomes on this line (0 when the line has no branches).</param>
-internal sealed record LineCoverage(int LineNumber, int HitCount, int BranchesCovered = 0, int BranchesTotal = 0);
+public sealed record LineCoverage(int LineNumber, int HitCount, int BranchesCovered = 0, int BranchesTotal = 0);

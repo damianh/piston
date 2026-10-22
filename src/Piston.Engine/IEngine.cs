@@ -45,6 +45,15 @@ public interface IEngine : IDisposable
     // State queries
     PistonState State { get; }
 
+    /// <summary>Returns the solution-wide coverage report, or null when coverage is disabled.</summary>
+    Coverage.CoverageReportSnapshot? GetCoverageReport() => null;
+
+    /// <summary>
+    /// Returns the coverage of one source file (absolute, or relative to the solution directory), or null
+    /// when coverage is disabled or the file was not measured.
+    /// </summary>
+    Coverage.FileCoverageSnapshot? GetFileCoverage(string filePath) => null;
+
     // Configuration
     void SetFilter(string? filter);
     void ClearResults();

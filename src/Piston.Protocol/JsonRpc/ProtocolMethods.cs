@@ -30,6 +30,9 @@ public static class ProtocolMethods
     /// <summary>Request per-file coverage data for the given source file.</summary>
     public const string CoverageGetForFile = "coverage/getForFile";
 
+    /// <summary>Request the solution-wide coverage report: totals and every measured file.</summary>
+    public const string CoverageGetSummary = "coverage/getSummary";
+
     // Notifications (server → client, no response)
 
     /// <summary>Full state snapshot — sent on connect and after every state change.</summary>

@@ -73,6 +73,44 @@ public sealed class OrchestratorCoverageTests
         }
     }
 
+    [Fact]
+    public async Task GetFileCoverage_FlagsFilesEditedSinceMeasurementAsStale()
+    {
+        var root = Directory.CreateTempSubdirectory("piston-coverage-query-").FullName;
+        try
+        {
+            var file = Path.Combine(root, "Code.cs");
+            await File.WriteAllTextAsync(file, "class C {}", _ct);
+            using var store = new SqliteCoverageStore();
+            await store.InitializeAsync(root);
+            await store.StoreReportAsync(store.CreateRunId(), [
+                new CoverageReportFile(
+                    new FileCoverage(file, [new LineCoverage(1, 2), new LineCoverage(2, 0)], "Lib"),
+                    CoverageReportFile.ComputeContentHash(file)),
+            ], isFullRun: true);
+            using var orchestrator = new PistonOrchestrator(
+                new StubFileWatcherService(), new StubBuildService(),
+                new StubTestRunnerService([], TimeSpan.Zero), new StubImpactAnalyzer([]),
+                new PistonState(), store, new CoverageProcessor(new CoberturaParser()), true);
+
+            var fresh = orchestrator.GetFileCoverage(file)!;
+            Assert.False(fresh.File.IsStale);
+            Assert.Equal([new LineCoverage(1, 2), new LineCoverage(2, 0)], fresh.Lines);
+            var report = orchestrator.GetCoverageReport()!;
+            Assert.Equal((2, 1), (report.LinesTotal, report.LinesCovered));
+            Assert.Null(orchestrator.GetFileCoverage(Path.Combine(root, "Other.cs")));
+
+            await File.WriteAllTextAsync(file, "class C { int x; }", _ct);
+
+            Assert.True(orchestrator.GetFileCoverage(file)!.File.IsStale);
+            Assert.True(Assert.Single(orchestrator.GetCoverageReport()!.Files).IsStale);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private sealed class PausingCoverageProcessor(string file) : ICoverageProcessor
     {
         public TaskCompletionSource Committed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

@@ -45,7 +45,7 @@ internal sealed record CoverageReportFile(FileCoverage Coverage, string? Content
 /// <param name="ContentHash">SHA-256 of the content the data was measured against.</param>
 /// <param name="RunId">Coverage run that last wrote the file.</param>
 /// <param name="UpdatedAt">When the file was last written.</param>
-internal sealed record CoverageFileSummary(
+public sealed record CoverageFileSummary(
     string FilePath,
     string? Module,
     int LinesTotal,
@@ -57,3 +57,25 @@ internal sealed record CoverageFileSummary(
     string? ContentHash,
     long RunId,
     DateTimeOffset UpdatedAt);
+
+/// <summary>
+/// The solution-wide coverage report: every measured file's totals.
+/// </summary>
+public sealed record CoverageReportSnapshot(IReadOnlyList<CoverageFileSummary> Files)
+{
+    public int LinesTotal => Files.Sum(f => f.LinesTotal);
+
+    public int LinesCovered => Files.Sum(f => f.LinesCovered);
+
+    public int BranchesTotal => Files.Sum(f => f.BranchesTotal);
+
+    public int BranchesCovered => Files.Sum(f => f.BranchesCovered);
+
+    /// <summary>When the report was last written, or null when it is empty.</summary>
+    public DateTimeOffset? GeneratedAt => Files.Count == 0 ? null : Files.Max(f => f.UpdatedAt);
+}
+
+/// <summary>
+/// One file's coverage totals and per-line coverage.
+/// </summary>
+public sealed record FileCoverageSnapshot(CoverageFileSummary File, IReadOnlyList<LineCoverage> Lines);

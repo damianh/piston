@@ -236,6 +236,11 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
     public void ClearResults() => _orchestrator.ClearResults(_solutionDirectory);
 
+    public CoverageReportSnapshot? GetCoverageReport() => _orchestrator.GetCoverageReport();
+
+    public FileCoverageSnapshot? GetFileCoverage(string filePath) =>
+        _orchestrator.GetFileCoverage(Path.GetFullPath(filePath, _solutionDirectory));
+
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
     public async ValueTask DisposeAsync()
