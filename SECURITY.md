@@ -32,7 +32,10 @@ filter and user settings, and stop the daemon.
   not send CORS headers.
 - The dashboard responses carry `X-Content-Type-Options: nosniff`,
   `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy: same-origin` and
-  `Cross-Origin-Resource-Policy: same-origin`.
+  `Cross-Origin-Resource-Policy: same-origin`, and a `Content-Security-Policy` that
+  allows scripts only from the daemon (plus `'wasm-unsafe-eval'` for WebAssembly and the
+  build's inline import map by hash) and no plugins. Inline styles are allowed. The
+  policy sets no `frame-ancestors`, so tools that embed the dashboard keep working.
 
 **Out of scope: local processes.** Any process of any user on the machine that can
 connect to loopback can use the HTTP endpoints. A local process can already run code as

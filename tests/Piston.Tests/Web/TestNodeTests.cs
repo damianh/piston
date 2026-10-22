@@ -36,7 +36,8 @@ public class TestNodeTests
         Assert.Equal("1 test: 1 passed, 0 failed", new NodeCounts(1, 1, 0).Description);
 
     [Theory]
-    [InlineData(0, "0ms")]
+    [InlineData(0, "<1ms")]
+    [InlineData(0.4, "<1ms")]
     [InlineData(999.9, "999ms")]
     [InlineData(1000, "1.0s")]
     [InlineData(2400, "2.4s")]

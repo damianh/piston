@@ -37,10 +37,12 @@ public sealed class OrchestratorCoverageTests
     public void RunImpactUnits_FilteredRunMerges_AndWithoutProjectsUsesTheSolution()
     {
         var filtered = PistonOrchestrator.RunImpactUnits(
-            [new ProjectTestResult("A", [], null, [], false)], "/repo/s.slnx", [], [], filter: "FullyQualifiedName=X");
+            [new ProjectTestResult("A", [], null, [], false), new ProjectTestResult("B", [], null, [], Crashed: true)],
+            "/repo/s.slnx", [], [], filter: "FullyQualifiedName=X");
         var solution = PistonOrchestrator.RunImpactUnits([], "/repo/s.slnx", ["r.xml"], ["T"], filter: null);
 
-        Assert.True(Assert.Single(filtered).Merge);
+        Assert.All(filtered, u => Assert.True(u.Merge));
+        Assert.Equal([true, false], filtered.Select(u => u.MethodsComplete));
         var unit = Assert.Single(solution);
         Assert.Equal("/repo/s.slnx", unit.ProjectPath);
         Assert.Equal(["r.xml"], unit.ReportPaths);

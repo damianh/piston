@@ -21,6 +21,8 @@ public static class ChildProcessEnvironment
 
     private const string StartupHooks = "DOTNET_STARTUP_HOOKS";
 
+    internal const string DiffEngineDisabled = "DiffEngine_Disabled";
+
     private static readonly string[] RemovedPrefixes =
     [
         "ASPIRE_",
@@ -64,6 +66,7 @@ public static class ChildProcessEnvironment
     public static IReadOnlyList<string> Prepare(ProcessStartInfo psi)
     {
         MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
+        DisableDiffTools(psi.Environment);
         return Sanitize(psi.Environment, PassThrough);
     }
 
@@ -100,6 +103,13 @@ public static class ChildProcessEnvironment
         removed.Sort(StringComparer.OrdinalIgnoreCase);
         return removed;
     }
+
+    /// <summary>
+    /// Stops snapshot libraries (Verify's DiffEngine) opening a diff tool for every failing snapshot test:
+    /// Piston runs tests in the background on every save. A value the user set is kept.
+    /// </summary>
+    internal static void DisableDiffTools(IDictionary<string, string?> environment) =>
+        _ = environment.TryAdd(DiffEngineDisabled, "true");
 
     /// <summary>One line for a run log naming the removed variables, or <see langword="null"/> when none were removed.</summary>
     public static string? Describe(IReadOnlyList<string> removed) =>

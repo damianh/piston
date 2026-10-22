@@ -734,20 +734,34 @@ static async Task<int?> TryStopViaPipeAsync(string pipeName)
 
 static async Task<bool> WaitForProcessExitAsync(int pid, TimeSpan timeout)
 {
-    try
+    // Process.WaitForExitAsync on Unix only notices a non-child process exiting when this process
+    // receives SIGCHLD, so it would wait out the timeout; poll instead.
+    var deadline = DateTime.UtcNow + timeout;
+    while (true)
     {
-        using var process = System.Diagnostics.Process.GetProcessById(pid);
-        using var cts = new CancellationTokenSource(timeout);
-        await process.WaitForExitAsync(cts.Token);
-        return true;
-    }
-    catch (ArgumentException)
-    {
-        return true; // already exited
-    }
-    catch (OperationCanceledException)
-    {
-        return false;
+        try
+        {
+            using var process = System.Diagnostics.Process.GetProcessById(pid);
+            if (process.HasExited)
+            {
+                return true;
+            }
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+
+        if (DateTime.UtcNow >= deadline)
+        {
+            return false;
+        }
+
+        await Task.Delay(TimeSpan.FromMilliseconds(200));
     }
 }
 

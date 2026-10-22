@@ -695,7 +695,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             RunUnitKey,
             p.CoverageReportPaths,
             [.. p.Suites.SelectMany(s => s.Tests).Select(t => t.FullyQualifiedName).Distinct(StringComparer.Ordinal)],
-            Merge: filtered || p.Crashed || p.RunnerError is not null))];
+            Merge: filtered || p.Crashed || p.RunnerError is not null,
+            MethodsComplete: filtered && !p.Crashed && p.RunnerError is null))];
     }
 
     private const string RunUnitKey = "run";

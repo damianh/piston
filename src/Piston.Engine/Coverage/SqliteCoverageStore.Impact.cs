@@ -4,6 +4,7 @@
 using System.Globalization;
 using Microsoft.Data.Sqlite;
 using Piston.Engine.Impact;
+using Piston.Engine.Services;
 
 namespace Piston.Engine.Coverage;
 
@@ -96,6 +97,11 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                     """);
                 _ = resetCmd.Parameters.AddWithValue("$unit_id", unitId);
                 _ = await resetCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }
+
+            if (recording.Merge && recording.MethodsComplete)
+            {
+                await PruneRenamedTestsAsync(unitId, recording.TestFqns, transaction).ConfigureAwait(false);
             }
 
             using (var testCmd = Command(transaction, "INSERT OR IGNORE INTO impact_unit_tests (unit_id, test_fqn) VALUES ($unit_id, $fqn);"))
@@ -517,6 +523,36 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
         }
 
         return tests;
+    }
+
+    private async Task PruneRenamedTestsAsync(long unitId, IReadOnlyList<string> ranTests, SqliteTransaction transaction)
+    {
+        var ran = ranTests.ToHashSet(StringComparer.Ordinal);
+        var methods = ranTests.Select(TestSelectionFilter.MethodName).ToHashSet(StringComparer.Ordinal);
+
+        var stale = new List<string>();
+        using (var readCmd = Command(transaction, "SELECT test_fqn FROM impact_unit_tests WHERE unit_id = $unit_id;"))
+        {
+            _ = readCmd.Parameters.AddWithValue("$unit_id", unitId);
+            using var reader = await readCmd.ExecuteReaderAsync().ConfigureAwait(false);
+            while (await reader.ReadAsync().ConfigureAwait(false))
+            {
+                var fqn = reader.GetString(0);
+                if (!ran.Contains(fqn) && methods.Contains(TestSelectionFilter.MethodName(fqn)))
+                {
+                    stale.Add(fqn);
+                }
+            }
+        }
+
+        using var deleteCmd = Command(transaction, "DELETE FROM impact_unit_tests WHERE unit_id = $unit_id AND test_fqn = $fqn;");
+        _ = deleteCmd.Parameters.AddWithValue("$unit_id", unitId);
+        var pFqn = deleteCmd.Parameters.Add("$fqn", SqliteType.Text);
+        foreach (var fqn in stale)
+        {
+            pFqn.Value = fqn;
+            _ = await deleteCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
     }
 
     private (string Hash, string Spans)? ReadUnitFile(long unitId, string filePath, SqliteTransaction transaction)

@@ -42,6 +42,26 @@ public sealed class ChildProcessEnvironmentTests
     }
 
     [Fact]
+    public void DisableDiffTools_SetsDiffEngineDisabled()
+    {
+        var environment = Environment(("PATH", "/usr/bin"));
+
+        ChildProcessEnvironment.DisableDiffTools(environment);
+
+        Assert.Equal("true", environment[ChildProcessEnvironment.DiffEngineDisabled]);
+    }
+
+    [Fact]
+    public void DisableDiffTools_KeepsUserValue()
+    {
+        var environment = Environment((ChildProcessEnvironment.DiffEngineDisabled, "false"));
+
+        ChildProcessEnvironment.DisableDiffTools(environment);
+
+        Assert.Equal("false", environment[ChildProcessEnvironment.DiffEngineDisabled]);
+    }
+
+    [Fact]
     public void Sanitize_KeepsAspireUserSettings()
     {
         var environment = Environment(("ASPIRE_CONTAINER_RUNTIME", "podman"));

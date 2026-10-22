@@ -325,6 +325,9 @@ A test run's log lists the variables it did not inherit. To keep some, set
 `PISTON_TEST_ENV_PASSTHROUGH` on the daemon to names or `PREFIX*` patterns separated
 by `;` or `,` (for example `ASPNETCORE_URLS;ASPIRE_DASHBOARD_*`).
 
+Child processes also get `DiffEngine_Disabled=true` unless it is already set, so snapshot
+tests (Verify) do not open a diff tool for every failure while Piston runs in the background.
+
 ## Building from source
 
 Production code lives in four projects under `src/`: `Piston`, `Piston.Engine`,

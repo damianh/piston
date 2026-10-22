@@ -179,7 +179,9 @@ public sealed class DaemonHost : IAsyncDisposable
 
         _webApp = webBuilder.Build();
         _webApp.Urls.Add(WebUrl);
-        _ = _webApp.UseRequestGuard(securityHeaders: true);
+        _ = _webApp.UseRequestGuard(
+            securityHeaders: true,
+            ContentSecurityPolicy.Build(ContentSecurityPolicy.ReadIndex(_webApp.Environment.WebRootFileProvider)));
         _ = _webApp.UseWebSockets();
 
         // Serve Blazor WASM framework files (handles content negotiation for .br/.gz compressed
@@ -190,6 +192,7 @@ public sealed class DaemonHost : IAsyncDisposable
         _ = _webApp.UseRouting();
 
         var router = _router;
+        var stopping = _webApp.Lifetime.ApplicationStopping;
         _ = _webApp.Map("/ws", async context =>
         {
             if (!context.WebSockets.IsWebSocketRequest)
@@ -199,7 +202,9 @@ public sealed class DaemonHost : IAsyncDisposable
             }
 
             var webSocket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
-            await router.AddWebSocketSessionAsync(webSocket, ct).ConfigureAwait(false);
+            // End the session when the server stops; otherwise shutdown waits for the dashboard to disconnect.
+            using var session = CancellationTokenSource.CreateLinkedTokenSource(ct, stopping);
+            await router.AddWebSocketSessionAsync(webSocket, session.Token).ConfigureAwait(false);
         });
 
         // Coverage report downloads: /api/coverage/lcov and /api/coverage/cobertura.

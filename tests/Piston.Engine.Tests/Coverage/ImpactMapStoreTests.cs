@@ -46,9 +46,10 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         string[] tests,
         LineSpan[] spans,
         string? content = null,
-        bool merge = false) =>
+        bool merge = false,
+        bool methodsComplete = false) =>
         _sut.RecordImpactAsync(new ImpactRecording(
-            Project, granularity, unitKey, _sut.CreateRunId(), tests, [new ImpactFile(File, spans, content ?? Original)], merge));
+            Project, granularity, unitKey, _sut.CreateRunId(), tests, [new ImpactFile(File, spans, content ?? Original)], merge, methodsComplete));
 
     [Fact]
     public async Task SelectTests_ChangeInsideAnExecutedSpan_SelectsTheUnitsTestsWithTheSpan()
@@ -165,6 +166,30 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         var selection = _sut.SelectTests([new ChangedFile(File, Edit(shifted, 6, "changed"))]);
         Assert.Equal(["T.A", "T.B"], selection.Tests.Keys.Order());
         Assert.Equal(new LineSpan(5, 7), Assert.Single(selection.Tests["T.A"]).ExecutedSpan);
+    }
+
+    [Fact]
+    public async Task RecordImpactAsync_MergeWithCompleteMethods_RemovesRenamedCasesOfThoseMethods()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A.Theory(at: 10:00)", "T.A.Other", "T.B.Theory(at: 10:00)"], [new(3, 5)]);
+
+        await Record(ImpactGranularity.Run, "run", ["T.A.Theory(at: 10:05)"], [new(3, 5)], merge: true, methodsComplete: true);
+
+        Assert.Equal(
+            ["T.A.Other", "T.A.Theory(at: 10:05)", "T.B.Theory(at: 10:00)"],
+            Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Run)).Tests.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task RecordImpactAsync_MergeWithIncompleteMethods_KeepsEarlierCases()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A.Theory(at: 10:00)"], [new(3, 5)]);
+
+        await Record(ImpactGranularity.Run, "run", ["T.A.Theory(at: 10:05)"], [new(3, 5)], merge: true);
+
+        Assert.Equal(
+            ["T.A.Theory(at: 10:00)", "T.A.Theory(at: 10:05)"],
+            Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Run)).Tests.Order(StringComparer.Ordinal));
     }
 
     [Fact]

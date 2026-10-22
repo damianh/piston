@@ -38,6 +38,11 @@ internal sealed record ImpactFile(string FilePath, IReadOnlyList<LineSpan> Spans
 /// True when only some of the unit's tests ran (a selective run): tests and spans are added to what is
 /// recorded rather than replacing it. False replaces the unit and marks it current.
 /// </param>
+/// <param name="MethodsComplete">
+/// For a merge: every test case of each method in <paramref name="TestFqns"/> ran (selective runs filter by
+/// method). Recorded tests of those methods that did not run no longer exist, such as theory cases whose
+/// display names change between runs, and are removed.
+/// </param>
 internal sealed record ImpactRecording(
     string ProjectPath,
     ImpactGranularity Granularity,
@@ -45,7 +50,8 @@ internal sealed record ImpactRecording(
     long RunId,
     IReadOnlyList<string> TestFqns,
     IReadOnlyList<ImpactFile> Files,
-    bool Merge);
+    bool Merge,
+    bool MethodsComplete = false);
 
 /// <summary>A changed source file to select tests for.</summary>
 /// <param name="FilePath">Absolute path of the file.</param>

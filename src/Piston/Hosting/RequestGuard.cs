@@ -31,8 +31,12 @@ internal static class RequestGuard
     public static IReadOnlyList<string> ConfiguredHosts { get; } =
         ParseHosts(Environment.GetEnvironmentVariable(AllowedHostsVariable));
 
-    /// <summary>Adds the guard, and the dashboard's response headers when <paramref name="securityHeaders"/> is set.</summary>
-    public static IApplicationBuilder UseRequestGuard(this IApplicationBuilder app, bool securityHeaders)
+    /// <summary>
+    /// Adds the guard, and the dashboard's response headers when <paramref name="securityHeaders"/> is set,
+    /// including <paramref name="contentSecurityPolicy"/> when given.
+    /// </summary>
+    public static IApplicationBuilder UseRequestGuard(
+        this IApplicationBuilder app, bool securityHeaders, string? contentSecurityPolicy = null)
     {
         var extraHosts = ConfiguredHosts;
         return app.Use(async (context, next) =>
@@ -52,6 +56,10 @@ internal static class RequestGuard
                 headers["Referrer-Policy"] = "no-referrer";
                 headers["Cross-Origin-Opener-Policy"] = "same-origin";
                 headers["Cross-Origin-Resource-Policy"] = "same-origin";
+                if (contentSecurityPolicy is not null)
+                {
+                    headers.ContentSecurityPolicy = contentSecurityPolicy;
+                }
             }
 
             await next(context).ConfigureAwait(false);

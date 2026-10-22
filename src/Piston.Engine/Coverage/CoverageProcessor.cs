@@ -184,7 +184,7 @@ internal sealed class CoverageProcessor : ICoverageProcessor
             }
 
             await impactMap.RecordImpactAsync(new ImpactRecording(
-                unit.ProjectPath, impact.Granularity, unit.UnitKey, runId, unit.TestFqns, files, unit.Merge)).ConfigureAwait(false);
+                unit.ProjectPath, impact.Granularity, unit.UnitKey, runId, unit.TestFqns, files, unit.Merge, unit.MethodsComplete)).ConfigureAwait(false);
         }
     }
 
