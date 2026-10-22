@@ -225,6 +225,14 @@ public static class DtoMapper
     public static SourceFingerprintDto ToDto(this SourceFingerprint fingerprint) =>
         new(fingerprint.Algorithm, fingerprint.Value, fingerprint.FileCount);
 
+    public static StoredRunSummaryDto ToDto(this StoredRunSummary run) => new(
+        run.RunId, run.Trigger.ToString(), run.Status.ToString(), run.Scope?.ToString(), run.IsFullScope, run.Freshness.ToString(),
+        run.RequestedAt, run.CompletedAt, run.Source, run.Passed, run.Failed, run.Skipped);
+
+    public static StoredRunDto ToDto(this StoredRun run) => new(
+        run.Summary.ToDto(),
+        [.. run.Results.Select(r => new StoredTestResultDto(r.Project, r.Test, r.Status.ToString(), r.DurationMs, r.ErrorMessage, r.StackTrace))]);
+
     public static TestRunDto ToDto(this TestRunRecord run)
     {
         var tests = run.Tests.ToList();

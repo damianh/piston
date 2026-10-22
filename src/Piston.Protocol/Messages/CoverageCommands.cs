@@ -15,3 +15,5 @@ public sealed record ExportCoverageCommand(string Format);
 /// <summary>Request the tests recorded as executing a source file.</summary>
 /// <param name="FilePath">Absolute path, or a path relative to the solution directory.</param>
 public sealed record GetCoveringTestsCommand(string FilePath);
+
+public sealed record GetStoredRunCommand(string RunId);

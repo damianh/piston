@@ -18,6 +18,10 @@
         {
             <CoverageTab OnOpenTest="OpenTest" />
         }
+        else if (_activeTab == DashboardTab.Runs)
+        {
+            <RunsTab OnOpenTest="OpenTest" />
+        }
     </div>
 
     <StatusBar />

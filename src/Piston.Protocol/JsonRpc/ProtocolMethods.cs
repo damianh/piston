@@ -39,6 +39,12 @@ public static class ProtocolMethods
     /// <summary>Export the coverage report as LCOV or Cobertura text.</summary>
     public const string CoverageExport = "coverage/export";
 
+    /// <summary>Request the runs kept in the run history, newest first.</summary>
+    public const string HistoryGetRuns = "history/getRuns";
+
+    /// <summary>Request one stored run with its per-test results.</summary>
+    public const string HistoryGetRun = "history/getRun";
+
     // Notifications (server → client, no response)
 
     /// <summary>Full state snapshot — sent on connect and after every state change.</summary>

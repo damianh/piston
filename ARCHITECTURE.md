@@ -372,7 +372,9 @@ fingerprint. Saves are debounced and atomic (temp file then rename); each test
 keeps 20 entries, the file keeps 50 runs with per-test results and clipped errors,
 and tests unseen for 30 days are pruned. The file stores each project and test
 name once and runs in columns. A history failure is logged and never fails a run.
-`clear_results` does not clear history.
+`clear_results` does not clear history. The dashboard reads the kept runs with
+`history/getRuns` and `history/getRun`, and compares two runs in the browser
+(`RunComparison`).
 
 There is no run-metadata table, preferences table, or graph cache. Coverage persistence alone is not full
 controller-state recovery. `.piston.json` is the actual optional configuration

@@ -104,6 +104,23 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
                 }
 
+            case ProtocolMethods.HistoryGetRuns:
+                {
+                    var runs = _engine.GetStoredRuns();
+                    var result = new StoredRunsDto(runs is not null, runs?.Select(DtoMapper.ToDto).ToList() ?? []);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.HistoryGetRun:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<GetStoredRunCommand>(@params);
+                    var run = string.IsNullOrWhiteSpace(cmd?.RunId) ? null : _engine.GetStoredRun(cmd.RunId);
+                    return run is null
+                        ? null
+                        : JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(run.ToDto(), JsonRpcSerializer.Options));
+                }
+
             case ProtocolMethods.CoverageGetSummary:
                 {
                     var result = DtoMapper.ToCoverageSummaryDto(_engine.GetCoverageReport(), SolutionDirectory);

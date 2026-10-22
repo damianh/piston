@@ -32,6 +32,13 @@ internal sealed class StubEngine : IEngine
 
     public IReadOnlyList<TestHistory>? GetFlakyTests() => Histories?.Where(h => h.Flaky).ToList();
 
+    /// <summary>Runs returned by the stored-run queries; null means history is off.</summary>
+    public IReadOnlyList<StoredRun>? StoredRuns { get; set; }
+
+    public IReadOnlyList<StoredRunSummary>? GetStoredRuns() => StoredRuns?.Select(r => r.Summary).ToList();
+
+    public StoredRun? GetStoredRun(string runId) => StoredRuns?.FirstOrDefault(r => r.Summary.RunId == runId);
+
     public Task StartAsync(string solutionPath)
     {
         State.SolutionPath = solutionPath;

@@ -112,6 +112,8 @@ Project, framework, namespace, class and pinned rows show how many tests they co
 
 The **Coverage** tab (when the daemon runs with coverage enabled) shows line and branch totals, the measured files grouped by module (filterable, sorted by path or by most uncovered lines) and the selected file's source with each line's hit count: covered lines green, partly covered branches yellow, uncovered lines red. A file is marked *stale* when it changed since it was measured and *partial* when only a selective run measured it. The line marks are aggregate coverage of the tests that ran. Below the source, a panel lists the tests the impact map records as executing the selected file, each with a badge for how precisely that was measured (`test`, `class` or `run`, see [Coverage and impact selection](#coverage-and-impact-selection)) and an *outdated* marker when the file or the measurement changed since; click a line number to narrow the list to that line, and click a test to open it in the **Tests** tab. After a selective run by changed lines, a test's details say why it ran, and the status bar shows the last run's scope. The tab links to LCOV and Cobertura downloads, which the daemon also serves at `/api/coverage/lcov` and `/api/coverage/cobertura`.
 
+The **Runs** tab lists the runs kept in the [run history](#run-history-and-failure-classification), newest first, with each run's trigger, scope and passed, failed and skipped counts. Selecting a run shows its per-test results, failures first with their messages, and compares it with an earlier run (the previous one by default): new failures, fixed tests, tests that passed in both but became at least twice as slow and 100 ms slower, tests still failing, added tests and, for a run of all tests, tests that did not run. Click a test to open it in the **Tests** tab.
+
 Keyboard shortcuts (press `?` in the dashboard for the list): `R` runs the selection, `[` and `]` move to the previous or next failure, `1`–`4` show or hide failed, passed, skipped and not-run tests, `G` cycles the grouping, `E` expands or collapses all, and `S` sorts slowest first.
 
 Dashboard styles are bundled locally; no CDN access is needed. After changing
@@ -327,7 +329,7 @@ Each failed test in a run is classified against that worktree's earlier results:
 
 `verify` lists failures with their class, new ones first, after a `Failure history:` count line.
 `get_test_run` includes `failureClassifications` (project, test, kind, evidence), and `get_test_history` shows the
-evidence. Set `"history": false` to turn this off.
+evidence. The dashboard's **Runs** tab browses and compares the kept runs. Set `"history": false` to turn this off.
 
 ### User settings
 

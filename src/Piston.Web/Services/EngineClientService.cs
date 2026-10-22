@@ -372,6 +372,20 @@ public sealed class EngineClientService : IAsyncDisposable
         return result?.Deserialize<FileCoverageDto>(JsonRpcSerializer.Options);
     }
 
+    /// <summary>The runs kept in the run history, newest first; null when the daemon is unreachable.</summary>
+    public async Task<StoredRunsDto?> GetStoredRunsAsync()
+    {
+        var result = await SendRequestAsync(ProtocolMethods.HistoryGetRuns).ConfigureAwait(false);
+        return result?.Deserialize<StoredRunsDto>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>One stored run with its per-test results; null when it is not kept or the daemon is unreachable.</summary>
+    public async Task<StoredRunDto?> GetStoredRunAsync(string runId)
+    {
+        var result = await SendRequestAsync(ProtocolMethods.HistoryGetRun, new GetStoredRunCommand(runId)).ConfigureAwait(false);
+        return result?.Deserialize<StoredRunDto>(JsonRpcSerializer.Options);
+    }
+
     public async Task<CoveringTestsDto?> GetCoveringTestsAsync(string filePath)
     {
         var result = await SendRequestAsync(ProtocolMethods.CoverageGetCoveringTests, new GetCoveringTestsCommand(filePath))
