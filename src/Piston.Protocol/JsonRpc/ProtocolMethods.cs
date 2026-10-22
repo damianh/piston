@@ -39,6 +39,9 @@ public static class ProtocolMethods
     /// <summary>Export the coverage report as LCOV or Cobertura text.</summary>
     public const string CoverageExport = "coverage/export";
 
+    /// <summary>Request the text of a source file in the watched solution.</summary>
+    public const string SourceGet = "source/get";
+
     /// <summary>Request the runs kept in the run history, newest first.</summary>
     public const string HistoryGetRuns = "history/getRuns";
 

@@ -66,6 +66,9 @@ coverage (optionally with its source), and LCOV or Cobertura exports; the daemon
 also serves the exports over HTTP at `/api/coverage/{lcov|cobertura}`.
 `coverage/getCoveringTests` returns the tests the impact map records as executing
 a file, with their evidence granularity and executed line ranges.
+`source/get` returns a source file's lines for the dashboard's stack-trace view;
+it refuses paths that resolve (following symlinks) outside the solution
+directory, files over 1 MB and binary files.
 Clients receive state, test progress, build errors, and activity notifications.
 The dashboard presents current test/build state, aggregate coverage, activity,
 and MCP call history; there is no diagnostic view.

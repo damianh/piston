@@ -104,6 +104,14 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
                 }
 
+            case ProtocolMethods.SourceGet:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<GetSourceCommand>(@params);
+                    var result = SourceFileReader.Read(cmd?.FilePath, SolutionDirectory);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
             case ProtocolMethods.HistoryGetRuns:
                 {
                     var runs = _engine.GetStoredRuns();

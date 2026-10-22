@@ -1,5 +1,6 @@
 @using Piston.Protocol.Dtos
 @using Piston.Protocol.Messages
+@using Piston.Web.Models
 @inject IJSRuntime JS
 
 @if (Test is null)
@@ -114,12 +115,33 @@ else
             </div>
         }
 
-        <!-- Stack trace -->
-        @if (!string.IsNullOrEmpty(Test.StackTrace))
+        <!-- Stack trace, with the source of the selected frame: by default the failing line of the solution's code -->
+        @if (Frames.Count > 0)
         {
             <div>
                 <div class="text-gray-400 font-semibold mb-1">Stack Trace</div>
-                <pre class="bg-gray-900 border border-gray-800 rounded p-3 text-gray-400 text-xs overflow-x-auto whitespace-pre-wrap break-all">@Test.StackTrace</pre>
+                @if (_sourceFrame is { } shown)
+                {
+                    <div class="mb-2">
+                        <SourceExcerpt FilePath="@(shown.FilePath!)" Line="@(shown.Line!.Value)" SolutionDirectory="@SolutionDirectory" />
+                    </div>
+                }
+                <div class="bg-gray-900 border border-gray-800 rounded p-3 text-gray-400 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
+                    @foreach (var frame in Frames)
+                    {
+                        @if (frame.HasSource && StackTraceParser.IsInSolution(frame.FilePath!, SolutionDirectory))
+                        {
+                            var current = frame == _sourceFrame;
+                            <button type="button" class="block w-full text-left whitespace-pre-wrap break-all rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 @(current ? "text-gray-200 bg-gray-800" : "text-gray-300 hover:text-gray-100 hover:bg-gray-800")"
+                                    title="Show this line of source" aria-pressed="@(current ? "true" : "false")"
+                                    @onclick="() => _sourceFrame = frame">@frame.Text</button>
+                        }
+                        else
+                        {
+                            <span class="block">@frame.Text</span>
+                        }
+                    }
+                </div>
             </div>
         }
 
@@ -175,6 +197,28 @@ else
     }
 
     private static string Lines(string range) => range.Contains('-', StringComparison.Ordinal) ? $"lines {range}" : $"line {range}";
+
+    private string? _framesFor;
+    private IReadOnlyList<StackFrameLine> _frames = [];
+    private StackFrameLine? _sourceFrame;
+
+    private string? SolutionDirectory =>
+        SolutionPath is { } path && path.LastIndexOfAny(['/', '\\']) is var slash and > 0 ? path[..slash] : null;
+
+    private IReadOnlyList<StackFrameLine> Frames => _frames;
+
+    protected override void OnParametersSet()
+    {
+        var trace = Test?.StackTrace;
+        if (trace == _framesFor)
+        {
+            return;
+        }
+
+        _framesFor = trace;
+        _frames = StackTraceParser.Parse(trace);
+        _sourceFrame = StackTraceParser.FirstInSolution(_frames, SolutionDirectory);
+    }
 
     private RunTestsCommand? RunCommand =>
         Test is null || Project is null

@@ -372,6 +372,13 @@ public sealed class EngineClientService : IAsyncDisposable
         return result?.Deserialize<FileCoverageDto>(JsonRpcSerializer.Options);
     }
 
+    /// <summary>A source file of the watched solution, e.g. one a stack frame names; null when the daemon is unreachable.</summary>
+    public async Task<SourceFileDto?> GetSourceAsync(string filePath)
+    {
+        var result = await SendRequestAsync(ProtocolMethods.SourceGet, new GetSourceCommand(filePath)).ConfigureAwait(false);
+        return result?.Deserialize<SourceFileDto>(JsonRpcSerializer.Options);
+    }
+
     /// <summary>The runs kept in the run history, newest first; null when the daemon is unreachable.</summary>
     public async Task<StoredRunsDto?> GetStoredRunsAsync()
     {
