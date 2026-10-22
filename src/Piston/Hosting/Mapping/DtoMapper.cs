@@ -233,6 +233,22 @@ public static class DtoMapper
         run.Summary.ToDto(),
         [.. run.Results.Select(r => new StoredTestResultDto(r.Project, r.Test, r.Status.ToString(), r.DurationMs, r.ErrorMessage, r.StackTrace))]);
 
+    public static TestHistoryDto ToDto(this TestHistory history) => new(
+        history.Project, history.Test, history.Flaky,
+        [.. history.Runs.Select(e => new TestHistoryEntryDto(e.RunId, e.At, e.Status.ToString(), e.DurationMs, e.Source))]);
+
+    /// <summary>One mark per test that is failing now or flaky.</summary>
+    public static List<TestMarkDto> ToMarks(IReadOnlyList<FailureClassification> failures, IReadOnlyList<TestHistory> flaky)
+    {
+        var flakyKeys = flaky.Select(f => (f.Project, f.Test)).ToHashSet();
+        var marks = failures
+            .Select(f => new TestMarkDto(f.Project, f.Test, f.Kind.ToString(), f.Evidence, flakyKeys.Contains((f.Project, f.Test))))
+            .ToList();
+        var failing = failures.Select(f => (f.Project, f.Test)).ToHashSet();
+        marks.AddRange(flaky.Where(f => !failing.Contains((f.Project, f.Test))).Select(f => new TestMarkDto(f.Project, f.Test, null, null, Flaky: true)));
+        return marks;
+    }
+
     public static TestRunDto ToDto(this TestRunRecord run)
     {
         var tests = run.Tests.ToList();

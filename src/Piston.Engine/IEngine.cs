@@ -75,6 +75,9 @@ public interface IEngine : IDisposable
     /// <summary>Tests that passed and failed on the same source within their recorded history; null when history is off.</summary>
     IReadOnlyList<Models.TestHistory>? GetFlakyTests() => null;
 
+    /// <summary>How each test whose latest recorded result is a failure relates to its history; null when history is off.</summary>
+    IReadOnlyList<Models.FailureClassification>? GetLatestFailures() => null;
+
     /// <summary>Summaries of the runs kept in the run history, newest first; null when history is off.</summary>
     IReadOnlyList<Models.StoredRunSummary>? GetStoredRuns() => null;
 

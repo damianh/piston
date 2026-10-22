@@ -197,6 +197,28 @@ internal sealed class RunHistoryStore : IDisposable
         }
     }
 
+    /// <summary>
+    /// The classification of each test whose latest recorded result is a failure, judged against the entries
+    /// before that failure, as the run that recorded it classified it.
+    /// </summary>
+    public IReadOnlyList<FailureClassification> GetLatestFailures()
+    {
+        lock (_gate)
+        {
+            var failures = new List<FailureClassification>();
+            foreach (var (key, entries) in _tests.OrderBy(p => p.Key.Project, StringComparer.Ordinal).ThenBy(p => p.Key.Test, StringComparer.Ordinal))
+            {
+                var last = entries.FindLastIndex(e => e.Status is TestStatus.Passed or TestStatus.Failed);
+                if (last >= 0 && entries[last].Status == TestStatus.Failed)
+                {
+                    failures.Add(Classify(key.Project, key.Test, entries[..last], entries[last]));
+                }
+            }
+
+            return failures;
+        }
+    }
+
     /// <summary>Summaries of the stored runs, newest first.</summary>
     public IReadOnlyList<StoredRunSummary> GetRuns()
     {

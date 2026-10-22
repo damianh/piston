@@ -32,6 +32,17 @@
                 aria-pressed="@(ShowNotRun ? "true" : "false")" @onclick="OnToggleNotRun">◌</button>
     </div>
 
+    <!-- History filters: only when the daemon keeps run history -->
+    @if (HistoryEnabled)
+    {
+        <div class="flex items-center gap-0.5" role="group" aria-label="Show tests by history">
+            <button class="@HistoryToggleClass(OnlyNewFailures, "text-red-400")" title="Show only new failures: tests whose previous result passed"
+                    aria-pressed="@(OnlyNewFailures ? "true" : "false")" @onclick="OnToggleNewFailures">new</button>
+            <button class="@HistoryToggleClass(OnlyFlaky, "text-yellow-400")" title="Show only flaky tests: passed and failed on the same source"
+                    aria-pressed="@(OnlyFlaky ? "true" : "false")" @onclick="OnToggleFlaky">flaky</button>
+        </div>
+    }
+
     <!-- Grouping mode -->
     <div class="relative ml-2">
         <select class="appearance-none bg-gray-800 border border-gray-700 rounded pl-2 pr-6 py-0.5 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
@@ -125,6 +136,11 @@
     [Parameter] public EventCallback OnTogglePassed { get; set; }
     [Parameter] public EventCallback OnToggleSkipped { get; set; }
     [Parameter] public EventCallback OnToggleNotRun { get; set; }
+    [Parameter] public bool HistoryEnabled { get; set; }
+    [Parameter] public bool OnlyNewFailures { get; set; }
+    [Parameter] public bool OnlyFlaky { get; set; }
+    [Parameter] public EventCallback OnToggleNewFailures { get; set; }
+    [Parameter] public EventCallback OnToggleFlaky { get; set; }
     [Parameter] public bool SortByDuration { get; set; }
     [Parameter] public EventCallback OnToggleSort { get; set; }
     [Parameter] public int FailedCount { get; set; }
@@ -138,6 +154,10 @@
     private static string ToggleClass(bool on, string onColor) =>
         "w-6 py-0.5 rounded text-center " +
         // On: a raised surface in the status colour; off: flat and muted. Icons keep >= 3.8:1 in both themes.
+        (on ? $"bg-gray-800 ring-1 ring-inset ring-gray-700 {onColor} hover:ring-gray-500" : "text-gray-500 hover:text-gray-300 hover:bg-gray-800/50");
+
+    private static string HistoryToggleClass(bool on, string onColor) =>
+        "px-1.5 py-0.5 rounded " +
         (on ? $"bg-gray-800 ring-1 ring-inset ring-gray-700 {onColor} hover:ring-gray-500" : "text-gray-500 hover:text-gray-300 hover:bg-gray-800/50");
 
     private Task HandleGroupingChange(ChangeEventArgs e) =>

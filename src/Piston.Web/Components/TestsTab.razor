@@ -22,6 +22,11 @@
              OnTogglePassed="() => ToggleStatus(s => s.ShowPassed = !s.ShowPassed)"
              OnToggleSkipped="() => ToggleStatus(s => s.ShowSkipped = !s.ShowSkipped)"
              OnToggleNotRun="() => ToggleStatus(s => s.ShowNotRun = !s.ShowNotRun)"
+             HistoryEnabled="@_historyEnabled"
+             OnlyNewFailures="@_viewState.OnlyNewFailures"
+             OnlyFlaky="@_viewState.OnlyFlaky"
+             OnToggleNewFailures="() => ToggleStatus(s => s.OnlyNewFailures = !s.OnlyNewFailures)"
+             OnToggleFlaky="() => ToggleStatus(s => s.OnlyFlaky = !s.OnlyFlaky)"
              SortByDuration="@_viewState.SortByDuration"
              OnToggleSort="ToggleSort"
              FailedCount="@_runFailedCount"
@@ -127,6 +132,41 @@
             _snapshot = current;
             RebuildTree();
         }
+
+        _marksRunTime = Client.CurrentSnapshot?.LastRunTime;
+        _ = LoadMarksAsync();
+    }
+
+    private bool _historyEnabled;
+    private DateTimeOffset? _marksRunTime;
+
+    // Failure kinds change only when a run finishes.
+    private async Task LoadMarksAsync()
+    {
+        if (await Client.GetTestMarksAsync() is not { } marks)
+        {
+            return;
+        }
+
+        _historyEnabled = marks.Enabled;
+        var byKey = new Dictionary<string, TestMarkDto>(StringComparer.Ordinal);
+        foreach (var mark in marks.Tests)
+        {
+            byKey[mark.Test] = mark;
+        }
+
+        _viewState.TestMarks = byKey;
+        if (!_historyEnabled)
+        {
+            _viewState.OnlyNewFailures = false;
+            _viewState.OnlyFlaky = false;
+        }
+
+        await InvokeAsync(() =>
+        {
+            RebuildTree();
+            StateHasChanged();
+        });
     }
 
     protected override void OnParametersSet()
@@ -140,6 +180,12 @@
 
     private void OnStateChanged(StateSnapshotNotification snapshot)
     {
+        if (snapshot.LastRunTime != _marksRunTime)
+        {
+            _marksRunTime = snapshot.LastRunTime;
+            _ = LoadMarksAsync();
+        }
+
         _snapshot = snapshot;
         RebuildTree();
         InvokeAsync(StateHasChanged);

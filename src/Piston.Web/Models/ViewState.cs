@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Piston.Protocol.Dtos;
 using Piston.Protocol.Messages;
 
 namespace Piston.Web.Models;
@@ -15,6 +16,17 @@ public sealed class ViewState
     public bool ShowFailed { get; set; } = true;
     public bool ShowSkipped { get; set; } = true;
     public bool ShowNotRun { get; set; } = true;
+
+    // ── Run history ──
+
+    /// <summary>History marks of failing and flaky tests, keyed by <see cref="Piston.Protocol.Dtos.TestResultDto.Key"/>.</summary>
+    public IReadOnlyDictionary<string, TestMarkDto> TestMarks { get; set; } = new Dictionary<string, TestMarkDto>();
+
+    /// <summary>Show only failing tests whose previous result passed (with <see cref="OnlyFlaky"/>, either kind).</summary>
+    public bool OnlyNewFailures { get; set; }
+
+    /// <summary>Show only tests that passed and failed on the same source (with <see cref="OnlyNewFailures"/>, either kind).</summary>
+    public bool OnlyFlaky { get; set; }
 
     // ── Grouping mode ──
     public GroupingMode Grouping { get; set; } = GroupingMode.ProjectNamespaceClass;

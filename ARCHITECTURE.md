@@ -374,7 +374,10 @@ and tests unseen for 30 days are pruned. The file stores each project and test
 name once and runs in columns. A history failure is logged and never fails a run.
 `clear_results` does not clear history. The dashboard reads the kept runs with
 `history/getRuns` and `history/getRun`, and compares two runs in the browser
-(`RunComparison`).
+(`RunComparison`). `history/getTestMarks` gives each test whose latest recorded
+result failed its classification (`GetLatestFailures`) plus the flaky tests, for
+the Tests tab's badges and filters; `history/getTestHistory` gives one test's
+entries for its history strip.
 
 There is no run-metadata table, preferences table, or graph cache. Coverage persistence alone is not full
 controller-state recovery. `.piston.json` is the actual optional configuration

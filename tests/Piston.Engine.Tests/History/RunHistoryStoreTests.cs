@@ -96,6 +96,22 @@ public sealed class RunHistoryStoreTests : IDisposable
     }
 
     [Fact]
+    public void Latest_failures_list_tests_whose_last_result_failed_classified_as_when_recorded()
+    {
+        using var store = Open();
+        _ = store.Record(Run("s1", TestStatus.Passed));
+        _ = store.Record(Run("s2", TestStatus.Failed));
+        _ = store.Record(Run("s2", TestStatus.Skipped));
+
+        var latest = Assert.Single(store.GetLatestFailures());
+        Assert.Equal(FailureKind.New, latest.Kind);
+        Assert.Equal(Test, latest.Test);
+
+        _ = store.Record(Run("s3", TestStatus.Passed));
+        Assert.Empty(store.GetLatestFailures());
+    }
+
+    [Fact]
     public void Recording_a_run_twice_is_a_no_op()
     {
         using var store = Open();

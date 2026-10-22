@@ -263,6 +263,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
     public IReadOnlyList<TestHistory>? GetFlakyTests() => _history?.GetFlakyTests();
 
+    public IReadOnlyList<FailureClassification>? GetLatestFailures() => _history?.GetLatestFailures();
+
     public IReadOnlyList<StoredRunSummary>? GetStoredRuns() => _history?.GetRuns();
 
     public StoredRun? GetStoredRun(string runId) => _history?.GetRun(runId);

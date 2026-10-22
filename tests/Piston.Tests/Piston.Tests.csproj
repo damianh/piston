@@ -25,6 +25,10 @@
     <Compile Include="..\..\src\Piston.Web\Models\DashboardStatus.cs" Link="Web\DashboardStatus.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\TestNode.cs" Link="Web\TestNode.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\RunComparison.cs" Link="Web\RunComparison.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\TestHistoryStrip.cs" Link="Web\TestHistoryStrip.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\TestTreeBuilder.cs" Link="Web\TestTreeBuilder.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\ViewState.cs" Link="Web\ViewState.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\NodeDetail.cs" Link="Web\NodeDetail.cs" />
   </ItemGroup>
 
 </Project>

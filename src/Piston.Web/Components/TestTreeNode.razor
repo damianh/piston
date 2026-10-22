@@ -1,5 +1,6 @@
 @using Piston.Web.Models
 @using Piston.Protocol.Dtos
+@inject ViewState View
 
 @{
     var indent = Depth * 16;
@@ -55,6 +56,18 @@
         </span>
 
         <FrameworkBadge Framework="@Node.Framework" />
+
+        @if (isTest && Node.Test is { } marked)
+        {
+            @if (TestTreeBuilder.IsNewFailure(marked, View))
+            {
+                <span class="shrink-0 px-1 rounded text-[10px] bg-red-500/15 text-red-400" title="New failure: its previous result passed">new</span>
+            }
+            @if (TestTreeBuilder.IsFlaky(marked, View))
+            {
+                <span class="shrink-0 px-1 rounded text-[10px] bg-yellow-500/15 text-yellow-400" title="Flaky: passed and failed on the same source">flaky</span>
+            }
+        }
 
         <!-- Result counts for group nodes: total, passed, failed (status rows already count in their label) -->
         @if (counts is { Total: > 0 } c && Node.Structure != NodeStructure.Status)

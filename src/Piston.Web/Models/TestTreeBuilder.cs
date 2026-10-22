@@ -298,6 +298,7 @@ public static class TestTreeBuilder
         var allTests = suites
             .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
             .Where(x => matcher is null || matcher(x.Test.FullyQualifiedName))
+            .Where(x => IsHistoryVisible(x.Test, viewState))
             .ToList();
 
         if (allTests.Count == 0)
@@ -367,7 +368,7 @@ public static class TestTreeBuilder
         var allTests = suites
             .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
             .Where(x => matcher is null || matcher(x.Test.FullyQualifiedName))
-            .Where(x => IsStatusVisible(x.Test.Status, viewState));
+            .Where(x => IsStatusVisible(x.Test.Status, viewState) && IsHistoryVisible(x.Test, viewState));
         var ordered = OrderTests(allTests, x => x.Test, ClassMethodLabel, viewState)
             .ThenBy(x => x.Test.TargetFramework, FrameworkComparer.Instance)
             .ToList();
@@ -476,9 +477,25 @@ public static class TestTreeBuilder
             filtered = filtered.Where(t => matcher(t.FullyQualifiedName));
         }
 
-        filtered = filtered.Where(t => IsStatusVisible(t.Status, viewState));
+        filtered = filtered.Where(t => IsStatusVisible(t.Status, viewState) && IsHistoryVisible(t, viewState));
         return filtered.ToList();
     }
+
+    /// <summary>True when the test is a new failure, for <see cref="ViewState.OnlyNewFailures"/>.</summary>
+    public static bool IsNewFailure(TestResultDto test, ViewState viewState) =>
+        test.Status == TestStatusDto.Failed
+        && viewState.TestMarks.TryGetValue(test.Key, out var mark)
+        && mark.FailureKind == "New";
+
+    /// <summary>True when the run history marks the test flaky.</summary>
+    public static bool IsFlaky(TestResultDto test, ViewState viewState) =>
+        viewState.TestMarks.TryGetValue(test.Key, out var mark) && mark.Flaky;
+
+    // With both history filters on, a test passes either.
+    private static bool IsHistoryVisible(TestResultDto test, ViewState viewState) =>
+        !(viewState.OnlyNewFailures || viewState.OnlyFlaky)
+        || (viewState.OnlyNewFailures && IsNewFailure(test, viewState))
+        || (viewState.OnlyFlaky && IsFlaky(test, viewState));
 
     private static bool IsStatusVisible(TestStatusDto status, ViewState viewState) =>
         status switch

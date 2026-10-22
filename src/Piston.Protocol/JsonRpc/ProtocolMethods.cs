@@ -45,6 +45,12 @@ public static class ProtocolMethods
     /// <summary>Request one stored run with its per-test results.</summary>
     public const string HistoryGetRun = "history/getRun";
 
+    /// <summary>Request the failure kind of each failing test and the flaky tests.</summary>
+    public const string HistoryGetTestMarks = "history/getTestMarks";
+
+    /// <summary>Request the recorded results of a test.</summary>
+    public const string HistoryGetTestHistory = "history/getTestHistory";
+
     // Notifications (server → client, no response)
 
     /// <summary>Full state snapshot — sent on connect and after every state change.</summary>

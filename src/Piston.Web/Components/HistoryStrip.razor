@@ -1,0 +1,110 @@
+@inject EngineClientService Client
+@inject ViewState View
+@implements IDisposable
+
+@if (_history is { } history)
+{
+    <div>
+        <div class="flex items-center gap-2 text-gray-400 font-semibold mb-1">
+            History
+            @if (history.Flaky)
+            {
+                <span class="px-1 rounded text-[10px] font-normal bg-yellow-500/15 text-yellow-400"
+                      title="Passed and failed on the same source within its recorded runs">flaky</span>
+            }
+        </div>
+        @if (Mark is { FailureKind: { } kind } mark && TestHistoryStrip.KindLabel(kind) is { } label)
+        {
+            <div class="text-gray-400 mb-1"><span class="@KindClass(kind)">@label</span>: @mark.Evidence</div>
+        }
+        <div class="flex items-center gap-3">
+            <div class="flex items-center gap-0.5" role="list" aria-label="Recorded results, oldest first">
+                @foreach (var run in history.Runs)
+                {
+                    <span role="listitem" class="w-2.5 h-2.5 rounded-sm @TestHistoryStrip.SquareClass(run.Status)"
+                          title="@Describe(run)"><span class="sr-only">@Describe(run)</span></span>
+                }
+            </div>
+            @if (TestHistoryStrip.SparklinePoints(history.Runs, SparkWidth, SparkHeight) is { } points)
+            {
+                var durations = history.Runs.Where(r => r.Status is "Passed" or "Failed").Select(r => r.DurationMs).ToList();
+                <svg width="@SparkWidth" height="@(SparkHeight + 2)" viewBox="0 -1 @SparkWidth @(SparkHeight + 2)" class="text-yellow-600 shrink-0"
+                     role="img" aria-label="Duration trend from @TestNode.FormatDuration(durations[0]) to @TestNode.FormatDuration(durations[^1])">
+                    <title>Duration: min @TestNode.FormatDuration(durations.Min()), max @TestNode.FormatDuration(durations.Max())</title>
+                    <polyline points="@points" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round" />
+                </svg>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    private const double SparkWidth = 96;
+    private const double SparkHeight = 14;
+
+    private TestHistoryDto? _history;
+    private string? _loadedKey;
+    private DateTimeOffset? _lastRunTime;
+
+    /// <summary>The test's result key: fully-qualified name, with the framework when multi-targeted.</summary>
+    [Parameter, EditorRequired] public string TestKey { get; set; } = "";
+
+    [Parameter] public string? Project { get; set; }
+
+    private TestMarkDto? Mark => View.TestMarks.GetValueOrDefault(TestKey);
+
+    protected override void OnInitialized()
+    {
+        Client.StateChanged += OnStateChanged;
+        _lastRunTime = Client.CurrentSnapshot?.LastRunTime;
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_loadedKey != TestKey)
+        {
+            _loadedKey = TestKey;
+            _history = null;
+            await LoadAsync();
+        }
+    }
+
+    private void OnStateChanged(StateSnapshotNotification snapshot)
+    {
+        if (snapshot.LastRunTime != _lastRunTime)
+        {
+            _lastRunTime = snapshot.LastRunTime;
+            _ = InvokeAsync(async () =>
+            {
+                await LoadAsync();
+                StateHasChanged();
+            });
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        var key = TestKey;
+        var result = await Client.GetTestHistoryAsync(key, Project);
+        if (key == TestKey)
+        {
+            // The key names one framework's results, so the match is exact.
+            _history = result?.Tests.FirstOrDefault(t => t.Test == key && (Project is null || t.Project == Project)) is { Runs.Count: > 0 } h ? h : null;
+        }
+    }
+
+    private static string Describe(TestHistoryEntryDto run)
+    {
+        var duration = run.Status is "Passed" or "Failed" ? $" in {TestNode.FormatDuration(run.DurationMs)}" : "";
+        return $"{run.Status}{duration}, {run.At.ToLocalTime():yyyy-MM-dd HH:mm:ss}, run {run.RunId}";
+    }
+
+    private static string KindClass(string kind) => kind switch
+    {
+        "New" => "text-red-400",
+        "Flaky" => "text-yellow-400",
+        _ => "text-gray-300",
+    };
+
+    public void Dispose() => Client.StateChanged -= OnStateChanged;
+}

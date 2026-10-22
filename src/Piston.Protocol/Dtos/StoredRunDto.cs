@@ -36,3 +36,24 @@ public sealed record StoredTestResultDto(
 
 /// <summary>A stored run with its per-test results.</summary>
 public sealed record StoredRunDto(StoredRunSummaryDto Summary, IReadOnlyList<StoredTestResultDto> Results);
+
+/// <summary>What the run history says about a test that is failing now or flaky.</summary>
+/// <param name="FailureKind">New, PreExisting, Flaky or Unknown when the test's latest result failed; otherwise null.</param>
+/// <param name="Evidence">The earlier runs the failure kind rests on.</param>
+/// <param name="Flaky">True when the test passed and failed on the same source within its recorded history.</param>
+public sealed record TestMarkDto(string Project, string Test, string? FailureKind, string? Evidence, bool Flaky);
+
+/// <summary>History marks for the tests that have any.</summary>
+/// <param name="Enabled">False when the daemon keeps no run history.</param>
+public sealed record TestMarksDto(bool Enabled, IReadOnlyList<TestMarkDto> Tests);
+
+/// <summary>One recorded result of a test.</summary>
+/// <param name="Source">The run's source fingerprint when its results were current; otherwise null.</param>
+public sealed record TestHistoryEntryDto(string RunId, DateTimeOffset At, string Status, double DurationMs, string? Source);
+
+/// <summary>Recorded results of one test, oldest first.</summary>
+public sealed record TestHistoryDto(string Project, string Test, bool Flaky, IReadOnlyList<TestHistoryEntryDto> Runs);
+
+/// <summary>Recorded results of the tests matching a name.</summary>
+/// <param name="Enabled">False when the daemon keeps no run history.</param>
+public sealed record TestHistoriesDto(bool Enabled, IReadOnlyList<TestHistoryDto> Tests);

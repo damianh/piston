@@ -32,6 +32,11 @@ internal sealed class StubEngine : IEngine
 
     public IReadOnlyList<TestHistory>? GetFlakyTests() => Histories?.Where(h => h.Flaky).ToList();
 
+    /// <summary>Failures returned by <see cref="GetLatestFailures"/>; null means history is off.</summary>
+    public IReadOnlyList<FailureClassification>? LatestFailures { get; set; }
+
+    public IReadOnlyList<FailureClassification>? GetLatestFailures() => LatestFailures;
+
     /// <summary>Runs returned by the stored-run queries; null means history is off.</summary>
     public IReadOnlyList<StoredRun>? StoredRuns { get; set; }
 

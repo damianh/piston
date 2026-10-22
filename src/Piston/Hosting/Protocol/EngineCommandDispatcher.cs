@@ -121,6 +121,25 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                         : JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(run.ToDto(), JsonRpcSerializer.Options));
                 }
 
+            case ProtocolMethods.HistoryGetTestMarks:
+                {
+                    var failures = _engine.GetLatestFailures();
+                    var flaky = _engine.GetFlakyTests();
+                    var result = new TestMarksDto(failures is not null || flaky is not null, DtoMapper.ToMarks(failures ?? [], flaky ?? []));
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.HistoryGetTestHistory:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<GetTestHistoryCommand>(@params);
+                    // An empty name matches no test, but still reports whether history is on.
+                    var histories = _engine.GetTestHistory(cmd?.Test ?? "", cmd?.Project);
+                    var result = new TestHistoriesDto(histories is not null, histories?.Select(DtoMapper.ToDto).ToList() ?? []);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
             case ProtocolMethods.CoverageGetSummary:
                 {
                     var result = DtoMapper.ToCoverageSummaryDto(_engine.GetCoverageReport(), SolutionDirectory);

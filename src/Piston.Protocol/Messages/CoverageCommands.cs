@@ -17,3 +17,7 @@ public sealed record ExportCoverageCommand(string Format);
 public sealed record GetCoveringTestsCommand(string FilePath);
 
 public sealed record GetStoredRunCommand(string RunId);
+
+/// <param name="Test">Fully-qualified name; a multi-targeted test's results under every framework match.</param>
+/// <param name="Project">Test project name; null matches any.</param>
+public sealed record GetTestHistoryCommand(string Test, string? Project = null);

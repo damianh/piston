@@ -386,6 +386,20 @@ public sealed class EngineClientService : IAsyncDisposable
         return result?.Deserialize<StoredRunDto>(JsonRpcSerializer.Options);
     }
 
+    /// <summary>Failure kinds of failing tests and the flaky tests; null when the daemon is unreachable.</summary>
+    public async Task<TestMarksDto?> GetTestMarksAsync()
+    {
+        var result = await SendRequestAsync(ProtocolMethods.HistoryGetTestMarks).ConfigureAwait(false);
+        return result?.Deserialize<TestMarksDto>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>Recorded results of a test; null when the daemon is unreachable.</summary>
+    public async Task<TestHistoriesDto?> GetTestHistoryAsync(string test, string? project)
+    {
+        var result = await SendRequestAsync(ProtocolMethods.HistoryGetTestHistory, new GetTestHistoryCommand(test, project)).ConfigureAwait(false);
+        return result?.Deserialize<TestHistoriesDto>(JsonRpcSerializer.Options);
+    }
+
     public async Task<CoveringTestsDto?> GetCoveringTestsAsync(string filePath)
     {
         var result = await SendRequestAsync(ProtocolMethods.CoverageGetCoveringTests, new GetCoveringTestsCommand(filePath))

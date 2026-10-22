@@ -63,6 +63,8 @@ else
             }
         </div>
 
+        <HistoryStrip TestKey="@Test.Key" Project="@Project" />
+
         <!-- Why the last run selected it -->
         @if (SelectionReasons is { Count: > 0 } reasons)
         {
