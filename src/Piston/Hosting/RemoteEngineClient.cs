@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Piston.Protocol;
+using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
@@ -146,6 +147,14 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
     {
         var result = await RequestAsync(ProtocolMethods.DaemonInfo, null).ConfigureAwait(false);
         return result?.Deserialize<DaemonInfoResponse>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>Exports the coverage report as <c>lcov</c> or <c>cobertura</c>.</summary>
+    public async Task<CoverageExportDto?> ExportCoverageAsync(string format)
+    {
+        var @params = JsonSerializer.SerializeToNode(new ExportCoverageCommand(format), JsonRpcSerializer.Options);
+        var result = await RequestAsync(ProtocolMethods.CoverageExport, @params).ConfigureAwait(false);
+        return result?.Deserialize<CoverageExportDto>(JsonRpcSerializer.Options);
     }
 
     /// <summary>Asks the daemon to stop its engine and exit.</summary>

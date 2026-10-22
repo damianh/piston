@@ -18,6 +18,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
 {
     public const string GetCoverageTool = "get_coverage";
     public const string GetChangedLineCoverageTool = "get_changed_line_coverage";
+    public const string ExportCoverageTool = "export_coverage";
 
     /// <summary>Source file types whose changed lines can be measured.</summary>
     private static readonly HashSet<string> CodeExtensions = new(StringComparer.OrdinalIgnoreCase) { ".cs", ".fs", ".vb" };
@@ -267,6 +268,72 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
 
     private static double Percent(int covered, int total) =>
         total == 0 ? 100 : Math.Round(100.0 * covered / total, 1);
+
+    [McpServerTool(Name = ExportCoverageTool), Description(
+        "Write the coverage report to a file as LCOV (lcov.info) or Cobertura XML, for editors, CI or ReportGenerator. " +
+        "Files changed since they were measured are left out. Returns the path written and the file counts. " +
+        "Requires the daemon to run with coverage enabled.")]
+    public string ExportCoverage(
+        [Description("lcov or cobertura (default lcov).")] string format = "lcov",
+        [Description("Where to write, absolute or solution-relative, inside the solution directory. " +
+            "Defaults to .piston/coverage/lcov.info or .piston/coverage/cobertura.xml.")] string? outputPath = null)
+    {
+        availability?.ThrowIfUnavailable();
+        var sw = Stopwatch.StartNew();
+        var succeeded = false;
+        string? summary = null;
+        try
+        {
+            if (!CoverageExporter.TryParseFormat(format, out var exportFormat))
+            {
+                throw new McpException("format must be 'lcov' or 'cobertura'.");
+            }
+
+            var solutionDirectory = SolutionDirectory()
+                ?? throw new McpException("The daemon has no solution loaded.");
+            var target = ResolveOutputPath(outputPath, solutionDirectory, CoverageExporter.FileName(exportFormat));
+            var export = CoverageExporter.Export(engine, exportFormat)
+                ?? throw new McpException("Coverage is disabled. Start Piston with --coverage or set coverageEnabled in .piston.json.");
+
+            _ = Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.WriteAllText(target, export.Content);
+
+            var json = new JsonObject
+            {
+                ["schema"] = "piston.coverage-export/v1",
+                ["format"] = exportFormat.ToString().ToLowerInvariant(),
+                ["path"] = target,
+                ["files"] = export.FileCount,
+                ["staleFilesSkipped"] = export.StaleFilesSkipped,
+            };
+            summary = $"{export.FileCount} file(s) -> {Relative(target, solutionDirectory)}";
+            succeeded = true;
+            return json.ToJsonString(WriteOptions);
+        }
+        finally
+        {
+            sw.Stop();
+            recorder.Record(ExportCoverageTool, $"{format} {outputPath}".Trim(), summary, sw.Elapsed.TotalMilliseconds, succeeded);
+        }
+    }
+
+    /// <summary>Resolves an export path, refusing paths outside <paramref name="solutionDirectory"/>.</summary>
+    internal static string ResolveOutputPath(string? outputPath, string solutionDirectory, string defaultFileName)
+    {
+        var root = Path.GetFullPath(solutionDirectory);
+        var target = string.IsNullOrWhiteSpace(outputPath)
+            ? Path.Combine(root, ".piston", "coverage", defaultFileName)
+            : Path.GetFullPath(outputPath, root);
+        var relative = Path.GetRelativePath(root, target);
+        if (relative is "." or ".." || Path.IsPathRooted(relative)
+            || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            || relative.StartsWith("../", StringComparison.Ordinal))
+        {
+            throw new McpException($"outputPath must be a file inside the solution directory ({root}).");
+        }
+
+        return target;
+    }
 
     private static string Relative(string path, string? solutionDirectory) =>
         solutionDirectory is null ? path : Path.GetRelativePath(solutionDirectory, path).Replace('\\', '/');

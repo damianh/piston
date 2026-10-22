@@ -200,6 +200,36 @@ public sealed class CoverageToolsTests : IDisposable
         _ = await Assert.ThrowsAsync<McpException>(() => tools.GetChangedLineCoverageAsync("--output=/tmp/x", _ct));
     }
 
+    [Fact]
+    public void ExportCoverage_WritesDefaultFileInsideSolution()
+    {
+        var engine = Engine();
+        var path = Path.Combine(_root, "A.cs");
+        engine.CoverageReport = new CoverageReportSnapshot([Summary(path, 1, 1)]);
+        engine.FileCoverage[path] = new FileCoverageSnapshot(Summary(path, 1, 1), [new(1, 1)]);
+        var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
+
+        var json = JsonNode.Parse(tools.ExportCoverage("cobertura"))!;
+
+        var written = Path.Combine(_root, ".piston", "coverage", "cobertura.xml");
+        Assert.Equal(written, json["path"]!.GetValue<string>());
+        Assert.Equal(1, json["files"]!.GetValue<int>());
+        Assert.Contains("<coverage", File.ReadAllText(written), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("../outside.info")]
+    [InlineData("/tmp/outside.info")]
+    [InlineData(".")]
+    public void ResolveOutputPath_RefusesPathsOutsideSolution(string outputPath) =>
+        Assert.Throws<McpException>(() => CoverageTools.ResolveOutputPath(outputPath, _root, "lcov.info"));
+
+    [Fact]
+    public void ResolveOutputPath_ResolvesRelativeToSolution() =>
+        Assert.Equal(
+            Path.Combine(_root, "out", "lcov.info"),
+            CoverageTools.ResolveOutputPath("out/lcov.info", _root, "lcov.info"));
+
     private void Git(params string[] args)
     {
         var psi = new ProcessStartInfo("git") { WorkingDirectory = _root, RedirectStandardError = true };

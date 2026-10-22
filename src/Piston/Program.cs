@@ -4,6 +4,7 @@
 using System.CommandLine;
 using Piston;
 using Piston.Engine;
+using Piston.Engine.Coverage;
 using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Hosting;
@@ -233,6 +234,38 @@ statusCmd.SetHandler(async ctx =>
 });
 
 rootCommand.AddCommand(statusCmd);
+
+// ── coverage-export subcommand ────────────────────────────────────────────────
+
+var formatOpt = new Option<string>(
+    "--format",
+    getDefaultValue: () => "lcov",
+    description: "Report format: lcov or cobertura.");
+
+var outputOpt = new Option<FileInfo?>(
+    ["--output", "-o"],
+    description: "File to write. Defaults to standard output.");
+
+var coverageExportCmd = new Command(
+    "coverage-export",
+    "Export the running daemon's coverage report as LCOV or Cobertura XML.")
+{
+    solutionArg,
+    pipeNameOpt,
+    formatOpt,
+    outputOpt,
+};
+
+coverageExportCmd.SetHandler(async ctx =>
+{
+    var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
+    var pipeName = ctx.ParseResult.GetValueForOption(pipeNameOpt);
+    var format = ctx.ParseResult.GetValueForOption(formatOpt);
+    var output = ctx.ParseResult.GetValueForOption(outputOpt);
+    ctx.ExitCode = await RunCoverageExportAsync(solutionFile, pipeName, format, output);
+});
+
+rootCommand.AddCommand(coverageExportCmd);
 
 return await rootCommand.InvokeAsync(args);
 
@@ -724,6 +757,75 @@ static string DescribeRunDto(TestRunDto run) =>
     $"{run.TotalTests} tests ({run.Passed} passed, {run.Failed} failed, {run.Skipped} skipped)";
 
 // ── status command ─────────────────────────────────────────────────────────────
+
+static async Task<int> RunCoverageExportAsync(FileInfo? solutionArg, string? cliPipeName, string? format, FileInfo? output)
+{
+    if (!CoverageExporter.TryParseFormat(format, out _))
+    {
+        Console.Error.WriteLine("error: --format must be lcov or cobertura.");
+        return 1;
+    }
+
+    string solutionPath;
+    PistonConfig config;
+    try
+    {
+        (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg);
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 1;
+    }
+
+    var pipeName = cliPipeName ?? config.PipeName ?? NamedPipeListener.GeneratePipeName(solutionPath);
+    await using var client = new RemoteEngineClient(pipeName);
+    using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+    try
+    {
+        await client.ConnectAsync(connectCts.Token);
+    }
+    catch
+    {
+        Console.Error.WriteLine($"error: no daemon running for {solutionPath}. Start one with 'piston daemon --coverage'.");
+        return 1;
+    }
+
+    CoverageExportDto? export;
+    try
+    {
+        export = await client.ExportCoverageAsync(format!);
+    }
+    catch (InvalidOperationException ex)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 1;
+    }
+
+    if (export is null)
+    {
+        Console.Error.WriteLine("error: the daemon returned no report.");
+        return 1;
+    }
+
+    if (output is null)
+    {
+        Console.Out.Write(export.Content);
+    }
+    else
+    {
+        output.Directory?.Create();
+        await File.WriteAllTextAsync(output.FullName, export.Content);
+        Console.Error.WriteLine($"[piston] Wrote {export.FileCount} file(s) to {output.FullName}");
+    }
+
+    if (export.StaleFilesSkipped > 0)
+    {
+        Console.Error.WriteLine($"[piston] Skipped {export.StaleFilesSkipped} file(s) changed since they were measured.");
+    }
+
+    return 0;
+}
 
 static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName)
 {

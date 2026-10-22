@@ -7,3 +7,7 @@ namespace Piston.Protocol.Messages;
 /// <param name="FilePath">Absolute path, or a path relative to the solution directory.</param>
 /// <param name="IncludeSource">Also return the file's text, for rendering it with line coverage.</param>
 public sealed record GetFileCoverageCommand(string FilePath, bool IncludeSource = false);
+
+/// <summary>Export the solution-wide coverage report.</summary>
+/// <param name="Format"><c>lcov</c> or <c>cobertura</c>.</param>
+public sealed record ExportCoverageCommand(string Format);

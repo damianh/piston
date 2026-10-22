@@ -87,4 +87,37 @@ public sealed class CoverageCommandTests : IDisposable
         Assert.Null(result["summary"]);
         Assert.Null(result["source"]);
     }
+
+    [Fact]
+    public async Task Export_ReturnsLcovContent()
+    {
+        var engine = new StubEngine();
+        engine.State.SolutionPath = Path.Combine(_root, "App.slnx");
+        var path = Path.Combine(_root, "A.cs");
+        engine.CoverageReport = new CoverageReportSnapshot([Summary(path, 2, 1)]);
+        engine.FileCoverage[path] = new FileCoverageSnapshot(Summary(path, 2, 1), [new(1, 1), new(2, 0)]);
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var result = await dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageExport, new JsonObject { ["format"] = "lcov" }, _ct);
+
+        Assert.Equal("lcov", result!["format"]!.GetValue<string>());
+        Assert.Equal("lcov.info", result["fileName"]!.GetValue<string>());
+        Assert.Equal(1, result["fileCount"]!.GetValue<int>());
+        Assert.Contains("DA:2,0", result["content"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Export_RejectsUnknownFormatAndDisabledCoverage()
+    {
+        var dispatcher = new EngineCommandDispatcher(new StubEngine());
+
+        var badFormat = await Assert.ThrowsAsync<JsonRpcException>(() => dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageExport, new JsonObject { ["format"] = "html" }, _ct));
+        var disabled = await Assert.ThrowsAsync<JsonRpcException>(() => dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageExport, new JsonObject { ["format"] = "cobertura" }, _ct));
+
+        Assert.Equal(JsonRpcErrorCodes.InvalidParams, badFormat.Code);
+        Assert.Contains("disabled", disabled.Message, StringComparison.Ordinal);
+    }
 }

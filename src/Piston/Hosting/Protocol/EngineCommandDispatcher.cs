@@ -4,9 +4,11 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Piston.Engine;
+using Piston.Engine.Coverage;
 using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
 using Piston.Hosting.Services;
+using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 
@@ -95,6 +97,26 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
             case ProtocolMethods.CoverageGetSummary:
                 {
                     var result = DtoMapper.ToCoverageSummaryDto(_engine.GetCoverageReport(), SolutionDirectory);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.CoverageExport:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<ExportCoverageCommand>(@params);
+                    if (!CoverageExporter.TryParseFormat(cmd?.Format, out var format))
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "format must be 'lcov' or 'cobertura'.");
+                    }
+
+                    var export = CoverageExporter.Export(_engine, format)
+                        ?? throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, "Coverage is disabled.");
+                    var result = new CoverageExportDto(
+                        format.ToString().ToLowerInvariant(),
+                        CoverageExporter.FileName(format),
+                        export.Content,
+                        export.FileCount,
+                        export.StaleFilesSkipped);
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
                 }

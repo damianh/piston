@@ -33,6 +33,9 @@ public static class ProtocolMethods
     /// <summary>Request the solution-wide coverage report: totals and every measured file.</summary>
     public const string CoverageGetSummary = "coverage/getSummary";
 
+    /// <summary>Export the coverage report as LCOV or Cobertura text.</summary>
+    public const string CoverageExport = "coverage/export";
+
     // Notifications (server → client, no response)
 
     /// <summary>Full state snapshot — sent on connect and after every state change.</summary>
