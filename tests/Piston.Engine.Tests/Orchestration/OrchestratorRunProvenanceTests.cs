@@ -227,6 +227,29 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     }
 
     [Fact]
+    public async Task Runs_RecordTheirTriggeringFilesAndTheTestsTheyFixedOrBroke()
+    {
+        await StartAndWaitForStartupRunAsync();
+        var code = Path.Combine(_root, "Code.cs");
+
+        _runner.FailingTest = "A.Tests.Test1";
+        var broken = await _orchestrator.RequestRunAsync();
+        _runner.FailingTest = null;
+        _watcher.TriggerChange(new FileChangeBatch(
+            [new FileChangeEvent(code, WatcherChangeTypes.Changed, DateTimeOffset.UtcNow),
+             new FileChangeEvent(code, WatcherChangeTypes.Changed, DateTimeOffset.UtcNow)], DateTimeOffset.UtcNow));
+        await WaitForAsync(() => _state.LastRun is { Trigger: TestRunTrigger.FileChange });
+        var fixedRun = _state.LastRun!;
+
+        Assert.Empty(broken!.ChangedFiles);
+        Assert.Equal(["A.Tests.Test1"], broken.NewlyFailingTests);
+        Assert.Empty(broken.FixedTests);
+        Assert.Equal([code], fixedRun.ChangedFiles);
+        Assert.Equal(["A.Tests.Test1"], fixedRun.FixedTests);
+        Assert.Empty(fixedRun.NewlyFailingTests);
+    }
+
+    [Fact]
     public async Task UserFilter_MarksFullRunAsFilteredAndNotFullScope()
     {
         await StartAndWaitForStartupRunAsync();

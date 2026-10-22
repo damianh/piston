@@ -96,6 +96,9 @@ public static class TestRunJson
                 })
                 .ToArray()),
             ["possiblyHangingTests"] = new JsonArray(run.PossiblyHangingTests.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
+            ["changedFiles"] = Strings(run.ChangedFiles),
+            ["fixedTests"] = Strings(run.FixedTests),
+            ["newlyFailingTests"] = Strings(run.NewlyFailingTests),
             ["tests"] = testArray,
         };
     }

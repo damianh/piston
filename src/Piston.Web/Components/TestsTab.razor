@@ -35,6 +35,8 @@
              RunFailedError="@_runError"
              OnFilterChanged="SetFilter" />
 
+    <WatchStripBar Snapshot="@_snapshot" OnRevealTest="RevealTestByKey" />
+
     <!-- Main content area: test tree, resizable splitter, detail panel (docked right or bottom) -->
     <div class="@(_isBottom ? "flex flex-col" : "flex") flex-1 min-h-0 overflow-hidden"
          data-orientation="@(_isBottom ? "bottom" : "right")" @ref="_splitContainer">
@@ -325,6 +327,14 @@
     {
         _scrollToSelected = ExpandAncestors(_treeNodes, test.Key);
         SelectTest(test);
+    }
+
+    private void RevealTestByKey(string key)
+    {
+        if (_snapshot?.Suites.SelectMany(s => s.Tests).FirstOrDefault(t => t.Key == key) is { } test)
+        {
+            RevealTest(test);
+        }
     }
 
     private void SelectProject(string project) => SelectNode($"suite:{project}");

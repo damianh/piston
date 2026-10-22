@@ -31,7 +31,9 @@ public sealed record TestRunAdmissionDto(
 /// added without breaking older clients. Per-test results are available through the MCP
 /// <c>GetTestRun</c> tool; suites in snapshots carry <see cref="TestSuiteDto.RunId"/>.
 /// <see cref="SelectionExplanation"/> says why the run has its scope; <see cref="SelectionReasons"/> says why each
-/// test was selected when the impact map narrowed the run by changed lines.
+/// test was selected when the impact map narrowed the run by changed lines. <see cref="ChangedFiles"/> are the files
+/// whose change triggered the run; <see cref="FixedTests"/> and <see cref="NewlyFailingTests"/> are the result keys of
+/// tests whose outcome the run changed from failed to passed, and to failed from passed or no result.
 /// </summary>
 public sealed record TestRunDto(
     string RunId,
@@ -62,5 +64,8 @@ public sealed record TestRunDto(
     TestRunAdmissionDto? Admission = null,
     BuildResultDto? Build = null,
     string? SelectionExplanation = null,
-    IReadOnlyDictionary<string, IReadOnlyList<TestSelectionReasonDto>>? SelectionReasons = null
+    IReadOnlyDictionary<string, IReadOnlyList<TestSelectionReasonDto>>? SelectionReasons = null,
+    IReadOnlyList<string>? ChangedFiles = null,
+    IReadOnlyList<string>? FixedTests = null,
+    IReadOnlyList<string>? NewlyFailingTests = null
 );

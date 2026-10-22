@@ -284,7 +284,10 @@ public static class DtoMapper
             SelectionReasons: run.Context?.SelectionReasons?.ToDictionary(
                 kv => kv.Key,
                 kv => (IReadOnlyList<TestSelectionReasonDto>)[.. kv.Value.Select(r => r.ToDto())],
-                StringComparer.Ordinal));
+                StringComparer.Ordinal),
+            ChangedFiles: run.ChangedFiles,
+            FixedTests: run.FixedTests,
+            NewlyFailingTests: run.NewlyFailingTests);
     }
 
     public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>

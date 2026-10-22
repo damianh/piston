@@ -825,7 +825,10 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     private async Task<TestRunRecord> RunPipelineAsync(
         string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, SelectedRun? selection, CancellationTokenSource newCts)
     {
-        var run = CreateRunRecord(trigger);
+        var run = CreateRunRecord(trigger) with
+        {
+            ChangedFiles = batch is null ? [] : [.. batch.Changes.Select(c => c.FilePath).Distinct(StringComparer.Ordinal)],
+        };
 
         // Serialize: only one pipeline runs at a time
         try
@@ -1504,6 +1507,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 CleanUpCoverageResultsDirs(coverageReportPaths);
             }
 
+            var (fixedTests, newlyFailingTests) = TestOutcomeChanges.Compare(_state.TestSuites, newSuites);
+
             // Merge selective results with preserved results from untouched test projects
             _state.TestSuites = impactResult.IsFullRun
                 ? newSuites
@@ -1552,6 +1557,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 Projects = outcomes,
                 DuplicateTestIds = duplicates,
                 PossiblyHangingTests = hangingTests,
+                FixedTests = fixedTests,
+                NewlyFailingTests = newlyFailingTests,
                 RunnerError = runnerError,
             };
 

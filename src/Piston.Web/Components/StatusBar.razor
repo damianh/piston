@@ -66,7 +66,7 @@
         @if (phase == PistonPhaseDto.Testing && Snapshot.LongestRunningTest is { } longest)
         {
             var elapsed = TestNode.FormatDuration(Math.Max(0, (DateTimeOffset.UtcNow - longest.StartedAt).TotalMilliseconds));
-            var shortName = ShortTestName(longest.Name);
+            var shortName = WatchStrip.ShortTestName(longest.Name);
             <span class="flex items-center gap-1.5 min-w-0 @(longest.PossiblyHanging ? "text-amber-400" : "text-gray-400")"
                   data-testid="longest-running-test"
                   title="@($"Running longest: {longest.Name}{Environment.NewLine}{Path.GetFileNameWithoutExtension(longest.ProjectPath)}{(longest.PossiblyHanging ? $"{Environment.NewLine}Running longer than the hang threshold: possibly hanging" : "")}")">
@@ -97,7 +97,7 @@
         @if (Snapshot.ImpactBackfill is null
             && phase is PistonPhaseDto.Watching or PistonPhaseDto.Idle
             && Snapshot.LastRun is { } lastRun
-            && ScopeLabel(lastRun) is { } scope)
+            && WatchStrip.ScopeLabel(lastRun) is { } scope)
         {
             <span class="min-w-0 truncate" title="@(lastRun.SelectionExplanation ?? "Why the last run had this scope")">last run: @scope</span>
         }
@@ -174,25 +174,6 @@
         Client.StateChanged -= OnStateChanged;
         _tick?.Dispose();
     }
-
-    // The method name (and arguments) of a fully qualified test name.
-    private static string ShortTestName(string name)
-    {
-        var args = name.IndexOf('(');
-        var dot = name.LastIndexOf('.', args < 0 ? name.Length - 1 : args);
-        return dot < 0 ? name : name[(dot + 1)..];
-    }
-
-    private static string Count(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
-
-    private static string? ScopeLabel(TestRunDto run) => run switch
-    {
-        { SelectionReasons.Count: > 0 } => $"{Count(run.SelectionReasons.Count, "test")} by changed lines",
-        { IsFullScope: true } => "every test",
-        { Scope: "Selective", TestProjects: { } projects } => $"{Count(projects.Count, "project")}{(run.IsFiltered ? ", filtered" : "")}",
-        { IsFiltered: true } => "filtered",
-        _ => null,
-    };
 
     private static List<string> RunningProjects(StateSnapshotNotification snapshot) =>
         snapshot.ProjectStatuses?

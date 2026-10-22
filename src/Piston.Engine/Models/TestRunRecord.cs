@@ -228,6 +228,18 @@ public sealed record TestRunRecord
     /// <summary>Tests that ran longer than the hang threshold during this run.</summary>
     public IReadOnlyList<string> PossiblyHangingTests { get; init; } = [];
 
+    /// <summary>The files whose change triggered this run; empty unless it was triggered by a file change.</summary>
+    public IReadOnlyList<string> ChangedFiles { get; init; } = [];
+
+    /// <summary>Result keys of tests that failed before this run and passed in it.</summary>
+    public IReadOnlyList<string> FixedTests { get; init; } = [];
+
+    /// <summary>
+    /// Result keys of tests that failed in this run but had not failed before it (including new tests);
+    /// empty when there were no earlier results to compare with.
+    /// </summary>
+    public IReadOnlyList<string> NewlyFailingTests { get; init; } = [];
+
     /// <summary>
     /// How each failed test relates to the worktree's run history (new, pre-existing, flaky or unknown);
     /// empty when history is off or nothing failed.
