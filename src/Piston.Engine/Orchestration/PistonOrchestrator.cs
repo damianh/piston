@@ -1101,7 +1101,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             // Update coverage impact detail for TUI
             if (impactResult.AffectedTestFqns is { Count: > 0 } fqns)
             {
-                _state.CoverageImpactDetail = $"Tier 3: {fqns.Count} test(s) (coverage)";
+                _state.CoverageImpactDetail = impactResult.SelectionReasons is { } reasons
+                    ? $"Tier 3: {fqns.Count} test(s) (changed lines, {string.Join("/", reasons.Values.SelectMany(r => r).Select(r => r.Granularity).Distinct().Order(StringComparer.Ordinal))}-level)"
+                    : $"Tier 3: {fqns.Count} test(s) (coverage)";
             }
             else
             {

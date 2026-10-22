@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Piston.Engine.Coverage;
 using Piston.Engine.Impact;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
@@ -394,6 +395,88 @@ public sealed class ImpactAnalyzerTests : IDisposable
         Assert.False(result.IsFullRun);
         // Empty FQN set → falls back to Tier 2 (null)
         Assert.Null(result.AffectedTestFqns);
+    }
+
+    // ── Tier 3 with the impact map ─────────────────────────────────────────────
+
+    private static readonly string LibSource = string.Join("\n", Enumerable.Range(1, 20).Select(i => $"// line {i}"));
+
+    private async Task<SqliteCoverageStore> ImpactStoreAsync()
+    {
+        File.WriteAllText(_libCode, LibSource);
+        var store = new SqliteCoverageStore();
+        await store.InitializeAsync(_root);
+        var lib = Path.GetFullPath(_libCode);
+        await store.RecordImpactAsync(new ImpactRecording(
+            _testsCsproj, ImpactGranularity.Class, "T.A", store.CreateRunId(), ["T.A.One"], [new ImpactFile(lib, [new(2, 4)], LibSource)], Merge: false));
+        await store.RecordImpactAsync(new ImpactRecording(
+            _testsCsproj, ImpactGranularity.Class, "T.B", store.CreateRunId(), ["T.B.One"], [new ImpactFile(lib, [new(10, 12)], LibSource)], Merge: false));
+        return store;
+    }
+
+    private void EditLibLine(int line) =>
+        File.WriteAllText(_libCode, LibSource.Replace($"// line {line}\n", "// edited\n", StringComparison.Ordinal));
+
+    [Fact]
+    public async Task Tier3_ImpactMap_SelectsOnlyTestsWhoseExecutedLinesTheEditTouches()
+    {
+        using var store = await ImpactStoreAsync();
+        var analyzer = new ImpactAnalyzer(_factory, store);
+        await analyzer.InitializeAsync("solution.slnx", _ct);
+        EditLibLine(11);
+
+        var result = analyzer.Analyze([Change(_libCode)]);
+
+        Assert.Equal(["T.B.One"], result.AffectedTestFqns);
+        var reason = Assert.Single(result.SelectionReasons!["T.B.One"]);
+        Assert.Equal(("11", "10-12", "class"), (reason.ChangedLines, reason.ExecutedLines, reason.Granularity));
+        Assert.Equal(_testsCsproj, reason.ProjectPath);
+    }
+
+    [Fact]
+    public async Task Tier3_ImpactMap_AnalyzeMarksClassUnitsDirty_PreviewDoesNot()
+    {
+        using var store = await ImpactStoreAsync();
+        var analyzer = new ImpactAnalyzer(_factory, store);
+        await analyzer.InitializeAsync("solution.slnx", _ct);
+        EditLibLine(3);
+
+        var preview = analyzer.Preview([Change(_libCode)]);
+
+        Assert.Equal(["T.A.One"], preview.AffectedTestFqns);
+        Assert.All(store.GetUnits(_testsCsproj, ImpactGranularity.Class), u => Assert.True(u.IsCurrent));
+
+        _ = analyzer.Analyze([Change(_libCode)]);
+
+        Assert.All(store.GetUnits(_testsCsproj, ImpactGranularity.Class), u => Assert.False(u.IsCurrent));
+    }
+
+    [Fact]
+    public async Task Tier3_ImpactMap_UnmappedFile_FallsBackToTier2()
+    {
+        using var store = await ImpactStoreAsync();
+        var analyzer = new ImpactAnalyzer(_factory, store);
+        await analyzer.InitializeAsync("solution.slnx", _ct);
+        EditLibLine(3);
+
+        var result = analyzer.Analyze([Change(_libCode), Change(_appProgram)]);
+
+        Assert.Null(result.AffectedTestFqns);
+        Assert.Contains(_testsCsproj, result.AffectedTestProjectPaths, StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Tier3_ImpactMap_TestFileChange_FallsBackToTier2()
+    {
+        using var store = await ImpactStoreAsync();
+        var analyzer = new ImpactAnalyzer(_factory, store);
+        await analyzer.InitializeAsync("solution.slnx", _ct);
+        EditLibLine(3);
+
+        var result = analyzer.Analyze([Change(_libCode), Change(_testsFile)]);
+
+        Assert.Null(result.AffectedTestFqns);
+        Assert.Contains(_testsCsproj, result.AffectedTestProjectPaths, StringComparer.OrdinalIgnoreCase);
     }
 
     [Fact]

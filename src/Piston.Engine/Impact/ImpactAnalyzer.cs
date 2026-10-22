@@ -46,24 +46,28 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         }
     }
 
-    public ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes)
+    public ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes) => Analyze(changes, record: true);
+
+    public ImpactAnalysisResult Preview(IReadOnlyList<FileChangeEvent> changes) => Analyze(changes, record: false);
+
+    private ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes, bool record)
     {
         lock (_graphLock)
         {
             var graphRefreshed = false;
-            if (_solutionPath is not null && changes.Any(c =>
+            if (record && _solutionPath is not null && changes.Any(c =>
                 Path.GetExtension(c.FilePath).ToLowerInvariant() is
                     ".sln" or ".slnx" or ".slnf" or ".csproj" or ".props" or ".targets"))
             {
                 graphRefreshed = TryRefreshGraph(_solutionPath);
             }
 
-            var result = AnalyzeCore(changes);
+            var result = AnalyzeCore(changes, record);
             return graphRefreshed ? result with { RequiresGraphRebuild = false } : result;
         }
     }
 
-    private ImpactAnalysisResult AnalyzeCore(IReadOnlyList<FileChangeEvent> changes)
+    private ImpactAnalysisResult AnalyzeCore(IReadOnlyList<FileChangeEvent> changes, bool record)
     {
         // If graph is not available, fall back to full run
         if (_graph is null)
@@ -87,6 +91,7 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         var affectedTestProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var requiresGraphRebuild = false;
         var hasUnknownFile = false;
+        var hasTestFileChange = false;
 
         foreach (var change in changes)
         {
@@ -127,6 +132,7 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
             {
                 // A test file change: rebuild and run only that test project
                 _ = affectedTestProjects.Add(owningProject);
+                hasTestFileChange |= change.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
             }
             else
             {
@@ -170,47 +176,84 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         );
 
         // ── Tier 3: coverage-based test-level narrowing ────────────────────────
-        if (_coverageStore is not null)
+        if (_coverageStore is null)
         {
-            var csChanges = changes
-                .Where(c => c.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            return tier2Result;
+        }
 
-            if (csChanges.Count > 0)
+        var csPaths = changes
+            .Where(c => c.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            .Select(c => Path.GetFullPath(c.FilePath))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        if (csPaths.Count == 0)
+        {
+            return tier2Result;
+        }
+
+        ImpactAnalysisResult? tier3Result = null;
+
+        // An edited test file may add tests no recording knows about, so only Tier 2 is safe.
+        if (!hasTestFileChange && _coverageStore is IImpactMapStore impactMap)
+        {
+            var changed = csPaths.Select(p => new ChangedFile(p, ImpactContent.TryRead(p))).ToList();
+            var selection = impactMap.SelectTests(changed);
+            if (selection.UnmappedFiles.Count == 0 && selection.Tests.Count > 0)
             {
-                var tier3Fqns = new HashSet<string>(StringComparer.Ordinal);
-                var allHaveCoverage = true;
-
-                foreach (var change in csChanges)
+                tier3Result = tier2Result with
                 {
-                    var normalizedPath = Path.GetFullPath(change.FilePath);
+                    AffectedTestFqns = [.. selection.Tests.Keys.Order(StringComparer.Ordinal)],
+                    SelectionReasons = selection.Tests.ToDictionary(
+                        kv => kv.Key,
+                        kv => (IReadOnlyList<TestSelectionReason>)[.. kv.Value.Select(ToSelectionReason)],
+                        StringComparer.Ordinal),
+                };
+            }
 
-                    if (!_coverageStore.HasCoverageData(normalizedPath))
-                    {
-                        allHaveCoverage = false;
-                        // Still mark stale so future runs don't use this file's old coverage
-                        _ = _coverageStore.MarkFileStaleAsync(normalizedPath);
-                    }
-                    else
-                    {
-                        var tests = _coverageStore.GetTestsCoveringFile(normalizedPath);
-                        foreach (var t in tests)
-                        {
-                            _ = tier3Fqns.Add(t);
-                        }
-
-                        // Mark stale after reading: prevents the next run from using
-                        // this coverage until it has been refreshed by a new test run
-                        _ = _coverageStore.MarkFileStaleAsync(normalizedPath);
-                    }
+            if (record)
+            {
+                try
+                {
+                    // Class and test recordings of the old content no longer describe the file.
+                    impactMap.MarkChangedAsync(changed).GetAwaiter().GetResult();
                 }
-
-                if (allHaveCoverage && tier3Fqns.Count > 0)
+                catch
                 {
-                    // Tier 3 narrowed the run — attach the FQN list
-                    return tier2Result with { AffectedTestFqns = [.. tier3Fqns] };
+                    // Impact map bookkeeping is best effort; the run-level map still selects.
                 }
             }
+        }
+
+        var tier3Fqns = new HashSet<string>(StringComparer.Ordinal);
+        var allHaveCoverage = !hasTestFileChange;
+        foreach (var path in csPaths)
+        {
+            if (!_coverageStore.HasCoverageData(path))
+            {
+                allHaveCoverage = false;
+            }
+            else
+            {
+                tier3Fqns.UnionWith(_coverageStore.GetTestsCoveringFile(path));
+            }
+
+            if (record)
+            {
+                // Mark stale after reading: prevents the next run from using
+                // this coverage until it has been refreshed by a new test run
+                _ = _coverageStore.MarkFileStaleAsync(path);
+            }
+        }
+
+        if (tier3Result is not null)
+        {
+            return tier3Result;
+        }
+
+        if (allHaveCoverage && tier3Fqns.Count > 0)
+        {
+            // File-level coverage narrowed the run — attach the FQN list
+            return tier2Result with { AffectedTestFqns = [.. tier3Fqns] };
         }
 
         return tier2Result;
@@ -315,6 +358,13 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private static TestSelectionReason ToSelectionReason(ImpactReason reason) => new(
+        reason.FilePath,
+        reason.ChangedLines.ToString(),
+        reason.ExecutedSpan?.ToString(),
+        reason.Granularity.ToString().ToLowerInvariant(),
+        reason.ProjectPath);
 
     private static ImpactAnalysisResult FullRunResult() =>
         new([], [], RequiresGraphRebuild: false, IsFullRun: true);

@@ -9,6 +9,12 @@ public interface IImpactAnalyzer
 {
     Task InitializeAsync(string solutionPath, CancellationToken ct);
     ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes);
+
+    /// <summary>
+    /// What <see cref="Analyze"/> would select for <paramref name="changes"/>, without marking coverage stale or
+    /// impact units dirty.
+    /// </summary>
+    ImpactAnalysisResult Preview(IReadOnlyList<FileChangeEvent> changes) => Analyze(changes);
     ImpactAnalysisResult AnalyzeFullRun();
     void InvalidateGraph();
     IReadOnlyList<string> GetAllTestProjectPaths();
