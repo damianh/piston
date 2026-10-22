@@ -8,7 +8,6 @@
         ? Node.Test?.Key == SelectedKey
         : Node.ExpansionKey is { } key && key == SelectedNodeKey;
     var isPinned = isTest && Node.Test is not null && PinnedFqns.Contains(Node.Test.FullyQualifiedName);
-    // Status groups already show their count in the label.
     NodeCounts? counts = isTest ? null : Node.Counts();
 }
 
@@ -23,7 +22,7 @@
         @if (Node.Children.Count > 0)
         {
             <button type="button"
-                    class="text-gray-600 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none w-3 text-center text-xs select-none"
+                    class="shrink-0 text-gray-600 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none w-3 text-center text-xs select-none"
                     aria-label="@(Node.IsExpanded ? "Collapse" : "Expand") @Node.Label"
                     aria-expanded="@(Node.IsExpanded ? "true" : "false")"
                     @onclick="ToggleExpanded"
@@ -32,11 +31,11 @@
         }
         else
         {
-            <span class="w-3"></span>
+            <span class="w-3 shrink-0"></span>
         }
 
         <!-- Status icon -->
-        <span class="@StatusColor(Node) w-4 text-center">@StatusIcon(Node)</span>
+        <span class="@StatusColor(Node) w-4 shrink-0 text-center">@StatusIcon(Node)</span>
 
         <!-- Structural icon: project / framework / namespace / class -->
         @if (Node.Structure is not (NodeStructure.Status or NodeStructure.Pinned))
@@ -44,8 +43,8 @@
             <NodeIcon Structure="@Node.Structure" />
         }
 
-        <!-- Label -->
-        <span class="flex-1 truncate text-xs @(Node.Kind == TestNodeKind.Test ? "text-gray-200" : "text-gray-300 font-medium")"
+        <!-- Label: sized to its text so the counts sit just after it; truncates when the row is too narrow -->
+        <span class="min-w-0 truncate text-xs @(Node.Kind == TestNodeKind.Test ? "text-gray-200" : "text-gray-300 font-medium")"
               title="@(Node.Test?.FullyQualifiedName)">
             @if (isPinned)
             {
@@ -59,7 +58,7 @@
         <!-- Result counts for group nodes: total, passed, failed (status rows already count in their label) -->
         @if (counts is { Total: > 0 } c && Node.Structure != NodeStructure.Status)
         {
-            <span class="flex items-center gap-1.5 ml-2 text-xs tabular-nums" title="@c.Description">
+            <span class="flex shrink-0 items-center gap-1.5 ml-2 text-xs tabular-nums" title="@c.Description">
                 <span class="sr-only">@c.Description</span>
                 <span class="text-gray-500" aria-hidden="true">@c.Total.ToString("N0")</span>
                 @if (c.Passed > 0)
@@ -73,28 +72,36 @@
             </span>
         }
 
-        <!-- Duration: a test's own, or the summed test time under a group -->
-        @if (Node.Kind == TestNodeKind.Test && Node.Test?.DurationMs > 0 && Node.Test.Status != TestStatusDto.Running)
-        {
-            <span class="text-yellow-600 text-xs ml-1 tabular-nums">@TestNode.FormatDuration(Node.Test.DurationMs)</span>
-        }
-        else if (counts is { DurationMs: > 0 } d)
-        {
-            <span class="text-yellow-600 text-xs ml-2 tabular-nums" title="@d.DurationDescription">
-                <span class="sr-only">@d.DurationDescription</span>
-                <span aria-hidden="true">@TestNode.FormatDuration(d.DurationMs)</span>
-            </span>
-        }
+        <span class="flex-1"></span>
 
-        <!-- Pin button (visible on hover for test nodes) -->
+        <!-- Duration column: a test's own, or the summed test time under a group -->
+        <span class="w-14 shrink-0 text-right text-yellow-600 text-xs tabular-nums">
+            @if (Node.Kind == TestNodeKind.Test && Node.Test?.DurationMs > 0 && Node.Test.Status != TestStatusDto.Running)
+            {
+                @TestNode.FormatDuration(Node.Test.DurationMs)
+            }
+            else if (counts is { DurationMs: > 0 } d)
+            {
+                <span title="@d.DurationDescription">
+                    <span class="sr-only">@d.DurationDescription</span>
+                    <span aria-hidden="true">@TestNode.FormatDuration(d.DurationMs)</span>
+                </span>
+            }
+        </span>
+
+        <!-- Pin button (visible on hover for test nodes); group rows keep its width so the duration column lines up -->
         @if (Node.Kind == TestNodeKind.Test && Node.Test is not null)
         {
-            <button class="text-gray-700 hover:text-yellow-400 ml-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+            <button class="w-4 shrink-0 text-center text-gray-700 hover:text-yellow-400 ml-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
                     title="@(isPinned ? "Unpin" : "Pin")"
                     @onclick:stopPropagation="true"
                     @onclick="() => OnTogglePin.InvokeAsync(Node.Test.FullyQualifiedName)">
                 @(isPinned ? "★" : "☆")
             </button>
+        }
+        else
+        {
+            <span class="w-4 shrink-0 ml-1" aria-hidden="true"></span>
         }
     </div>
 
