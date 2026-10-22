@@ -23,6 +23,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     private readonly MachineExecutionCoordinator _executionCoordinator;
     private readonly string? _ownerHost;
     private readonly bool _historyEnabled;
+    private readonly MtpWarmHostPool? _warmHosts;
     private readonly string? _historyDirectory;
     private WorktreeOwnership? _ownership;
     private RunHistoryStore? _history;
@@ -79,10 +80,12 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             _coverageStore);
 
         var vsTestStrategy = new ProcessTestExecutionStrategy(trxParser);
+        _warmHosts = options.WarmTestHosts ? new MtpWarmHostPool() : null;
         var mtpStrategy = new MtpTestExecutionStrategy(
             projectPath => impactAnalyzer.GetMtpOutputPath(projectPath),
             solutionDir,
-            impactAnalyzer.IsMultiTargeted);
+            impactAnalyzer.IsMultiTargeted,
+            _warmHosts);
 
         ITestExecutionStrategy strategy = options.TestExecutionMode switch
         {
@@ -325,6 +328,11 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _orchestrator.DisposeAsync().ConfigureAwait(false);
+        if (_warmHosts is not null)
+        {
+            await _warmHosts.DisposeAsync().ConfigureAwait(false);
+        }
+
         CloseHistory();
         _coverageStore?.Dispose();
         _pool.Dispose();

@@ -49,6 +49,12 @@ public sealed class PistonConfig
     public bool? History { get; set; }
 
     /// <summary>
+    /// Keep Microsoft.Testing.Platform test apps running in server mode between runs, so later runs skip
+    /// host start-up. Default false.
+    /// </summary>
+    public bool? WarmTestHosts { get; set; }
+
+    /// <summary>
     /// Maximum number of concurrent <c>dotnet test</c> processes.
     /// 0 means auto-detect. Corresponds to the <c>--parallelism</c> CLI flag.
     /// </summary>

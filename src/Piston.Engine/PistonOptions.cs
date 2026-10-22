@@ -115,6 +115,13 @@ public sealed class PistonOptions
     public bool HistoryEnabled { get; init; } = true;
 
     /// <summary>
+    /// Keeps each Microsoft.Testing.Platform test app running in server mode between runs, so later
+    /// discoveries and runs skip host start-up. A host is replaced when its build output changes.
+    /// Coverage runs always use a fresh process. Default is false.
+    /// </summary>
+    public bool WarmTestHosts { get; init; }
+
+    /// <summary>
     /// Absolute base directory of the run history. Null uses <c>PISTON_HISTORY_DIRECTORY</c> or the per-user default.
     /// </summary>
     public string? HistoryDirectory { get; init; }

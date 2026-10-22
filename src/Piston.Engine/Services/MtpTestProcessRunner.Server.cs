@@ -24,7 +24,8 @@ internal static partial class MtpTestProcessRunner
         string solutionDirectory,
         TestFilterExpression? filter,
         Action<IReadOnlyList<TestResult>>? onPartial,
-        CancellationToken ct)
+        CancellationToken ct,
+        MtpWarmHostPool? warmHosts = null)
     {
         var tests = new List<TestResult>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -56,7 +57,7 @@ internal static partial class MtpTestProcessRunner
             {
                 partials?.Signal();
             }
-        }, ct).ConfigureAwait(false);
+        }, ct, warmHosts: warmHosts).ConfigureAwait(false);
 
         partials?.Dispose();
         DiagnosticLog.Instance?.Write("MtpRunner",
@@ -87,7 +88,8 @@ internal static partial class MtpTestProcessRunner
         string? filter,
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct,
-        ExecutionLog? runLog = null)
+        ExecutionLog? runLog = null,
+        MtpWarmHostPool? warmHosts = null)
     {
         var log = runLog ?? new ExecutionLog(projectPath);
         log.Runner = "MTP server";
@@ -104,7 +106,7 @@ internal static partial class MtpTestProcessRunner
             var discoveredKeys = new HashSet<string>(StringComparer.Ordinal);
             var discovery = await MtpServerSession.RunAsync(appPath, solutionDirectory, MtpServerSession.DiscoverMethod, tests: null,
                 nodes => discovered.AddRange(nodes.Where(n => IsAction(n) && NodeKey(n) is { } key && discoveredKeys.Add(key))),
-                ct, log).ConfigureAwait(false);
+                ct, log, warmHosts).ConfigureAwait(false);
             if (discovery.Outcome == MtpServerSession.Outcome.Cancelled)
             {
                 return new ProjectTestResult(projectPath, [], null, [], Crashed: false);
@@ -155,7 +157,7 @@ internal static partial class MtpTestProcessRunner
             }
 
             progress?.Signal();
-        }, ct, log).ConfigureAwait(false);
+        }, ct, log, warmHosts).ConfigureAwait(false);
 
         log.Write("MtpRunner", $"Server run {run.Outcome}: {live.Count} test(s)" + (run.Error is null ? "" : $" | {run.Error}"));
 

@@ -33,13 +33,14 @@ internal static partial class MtpTestProcessRunner
         string solutionDirectory,
         string? filter,
         Action<IReadOnlyList<TestResult>>? onPartial,
-        CancellationToken ct)
+        CancellationToken ct,
+        MtpWarmHostPool? warmHosts = null)
     {
         TestFilterExpression? expression = null;
         var filterSupported = string.IsNullOrWhiteSpace(filter) || TestFilterExpression.TryParse(filter, out expression);
         if (filterSupported && appPath is not null && File.Exists(appPath))
         {
-            var tests = await DiscoverWithServerAsync(appPath, solutionDirectory, expression, onPartial, ct).ConfigureAwait(false);
+            var tests = await DiscoverWithServerAsync(appPath, solutionDirectory, expression, onPartial, ct, warmHosts).ConfigureAwait(false);
             if (tests is not null)
             {
                 return tests;
@@ -79,7 +80,8 @@ internal static partial class MtpTestProcessRunner
         string? filter,
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct,
-        MtpCoverage coverage = MtpCoverage.Off)
+        MtpCoverage coverage = MtpCoverage.Off,
+        MtpWarmHostPool? warmHosts = null)
     {
         var log = new ExecutionLog(projectPath);
         log.Write("MtpRunner", $"Project: {projectPath}");
@@ -105,7 +107,7 @@ internal static partial class MtpTestProcessRunner
             // controller process, so coverage runs use dotnet test.
             if (appPath is not null && File.Exists(appPath) && coverageArgs is null)
             {
-                result = await RunWithServerAsync(projectPath, appPath, solutionDirectory, filter, onProgress, ct, log)
+                result = await RunWithServerAsync(projectPath, appPath, solutionDirectory, filter, onProgress, ct, log, warmHosts)
                     .ConfigureAwait(false);
             }
             else if (coverageArgs is not null)

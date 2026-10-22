@@ -297,6 +297,7 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `hangThreshold` | `string` | How long a test runs before it is reported as possibly hanging (default `60s`). See [Slow and hanging tests](#slow-and-hanging-tests). |
 | `testTimeout` | `string` | Per-test limit; off by default. See [Slow and hanging tests](#slow-and-hanging-tests). |
 | `history` | `bool` | Keep per-test run history and classify failures (default `true`). See [Run history and failure classification](#run-history-and-failure-classification). |
+| `warmTestHosts` | `bool` | Keep MTP test apps running between runs to skip host start-up (default `false`). See [Warm test hosts](#warm-test-hosts). |
 | `parallelism` | `int` | Max concurrent test processes. `0` = auto: half the logical processor count, at least one. |
 | `processRecycleAfter` | `int` | Runs after which a pool slot logs a recycling warning (default 50). |
 | `pipeName` | `string` | Override the named pipe name. |
@@ -341,6 +342,18 @@ Each failed test in a run is classified against that worktree's earlier results:
 `verify` lists failures with their class, new ones first, after a `Failure history:` count line.
 `get_test_run` includes `failureClassifications` (project, test, kind, evidence), and `get_test_history` shows the
 evidence. The dashboard's **Runs** tab browses and compares the kept runs, and the **Tests** tab marks and filters new failures and flaky tests. Set `"history": false` to turn this off.
+
+### Warm test hosts
+
+With `"warmTestHosts": true`, Piston keeps each Microsoft.Testing.Platform test app running in server mode after a
+discovery or run, and sends later requests for that app over the same connection, so they skip process start-up and
+initialization. A host is replaced when anything in its app's output directory changes (a rebuild), when it exits,
+and after a failed, timed-out or cancelled request; cancelling kills it. A host serves one request at a time, so a
+second concurrent request for the same app gets its own process, and a reused host that fails before reporting any
+test is retried once in a new process. Coverage runs still go through `dotnet test` in a fresh process. Warm hosts
+get the environment variable `PISTON_WARM_HOST=1`, so a test suite can tell when process-wide state may outlive a
+run; state that a fresh process would reset (statics, environment changes) carries over between runs, which is why
+this is off by default. Hosts are asked to exit when the daemon stops.
 
 ### User settings
 

@@ -165,6 +165,7 @@ public static class HostHelpers
             HangThreshold = hangThreshold,
             TestTimeout = testTimeout,
             HistoryEnabled = config.History ?? true,
+            WarmTestHosts = config.WarmTestHosts ?? false,
             ProcessPoolSize = processPoolSize,
             ProcessRecycleAfter = processRecycleAfter,
             TestExecutionMode = testExecutionMode,

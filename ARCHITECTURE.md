@@ -210,6 +210,16 @@ both use this routing. `InProcess` is accepted as a configuration enum value but
 throws `NotSupportedException` during engine construction. There is no implemented
 in-process MTP execution mode.
 
+With `warmTestHosts`, `MtpWarmHostPool` keeps one MTP server-mode host per
+test app alive: `MtpServerSession.Connection` initializes once and then serves
+any number of `testing/discoverTests` and `testing/runTests` requests, one at a
+time. The pool replaces a host when a fingerprint of its output directory (file
+names, sizes and write times) changes, when it has exited, and after a failed,
+timed-out or cancelled request. A request for a busy host, and a retry after a
+reused host fails before reporting a test, run in a cold process. Coverage runs
+use `dotnet test` and never a warm host. The engine disposes the pool on
+shutdown, sending `exit` before killing.
+
 `TestProcessPool` is a semaphore-based concurrency limiter, not a pool of
 prewarmed, reusable processes. Automatic concurrency is
 `Math.Max(1, Environment.ProcessorCount / 2)`. `processRecycleAfter` logs a debug
