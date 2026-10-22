@@ -322,6 +322,14 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         }
     }
 
+    public bool RefreshGraphIfEvaluatedBeforeRestore()
+    {
+        lock (_graphLock)
+        {
+            return _graph is { EvaluatedBeforeRestore: true } && _solutionPath is not null && TryRefreshGraph(_solutionPath);
+        }
+    }
+
     public IReadOnlyList<string> GetAllTestProjectPaths()
     {
         lock (_graphLock)

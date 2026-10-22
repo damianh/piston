@@ -110,6 +110,17 @@ public sealed class MsBuildSolutionGraphTests : IAsyncLifetime
     }
 
     [Fact]
+    public void EvaluatedBeforeRestore_IsSetOnlyWhileAProjectHasNoAssetsFile()
+    {
+        var restored = new MsBuildSolutionGraph(_slnPath);
+        File.Delete(Path.Combine(_root, "Lib", "obj", "project.assets.json"));
+        var unrestored = new MsBuildSolutionGraph(_slnPath);
+
+        Assert.False(restored.EvaluatedBeforeRestore);
+        Assert.True(unrestored.EvaluatedBeforeRestore);
+    }
+
+    [Fact]
     public void AllProjectPaths_ContainsAllThreeProjects()
     {
         var sut = new MsBuildSolutionGraph(_slnPath);

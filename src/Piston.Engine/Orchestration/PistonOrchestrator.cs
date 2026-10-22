@@ -984,6 +984,15 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 testTargets = impactResult.AffectedTestProjectPaths;
             }
 
+            Dictionary<string, string> TestWorkingDirectories(IReadOnlyList<string>? targets) =>
+                (targets ?? [Path.GetFullPath(solutionPath)])
+                    .ToDictionary(
+                        path => path,
+                        path => _impactAnalyzer.GetMtpOutputPath(path) is not null
+                            ? solutionDir
+                            : TestProcessRunner.WorkingDirectoryFor(path) ?? Environment.CurrentDirectory,
+                        StringComparer.Ordinal);
+
             // Build the effective test filter:
             //   - A selected run runs exactly its selection, ignoring the user's TestFilter
             //   - If Tier 3 produced FQNs, build a dotnet-test filter expression
@@ -1009,13 +1018,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     Runtime: System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
                     OperatingSystem: System.Runtime.InteropServices.RuntimeInformation.OSDescription,
                     WorkingDirectory: solutionDir,
-                    TestWorkingDirectories: (testTargets ?? [Path.GetFullPath(solutionPath)])
-                        .ToDictionary(
-                            path => path,
-                            path => _impactAnalyzer.GetMtpOutputPath(path) is not null
-                                ? solutionDir
-                                : TestProcessRunner.WorkingDirectoryFor(path) ?? Environment.CurrentDirectory,
-                            StringComparer.Ordinal),
+                    TestWorkingDirectories: TestWorkingDirectories(testTargets),
                     SelectionExplanation: selection is not null ? "The tests were chosen explicitly." : impactResult.RunExplanation,
                     SelectionReasons: selection is null && impactResult.NarrowsToTests ? impactResult.SelectionReasons : null),
             };
@@ -1125,6 +1128,24 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     ScheduleGraphRebuildIfNeeded(impactResult);
                     return Finish(TestRunStatus.BuildFailed,
                         $"Build failed with {buildResult.Errors.Count} error(s).", computeAfter: true);
+                }
+
+                // The build restored packages the graph was evaluated without (a fresh clone): reload it, so test
+                // projects recognized only through package properties (xUnit v3, TUnit) are found and run.
+                if (_impactAnalyzer.RefreshGraphIfEvaluatedBeforeRestore() && impactResult.IsFullRun)
+                {
+                    var allTestProjects = _impactAnalyzer.GetAllTestProjectPaths();
+                    testTargets = allTestProjects.Count > 0 ? allTestProjects : null;
+                    log?.Write("Orchestrator", $"Graph reloaded after restore: {testTargets?.Count ?? 0} test project(s)");
+                    run = run with
+                    {
+                        Context = run.Context! with
+                        {
+                            TestProjects = testTargets?.ToList(),
+                            TestWorkingDirectories = TestWorkingDirectories(testTargets),
+                        },
+                    };
+                    PublishActiveRun(run);
                 }
 
                 // Outputs become reusable once the run finishes with stable sources (see Finish).

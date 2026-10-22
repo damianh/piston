@@ -250,6 +250,21 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     }
 
     [Fact]
+    public async Task StartupRun_RunsTestProjectsFoundOnlyOnceTheBuildRestoredTheirPackages()
+    {
+        // A fresh clone: xUnit v3 / TUnit projects are recognized through properties their packages set.
+        _impact.TestProjects = [Projects[0]];
+        _impact.TestProjectsAfterRestore = Projects;
+
+        await StartAndWaitForStartupRunAsync();
+
+        var run = _state.LastRun!;
+        Assert.Equal(Projects, run.Context!.TestProjects);
+        Assert.Equal(Projects, run.Context.TestWorkingDirectories!.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(["A.Tests", "B.Tests"], _state.TestSuites.Select(s => s.Name).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
     public async Task UserFilter_MarksFullRunAsFilteredAndNotFullScope()
     {
         await StartAndWaitForStartupRunAsync();
@@ -447,6 +462,23 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
 
 internal sealed class ProvenanceImpactAnalyzer(IReadOnlyList<string> testProjects) : IImpactAnalyzer
 {
+    public IReadOnlyList<string> TestProjects { get; set; } = testProjects;
+
+    /// <summary>The test projects the graph finds once reloaded after restore; null when it was restored already.</summary>
+    public IReadOnlyList<string>? TestProjectsAfterRestore { get; set; }
+
+    public bool RefreshGraphIfEvaluatedBeforeRestore()
+    {
+        if (TestProjectsAfterRestore is not { } restored)
+        {
+            return false;
+        }
+
+        TestProjects = restored;
+        TestProjectsAfterRestore = null;
+        return true;
+    }
+
     public Func<string?> VerificationCoverage { get; set; } = () => null;
     public string? GetVerificationCoverageIssue(string solutionPath) => VerificationCoverage();
     public Task Initialization { get; set; } = Task.CompletedTask;
@@ -454,13 +486,13 @@ internal sealed class ProvenanceImpactAnalyzer(IReadOnlyList<string> testProject
     public Task InitializeAsync(string solutionPath, CancellationToken ct) => Initialization;
 
     public ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes) =>
-        new([testProjects[0]], [testProjects[0]], RequiresGraphRebuild: false, IsFullRun: false);
+        new([TestProjects[0]], [TestProjects[0]], RequiresGraphRebuild: false, IsFullRun: false);
 
     public ImpactAnalysisResult AnalyzeFullRun() =>
-        new(testProjects, testProjects, RequiresGraphRebuild: false, IsFullRun: true);
+        new(TestProjects, TestProjects, RequiresGraphRebuild: false, IsFullRun: true);
 
     public void InvalidateGraph() { }
-    public IReadOnlyList<string> GetAllTestProjectPaths() => testProjects;
+    public IReadOnlyList<string> GetAllTestProjectPaths() => TestProjects;
     public bool IsMtpProject(string projectPath) => MtpProjects.Contains(projectPath);
     public string? GetMtpOutputPath(string projectPath) => IsMtpProject(projectPath) ? projectPath + ".dll" : null;
 }

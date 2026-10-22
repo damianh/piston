@@ -72,6 +72,12 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
 
             nodes.Add(node);
 
+            var assetsFile = node.ProjectInstance.GetPropertyValue("ProjectAssetsFile");
+            if (!string.IsNullOrEmpty(assetsFile) && !File.Exists(assetsFile))
+            {
+                EvaluatedBeforeRestore = true;
+            }
+
             var isTest = IsTestProjectNode(node);
             var isMtp = IsMtpProjectNode(node);
 
@@ -142,7 +148,8 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
 
         log?.Write("SolutionGraph",
             $"Graph loaded: {_allProjects.Count} projects, " +
-            $"{_testProjects.Count} test, {_mtpProjects.Count} MTP");
+            $"{_testProjects.Count} test, {_mtpProjects.Count} MTP" +
+            (EvaluatedBeforeRestore ? " (some projects not yet restored)" : ""));
     }
 
     public string? FindOwningProject(string filePath)
@@ -173,6 +180,8 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         var normalized = Path.GetFullPath(projectPath);
         return _sourceFilesByProject.TryGetValue(normalized, out var files) ? files : [];
     }
+
+    public bool EvaluatedBeforeRestore { get; }
 
     public bool IsTestProject(string projectPath)
     {

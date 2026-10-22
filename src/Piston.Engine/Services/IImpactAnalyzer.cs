@@ -50,4 +50,10 @@ public interface IImpactAnalyzer
         testProjects = GetAllTestProjectPaths().ToArray();
         return issue;
     }
+
+    /// <summary>
+    /// Reloads the graph when it was evaluated before a project's packages were restored (a fresh clone's first
+    /// build restores them). Returns whether it reloaded.
+    /// </summary>
+    bool RefreshGraphIfEvaluatedBeforeRestore() => false;
 }
