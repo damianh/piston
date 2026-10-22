@@ -81,22 +81,15 @@ internal sealed class CoverageProcessor : ICoverageProcessor
             return;
         }
 
-        // Build the test coverage map: each test FQN → all covered file+line entries
-        var testCoverageMap = new Dictionary<string, IReadOnlyList<TestLineCoverage>>(
-            StringComparer.Ordinal);
-
+        // Run granularity: every test in the run is credited with every covered line. All tests share one
+        // list so the store keeps the lines once rather than once per test.
+        IReadOnlyList<TestLineCoverage> entries =
+        [
+            .. coveredLines.SelectMany(file => file.Value.Select(line => new TestLineCoverage(file.Key, line, 1))),
+        ];
+        var testCoverageMap = new Dictionary<string, IReadOnlyList<TestLineCoverage>>(StringComparer.Ordinal);
         foreach (var testFqn in testFqns)
         {
-            var entries = new List<TestLineCoverage>();
-
-            foreach (var (filePath, lines) in coveredLines)
-            {
-                foreach (var lineNumber in lines)
-                {
-                    entries.Add(new TestLineCoverage(filePath, lineNumber, 1));
-                }
-            }
-
             testCoverageMap[testFqn] = entries;
         }
 

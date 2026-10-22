@@ -68,7 +68,7 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
         {
             await connection.OpenAsync(_ct);
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT (SELECT COUNT(*) FROM coverage_map) + (SELECT COUNT(*) FROM coverage_summary);";
+            command.CommandText = "SELECT (SELECT COUNT(*) FROM coverage_set_lines) + (SELECT COUNT(*) FROM coverage_set_tests) + (SELECT COUNT(*) FROM coverage_sets) + (SELECT COUNT(*) FROM coverage_summary);";
             Assert.Equal(0L, await command.ExecuteScalarAsync(_ct));
         }
 
@@ -419,7 +419,7 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task InitializeAsync_DatabaseFromOlderVersion_AddsReportTablesAndGranularity()
+    public async Task InitializeAsync_DatabaseFromOlderVersion_DropsPerTestMapAndKeepsRunCounter()
     {
         _sut.Dispose();
         var dbPath = Path.Combine(_dbDir, ".piston", "piston.db");
@@ -447,8 +447,44 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
         {
             await connection.OpenAsync(_ct);
             using var command = connection.CreateCommand();
-            command.CommandText = "SELECT granularity FROM coverage_map;";
-            Assert.Equal("run", await command.ExecuteScalarAsync(_ct));
+            command.CommandText = "SELECT COUNT(1) FROM sqlite_master WHERE name = 'coverage_map';";
+            Assert.Equal(0L, await command.ExecuteScalarAsync(_ct));
         }
+    }
+
+    [Fact]
+    public async Task StoreCoverageAsync_TestsSharingLines_StoreTheLinesOnce()
+    {
+        var file = Path.Combine(_dbDir, "A.cs");
+        IReadOnlyList<TestLineCoverage> lines = [.. Enumerable.Range(1, 50).Select(n => new TestLineCoverage(file, n, 1))];
+        var map = Enumerable.Range(0, 100).ToDictionary(i => $"Tests.T{i}", _ => lines);
+
+        await _sut.StoreCoverageAsync(_sut.CreateRunId(), map);
+
+        Assert.Equal(100, _sut.GetTestsCoveringLines(file, 10, 10).Count);
+        using var connection = new SqliteConnection($"Data Source={Path.Combine(_dbDir, ".piston", "piston.db")};Pooling=False");
+        await connection.OpenAsync(_ct);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM coverage_set_lines;";
+        Assert.Equal(50L, await command.ExecuteScalarAsync(_ct));
+    }
+
+    [Fact]
+    public async Task StoreCoverageAsync_RemeasuredFile_ReplacesEarlierTestsAndPrunesEmptySets()
+    {
+        var a = Path.Combine(_dbDir, "A.cs");
+        var b = Path.Combine(_dbDir, "B.cs");
+        await _sut.StoreCoverageAsync(_sut.CreateRunId(), MakeMap("Tests.Old", a, 1));
+        await _sut.StoreCoverageAsync(_sut.CreateRunId(), MakeMap("Tests.Other", b, 1));
+
+        await _sut.StoreCoverageAsync(_sut.CreateRunId(), MakeMap("Tests.New", a, 2));
+
+        Assert.Equal(["Tests.New"], _sut.GetTestsCoveringFile(a));
+        Assert.Equal(["Tests.Other"], _sut.GetTestsCoveringFile(b));
+        using var connection = new SqliteConnection($"Data Source={Path.Combine(_dbDir, ".piston", "piston.db")};Pooling=False");
+        await connection.OpenAsync(_ct);
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM coverage_sets;";
+        Assert.Equal(2L, await command.ExecuteScalarAsync(_ct));
     }
 }
