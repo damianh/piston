@@ -110,7 +110,7 @@ Clicking any node in the tree shows its details; double-click or the chevron exp
 
 Project, framework, namespace, class and pinned rows show how many tests they contain, with how many passed (✓) and failed (✗), and every group row shows its tests' summed duration. **Run failed** in the toolbar re-runs every failed test, and the ⏱ toggle lists tests slowest first. When a failure message has an expected and an actual value (xUnit, NUnit, MSTest or Shouldly), the test's details show them side by side with the difference highlighted. The browser tab's title and favicon show the run state (busy, passed or failed), so a background tab still tells you how the last run went, and screen readers announce when a run starts and finishes.
 
-The **Coverage** tab (when the daemon runs with coverage enabled) shows line and branch totals, the measured files grouped by module (filterable, sorted by path or by most uncovered lines) and the selected file's source with each line's hit count: covered lines green, partly covered branches yellow, uncovered lines red. A file is marked *stale* when it changed since it was measured and *partial* when only a selective run measured it. The figures are aggregate coverage of the tests that ran, not per-test attribution. The tab links to LCOV and Cobertura downloads, which the daemon also serves at `/api/coverage/lcov` and `/api/coverage/cobertura`.
+The **Coverage** tab (when the daemon runs with coverage enabled) shows line and branch totals, the measured files grouped by module (filterable, sorted by path or by most uncovered lines) and the selected file's source with each line's hit count: covered lines green, partly covered branches yellow, uncovered lines red. A file is marked *stale* when it changed since it was measured and *partial* when only a selective run measured it. The line marks are aggregate coverage of the tests that ran. Below the source, a panel lists the tests the impact map records as executing the selected file, each with a badge for how precisely that was measured (`test`, `class` or `run`, see [Coverage and impact selection](#coverage-and-impact-selection)) and an *outdated* marker when the file or the measurement changed since; click a line number to narrow the list to that line, and click a test to open it in the **Tests** tab. After a selective run by changed lines, a test's details say why it ran, and the status bar shows the last run's scope. The tab links to LCOV and Cobertura downloads, which the daemon also serves at `/api/coverage/lcov` and `/api/coverage/cobertura`.
 
 Keyboard shortcuts (press `?` in the dashboard for the list): `R` runs the selection, `[` and `]` move to the previous or next failure, `1`–`4` show or hide failed, passed, skipped and not-run tests, `G` cycles the grouping, `E` expands or collapses all, and `S` sorts slowest first.
 
@@ -226,9 +226,16 @@ Limits: this is admission control by reservation. Piston does not cap the actual
 
 ## Coverage and impact selection
 
-Project ownership and transitive dependencies determine affected test projects. The optional Tier 3 path adds a file-based test-FQN filter when usable coverage exists. It is **not verified per-test/changed-line selection**: `CoverageProcessor` unions covered lines across reports and attributes them to every test returned in that run. The analyzer queries whole files, not changed line ranges.
+Project ownership and transitive dependencies determine affected test projects (Tier 2). With coverage enabled, Tier 3 narrows the run to the tests whose recorded execution touches the **changed lines**:
 
-Coverage persists in `.piston/piston.db`: the merged line and branch report (what the dashboard, `get_coverage` and the exports read) and the run-level test associations used for selection. Test-result history and the project graph do not persist. Only files under the solution directory are recorded, so code a test loads from elsewhere (such as fixture projects built in a temp directory) does not count. A full, unfiltered run replaces the report; a selective run adds hits to unchanged files and marks new or changed files it measured as partial. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, running it through `dotnet test` rather than server mode (so without live per-test progress); without it, the project runs without coverage and its run log says why. Fine-grained attribution and selection correctness are future experiments.
+- Each coverage run records an *impact map*: per test project, the line spans each source file executed, and a snapshot of the file's content. A full, cleanly passing run replaces the project's `run` unit; other runs add to it.
+- On a change, Piston diffs the new content against the snapshot and selects the tests of every unit whose executed spans overlap the changed lines. A change outside every executed span (for example a new member) selects every test that executed the file.
+- `run` evidence attributes the whole project's execution to all its tests, so it over-selects. While the daemon is idle, the **impact backfill** runs each test class on its own with coverage and records a `class` unit (`impactBackfill`: `"class"` by default, `"test"` to measure each test method, or `"off"`). Current finer evidence overrides coarser evidence; an edit makes class and test units of the changed file outdated, so the `run` unit decides until they are remeasured. The status bar shows the backfill's progress, and a new run cancels it.
+- Tier 3 abstains, and tests are selected by project, when a test file changed (it may add tests no recording knows), when a changed file has no recording, or when more than 100 tests are selected. Otherwise, a file-level fallback selects the tests whose coverage includes the changed files.
+
+Selection by lines is a heuristic, not a proof: code reached through reflection, static state, configuration or data files can affect a test without appearing in its executed lines, and a forced or full run remains the authority. `plan_affected_tests` previews a selection with the changed lines and evidence granularity behind each test.
+
+Coverage persists in `.piston/piston.db`: the merged line and branch report (what the dashboard, `get_coverage` and the exports read), the file-level test associations and the impact map used for selection. Test-result history and the project graph do not persist. Only files under the solution directory are recorded, so code a test loads from elsewhere (such as fixture projects built in a temp directory) does not count. A full, unfiltered run replaces the report; a selective run adds hits to unchanged files and marks new or changed files it measured as partial. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, running it through `dotnet test` rather than server mode (so without live per-test progress); without it, the project runs without coverage and its run log says why.
 
 ### Selective builds
 
@@ -270,6 +277,7 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `debounceMs` | `int` | File-change debounce interval in milliseconds. |
 | `testFilter` | `string` | Default filter passed to the selected test runner. |
 | `coverageEnabled` | `bool` | Request coverage collection (see `--coverage`). |
+| `impactBackfill` | `string` | With coverage, how finely to measure the impact map while idle: `"class"` (default), `"test"` or `"off"`. See [Coverage and impact selection](#coverage-and-impact-selection). |
 | `parallelism` | `int` | Max concurrent test processes. `0` = auto: half the logical processor count, at least one. |
 | `processRecycleAfter` | `int` | Runs after which a pool slot logs a recycling warning (default 50). |
 | `pipeName` | `string` | Override the named pipe name. |
@@ -372,7 +380,7 @@ The repo pins [roslynk](https://www.nuget.org/packages/roslynk) as a local .NET 
 
 ## Proposed direction
 
-Fine-grained coverage, Copilot canvas/harness integrations, and a per-user hub
+Copilot canvas/harness integrations and a per-user hub
 with isolated worktree workers remain deferred. The separate `measurements/`
 harness does not establish a measured Piston improvement; a matched comparison
 campaign remains future work. Aspire is one possible generic integration-test example, not a

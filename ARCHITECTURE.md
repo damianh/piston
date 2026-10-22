@@ -64,6 +64,8 @@ by the headless dispatcher because the solution is configured at launch.
 Coverage requests return the solution's coverage summary, one file's line
 coverage (optionally with its source), and LCOV or Cobertura exports; the daemon
 also serves the exports over HTTP at `/api/coverage/{lcov|cobertura}`.
+`coverage/getCoveringTests` returns the tests the impact map records as executing
+a file, with their evidence granularity and executed line ranges.
 Clients receive state, test progress, build errors, and activity notifications.
 The dashboard presents current test/build state, aggregate coverage, activity,
 and MCP call history; there is no diagnostic view.
@@ -130,31 +132,42 @@ fall back to a full run. Project/build-input changes can require graph
 reinitialization. The graph is held in memory; there is no implemented
 `.piston/project-graph.json` cache or persisted graph recovery.
 
-### Coverage-assisted filtering (implemented, coarse)
+### Changed-line selection (implemented)
 
-The existing Tier 3 path attaches test FQNs when all changed C# files have
-non-stale coverage associations. It queries **whole files**, not changed line
-ranges. The store has a line-range query API, but the analyzer does not use it
-and does not calculate changed lines with a git diff.
+With coverage enabled, Tier 3 selects tests from the **impact map**
+(`IImpactMapStore`, implemented by `SqliteCoverageStore`). Each recorded *unit*
+belongs to a test project, has a granularity (`run`, `class` or `test`) and lists
+the tests it measured and, per source file, the line spans those tests executed
+plus a content-addressed snapshot of the file as measured.
 
-The important limitation is attribution: the orchestrator passes all reports
-and all returned test FQNs from a run to `CoverageProcessor`. The processor unions
-the covered lines across those reports and associates **every covered line with
-every supplied test FQN**. Associations can therefore span multiple suites in a
-run. Stored FQNs do not establish that a particular test executed a particular
-line, even though the data is represented as file/line/test rows.
+- **Recording.** After a coverage run, the orchestrator records one `run` unit per
+  test project from that project's reports. A full run in which all the project's
+  tests ran cleanly replaces the unit; other runs merge into it, first remapping
+  earlier spans onto the new content with a line diff.
+- **Backfill.** `run` evidence credits every executed line to every test of the
+  project. When the daemon is idle, `ImpactBackfill` plans class (or test) units
+  that are missing or outdated, and the orchestrator runs each with a name filter
+  and coverage, recording a `class`/`test` unit. A unit is skipped when not every
+  planned test ran. Any new run cancels the backfill; progress is published as
+  `ImpactBackfill` in the state snapshot.
+- **Selection.** `SelectTests` diffs each changed file against each unit's
+  snapshot. A unit whose executed spans overlap the changed lines selects its tests,
+  with a `TestSelectionReason` (changed lines, executed span, granularity); a change
+  outside every span selects every test that executed the file. Current finer
+  evidence about a test overrides coarser evidence. Analyzing a change marks the
+  file's class and test units dirty, so the `run` unit decides until they are
+  remeasured.
+- **Abstaining.** A changed test file, a changed file with no recording, or more
+  than `ImpactAnalysisResult.MaxFilteredTests` (100) selected tests falls back to
+  project selection, and the run records why (`SelectionExplanation`). Without an
+  impact-map hit, the older file-level path (`coverage_set_*`) may still narrow by
+  whole files.
 
-This is coarse coverage-assisted selection, not verified fine-grained per-test
-impact detection. If a changed file lacks usable coverage associations, selection
-falls back to project-level tests. The analyzer marks file associations stale
-after reading them; coverage processing refreshes files represented in new data.
-This is not a complete freshness or correctness guarantee across arbitrary edits
-or restarts.
-
-Fine-grained coverage is a future spike: establish trustworthy attribution,
-evaluate changed-line mapping and invalidation, and measure selection correctness
-before claiming per-test precision. This limitation concerns Piston's current
-processing path, not every capability offered by test frameworks or collectors.
+This is a heuristic: code reached by reflection, static state or data files can
+affect a test without appearing in its spans, and a full or forced run remains
+authoritative. Theory display names that change between runs (for example ones
+containing timestamps) accumulate in `run` units and prevent their class from
+being measured alone.
 
 ## Builds and execution
 
@@ -294,10 +307,14 @@ and uses WAL mode. Its tables are:
 |---|---|
 | `coverage_files` | Per-file line/branch totals, module, content hash, stale and partial flags. |
 | `coverage_lines` | Per-line hits and branch counts: the merged report. |
-| `coverage_sets` | One row per attribution set: run ID and granularity (currently always `run`). |
+| `coverage_sets` | One row per file-level attribution set: run ID and granularity (always `run`). |
 | `coverage_set_tests` | The tests credited with a set. |
 | `coverage_set_lines` | The lines a set covers, with stale flag. |
 | `coverage_summary` | File path, last run ID, last-updated timestamp. |
+| `impact_units` | One row per impact unit: test project, granularity, unit key, run ID, dirty flag. |
+| `impact_unit_tests` | The tests a unit measured. |
+| `impact_unit_files` | Per unit and file: the executed line spans and the snapshot they are numbered against. |
+| `impact_snapshots` | File content by hash, so later edits can be diffed against what was measured. |
 
 The report tables answer the dashboard, `get_coverage`, changed-line coverage and
 exports. A full, unfiltered run replaces them. A selective run merges its hits
@@ -305,7 +322,7 @@ into files whose content hash is unchanged, and replaces (and marks partial) fil
 that are new or changed. A file whose content no longer matches its hash is
 reported stale.
 
-The set tables hold the coarse attribution described above. Tests that share one
+The set tables hold coarse file-level attribution: every covered line of a run is credited to every test of that run. Tests that share one
 line list share one set, so a run stores its covered lines once rather than once
 per test. Processing replaces old associations for files present in new coverage
 data and prunes sets left without lines. Hit counts are association values, not

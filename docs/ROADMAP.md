@@ -363,6 +363,27 @@ blocking in-process hook (an injected xUnit `BeforeAfterTestAttribute` or MTP
 extension) could reach about 1.2× but modifies the user's test project; it is
 deferred.
 
+### Status
+
+Implemented:
+
+- An impact map of `run` units recorded by every coverage run and `class` (or,
+  with `impactBackfill: "test"`, `test`) units measured by the idle backfill, each
+  with executed line spans and a content snapshot. Aggregate line coverage is
+  stored separately and labelled as aggregate.
+- Changed-line selection (Tier 3) diffing changed files against the snapshots,
+  with per-test reasons, conservative fallback to project selection, and a
+  `plan_affected_tests` preview. Spans merged after an edit are remapped with a
+  line diff; class and test units of an edited file are treated as outdated until
+  remeasured.
+- Dashboard: a covering-tests panel per file and per line with evidence
+  granularity and outdated markers, drill-down to the test, "Why it ran" in test
+  details, backfill progress and the last run's scope in the status bar.
+
+Not yet done: branch-level attribution, the passing/failing/uncovered verdict per
+changed line, a coverage-aware diff view, method-level identity, and pruning test
+names that no longer exist (theories whose display names change each run).
+
 ### Implementation
 
 - Persist genuine per-test executable-line and, where available, branch hits,
