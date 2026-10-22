@@ -47,6 +47,12 @@ public sealed class ViewState
     public string? SelectedTestKey { get; set; }
 
     /// <summary>
+    /// Set when another view opens <see cref="SelectedTestKey"/>; the Tests tab then expands the test's ancestors and
+    /// scrolls it into view once.
+    /// </summary>
+    public bool RevealSelectedTest { get; set; }
+
+    /// <summary>
     /// The project, framework, namespace, class or group shown in the details pane, by its
     /// <see cref="TestNode.ExpansionKey"/>.
     /// </summary>

@@ -33,6 +33,9 @@ public static class ProtocolMethods
     /// <summary>Request the solution-wide coverage report: totals and every measured file.</summary>
     public const string CoverageGetSummary = "coverage/getSummary";
 
+    /// <summary>Request the tests the impact map records as executing a source file.</summary>
+    public const string CoverageGetCoveringTests = "coverage/getCoveringTests";
+
     /// <summary>Export the coverage report as LCOV or Cobertura text.</summary>
     public const string CoverageExport = "coverage/export";
 

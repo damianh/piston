@@ -94,6 +94,16 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
                 }
 
+            case ProtocolMethods.CoverageGetCoveringTests:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<GetCoveringTestsCommand>(@params);
+                    var filePath = cmd?.FilePath ?? string.Empty;
+                    var tests = string.IsNullOrWhiteSpace(filePath) ? null : _engine.GetCoveringTests(filePath);
+                    var result = DtoMapper.ToCoveringTestsDto(filePath, tests);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
             case ProtocolMethods.CoverageGetSummary:
                 {
                     var result = DtoMapper.ToCoverageSummaryDto(_engine.GetCoverageReport(), SolutionDirectory);

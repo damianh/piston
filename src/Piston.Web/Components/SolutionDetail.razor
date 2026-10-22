@@ -1,4 +1,5 @@
 @inject EngineClientService Client
+@inject ViewState View
 @implements IDisposable
 
 <div class="flex flex-col flex-1 overflow-hidden">
@@ -15,7 +16,7 @@
         }
         else if (_activeTab == DashboardTab.Coverage)
         {
-            <CoverageTab />
+            <CoverageTab OnOpenTest="OpenTest" />
         }
     </div>
 
@@ -33,6 +34,14 @@
     }
 
     private void SetTab(DashboardTab tab) => _activeTab = tab;
+
+    private void OpenTest(string fullyQualifiedName)
+    {
+        View.SelectedNodeKey = null;
+        View.SelectedTestKey = fullyQualifiedName;
+        View.RevealSelectedTest = true;
+        _activeTab = DashboardTab.Tests;
+    }
 
     private void OnActivityEvent(ActivityEvent _) { /* keeps badge counts fresh if needed */ }
 

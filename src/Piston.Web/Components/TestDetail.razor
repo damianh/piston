@@ -57,11 +57,28 @@ else
             {
                 <div class="text-gray-500 mt-1">Framework: <span class="font-mono">@framework</span></div>
             }
-            @if (Test.DurationMs > 0)
+            @if (TestNode.HasDuration(Test))
             {
                 <div class="text-gray-500 mt-1">Duration: @FormatDuration(Test.DurationMs)</div>
             }
         </div>
+
+        <!-- Why the last run selected it -->
+        @if (SelectionReasons is { Count: > 0 } reasons)
+        {
+            <div>
+                <div class="text-gray-400 font-semibold mb-1">Why it ran</div>
+                <ul class="flex flex-col gap-1">
+                    @foreach (var reason in reasons)
+                    {
+                        <li class="flex items-start gap-2">
+                            <GranularityBadge Granularity="@reason.Granularity" />
+                            <span class="text-gray-300 break-all" title="@reason.FilePath">@DescribeReason(reason)</span>
+                        </li>
+                    }
+                </ul>
+            </div>
+        }
 
         <!-- Error message -->
         @if (!string.IsNullOrEmpty(Test.ErrorMessage))
@@ -138,6 +155,25 @@ else
     /// <summary>False while a run is in progress or the daemon is unreachable.</summary>
     [Parameter] public bool CanRun { get; set; }
 
+    /// <summary>Why the last run selected the test, when the impact map narrowed it by changed lines.</summary>
+    [Parameter] public IReadOnlyList<TestSelectionReasonDto>? SelectionReasons { get; set; }
+
+    /// <summary>The watched solution, for showing changed files relative to it.</summary>
+    [Parameter] public string? SolutionPath { get; set; }
+
+    private string DescribeReason(TestSelectionReasonDto reason)
+    {
+        var file = Path.GetDirectoryName(SolutionPath) is { Length: > 0 } root
+            ? Path.GetRelativePath(root, reason.FilePath)
+            : Path.GetFileName(reason.FilePath);
+        var who = GranularityBadge.Executor(reason.Granularity);
+        return reason.ExecutedLines is { } executed
+            ? $"{file}: {Lines(reason.ChangedLines)} changed, overlapping {Lines(executed)} that {who} executed"
+            : $"{file}: {Lines(reason.ChangedLines)} changed outside every line {who} executed, so every test that executed the file ran";
+    }
+
+    private static string Lines(string range) => range.Contains('-', StringComparison.Ordinal) ? $"lines {range}" : $"line {range}";
+
     private RunTestsCommand? RunCommand =>
         Test is null || Project is null
             ? null
@@ -167,6 +203,5 @@ else
         }
     }
 
-    private static string FormatDuration(double ms) =>
-        ms < 1000 ? $"{(int)ms}ms" : $"{ms / 1000.0:F1}s";
+    private static string FormatDuration(double ms) => TestNode.FormatDuration(ms);
 }

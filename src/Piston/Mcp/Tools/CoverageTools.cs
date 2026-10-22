@@ -285,15 +285,9 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
     internal static JsonObject AffectedPlan(
         string basis, IReadOnlyList<string> changedFiles, ImpactAnalysisResult plan, string solutionDirectory)
     {
-        var explanation = plan.Explanation ?? string.Empty;
+        var explanation = plan.RunExplanation ?? string.Empty;
         var fqns = plan.AffectedTestFqns ?? [];
-        var narrowed = fqns.Count is > 0 and <= ImpactAnalysisResult.MaxFilteredTests;
-        if (fqns.Count > ImpactAnalysisResult.MaxFilteredTests)
-        {
-            explanation = $"{fqns.Count} tests were selected, more than the {ImpactAnalysisResult.MaxFilteredTests} a run " +
-                "narrows to, so tests are selected by project.";
-        }
-
+        var narrowed = plan.NarrowsToTests;
         var scope = plan.IsFullRun ? "full"
             : narrowed ? "tests"
             : plan.AffectedTestProjectPaths.Count > 0 ? "projects"

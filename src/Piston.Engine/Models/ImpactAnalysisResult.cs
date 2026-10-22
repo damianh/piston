@@ -32,6 +32,17 @@ public sealed record ImpactAnalysisResult(
     /// <summary>One sentence saying why the analysis chose this scope, e.g. why it could not narrow to tests.</summary>
     public string? Explanation { get; init; }
 
+    /// <summary>True when a run narrows to <see cref="AffectedTestFqns"/> by name rather than running whole projects.</summary>
+    public bool NarrowsToTests => AffectedTestFqns is { Count: > 0 and <= MaxFilteredTests };
+
+    /// <summary>
+    /// <see cref="Explanation"/>, except when more tests were selected than a run narrows to and the affected projects
+    /// run whole instead.
+    /// </summary>
+    public string? RunExplanation => AffectedTestFqns is { Count: > MaxFilteredTests } fqns
+        ? $"{fqns.Count} tests were selected, more than the {MaxFilteredTests} a run narrows to, so tests are selected by project."
+        : Explanation;
+
     /// <summary>
     /// Projects that must be built before a selective test run: every affected non-test
     /// project plus every affected test project. Test projects must be rebuilt because

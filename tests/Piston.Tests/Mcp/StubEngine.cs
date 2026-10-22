@@ -107,5 +107,11 @@ internal sealed class StubEngine : IEngine
     public Engine.Coverage.FileCoverageSnapshot? GetFileCoverage(string filePath) =>
         FileCoverage.GetValueOrDefault(filePath);
 
+    /// <summary>Covering tests returned by <see cref="GetCoveringTests"/>, keyed by the requested path.</summary>
+    public Dictionary<string, IReadOnlyList<Engine.Coverage.CoveringTest>> CoveringTests { get; } = [];
+
+    public IReadOnlyList<Engine.Coverage.CoveringTest>? GetCoveringTests(string filePath) =>
+        CoveringTests.GetValueOrDefault(filePath);
+
     public void Dispose() { }
 }

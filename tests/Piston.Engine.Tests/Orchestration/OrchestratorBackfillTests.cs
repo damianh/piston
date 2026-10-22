@@ -108,6 +108,27 @@ public sealed class OrchestratorBackfillTests : IDisposable
         Assert.All(_runner.Filters, f => Assert.Null(f));
     }
 
+    [Fact]
+    public async Task GetCoveringTests_MarksEvidenceRecordedAgainstOtherContentAsNotCurrent()
+    {
+        await _store.InitializeAsync(_root);
+        var code = Path.Combine(_root, "Code.cs");
+        await _store.RecordImpactAsync(new ImpactRecording(
+            Project, ImpactGranularity.Run, "run", _store.CreateRunId(), ["A.Tests.Bar.One", "A.Tests.Foo.One"],
+            [new ImpactFile(code, [new LineSpan(1, 2)], "class Code\n{ }")], Merge: false));
+        await _store.RecordImpactAsync(new ImpactRecording(
+            Project, ImpactGranularity.Class, "A.Tests.Foo", _store.CreateRunId(), ["A.Tests.Foo.One"],
+            [new ImpactFile(code, [new LineSpan(1, 1)], "class Code { }")], Merge: false));
+
+        var tests = _orchestrator.GetCoveringTests(code)!;
+
+        Assert.Equal(["A.Tests.Bar.One", "A.Tests.Foo.One"], tests.Select(t => t.TestFqn));
+        Assert.Equal(("run", false), (tests[0].Granularity, tests[0].IsCurrent));
+        Assert.Equal(("class", true), (tests[1].Granularity, tests[1].IsCurrent));
+        Assert.Equal([new CoveredLineRange(1, 1)], tests[1].ExecutedLines);
+        Assert.Empty(_orchestrator.GetCoveringTests(Path.Combine(_root, "Other.cs"))!);
+    }
+
     private sealed class ClassRunner : ITestRunnerService
     {
         private static readonly string[] Tests = ["A.Tests.Foo.One", "A.Tests.Foo.Two", "A.Tests.Bar.One"];

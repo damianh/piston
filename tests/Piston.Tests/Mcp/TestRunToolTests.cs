@@ -181,6 +181,29 @@ public sealed class TestRunToolTests
     }
 
     [Fact]
+    public void SelectionExplanationAndReasonsRoundTripThroughTheProtocol()
+    {
+        var reason = new TestSelectionReason("/w/src/A.cs", "4", "3-5", "class", "/w/T/T.csproj");
+        var baseRun = Run("selective", 4, scope: TestRunScope.Selective);
+        var run = baseRun with
+        {
+            Context = baseRun.Context! with
+            {
+                SelectionExplanation = "Selected by changed lines.",
+                SelectionReasons = new Dictionary<string, IReadOnlyList<TestSelectionReason>> { ["Ns.A.First"] = [reason] },
+            },
+        };
+
+        var json = JsonSerializer.Serialize(run.ToDto(), JsonRpcSerializer.Options);
+        var dto = JsonSerializer.Deserialize<TestRunDto>(json, JsonRpcSerializer.Options)!;
+
+        Assert.Equal("Selected by changed lines.", dto.SelectionExplanation);
+        var mapped = Assert.Single(Assert.Single(dto.SelectionReasons!).Value);
+        Assert.Equal(("/w/src/A.cs", "4", "3-5", "class"), (mapped.FilePath, mapped.ChangedLines, mapped.ExecutedLines, mapped.Granularity));
+        Assert.Null(Run("full", 5).ToDto().SelectionReasons);
+    }
+
+    [Fact]
     public void GetTestRunRejectsUnknownRun()
     {
         var tools = new TestTools(new StubEngine(), NullMcpCallRecorder.Instance);

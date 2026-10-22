@@ -372,6 +372,13 @@ public sealed class EngineClientService : IAsyncDisposable
         return result?.Deserialize<FileCoverageDto>(JsonRpcSerializer.Options);
     }
 
+    public async Task<CoveringTestsDto?> GetCoveringTestsAsync(string filePath)
+    {
+        var result = await SendRequestAsync(ProtocolMethods.CoverageGetCoveringTests, new GetCoveringTestsCommand(filePath))
+            .ConfigureAwait(false);
+        return result?.Deserialize<CoveringTestsDto>(JsonRpcSerializer.Options);
+    }
+
     /// <summary>
     /// Merges the daemon's retained activity history into the local log so events that
     /// happened before this page connected (e.g. agent MCP calls) appear in the timeline.

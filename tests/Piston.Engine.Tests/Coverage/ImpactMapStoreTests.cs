@@ -193,6 +193,42 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetTestsExecuting_CurrentClassEvidence_OverridesTheRunUnit()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A.One", "T.B.One"], [new(1, 30)]);
+        await Record(ImpactGranularity.Class, "T.A", ["T.A.One"], [new(3, 5)]);
+
+        var executors = _sut.GetTestsExecuting(File);
+
+        Assert.Equal(["T.A.One", "T.B.One"], executors.Select(e => e.TestFqn));
+        Assert.Equal(ImpactGranularity.Class, executors[0].Granularity);
+        Assert.Equal([new LineSpan(3, 5)], executors[0].Spans);
+        Assert.Equal(ImpactGranularity.Run, executors[1].Granularity);
+        Assert.All(executors, e => Assert.True(e.IsUnitCurrent));
+    }
+
+    [Fact]
+    public async Task GetTestsExecuting_DirtyClassEvidence_FallsBackToTheCurrentRunUnit()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A.One"], [new(1, 30)]);
+        await Record(ImpactGranularity.Class, "T.A", ["T.A.One"], [new(3, 5)]);
+        await _sut.MarkChangedAsync([new ChangedFile(File, Edit(Original, 11, "changed"))]);
+
+        var executor = Assert.Single(_sut.GetTestsExecuting(File));
+
+        Assert.Equal(ImpactGranularity.Run, executor.Granularity);
+        Assert.True(executor.IsUnitCurrent);
+    }
+
+    [Fact]
+    public async Task GetTestsExecuting_FileWithNoRecording_IsEmpty()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A"], [new(1, 30)]);
+
+        Assert.Empty(_sut.GetTestsExecuting("/repo/src/Lib/Other.cs"));
+    }
+
+    [Fact]
     public async Task Clear_RemovesTheImpactMap()
     {
         await Record(ImpactGranularity.Run, "run", ["T.A"], [new(1, 30)]);

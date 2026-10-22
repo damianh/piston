@@ -254,8 +254,24 @@ public static class DtoMapper
             Skipped: tests.Count(t => t.Status == TestStatus.Skipped),
             DuplicateTestCount: run.DuplicateTestIds.Count,
             Admission: run.Admission?.ToDto(),
-            Build: run.Build?.ToDto());
+            Build: run.Build?.ToDto(),
+            SelectionExplanation: run.Context?.SelectionExplanation,
+            SelectionReasons: run.Context?.SelectionReasons?.ToDictionary(
+                kv => kv.Key,
+                kv => (IReadOnlyList<TestSelectionReasonDto>)[.. kv.Value.Select(r => r.ToDto())],
+                StringComparer.Ordinal));
     }
+
+    public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
+        new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath);
+
+    public static CoveringTestsDto ToCoveringTestsDto(string filePath, IReadOnlyList<CoveringTest>? tests) =>
+        new(filePath, [.. (tests ?? []).Select(t => new CoveringTestDto(
+            t.TestFqn,
+            t.ProjectPath,
+            t.Granularity,
+            [.. t.ExecutedLines.Select(r => new LineRangeDto(r.Start, r.End))],
+            t.IsCurrent))]);
 
     public static TestRunAdmissionDto ToDto(this TestRunAdmission admission) =>
         new(

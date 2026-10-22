@@ -82,9 +82,15 @@ public sealed class TestNode
         return new(total, passed, failed, durationMs);
     }
 
-    /// <summary>Formats a duration compactly, e.g. <c>85ms</c>, <c>2.4s</c> or <c>3m 12s</c>.</summary>
+    /// <summary>
+    /// True when <paramref name="test"/> finished, so its duration was measured. Runners report a test that took under a
+    /// millisecond as 0 ms.
+    /// </summary>
+    public static bool HasDuration(TestResultDto test) => test.Status is TestStatusDto.Passed or TestStatusDto.Failed;
+
+    /// <summary>Formats a duration compactly, e.g. <c>&lt;1ms</c>, <c>85ms</c>, <c>2.4s</c> or <c>3m 12s</c>.</summary>
     public static string FormatDuration(double ms) =>
-        ms < 1000 ? $"{(int)ms}ms" : ms < 60_000 ? $"{ms / 1000.0:F1}s" : $"{(int)(ms / 60_000)}m {(int)(ms % 60_000 / 1000)}s";
+        ms < 1 ? "<1ms" : ms < 1000 ? $"{(int)ms}ms" : ms < 60_000 ? $"{ms / 1000.0:F1}s" : $"{(int)(ms / 60_000)}m {(int)(ms % 60_000 / 1000)}s";
 
     /// <summary>The node with <paramref name="expansionKey"/> in <paramref name="nodes"/> or their descendants.</summary>
     public static TestNode? Find(IEnumerable<TestNode> nodes, string expansionKey)

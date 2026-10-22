@@ -15,6 +15,7 @@
     <!-- Node row: a click shows the node's details; the chevron or a double-click expands or collapses it -->
     <div class="flex items-center gap-1 px-2 py-0.5 cursor-pointer hover:bg-gray-800 @(isSelected ? "bg-gray-700" : "") @(Node.IsStale ? "opacity-50" : "")"
          style="padding-left: @(indent + 8)px"
+         data-selected="@(isSelected ? "true" : null)"
          title="@(isTest ? null : "Show details · double-click to expand or collapse")"
          @onclick="HandleClick"
          @ondblclick="HandleDoubleClick">
@@ -76,11 +77,11 @@
 
         <!-- Duration column: a test's own, or the summed test time under a group -->
         <span class="w-14 shrink-0 text-right text-yellow-600 text-xs tabular-nums">
-            @if (Node.Kind == TestNodeKind.Test && Node.Test?.DurationMs > 0 && Node.Test.Status != TestStatusDto.Running)
+            @if (Node.Kind == TestNodeKind.Test && Node.Test is { } test && TestNode.HasDuration(test))
             {
-                @TestNode.FormatDuration(Node.Test.DurationMs)
+                @TestNode.FormatDuration(test.DurationMs)
             }
-            else if (counts is { DurationMs: > 0 } d)
+            else if (counts is { } d && d.Passed + d.Failed > 0)
             {
                 <span title="@d.DurationDescription">
                     <span class="sr-only">@d.DurationDescription</span>

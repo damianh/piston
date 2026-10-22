@@ -247,6 +247,9 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     public FileCoverageSnapshot? GetFileCoverage(string filePath) =>
         _orchestrator.GetFileCoverage(Path.GetFullPath(filePath, _solutionDirectory));
 
+    public IReadOnlyList<CoveringTest>? GetCoveringTests(string filePath) =>
+        _orchestrator.GetCoveringTests(Path.GetFullPath(filePath, _solutionDirectory));
+
     public ImpactAnalysisResult PlanAffected(IReadOnlyList<string> filePaths)
     {
         // Mirror the watcher: changes under bin, obj and other excluded directories trigger nothing.

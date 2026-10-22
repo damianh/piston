@@ -1,0 +1,29 @@
+@* How precisely coverage evidence attributes executed code to a test. *@
+<span class="shrink-0 rounded px-1 text-[10px] leading-4 font-medium @Color" title="@Description(Granularity)">@Granularity</span>
+
+@code {
+    /// <summary><c>run</c>, <c>class</c> or <c>test</c>.</summary>
+    [Parameter] public string Granularity { get; set; } = "run";
+
+    private string Color => Granularity switch
+    {
+        "test" => "bg-emerald-500/15 text-emerald-300",
+        "class" => "bg-sky-500/15 text-sky-300",
+        _ => "bg-gray-700/60 text-gray-300",
+    };
+
+    /// <summary>Who executed the code the evidence describes, e.g. "its class".</summary>
+    public static string Executor(string granularity) => granularity switch
+    {
+        "test" => "it",
+        "class" => "its class",
+        _ => "its project's run",
+    };
+
+    public static string Description(string granularity) => granularity switch
+    {
+        "test" => "Measured alone: the test itself executed this code.",
+        "class" => "Measured with its class: some test in the class executed this code, not necessarily this one.",
+        _ => "Measured with its whole project's run: some test in the project executed this code, not necessarily this one.",
+    };
+}

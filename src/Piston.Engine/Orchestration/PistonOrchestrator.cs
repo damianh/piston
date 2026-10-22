@@ -638,6 +638,42 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     }
 
     /// <summary>
+    /// Returns the tests the impact map credits with executing <paramref name="filePath"/>, or null when coverage is
+    /// disabled.
+    /// </summary>
+    internal IReadOnlyList<CoveringTest>? GetCoveringTests(string filePath)
+    {
+        if (_coverageStore is not IImpactMapStore store)
+        {
+            return null;
+        }
+
+        IReadOnlyList<ImpactExecutor> executors;
+        _coverageLock.Wait();
+        try
+        {
+            executors = store.GetTestsExecuting(filePath);
+        }
+        finally
+        {
+            _ = _coverageLock.Release();
+        }
+
+        if (executors.Count == 0)
+        {
+            return [];
+        }
+
+        var currentHash = ImpactContent.TryRead(filePath) is { } content ? ImpactContent.Hash(content) : null;
+        return [.. executors.Select(e => new CoveringTest(
+            e.TestFqn,
+            e.ProjectPath,
+            e.Granularity.ToString().ToLowerInvariant(),
+            [.. e.Spans.Select(s => new CoveredLineRange(s.Start, s.End))],
+            e.IsUnitCurrent && string.Equals(e.SnapshotHash, currentHash, StringComparison.Ordinal)))];
+    }
+
+    /// <summary>
     /// One run-granularity impact unit per test project. A project's unit is replaced only when all its tests ran
     /// cleanly; otherwise the run adds to what is stored.
     /// </summary>
@@ -962,9 +998,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     BuildTargets: buildTargets?.ToList(),
                     UserFilter: string.IsNullOrWhiteSpace(userFilter) ? null : userFilter,
                     EffectiveFilter: string.IsNullOrWhiteSpace(effectiveFilter) ? null : effectiveFilter,
-                    CoverageSelectedTestCount: impactResult.AffectedTestFqns is { Count: > 0 and <= ImpactAnalysisResult.MaxFilteredTests } selected
-                        ? selected.Count
-                        : null,
+                    CoverageSelectedTestCount: impactResult.NarrowsToTests ? impactResult.AffectedTestFqns!.Count : null,
                     CoverageEnabled: _coverageEnabled,
                     BuildConfiguration: "Debug",
                     SdkVersion: SafeSdkVersion(solutionDir),
@@ -977,7 +1011,9 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                             path => _impactAnalyzer.GetMtpOutputPath(path) is not null
                                 ? solutionDir
                                 : TestProcessRunner.WorkingDirectoryFor(path) ?? Environment.CurrentDirectory,
-                            StringComparer.Ordinal)),
+                            StringComparer.Ordinal),
+                    SelectionExplanation: selection is not null ? "The tests were chosen explicitly." : impactResult.RunExplanation,
+                    SelectionReasons: selection is null && impactResult.NarrowsToTests ? impactResult.SelectionReasons : null),
             };
             if (run.IsFullScope)
             {

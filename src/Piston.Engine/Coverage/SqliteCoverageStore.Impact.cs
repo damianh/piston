@@ -411,6 +411,48 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
         }
     }
 
+    public IReadOnlyList<ImpactExecutor> GetTestsExecuting(string filePath)
+    {
+        using var gate = Enter();
+
+        var finest = ReadFinestCurrentGranularity();
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = """
+            SELECT u.project_path, t.test_fqn, u.granularity, u.is_dirty, f.snapshot_hash, f.spans
+            FROM impact_unit_files f
+            JOIN impact_units u ON u.unit_id = f.unit_id
+            JOIN impact_unit_tests t ON t.unit_id = u.unit_id
+            WHERE f.file_path = $path;
+            """;
+        _ = cmd.Parameters.AddWithValue("$path", filePath);
+
+        var best = new Dictionary<(string Project, string Fqn), ImpactExecutor>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            var key = (reader.GetString(0), reader.GetString(1));
+            var granularity = (ImpactGranularity)reader.GetInt32(2);
+
+            // Current finer evidence about this test overrides a coarser recording.
+            if (finest.TryGetValue(key, out var finer) && finer > granularity)
+            {
+                continue;
+            }
+
+            var row = new ImpactExecutor(
+                key.Item1, key.Item2, granularity, LineSpan.Parse(reader.GetString(5)), reader.GetString(4), reader.GetInt64(3) == 0);
+            if (!best.TryGetValue(key, out var existing)
+                || (row.IsUnitCurrent, row.Granularity).CompareTo((existing.IsUnitCurrent, existing.Granularity)) > 0)
+            {
+                best[key] = row;
+            }
+        }
+
+        return [.. best.Values
+            .OrderBy(e => e.ProjectPath, StringComparer.Ordinal)
+            .ThenBy(e => e.TestFqn, StringComparer.Ordinal)];
+    }
+
     private sealed record FileUnit(long UnitId, string ProjectPath, ImpactGranularity Granularity, string Hash, string Spans);
 
     private List<FileUnit> ReadFileUnits(string filePath)

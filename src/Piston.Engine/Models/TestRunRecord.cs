@@ -90,6 +90,10 @@ public sealed record SourceFingerprint(string Algorithm, string Value, int FileC
 /// <param name="OperatingSystem">Host operating system description.</param>
 /// <param name="WorkingDirectory">Working directory of the build process and SDK version probe.</param>
 /// <param name="TestWorkingDirectories">Working directory per test target: solution directory for MTP, project directory for VSTest.</param>
+/// <param name="SelectionExplanation">One sentence saying why the run has this scope.</param>
+/// <param name="SelectionReasons">
+/// Why each test was selected, when the impact map narrowed the run to tests by changed lines.
+/// </param>
 public sealed record TestRunContext(
     string SolutionPath,
     IReadOnlyList<string>? TestProjects,
@@ -103,7 +107,9 @@ public sealed record TestRunContext(
     string Runtime,
     string OperatingSystem,
     string WorkingDirectory,
-    IReadOnlyDictionary<string, string>? TestWorkingDirectories = null);
+    IReadOnlyDictionary<string, string>? TestWorkingDirectories = null,
+    string? SelectionExplanation = null,
+    IReadOnlyDictionary<string, IReadOnlyList<TestSelectionReason>>? SelectionReasons = null);
 
 /// <summary>Machine-wide admission state of a run.</summary>
 public enum TestRunAdmissionState

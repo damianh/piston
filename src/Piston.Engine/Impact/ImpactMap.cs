@@ -103,7 +103,25 @@ internal interface IImpactMapStore
 
     /// <summary>Forgets the named units of a project, e.g. test classes that no longer exist.</summary>
     Task RemoveUnitsAsync(string projectPath, ImpactGranularity granularity, IReadOnlyCollection<string> unitKeys);
+
+    /// <summary>
+    /// Returns each test recorded as executing <paramref name="filePath"/>, judged by the same evidence
+    /// <see cref="SelectTests"/> uses: a test with current finer evidence is not credited by a coarser recording.
+    /// </summary>
+    IReadOnlyList<ImpactExecutor> GetTestsExecuting(string filePath);
 }
+
+/// <summary>A test the impact map credits with executing a file.</summary>
+/// <param name="Spans">The executed method ranges, numbered as in the snapshot the unit was measured against.</param>
+/// <param name="SnapshotHash">Hash of the file's content when measured.</param>
+/// <param name="IsUnitCurrent">False when the unit's code changed and it awaits re-measurement.</param>
+internal sealed record ImpactExecutor(
+    string ProjectPath,
+    string TestFqn,
+    ImpactGranularity Granularity,
+    IReadOnlyList<LineSpan> Spans,
+    string SnapshotHash,
+    bool IsUnitCurrent);
 
 /// <summary>A recorded unit's identity and state.</summary>
 /// <param name="Tests">The tests credited with the unit's files.</param>

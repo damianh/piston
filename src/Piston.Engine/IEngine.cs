@@ -55,6 +55,12 @@ public interface IEngine : IDisposable
     Coverage.FileCoverageSnapshot? GetFileCoverage(string filePath) => null;
 
     /// <summary>
+    /// Returns the tests recorded as executing one source file (absolute, or relative to the solution directory), with
+    /// how precisely each was measured. Null when coverage is disabled or unsupported.
+    /// </summary>
+    IReadOnlyList<Coverage.CoveringTest>? GetCoveringTests(string filePath) => null;
+
+    /// <summary>
     /// Returns what a run triggered by changes to <paramref name="filePaths"/> (absolute, or relative to the solution
     /// directory) would build and test, without running anything or changing any state. Null when unsupported.
     /// </summary>

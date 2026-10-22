@@ -30,7 +30,7 @@
                     </span>
                 }
             }
-            <span class="text-gray-500" title="Coverage is merged over every test that ran. It does not say which test covered a line.">aggregate · not per test</span>
+            <span class="text-gray-500" title="Line marks merge every test that ran. Select a file to see which tests executed it, and how precisely each was measured.">aggregate line marks</span>
             <div class="flex-1"></div>
             <input type="search" placeholder="Filter files" aria-label="Filter files"
                    class="w-48 px-2 py-0.5 rounded bg-gray-950 border border-gray-700 text-gray-200 placeholder:text-gray-500 focus:outline-none focus:border-blue-500"
@@ -112,9 +112,12 @@
                             {
                                 var number = i + 1;
                                 var line = _lines.GetValueOrDefault(number);
-                                <div class="flex @LineTint(line)" title="@LineTitle(line)">
+                                var picked = number == _selectedLine;
+                                <div class="flex @LineTint(line) @(picked ? "ring-1 ring-inset ring-blue-500/70" : "")" title="@LineTitle(line)">
                                     <span class="w-1 shrink-0 @GutterColor(line)" aria-hidden="true"></span>
-                                    <span class="w-12 pr-2 text-right text-gray-500 select-none shrink-0 tabular-nums">@number</span>
+                                    <button type="button" class="w-12 pr-2 text-right select-none shrink-0 tabular-nums @(picked ? "text-blue-300" : "text-gray-500 hover:text-gray-200")"
+                                            title="Show the tests that executed line @number" aria-pressed="@(picked ? "true" : "false")"
+                                            @onclick="() => PickLine(number)">@number</button>
                                     <span class="w-10 pr-2 text-right text-gray-500 select-none shrink-0 tabular-nums">@HitText(line)</span>
                                     <span class="whitespace-pre text-gray-200 pr-4">@source[i]</span>
                                 </div>
@@ -125,6 +128,7 @@
                             <div class="text-gray-600 italic px-4 py-2">Source unavailable (file missing or too large).</div>
                         }
                     </div>
+                    @RenderCoveringTests()
                 }
             </div>
         </div>
@@ -144,6 +148,12 @@
     private string? _selectedPath;
     private FileCoverageDto? _file;
     private Dictionary<int, CoverageLineDto> _lines = [];
+    private CoveringTestsDto? _covering;
+    private int? _selectedLine;
+    private bool _backfilling;
+
+    /// <summary>Opens a test, by fully-qualified name, in the Tests tab.</summary>
+    [Parameter] public EventCallback<string> OnOpenTest { get; set; }
 
     protected override async Task OnInitializedAsync()
     {
@@ -161,14 +171,17 @@
         _coverageEnabled = snapshot.CoverageEnabled;
         _lastRunTime = snapshot.LastRunTime;
         _lastChangeTime = snapshot.LastFileChangeTime;
+        _backfilling = snapshot.ImpactBackfill is not null;
     }
 
     private void OnStateChanged(StateSnapshotNotification snapshot)
     {
         // Reload after a run finishes (new data) or a file changes (staleness).
+        // A finished backfill pass refines which tests executed the selected file.
         var changed = snapshot.CoverageEnabled != _coverageEnabled
             || snapshot.LastRunTime != _lastRunTime
-            || snapshot.LastFileChangeTime != _lastChangeTime;
+            || snapshot.LastFileChangeTime != _lastChangeTime
+            || (_backfilling && snapshot.ImpactBackfill is null);
         Capture(snapshot);
         if (changed)
         {
@@ -203,12 +216,17 @@
         _selectedPath = path;
         _file = null;
         _lines = [];
+        _covering = null;
+        _selectedLine = null;
         await LoadFileAsync(path);
     }
 
     private async Task LoadFileAsync(string path)
     {
-        var file = await Client.GetFileCoverageAsync(path, includeSource: true);
+        var fileTask = Client.GetFileCoverageAsync(path, includeSource: true);
+        var coveringTask = Client.GetCoveringTestsAsync(path);
+        var file = await fileTask;
+        var covering = await coveringTask;
         if (_selectedPath != path)
         {
             return;
@@ -216,7 +234,93 @@
 
         _file = file;
         _lines = file?.Lines.ToDictionary(l => l.LineNumber) ?? [];
+        _covering = covering;
     }
+
+    private void PickLine(int number) => _selectedLine = _selectedLine == number ? null : number;
+
+    private static readonly string[] Granularities = ["test", "class", "run"];
+
+    private static int Rank(string granularity) => Array.IndexOf(Granularities, granularity) is var i and >= 0 ? i : Granularities.Length;
+
+    private static string ShortTestName(string fqn)
+    {
+        var paren = fqn.IndexOf('(', StringComparison.Ordinal);
+        var head = paren < 0 ? fqn : fqn[..paren];
+        var parts = head.Split('.');
+        return string.Join('.', parts.TakeLast(2)) + (paren < 0 ? "" : fqn[paren..]);
+    }
+
+    private RenderFragment RenderCoveringTests() =>
+        @<text>
+            @{
+                var all = _covering?.Tests ?? [];
+                var shown = _selectedLine is { } pickedLine
+                    ? all.Where(t => t.ExecutedLines.Any(r => r.Start <= pickedLine && pickedLine <= r.End)).ToList()
+                    : all.ToList();
+                shown = [.. shown.OrderBy(t => Rank(t.Granularity)).ThenBy(t => t.TestFqn, StringComparer.Ordinal)];
+                var counts = shown.GroupBy(t => t.Granularity).ToDictionary(g => g.Key, g => g.Count());
+            }
+            <section class="flex flex-col shrink-0 max-h-[40%] min-h-0 border-t border-gray-800" aria-label="Tests that executed this file">
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5 shrink-0 select-none">
+                    <span class="text-gray-200 font-semibold">
+                        @(_selectedLine is { } line ? $"Tests that executed line {line}" : "Tests that executed this file")
+                    </span>
+                    @if (_covering is not null)
+                    {
+                        <span class="text-gray-400 tabular-nums">@shown.Count</span>
+                        @foreach (var granularity in Granularities.Where(counts.ContainsKey))
+                        {
+                            <span class="flex items-center gap-1 text-gray-500 tabular-nums">
+                                <GranularityBadge Granularity="@granularity" />@counts[granularity]
+                            </span>
+                        }
+                    }
+                    @if (_selectedLine is not null)
+                    {
+                        <button type="button" class="text-gray-400 underline decoration-gray-600 underline-offset-2 hover:text-gray-100"
+                                @onclick="() => _selectedLine = null">whole file</button>
+                    }
+                    else if (all.Count > 0)
+                    {
+                        <span class="text-gray-500">Click a line number to narrow to one line.</span>
+                    }
+                </div>
+                <div class="flex-1 min-h-0 overflow-y-auto pb-1">
+                    @if (_covering is null)
+                    {
+                        <div class="text-gray-600 italic px-4 py-1">Loading…</div>
+                    }
+                    else if (all.Count == 0)
+                    {
+                        <div class="text-gray-600 italic px-4 py-1">
+                            No test is recorded as executing this file yet. Each coverage run records what its tests executed,
+                            and while idle Piston measures each test class on its own.
+                        </div>
+                    }
+                    else if (shown.Count == 0)
+                    {
+                        <div class="text-gray-600 italic px-4 py-1">No recorded test executed this line.</div>
+                    }
+                    else
+                    {
+                        foreach (var test in shown)
+                        {
+                            <button type="button" class="flex items-center gap-2 w-full px-4 py-0.5 text-left text-gray-300 hover:bg-gray-800/50"
+                                    title="@test.TestFqn" @onclick="() => OnOpenTest.InvokeAsync(test.TestFqn)">
+                                <GranularityBadge Granularity="@test.Granularity" />
+                                <span class="min-w-0 truncate">@ShortTestName(test.TestFqn)</span>
+                                <span class="shrink-0 text-gray-500">@Path.GetFileNameWithoutExtension(test.ProjectPath)</span>
+                                @if (!test.IsCurrent)
+                                {
+                                    <span class="shrink-0 text-yellow-400" title="The file or the test's code changed since this was measured; the line ranges may be out of place">outdated</span>
+                                }
+                            </button>
+                        }
+                    }
+                </div>
+            </section>
+        </text>;
 
     private bool Filtering => !string.IsNullOrWhiteSpace(_filter);
 

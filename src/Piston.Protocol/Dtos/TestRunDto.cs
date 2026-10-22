@@ -30,6 +30,8 @@ public sealed record TestRunAdmissionDto(
 /// Provenance metadata for a single test run. Enum-like fields are strings so new values can be
 /// added without breaking older clients. Per-test results are available through the MCP
 /// <c>GetTestRun</c> tool; suites in snapshots carry <see cref="TestSuiteDto.RunId"/>.
+/// <see cref="SelectionExplanation"/> says why the run has its scope; <see cref="SelectionReasons"/> says why each
+/// test was selected when the impact map narrowed the run by changed lines.
 /// </summary>
 public sealed record TestRunDto(
     string RunId,
@@ -58,5 +60,7 @@ public sealed record TestRunDto(
     int Skipped,
     int DuplicateTestCount,
     TestRunAdmissionDto? Admission = null,
-    BuildResultDto? Build = null
+    BuildResultDto? Build = null,
+    string? SelectionExplanation = null,
+    IReadOnlyDictionary<string, IReadOnlyList<TestSelectionReasonDto>>? SelectionReasons = null
 );

@@ -89,6 +89,40 @@ public sealed class CoverageCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task GetCoveringTests_ReturnsEachTestWithItsGranularityAndLines()
+    {
+        var engine = new StubEngine();
+        engine.CoveringTests["A.cs"] =
+        [
+            new CoveringTest("T.A.One", "/t/T.csproj", "class", [new CoveredLineRange(3, 5)], IsCurrent: true),
+            new CoveringTest("T.B.One", "/t/T.csproj", "run", [], IsCurrent: false),
+        ];
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var result = await dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageGetCoveringTests, JsonNode.Parse("""{"filePath":"A.cs"}"""), _ct);
+
+        var tests = result!["tests"]!.AsArray();
+        Assert.Equal(["T.A.One", "T.B.One"], tests.Select(t => t!["testFqn"]!.GetValue<string>()));
+        Assert.Equal("class", tests[0]!["granularity"]!.GetValue<string>());
+        Assert.Equal(5, tests[0]!["executedLines"]![0]!["end"]!.GetValue<int>());
+        Assert.False(tests[1]!["isCurrent"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task GetCoveringTests_NoPathOrNoRecording_ReturnsNoTests()
+    {
+        var dispatcher = new EngineCommandDispatcher(new StubEngine());
+
+        var missing = await dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageGetCoveringTests, JsonNode.Parse("""{"filePath":"B.cs"}"""), _ct);
+        var empty = await dispatcher.HandleCommandAsync(ProtocolMethods.CoverageGetCoveringTests, null, _ct);
+
+        Assert.Empty(missing!["tests"]!.AsArray());
+        Assert.Empty(empty!["tests"]!.AsArray());
+    }
+
+    [Fact]
     public async Task Export_ReturnsLcovContent()
     {
         var engine = new StubEngine();

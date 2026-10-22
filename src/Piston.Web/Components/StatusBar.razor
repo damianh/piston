@@ -77,6 +77,14 @@
             </span>
         }
 
+        @if (Snapshot.ImpactBackfill is null
+            && phase is PistonPhaseDto.Watching or PistonPhaseDto.Idle
+            && Snapshot.LastRun is { } lastRun
+            && ScopeLabel(lastRun) is { } scope)
+        {
+            <span class="min-w-0 truncate" title="@(lastRun.SelectionExplanation ?? "Why the last run had this scope")">last run: @scope</span>
+        }
+
         var suites = phase == PistonPhaseDto.Testing
             ? TestTreeBuilder.WithLiveOverlay(Snapshot.Suites, Snapshot.InProgressSuites)
             : Snapshot.Suites;
@@ -135,6 +143,17 @@
     }
 
     public void Dispose() => Client.StateChanged -= OnStateChanged;
+
+    private static string Count(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
+
+    private static string? ScopeLabel(TestRunDto run) => run switch
+    {
+        { SelectionReasons.Count: > 0 } => $"{Count(run.SelectionReasons.Count, "test")} by changed lines",
+        { IsFullScope: true } => "every test",
+        { Scope: "Selective", TestProjects: { } projects } => $"{Count(projects.Count, "project")}{(run.IsFiltered ? ", filtered" : "")}",
+        { IsFiltered: true } => "filtered",
+        _ => null,
+    };
 
     private static List<string> RunningProjects(StateSnapshotNotification snapshot) =>
         snapshot.ProjectStatuses?
