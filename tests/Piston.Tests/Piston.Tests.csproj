@@ -22,6 +22,7 @@
   <ItemGroup>
     <Compile Include="..\..\src\Piston.Web\Models\AssertionDiff.cs" Link="Web\AssertionDiff.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\DashboardStatus.cs" Link="Web\DashboardStatus.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\TestNode.cs" Link="Web\TestNode.cs" />
   </ItemGroup>
 
 </Project>

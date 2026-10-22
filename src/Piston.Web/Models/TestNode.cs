@@ -53,6 +53,26 @@ public sealed class TestNode
         }
     }
 
+    /// <summary>How many of the tests under this node there are, and how many passed and failed.</summary>
+    public NodeCounts Counts()
+    {
+        int total = 0, passed = 0, failed = 0;
+        foreach (var test in Tests())
+        {
+            total++;
+            if (test.Status == TestStatusDto.Passed)
+            {
+                passed++;
+            }
+            else if (test.Status == TestStatusDto.Failed)
+            {
+                failed++;
+            }
+        }
+
+        return new(total, passed, failed);
+    }
+
     /// <summary>The node with <paramref name="expansionKey"/> in <paramref name="nodes"/> or their descendants.</summary>
     public static TestNode? Find(IEnumerable<TestNode> nodes, string expansionKey)
     {
@@ -71,6 +91,14 @@ public sealed class TestNode
 
         return null;
     }
+}
+
+/// <summary>Result counts for the tests under a tree node.</summary>
+public readonly record struct NodeCounts(int Total, int Passed, int Failed)
+{
+    /// <summary>A description for screen readers and tooltips, e.g. <c>12 tests: 10 passed, 2 failed</c>.</summary>
+    public string Description =>
+        $"{Total:N0} {(Total == 1 ? "test" : "tests")}: {Passed:N0} passed, {Failed:N0} failed";
 }
 
 public enum TestNodeKind

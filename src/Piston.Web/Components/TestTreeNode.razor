@@ -8,6 +8,8 @@
         ? Node.Test?.Key == SelectedKey
         : Node.ExpansionKey is { } key && key == SelectedNodeKey;
     var isPinned = isTest && Node.Test is not null && PinnedFqns.Contains(Node.Test.FullyQualifiedName);
+    // Status groups already show their count in the label.
+    NodeCounts? counts = isTest || Node.Structure == NodeStructure.Status ? null : Node.Counts();
 }
 
 <div>
@@ -53,6 +55,23 @@
         </span>
 
         <FrameworkBadge Framework="@Node.Framework" />
+
+        <!-- Result counts for group nodes: total, passed, failed -->
+        @if (counts is { Total: > 0 } c)
+        {
+            <span class="flex items-center gap-1.5 ml-2 text-xs tabular-nums" title="@c.Description">
+                <span class="sr-only">@c.Description</span>
+                <span class="text-gray-500" aria-hidden="true">@c.Total.ToString("N0")</span>
+                @if (c.Passed > 0)
+                {
+                    <span class="text-green-400" aria-hidden="true">✓@c.Passed.ToString("N0")</span>
+                }
+                @if (c.Failed > 0)
+                {
+                    <span class="text-red-400" aria-hidden="true">✗@c.Failed.ToString("N0")</span>
+                }
+            </span>
+        }
 
         <!-- Duration for test nodes -->
         @if (Node.Kind == TestNodeKind.Test && Node.Test?.DurationMs > 0 && Node.Test.Status != TestStatusDto.Running)
