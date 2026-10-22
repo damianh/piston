@@ -1,4 +1,5 @@
 @inject EngineClientService Client
+@inject ViewState View
 @implements IDisposable
 
 <div class="flex flex-col h-full overflow-hidden text-xs">
@@ -34,6 +35,20 @@
             <input type="search" placeholder="Filter files" aria-label="Filter files"
                    class="w-48 px-2 py-0.5 rounded bg-gray-950 border border-gray-700 text-gray-200 placeholder:text-gray-500 focus:outline-none focus:border-blue-500"
                    value="@_filter" @oninput="e => _filter = e.Value?.ToString()" />
+            <select class="px-1.5 py-0.5 rounded bg-gray-950 border border-gray-700 text-gray-200 focus:outline-none focus:border-blue-500"
+                    title="Group files by" aria-label="Group files by"
+                    value="@View.CoverageGrouping" @onchange="ChangeGrouping">
+                <option value="@CoverageGrouping.Module">By module</option>
+                <option value="@CoverageGrouping.Folder">By folder</option>
+                <option value="@CoverageGrouping.Flat">Flat list</option>
+            </select>
+            @if (View.CoverageGrouping != CoverageGrouping.Flat)
+            {
+                var anyCollapsed = AnyCollapsed();
+                <button class="px-2 py-0.5 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800/50"
+                        title="@(anyCollapsed ? "Expand all groups" : "Collapse all groups")"
+                        @onclick="ToggleAll">@(anyCollapsed ? "Expand all" : "Collapse all")</button>
+            }
             <div class="flex items-center gap-0.5" role="group" aria-label="Sort files">
                 @foreach (var (sort, label) in new[] { (CoverageSort.Path, "Path"), (CoverageSort.Uncovered, "Most uncovered") })
                 {
@@ -50,7 +65,7 @@
 
         <div class="flex flex-1 min-h-0 overflow-hidden">
             <!-- File list -->
-            <div class="flex flex-col min-h-0 overflow-y-auto border-r border-gray-800 py-1" style="flex: 0 0 40%" role="listbox" aria-label="Measured files">
+            <div class="flex flex-col min-h-0 overflow-y-auto border-r border-gray-800 py-1" style="flex: 0 0 40%" aria-label="Measured files">
                 @if (_summary is null)
                 {
                     <div class="text-gray-600 italic px-4 py-4">Loading…</div>
@@ -61,38 +76,7 @@
                 }
                 else
                 {
-                    @foreach (var module in VisibleModules())
-                    {
-                        <div class="flex items-center gap-2 px-3 pt-2 pb-0.5 text-gray-400 font-semibold">
-                            <span class="flex-1 truncate">@module.Name</span>
-                            <span class="tabular-nums font-normal text-gray-500">@Percent(module.Covered, module.Total)</span>
-                        </div>
-                        @foreach (var file in module.Files)
-                        {
-                            var selected = file.FilePath == _selectedPath;
-                            <button type="button" role="option" aria-selected="@(selected ? "true" : "false")"
-                                    class="flex items-center gap-2 w-full px-3 py-0.5 text-left @(selected ? "bg-gray-800 text-gray-100" : "text-gray-300 hover:bg-gray-800/50")"
-                                    title="@file.RelativePath" @onclick="() => SelectFileAsync(file.FilePath)">
-                                <span class="flex-1 min-w-0 truncate">
-                                    @{ var (dir, name) = SplitPath(file.RelativePath); }
-                                    <span>@name</span>
-                                    <span class="ml-1 text-gray-500">@dir</span>
-                                </span>
-                                @if (file.IsStale)
-                                {
-                                    <span class="text-yellow-400 shrink-0" title="Changed since it was measured">stale</span>
-                                }
-                                else if (file.IsPartial)
-                                {
-                                    <span class="text-gray-500 shrink-0" title="Measured by a selective run, not a full run of every test">partial</span>
-                                }
-                                <span class="w-16 h-1.5 rounded-sm bg-red-400/40 overflow-hidden shrink-0" aria-hidden="true">
-                                    <span class="block h-full bg-green-400" style="width: @(Ratio(file.LinesCovered, file.LinesTotal))%"></span>
-                                </span>
-                                <span class="w-12 text-right tabular-nums shrink-0 @PercentColor(file.LinesCovered, file.LinesTotal)">@Percent(file.LinesCovered, file.LinesTotal)</span>
-                            </button>
-                        }
-                    }
+                    @RenderGroup(BuildTree(), -1)
                 }
             </div>
 
@@ -149,8 +133,6 @@
 
 @code {
     private enum CoverageSort { Path, Uncovered }
-
-    private sealed record ModuleGroup(string Name, int Covered, int Total, List<CoverageFileSummaryDto> Files);
 
     private bool _coverageEnabled;
     private DateTimeOffset? _lastRunTime;
@@ -236,21 +218,127 @@
         _lines = file?.Lines.ToDictionary(l => l.LineNumber) ?? [];
     }
 
-    private IEnumerable<ModuleGroup> VisibleModules()
+    private bool Filtering => !string.IsNullOrWhiteSpace(_filter);
+
+    private CoverageGroup BuildTree() => CoverageTreeBuilder.Build(
+        _summary!.Files.Where(f => !Filtering || f.RelativePath.Contains(_filter!.Trim(), StringComparison.OrdinalIgnoreCase)),
+        View.CoverageGrouping,
+        _sort == CoverageSort.Uncovered);
+
+    private string ExpansionKey(CoverageGroup group) => $"{View.CoverageGrouping}:{group.Key}";
+
+    // A filter shows every match, so groups open while it is set.
+    private bool IsExpanded(CoverageGroup group) =>
+        Filtering || !View.CollapsedCoverageGroups.Contains(ExpansionKey(group));
+
+    private void Toggle(CoverageGroup group)
     {
-        var files = _summary!.Files.Where(f => string.IsNullOrWhiteSpace(_filter)
-            || f.RelativePath.Contains(_filter.Trim(), StringComparison.OrdinalIgnoreCase));
-        return files
-            .GroupBy(f => f.Module ?? "(unknown)")
-            .Select(g =>
-            {
-                var sorted = _sort == CoverageSort.Uncovered
-                    ? g.OrderByDescending(f => f.LinesTotal - f.LinesCovered).ThenBy(f => f.RelativePath, StringComparer.Ordinal)
-                    : g.OrderBy(f => f.RelativePath, StringComparer.Ordinal);
-                return new ModuleGroup(g.Key, g.Sum(f => f.LinesCovered), g.Sum(f => f.LinesTotal), sorted.ToList());
-            })
-            .OrderBy(m => m.Name, StringComparer.Ordinal);
+        var key = ExpansionKey(group);
+        if (!View.CollapsedCoverageGroups.Remove(key))
+        {
+            _ = View.CollapsedCoverageGroups.Add(key);
+        }
     }
+
+    private static IEnumerable<CoverageGroup> Descendants(CoverageGroup group) =>
+        group.Groups.SelectMany(g => Descendants(g).Prepend(g));
+
+    private bool AnyCollapsed() =>
+        _summary is not null && Descendants(BuildTree()).Any(g => !IsExpanded(g));
+
+    private void ToggleAll()
+    {
+        var groups = Descendants(BuildTree()).Select(ExpansionKey).ToList();
+        if (AnyCollapsed())
+        {
+            View.CollapsedCoverageGroups.ExceptWith(groups);
+        }
+        else
+        {
+            View.CollapsedCoverageGroups.UnionWith(groups);
+        }
+    }
+
+    private void ChangeGrouping(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<CoverageGrouping>(e.Value?.ToString(), out var grouping))
+        {
+            View.CoverageGrouping = grouping;
+        }
+    }
+
+    private static string Indent(int depth) => $"padding-left: {12 + (Math.Max(depth, 0) * 14)}px";
+
+    // The root (depth -1) is not drawn; its groups and files start at depth 0.
+    private RenderFragment RenderGroup(CoverageGroup group, int depth) =>
+        @<text>
+            @if (depth >= 0)
+            {
+                var expanded = IsExpanded(group);
+                <button type="button" class="flex items-center gap-2 w-full pr-3 py-0.5 text-left text-gray-300 hover:bg-gray-800/50"
+                        style="@Indent(depth)" title="@group.Key" aria-expanded="@(expanded ? "true" : "false")"
+                        @onclick="() => Toggle(group)">
+                    <span class="w-3 shrink-0 text-center text-gray-500 select-none" aria-hidden="true">@(expanded ? "▾" : "▸")</span>
+                    <span class="flex-1 min-w-0 truncate">
+                        <span class="font-semibold">@group.Name</span>
+                        <span class="ml-1 text-gray-500 tabular-nums" title="Files">@group.FileCount</span>
+                    </span>
+                    <span class="w-16 h-1.5 rounded-sm bg-red-400/40 overflow-hidden shrink-0" aria-hidden="true">
+                        <span class="block h-full bg-green-400" style="width: @(Ratio(group.LinesCovered, group.LinesTotal))%"></span>
+                    </span>
+                    <span class="w-12 text-right tabular-nums shrink-0 @PercentColor(group.LinesCovered, group.LinesTotal)"
+                          title="@group.LinesCovered.ToString("N0")/@group.LinesTotal.ToString("N0") lines">@Percent(group.LinesCovered, group.LinesTotal)</span>
+                </button>
+            }
+            @if (depth < 0 || IsExpanded(group))
+            {
+                foreach (var child in group.Groups)
+                {
+                    @RenderGroup(child, depth + 1)
+                }
+
+                foreach (var file in group.Files)
+                {
+                    @RenderFile(file, depth + 1)
+                }
+            }
+        </text>;
+
+    private RenderFragment RenderFile(CoverageFileSummaryDto file, int depth) =>
+        @<text>
+            @{
+                var selected = file.FilePath == _selectedPath;
+                var (dir, name) = SplitPath(file.RelativePath);
+                var grouped = View.CoverageGrouping != CoverageGrouping.Flat;
+            }
+            <button type="button" aria-current="@(selected ? "true" : null)"
+                    class="flex items-center gap-2 w-full pr-3 py-0.5 text-left @(selected ? "bg-gray-800 text-gray-100" : "text-gray-300 hover:bg-gray-800/50")"
+                    style="@Indent(depth)" title="@file.RelativePath" @onclick="() => SelectFileAsync(file.FilePath)">
+                @if (grouped)
+                {
+                    <span class="w-3 shrink-0" aria-hidden="true"></span>
+                }
+                <span class="flex-1 min-w-0 truncate">
+                    <span>@name</span>
+                    @if (View.CoverageGrouping != CoverageGrouping.Folder)
+                    {
+                        <span class="ml-1 text-gray-500">@dir</span>
+                    }
+                </span>
+                @if (file.IsStale)
+                {
+                    <span class="text-yellow-400 shrink-0" title="Changed since it was measured">stale</span>
+                }
+                else if (file.IsPartial)
+                {
+                    <span class="text-gray-500 shrink-0" title="Measured by a selective run, not a full run of every test">partial</span>
+                }
+                <span class="w-16 h-1.5 rounded-sm bg-red-400/40 overflow-hidden shrink-0" aria-hidden="true">
+                    <span class="block h-full bg-green-400" style="width: @(Ratio(file.LinesCovered, file.LinesTotal))%"></span>
+                </span>
+                <span class="w-12 text-right tabular-nums shrink-0 @PercentColor(file.LinesCovered, file.LinesTotal)">@Percent(file.LinesCovered, file.LinesTotal)</span>
+            </button>
+        </text>;
 
     private static double Ratio(int covered, int total) =>
         total == 0 ? 100 : Math.Round(100.0 * covered / total, 1);

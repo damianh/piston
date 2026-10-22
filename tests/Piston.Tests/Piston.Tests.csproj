@@ -21,6 +21,7 @@
   <!-- Pure dashboard models; Piston.Web is a WebAssembly app, so they are compiled in rather than referenced -->
   <ItemGroup>
     <Compile Include="..\..\src\Piston.Web\Models\AssertionDiff.cs" Link="Web\AssertionDiff.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\CoverageTree.cs" Link="Web\CoverageTree.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\DashboardStatus.cs" Link="Web\DashboardStatus.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\TestNode.cs" Link="Web\TestNode.cs" />
   </ItemGroup>

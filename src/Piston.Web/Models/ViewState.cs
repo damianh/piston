@@ -31,6 +31,12 @@ public sealed class ViewState
     public bool IsNodeExpanded(string key) =>
         NodeExpansion.TryGetValue(key, out var expanded) ? expanded : TreeExpanded;
 
+    // ── Coverage tab ──
+    public CoverageGrouping CoverageGrouping { get; set; } = CoverageGrouping.Module;
+
+    /// <summary>Coverage groups the user collapsed, keyed by grouping and <see cref="CoverageGroup.Key"/>.</summary>
+    public HashSet<string> CollapsedCoverageGroups { get; } = new(StringComparer.Ordinal);
+
     // ── Pinned tests ──
     public HashSet<string> PinnedTestFqns { get; } = new(StringComparer.Ordinal);
 
