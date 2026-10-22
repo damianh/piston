@@ -86,6 +86,15 @@ public static class TestRunJson
                 ["other"] = tests.Count(t => t.Status is not (TestStatus.Passed or TestStatus.Failed or TestStatus.Skipped)),
             },
             ["duplicateTestIds"] = new JsonArray(run.DuplicateTestIds.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
+            ["failureClassifications"] = new JsonArray(run.FailureClassifications
+                .Select(c => (JsonNode)new JsonObject
+                {
+                    ["project"] = c.Project,
+                    ["test"] = c.Test,
+                    ["kind"] = c.Kind.ToString(),
+                    ["evidence"] = c.Evidence,
+                })
+                .ToArray()),
             ["possiblyHangingTests"] = new JsonArray(run.PossiblyHangingTests.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
             ["tests"] = testArray,
         };

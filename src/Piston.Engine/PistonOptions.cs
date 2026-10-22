@@ -109,6 +109,17 @@ public sealed class PistonOptions
     public string? ExecutionCoordinationDirectory { get; init; }
 
     /// <summary>
+    /// Keeps per-test run history outside the checkout and classifies failures as new, pre-existing or flaky.
+    /// Default is true.
+    /// </summary>
+    public bool HistoryEnabled { get; init; } = true;
+
+    /// <summary>
+    /// Absolute base directory of the run history. Null uses <c>PISTON_HISTORY_DIRECTORY</c> or the per-user default.
+    /// </summary>
+    public string? HistoryDirectory { get; init; }
+
+    /// <summary>
     /// Recorded in the worktree ownership details so tools can tell a <c>piston mcp</c> session from a daemon.
     /// </summary>
     public string? OwnerHost { get; init; }

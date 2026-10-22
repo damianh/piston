@@ -120,7 +120,7 @@ public sealed class McpStdioHostTests : IDisposable
         }, _ct);
         var client = await ConnectAsync();
 
-        foreach (var tool in new[] { "verify", "run_tests", "get_test_run", "get_test_results", "clear_results" })
+        foreach (var tool in new[] { "verify", "run_tests", "get_test_run", "get_test_results", "get_test_history", "clear_results" })
         {
             var (isError, text) = await CallAsync(client, tool);
             Assert.True(isError, tool);

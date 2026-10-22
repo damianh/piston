@@ -164,6 +164,7 @@ public static class HostHelpers
             ImpactBackfill = coverageEnabled ? impactBackfill : ImpactBackfillMode.Off,
             HangThreshold = hangThreshold,
             TestTimeout = testTimeout,
+            HistoryEnabled = config.History ?? true,
             ProcessPoolSize = processPoolSize,
             ProcessRecycleAfter = processRecycleAfter,
             TestExecutionMode = testExecutionMode,

@@ -43,6 +43,12 @@ public sealed class PistonConfig
     public string? TestTimeout { get; set; }
 
     /// <summary>
+    /// Keep per-test run history outside the checkout and classify failures as new, pre-existing or flaky.
+    /// Default true.
+    /// </summary>
+    public bool? History { get; set; }
+
+    /// <summary>
     /// Maximum number of concurrent <c>dotnet test</c> processes.
     /// 0 means auto-detect. Corresponds to the <c>--parallelism</c> CLI flag.
     /// </summary>

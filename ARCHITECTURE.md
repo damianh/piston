@@ -354,8 +354,27 @@ coverage indicator.
 
 The engine keeps test results, timings, and build state in memory. Coverage run
 IDs are seeded from the database, but they do not constitute test-run history.
-There is no implemented durable test-result/failure history, run-metadata table,
-preferences table, or graph cache. Coverage persistence alone is not full
+
+Run history (`RunHistoryStore`) is the durable test-result record. It is a JSON
+file outside the checkout, resolved by `HistoryLocation` as
+`<base>/<repository>-<hash>/<worktree>-<hash>/<solution>.history.json`. The
+repository is the git common directory, so linked worktrees share a folder but not
+a file. `<base>` is `PISTON_HISTORY_DIRECTORY` or `Piston/history` under local
+application data; a location inside the worktree is refused, because its writes
+would change the source fingerprint. The engine opens it after acquiring worktree
+ownership and holds an exclusive `.lock`; a second opener is read-only and never
+saves. `CompleteRun` records every finished run with passed, failed or skipped
+tests, classifies each failure against the earlier entries (`New`,
+`PreExisting`, `Flaky` or `Unknown`) and attaches the result to the
+`TestRunRecord` as `FailureClassifications`. A test is flaky only when it passed
+and failed on the same `SourceAfter` fingerprint, and only `Current` runs record a
+fingerprint. Saves are debounced and atomic (temp file then rename); each test
+keeps 20 entries, the file keeps 50 runs with per-test results and clipped errors,
+and tests unseen for 30 days are pruned. The file stores each project and test
+name once and runs in columns. A history failure is logged and never fails a run.
+`clear_results` does not clear history.
+
+There is no run-metadata table, preferences table, or graph cache. Coverage persistence alone is not full
 controller-state recovery. `.piston.json` is the actual optional configuration
 file; `.piston/config.json` and a user-global configuration hierarchy are not
 implemented. The engine also writes a diagnostic log under `.piston`.
@@ -372,8 +391,8 @@ excluded by a physical file provider.
 
 ## MCP behavior and limitations
 
-The MCP wire names are `run_tests`, `get_test_run`, `get_test_results`,
-`set_test_filter`, and `clear_results` (implemented by the corresponding
+The MCP wire names are `verify`, `run_tests`, `get_test_run`, `get_test_results`,
+`get_test_history`, `set_test_filter`, and `clear_results` (implemented by the corresponding
 PascalCase methods in `TestTools`). They use the same engine state and pipeline
 as other clients; MCP does not bypass builds or provide prewarmed test processes.
 

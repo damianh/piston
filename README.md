@@ -151,6 +151,7 @@ To set up a coding agent, follow [docs/agent-usage.md](docs/agent-usage.md). It 
 | `verify` | Get current full verification (optional `expectedSolution` guard; the reply names the `Solution:`). Reuses the latest run if it is a current, full-scope, unfiltered result for the present source fingerprint; otherwise awaits an active full run or forces one, retrying at most twice when the source changes mid-run, then reporting `Stale`. Returns a compact verdict (`Passed`, `TestsFailed`, `BuildFailed`, `Incomplete`, `Stale`, `Cancelled`, `Faulted`, `TimedOut`, `NotFullScope`) with run ID, fingerprint, counts, capped failing tests / build errors and queue info. Only `Passed` is proof. |
 | `run_tests` | Request a full build + test run; returns a textual summary plus a `Run:` line with the run ID, status, scope, freshness and source fingerprint. |
 | `get_test_run` | Read one run's solution path, provenance, build diagnostics and per-test results as JSON (`piston.test-run/v1`): `runId` = an ID, `latest` (default) or `active`. |
+| `get_test_history` | Recorded results of one test (`test`, optional `project`) across runs in this worktree, newest first, with run ID, time, status, duration and source fingerprint. Empty `test` lists flaky tests. See [Run history and failure classification](#run-history-and-failure-classification). |
 | `get_test_results` | Read current accumulated test results (may combine several runs; each suite shows its run ID). |
 | `set_test_filter` | Apply a test name filter. |
 | `get_coverage` | Line and branch coverage as JSON (`piston.coverage/v1`). Without `file`: solution and per-module totals plus the files with the most uncovered lines (`maxFiles`, default 50). With `file`: its totals and its uncovered and partly covered line ranges. Requires coverage. |
@@ -282,6 +283,7 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `impactBackfill` | `string` | With coverage, how finely to measure the impact map while idle: `"class"` (default), `"test"` or `"off"`. See [Coverage and impact selection](#coverage-and-impact-selection). |
 | `hangThreshold` | `string` | How long a test runs before it is reported as possibly hanging (default `60s`). See [Slow and hanging tests](#slow-and-hanging-tests). |
 | `testTimeout` | `string` | Per-test limit; off by default. See [Slow and hanging tests](#slow-and-hanging-tests). |
+| `history` | `bool` | Keep per-test run history and classify failures (default `true`). See [Run history and failure classification](#run-history-and-failure-classification). |
 | `parallelism` | `int` | Max concurrent test processes. `0` = auto: half the logical processor count, at least one. |
 | `processRecycleAfter` | `int` | Runs after which a pool slot logs a recycling warning (default 50). |
 | `pipeName` | `string` | Override the named pipe name. |
@@ -304,6 +306,28 @@ with `timedOutTest`. The run ends `Incomplete`, and its status reason names the 
 Durations are seconds (`90`) or a number with a unit (`500ms`, `30s`, `5m`, `1.5h`); `0` or `"off"` turns the setting
 off. Tests are timed from when the runner reports them started, so only runners that report running tests (MTP server
 mode and VSTest with Piston's live collector) can time them; elsewhere neither setting applies.
+
+### Run history and failure classification
+
+Piston records every finished run's per-test outcomes in a history file outside the checkout, so deleting a worktree
+or running `clear_results` keeps it. The file is
+`<base>/<repository>-<hash>/<worktree>-<hash>/<solution>.history.json`, where `<base>` is `PISTON_HISTORY_DIRECTORY`
+(an absolute path outside the worktree) or `Piston/history` under the per-user local application data folder
+(`~/.local/share` on Linux, `%LOCALAPPDATA%` on Windows). Worktrees of one repository share the repository folder and
+keep separate files, because branches differ. It keeps the last 20 results of each test, the last 50 runs with their
+per-test results and errors, and drops tests not run for 30 days. Only the daemon that owns the worktree writes it.
+
+Each failed test in a run is classified against that worktree's earlier results:
+
+- **new**: the test's previous recorded result was a pass;
+- **pre-existing**: it was already failing (the evidence names the first failing run and the last pass, if any);
+- **flaky**: within its recorded window it both passed and failed on the same source fingerprint. Only `Current`
+  runs carry a fingerprint, so an edit-break-fix loop is not mistaken for flakiness;
+- **unknown**: there is no earlier pass or fail. Missing history is not proof that a failure is new.
+
+`verify` lists failures with their class, new ones first, after a `Failure history:` count line.
+`get_test_run` includes `failureClassifications` (project, test, kind, evidence), and `get_test_history` shows the
+evidence. Set `"history": false` to turn this off.
 
 ### User settings
 

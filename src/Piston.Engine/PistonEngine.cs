@@ -3,6 +3,7 @@
 
 using Piston.Engine.Coverage;
 using Piston.Engine.Execution;
+using Piston.Engine.History;
 using Piston.Engine.Impact;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
@@ -21,7 +22,10 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     private readonly string _solutionDirectory;
     private readonly MachineExecutionCoordinator _executionCoordinator;
     private readonly string? _ownerHost;
+    private readonly bool _historyEnabled;
+    private readonly string? _historyDirectory;
     private WorktreeOwnership? _ownership;
+    private RunHistoryStore? _history;
 
     public PistonEngine(PistonOptions options)
         : this(options, NullActivityEventSink.Instance)
@@ -32,6 +36,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     {
         _activitySink = activitySink;
         _ownerHost = options.OwnerHost;
+        _historyEnabled = options.HistoryEnabled;
+        _historyDirectory = options.HistoryDirectory;
 
         // Register MSBuild before any Microsoft.Build.* types are loaded.
         // This must happen before MsBuildSolutionGraph (or any class referencing MSBuild) is JIT-compiled.
@@ -200,6 +206,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             $"budget: {budget.CpuSlots} CPU slot(s), memory {budget.MemoryMb?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "not budgeted"} ({budget.Source}); " +
             $"reservation: {_executionCoordinator.Reservation.CpuSlots} CPU slot(s), memory {_executionCoordinator.Reservation.MemoryMb?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}");
 
+        OpenHistory(solutionPath);
+
         try
         {
             if (beforeRunsStart is not null)
@@ -212,6 +220,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         catch
         {
             await _orchestrator.DisposeAsync().ConfigureAwait(false);
+            CloseHistory();
             _ownership.Dispose();
             _ownership = null;
             throw;
@@ -219,6 +228,44 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
         _activitySink.Emit(new SolutionLoadedActivityEvent(solutionPath, 0));
     }
+
+    // Only the worktree owner writes history; a failure to open it leaves the engine without history.
+    private void OpenHistory(string solutionPath)
+    {
+        if (!_historyEnabled)
+        {
+            return;
+        }
+
+        try
+        {
+            _history = RunHistoryStore.Open(
+                _historyDirectory ?? HistoryLocation.DefaultBaseDirectory(),
+                solutionPath,
+                message => _diagnosticLog.Write("History", message));
+            _orchestrator.RunHistory = _history;
+            _diagnosticLog.Write("History", $"Run history: {_history.Location.FilePath}{(_history.ReadOnly ? " (read-only)" : "")}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ExecutionCoordinationException)
+        {
+            _diagnosticLog.Write("History", $"Run history is off: {ex.Message}");
+        }
+    }
+
+    private void CloseHistory()
+    {
+        _orchestrator.RunHistory = null;
+        _history?.Dispose();
+        _history = null;
+    }
+
+    public IReadOnlyList<TestHistory>? GetTestHistory(string test, string? project = null) => _history?.GetTestHistory(test, project);
+
+    public IReadOnlyList<TestHistory>? GetFlakyTests() => _history?.GetFlakyTests();
+
+    public IReadOnlyList<StoredRunSummary>? GetStoredRuns() => _history?.GetRuns();
+
+    public StoredRun? GetStoredRun(string runId) => _history?.GetRun(runId);
 
     public Task ForceRunAsync() => _orchestrator.ForceRunAsync();
 
@@ -276,6 +323,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await _orchestrator.DisposeAsync().ConfigureAwait(false);
+        CloseHistory();
         _coverageStore?.Dispose();
         _pool.Dispose();
         // Released after the orchestrator so no run executes without ownership.

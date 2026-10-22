@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Coverage;
+using Piston.Engine.History;
 using Piston.Engine.Impact;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
@@ -24,6 +25,9 @@ public sealed partial class PistonOrchestrator
 
     /// <summary>How long a test runs before it is reported as possibly hanging; null turns the warning off.</summary>
     internal TimeSpan? HangThreshold { get; set; }
+
+    /// <summary>Persistent run history that classifies failures; null when history is off.</summary>
+    internal RunHistoryStore? RunHistory { get; set; }
 
     /// <summary>The clock that times running tests.</summary>
     internal TimeProvider RunningTestTime { get; set; } = TimeProvider.System;

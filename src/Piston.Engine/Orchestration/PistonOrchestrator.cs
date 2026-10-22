@@ -1701,6 +1701,22 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             FreshnessReason = freshnessReason,
         };
 
+        if (RunHistory is { } history)
+        {
+            try
+            {
+                var failures = history.Record(finished);
+                if (failures.Count > 0)
+                {
+                    finished = finished with { FailureClassifications = failures };
+                }
+            }
+            catch (Exception ex)
+            {
+                DiagnosticLog.Instance?.Write("History", $"Cannot record run {finished.RunId}: {ex.Message}");
+            }
+        }
+
         lock (_runRecordsLock)
         {
             if (_state.CurrentRun?.RunId == finished.RunId)

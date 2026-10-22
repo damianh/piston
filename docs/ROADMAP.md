@@ -247,6 +247,12 @@ real-agent experiments.
   suspected flaky, or unknown. Missing baseline evidence is not proof a failure
   is new.
 
+  Status: per-worktree run history is implemented in the daemon, before the hub
+  split. It is stored outside checkouts under a per-user directory grouped by
+  repository identity, and classifies failures against the worktree's own
+  earlier runs (flaky = passed and failed on the same source fingerprint). A
+  declared merge-base baseline in a Piston-managed worktree is still open.
+
 Source content alone cannot prove freshness or flakiness. Include SDK/runtime,
 target framework, build configuration, relevant inputs/environment, and selected
 tests; reject or mark results stale if inputs change during execution. Identical

@@ -178,6 +178,14 @@ Do not treat these as verification:
 
 `get_test_run("<runId>")` gives the full JSON record behind any reply.
 
+With `TestsFailed`, a `Failure history:` line counts the failures that are
+`new` (the test passed in its previous recorded run in this worktree),
+`pre-existing`, `flaky` (passed and failed on the same source) or `unknown`
+(no earlier result), and each failed test carries its class, new ones first.
+Fix new failures first; they are the ones your change most likely caused.
+`get_test_history("<test>")` shows a test's recorded results. A pre-existing
+or flaky failure is still a failure: it does not make the verdict a pass.
+
 A tool *error* (not a verdict) is also not a pass. Examples: ownership by another
 process, a deleted worktree, a startup failure, or a solution mismatch. On any of
 these, run `dotnet test` explicitly and say so. Do the same if the `piston` server

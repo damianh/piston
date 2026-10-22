@@ -20,6 +20,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
     public const string VerifyTool = "verify";
     public const string GetTestResultsTool = "get_test_results";
     public const string GetTestRunTool = "get_test_run";
+    public const string GetTestHistoryTool = "get_test_history";
     public const string SetTestFilterTool = "set_test_filter";
     public const string ClearResultsTool = "clear_results";
 
@@ -191,6 +192,50 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         var result = TestRunJson.Serialize(run);
         sw.Stop();
         recorder.Record(GetTestRunTool, runId, $"{run.RunId} {run.Status}", sw.Elapsed.TotalMilliseconds, true);
+        return result;
+    }
+
+    [McpServerTool(Name = GetTestHistoryTool), Description(
+        "Get the recorded results of a test across runs in this worktree (kept outside the checkout, up to the 20 most recent " +
+        "per test), newest first, with run ID, time, status, duration and source fingerprint. Use it to decide whether a " +
+        "failure is new, pre-existing or flaky. Pass a fully-qualified test name (a target framework suffix such as " +
+        "' [net10.0]' is optional); pass empty to list tests that passed and failed on the same source (flaky).")]
+    public string GetTestHistory(
+        [Description("Fully-qualified test name; empty lists flaky tests.")] string test = "",
+        [Description("Optional test project name to disambiguate.")] string? project = null)
+    {
+        availability?.ThrowIfUnavailable();
+        var sw = Stopwatch.StartNew();
+        var key = test?.Trim() ?? "";
+        var histories = key.Length == 0 ? engine.GetFlakyTests() : engine.GetTestHistory(key, string.IsNullOrWhiteSpace(project) ? null : project.Trim());
+        string result;
+        if (histories is null)
+        {
+            result = "Run history is off for this Piston (the history setting is false, or the history file could not be opened).";
+        }
+        else if (histories.Count == 0)
+        {
+            result = key.Length == 0 ? "No flaky tests are recorded." : $"No history is recorded for '{key}'.";
+        }
+        else
+        {
+            var sb = new StringBuilder();
+            foreach (var history in histories)
+            {
+                _ = sb.AppendLine($"{history.Project} :: {history.Test}{(history.Flaky ? " (flaky)" : "")}");
+                foreach (var entry in history.Runs.Reverse())
+                {
+                    var source = entry.Source is { } s ? s[..Math.Min(12, s.Length)] : "unknown source";
+                    _ = sb.AppendLine(System.FormattableString.Invariant(
+                        $"  {entry.At.UtcDateTime:yyyy-MM-dd HH:mm:ss}Z {entry.Status,-7} {entry.DurationMs,8:F0}ms run {entry.RunId} ({source})"));
+                }
+            }
+
+            result = sb.ToString().TrimEnd();
+        }
+
+        sw.Stop();
+        recorder.Record(GetTestHistoryTool, key, histories is null ? "history off" : $"{histories.Count} test(s)", sw.Elapsed.TotalMilliseconds, histories is not null);
         return result;
     }
 

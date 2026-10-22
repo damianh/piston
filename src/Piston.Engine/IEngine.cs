@@ -66,6 +66,21 @@ public interface IEngine : IDisposable
     /// </summary>
     Models.ImpactAnalysisResult? PlanAffected(IReadOnlyList<string> filePaths) => null;
 
+    /// <summary>
+    /// Recorded results of a test in this worktree's run history, matched by fully-qualified name. Null when
+    /// history is off or unsupported.
+    /// </summary>
+    IReadOnlyList<Models.TestHistory>? GetTestHistory(string test, string? project = null) => null;
+
+    /// <summary>Tests that passed and failed on the same source within their recorded history; null when history is off.</summary>
+    IReadOnlyList<Models.TestHistory>? GetFlakyTests() => null;
+
+    /// <summary>Summaries of the runs kept in the run history, newest first; null when history is off.</summary>
+    IReadOnlyList<Models.StoredRunSummary>? GetStoredRuns() => null;
+
+    /// <summary>A run kept in the run history with its per-test results; null when unknown or history is off.</summary>
+    Models.StoredRun? GetStoredRun(string runId) => null;
+
     // Configuration
     void SetFilter(string? filter);
     void ClearResults();

@@ -19,6 +19,19 @@ internal sealed class StubEngine : IEngine
     /// <summary>Run record published as the latest finished run when ForceRunAsync completes.</summary>
     public TestRunRecord? NextRun { get; set; }
 
+    /// <summary>Histories returned by the history queries; null means history is off.</summary>
+    public IReadOnlyList<TestHistory>? Histories { get; set; }
+
+    public string? LastHistoryProject { get; private set; }
+
+    public IReadOnlyList<TestHistory>? GetTestHistory(string test, string? project = null)
+    {
+        LastHistoryProject = project;
+        return Histories?.Where(h => h.Test == test || h.Test.StartsWith(test + " [", StringComparison.Ordinal)).ToList();
+    }
+
+    public IReadOnlyList<TestHistory>? GetFlakyTests() => Histories?.Where(h => h.Flaky).ToList();
+
     public Task StartAsync(string solutionPath)
     {
         State.SolutionPath = solutionPath;

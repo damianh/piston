@@ -61,8 +61,24 @@ internal static class VerificationReport
 
         if (result.Verdict is VerificationVerdict.TestsFailed)
         {
-            AppendList(sb, "Failed tests", tests.Where(t => t.Status == TestStatus.Failed).ToList(),
-                t => t.ErrorMessage is { } message ? $"{t.ResultKey}: {Cap(message)}" : t.ResultKey);
+            var kinds = run.FailureClassifications
+                .GroupBy(c => c.Test, StringComparer.Ordinal)
+                .ToDictionary(g => g.Key, g => g.First().Kind, StringComparer.Ordinal);
+            if (kinds.Count > 0)
+            {
+                _ = sb.AppendLine(DescribeFailureHistory(run.FailureClassifications));
+            }
+
+            FailureKind? KindOf(TestResult t) => kinds.TryGetValue(t.ResultKey, out var kind) ? kind : null;
+            AppendList(sb, "Failed tests", tests
+                    .Where(t => t.Status == TestStatus.Failed)
+                    .OrderBy(t => KindOrder(KindOf(t)))
+                    .ToList(),
+                t =>
+                {
+                    var tag = KindOf(t) is { } kind ? $" [{Label(kind)}]" : "";
+                    return t.ErrorMessage is { } message ? $"{t.ResultKey}{tag}: {Cap(message)}" : t.ResultKey + tag;
+                });
         }
 
         if (result.Verdict is VerificationVerdict.Incomplete)
@@ -89,6 +105,33 @@ internal static class VerificationReport
         _ = sb.Append($"Details: get_test_run(\"{run.RunId}\")");
         return sb.ToString();
     }
+
+    /// <summary>"Failure history: 2 new, 1 pre-existing, 0 flaky, 3 unknown (...)".</summary>
+    internal static string DescribeFailureHistory(IReadOnlyList<FailureClassification> classifications)
+    {
+        int Count(FailureKind kind) => classifications.Count(c => c.Kind == kind);
+        return $"Failure history: {Count(FailureKind.New)} new, {Count(FailureKind.PreExisting)} pre-existing, " +
+               $"{Count(FailureKind.Flaky)} flaky, {Count(FailureKind.Unknown)} unknown " +
+               "(new = passed in the previous run of the test in this worktree; flaky = passed and failed on the same source; " +
+               "get_test_history(test) shows the evidence)";
+    }
+
+    internal static string Label(FailureKind kind) => kind switch
+    {
+        FailureKind.New => "new",
+        FailureKind.PreExisting => "pre-existing",
+        FailureKind.Flaky => "flaky",
+        _ => "unknown history",
+    };
+
+    // New failures first: they are the ones the latest change most likely caused.
+    private static int KindOrder(FailureKind? kind) => kind switch
+    {
+        FailureKind.New => 0,
+        FailureKind.Unknown or null => 1,
+        FailureKind.Flaky => 2,
+        _ => 3,
+    };
 
     private static string NoResults(TestRunProjectOutcome project) =>
         project.NoTestsReason is { } reason ? $"no test results ({Cap(reason)})" : "no test results";

@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Piston.Engine.History;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
 using Piston.Engine.Services;
@@ -262,6 +263,33 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         Assert.Contains(second.Tests, t => t is { FullyQualifiedName: "B.Tests.Test1", Status: TestStatus.Failed });
         Assert.Same(first, _state.FindRun(first.RunId));
         Assert.All(_state.TestSuites, s => Assert.Equal(second.RunId, s.RunId));
+    }
+
+    [Fact]
+    public async Task FailureAfterAPassOnEditedSource_IsClassifiedNew_AndOnUnchangedSource_Flaky()
+    {
+        // History lives outside the checkout, as it does in production; its lock file would otherwise block fingerprinting.
+        var historyDirectory = _root + "-history";
+        using var history = RunHistoryStore.Open(historyDirectory, SolutionPath);
+        _orchestrator.RunHistory = history;
+        await StartAndWaitForStartupRunAsync();
+        Assert.Empty(_state.LastRun!.FailureClassifications);
+
+        File.WriteAllText(Path.Combine(_root, "Code.cs"), "class Code { int X; }");
+        _runner.FailingTest = "B.Tests.Test1";
+        var broken = await _orchestrator.RequestRunAsync();
+        _runner.FailingTest = null;
+        _ = await _orchestrator.RequestRunAsync();
+        _runner.FailingTest = "B.Tests.Test1";
+        var flaky = await _orchestrator.RequestRunAsync();
+
+        var classification = Assert.Single(broken!.FailureClassifications);
+        Assert.Equal(new FailureClassification("B.Tests", "B.Tests.Test1", FailureKind.New, classification.Evidence), classification);
+        Assert.Equal(FailureKind.Flaky, Assert.Single(flaky!.FailureClassifications).Kind);
+        Assert.Equal(4, history.GetRuns().Count);
+        _orchestrator.RunHistory = null;
+        history.Dispose();
+        Directory.Delete(historyDirectory, recursive: true);
     }
 
     [Fact]

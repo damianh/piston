@@ -56,6 +56,38 @@ public sealed class VerifyToolTests
     }
 
     [Fact]
+    public async Task TestsFailed_TagsFailuresWithHistoryAndListsNewOnesFirst()
+    {
+        var run = Run(tests: [Test("A.Old", TestStatus.Failed, "old"), Test("A.Unseen", TestStatus.Failed), Test("A.Broke", TestStatus.Failed, "new")]) with
+        {
+            FailureClassifications =
+            [
+                new("T", "A.Old", FailureKind.PreExisting, "failed in 3 runs"),
+                new("T", "A.Unseen", FailureKind.Unknown, "no earlier result"),
+                new("T", "A.Broke", FailureKind.New, "passed in run-6"),
+            ],
+        };
+
+        var text = await VerifyAsync(new(VerificationVerdict.TestsFailed, "3 test(s) failed.", VerificationSource.Forced, 1, run, Source));
+
+        Assert.Contains("Failure history: 1 new, 1 pre-existing, 0 flaky, 1 unknown", text);
+        var broke = text.IndexOf("  - A.Broke [new]: new", StringComparison.Ordinal);
+        var unseen = text.IndexOf("  - A.Unseen [unknown history]", StringComparison.Ordinal);
+        var old = text.IndexOf("  - A.Old [pre-existing]: old", StringComparison.Ordinal);
+        Assert.True(broke >= 0 && unseen > broke && old > unseen, text);
+    }
+
+    [Fact]
+    public async Task TestsFailed_WithoutHistory_HasNoHistoryLine()
+    {
+        var text = await VerifyAsync(new(VerificationVerdict.TestsFailed, "1 test(s) failed.", VerificationSource.Forced, 1,
+            Run(tests: [Test("A.Fail", TestStatus.Failed, "boom")]), Source));
+
+        Assert.DoesNotContain("Failure history", text);
+        Assert.Contains("  - A.Fail: boom", text);
+    }
+
+    [Fact]
     public async Task TestsFailed_ListsCappedFailures()
     {
         var failures = Enumerable.Range(0, 25)

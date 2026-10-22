@@ -201,6 +201,17 @@ public sealed class HostHelpersTests : IDisposable
         Assert.Equal(TimeSpan.FromMinutes(5), options.TestTimeout);
     }
 
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void HistoryIsOnUnlessConfiguredOff(bool? configured, bool expected)
+    {
+        var config = new Piston.Hosting.Configuration.PistonConfig { History = configured };
+
+        Assert.Equal(expected, HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config).HistoryEnabled);
+    }
+
     [Fact]
     public void InvalidTestTimeoutIsRejected()
     {

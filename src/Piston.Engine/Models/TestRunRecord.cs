@@ -228,6 +228,12 @@ public sealed record TestRunRecord
     /// <summary>Tests that ran longer than the hang threshold during this run.</summary>
     public IReadOnlyList<string> PossiblyHangingTests { get; init; } = [];
 
+    /// <summary>
+    /// How each failed test relates to the worktree's run history (new, pre-existing, flaky or unknown);
+    /// empty when history is off or nothing failed.
+    /// </summary>
+    public IReadOnlyList<FailureClassification> FailureClassifications { get; init; } = [];
+
     public string? RunnerError { get; init; }
 
     /// <summary>Machine-wide admission; null when the engine runs without machine coordination.</summary>
