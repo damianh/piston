@@ -13,6 +13,10 @@
         {
             <TestsTab KeyboardEvent="@KeyboardEvent" />
         }
+        else if (_activeTab == DashboardTab.Coverage)
+        {
+            <CoverageTab />
+        }
     </div>
 
     <StatusBar />

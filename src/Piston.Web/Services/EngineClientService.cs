@@ -357,6 +357,21 @@ public sealed class EngineClientService : IAsyncDisposable
         return result?.Deserialize<RunLogResponse>(JsonRpcSerializer.Options)?.Log;
     }
 
+    /// <summary>The solution-wide coverage report, or <see langword="null"/> when the daemon is unreachable.</summary>
+    public async Task<CoverageSummaryDto?> GetCoverageSummaryAsync()
+    {
+        var result = await SendRequestAsync(ProtocolMethods.CoverageGetSummary).ConfigureAwait(false);
+        return result?.Deserialize<CoverageSummaryDto>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>One file's line coverage, with its source text when <paramref name="includeSource"/> is set.</summary>
+    public async Task<FileCoverageDto?> GetFileCoverageAsync(string filePath, bool includeSource)
+    {
+        var result = await SendRequestAsync(ProtocolMethods.CoverageGetForFile, new GetFileCoverageCommand(filePath, includeSource))
+            .ConfigureAwait(false);
+        return result?.Deserialize<FileCoverageDto>(JsonRpcSerializer.Options);
+    }
+
     /// <summary>
     /// Merges the daemon's retained activity history into the local log so events that
     /// happened before this page connected (e.g. agent MCP calls) appear in the timeline.

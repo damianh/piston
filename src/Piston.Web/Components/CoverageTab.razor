@@ -1,0 +1,308 @@
+@inject EngineClientService Client
+@implements IDisposable
+
+<div class="flex flex-col h-full overflow-hidden text-xs">
+    @if (!_coverageEnabled)
+    {
+        <div class="p-6 text-gray-400 max-w-xl leading-relaxed">
+            <div class="text-gray-200 font-semibold mb-2">Coverage is off</div>
+            Start the daemon with <code class="font-mono text-gray-200">--coverage</code>, or set
+            <code class="font-mono text-gray-200">"coverageEnabled": true</code> in <code class="font-mono text-gray-200">.piston.json</code>,
+            to collect line and branch coverage on every run.
+        </div>
+    }
+    else
+    {
+        <!-- Totals, filter and downloads -->
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1.5 shrink-0 bg-gray-900 border-b border-gray-800 select-none">
+            @if (_summary is { } s)
+            {
+                <span class="text-gray-400">Lines <span class="text-gray-100 font-semibold tabular-nums">@Percent(s.LinesCovered, s.LinesTotal)</span>
+                    <span class="tabular-nums">(@s.LinesCovered.ToString("N0")/@s.LinesTotal.ToString("N0"))</span></span>
+                <span class="text-gray-400">Branches <span class="text-gray-100 font-semibold tabular-nums">@Percent(s.BranchesCovered, s.BranchesTotal)</span>
+                    <span class="tabular-nums">(@s.BranchesCovered.ToString("N0")/@s.BranchesTotal.ToString("N0"))</span></span>
+                <span class="text-gray-400"><span class="tabular-nums">@s.Files.Count.ToString("N0")</span> files</span>
+                @if (_staleCount > 0)
+                {
+                    <span class="text-yellow-400" title="Files changed since they were measured; their line data is out of date until the next run covers them">
+                        <span class="tabular-nums">@_staleCount</span> stale
+                    </span>
+                }
+            }
+            <span class="text-gray-500" title="Coverage is merged over every test that ran. It does not say which test covered a line.">aggregate · not per test</span>
+            <div class="flex-1"></div>
+            <input type="search" placeholder="Filter files" aria-label="Filter files"
+                   class="w-48 px-2 py-0.5 rounded bg-gray-950 border border-gray-700 text-gray-200 placeholder:text-gray-500 focus:outline-none focus:border-blue-500"
+                   value="@_filter" @oninput="e => _filter = e.Value?.ToString()" />
+            <div class="flex items-center gap-0.5" role="group" aria-label="Sort files">
+                @foreach (var (sort, label) in new[] { (CoverageSort.Path, "Path"), (CoverageSort.Uncovered, "Most uncovered") })
+                {
+                    var on = sort == _sort;
+                    <button class="px-2 py-0.5 rounded @(on ? "bg-gray-800 ring-1 ring-inset ring-gray-700 text-gray-100" : "text-gray-400 hover:text-gray-100 hover:bg-gray-800/50")"
+                            aria-pressed="@(on ? "true" : "false")" @onclick="() => _sort = sort">@label</button>
+                }
+            </div>
+            <span class="text-gray-500">Export
+                <a class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300" href="api/coverage/lcov" download>lcov</a>
+                <a class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300" href="api/coverage/cobertura" download>cobertura</a>
+            </span>
+        </div>
+
+        <div class="flex flex-1 min-h-0 overflow-hidden">
+            <!-- File list -->
+            <div class="flex flex-col min-h-0 overflow-y-auto border-r border-gray-800 py-1" style="flex: 0 0 40%" role="listbox" aria-label="Measured files">
+                @if (_summary is null)
+                {
+                    <div class="text-gray-600 italic px-4 py-4">Loading…</div>
+                }
+                else if (_summary.Files.Count == 0)
+                {
+                    <div class="text-gray-600 italic px-4 py-4">No coverage yet. It is collected on the next test run.</div>
+                }
+                else
+                {
+                    @foreach (var module in VisibleModules())
+                    {
+                        <div class="flex items-center gap-2 px-3 pt-2 pb-0.5 text-gray-400 font-semibold">
+                            <span class="flex-1 truncate">@module.Name</span>
+                            <span class="tabular-nums font-normal text-gray-500">@Percent(module.Covered, module.Total)</span>
+                        </div>
+                        @foreach (var file in module.Files)
+                        {
+                            var selected = file.FilePath == _selectedPath;
+                            <button type="button" role="option" aria-selected="@(selected ? "true" : "false")"
+                                    class="flex items-center gap-2 w-full px-3 py-0.5 text-left @(selected ? "bg-gray-800 text-gray-100" : "text-gray-300 hover:bg-gray-800/50")"
+                                    title="@file.RelativePath" @onclick="() => SelectFileAsync(file.FilePath)">
+                                <span class="flex-1 min-w-0 truncate">
+                                    @{ var (dir, name) = SplitPath(file.RelativePath); }
+                                    <span>@name</span>
+                                    <span class="ml-1 text-gray-500">@dir</span>
+                                </span>
+                                @if (file.IsStale)
+                                {
+                                    <span class="text-yellow-400 shrink-0" title="Changed since it was measured">stale</span>
+                                }
+                                else if (file.IsPartial)
+                                {
+                                    <span class="text-gray-500 shrink-0" title="Measured by a selective run, not a full run of every test">partial</span>
+                                }
+                                <span class="w-16 h-1.5 rounded-sm bg-red-400/40 overflow-hidden shrink-0" aria-hidden="true">
+                                    <span class="block h-full bg-green-400" style="width: @(Ratio(file.LinesCovered, file.LinesTotal))%"></span>
+                                </span>
+                                <span class="w-12 text-right tabular-nums shrink-0 @PercentColor(file.LinesCovered, file.LinesTotal)">@Percent(file.LinesCovered, file.LinesTotal)</span>
+                            </button>
+                        }
+                    }
+                }
+            </div>
+
+            <!-- Source with line coverage -->
+            <div class="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+                @if (_file is null)
+                {
+                    <div class="text-gray-600 italic px-4 py-4">@(_selectedPath is null ? "Select a file to see its line coverage." : "Loading…")</div>
+                }
+                else
+                {
+                    var sum = _file.Summary;
+                    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5 shrink-0 border-b border-gray-800">
+                        <span class="text-gray-200 font-semibold break-all">@(sum?.RelativePath ?? _file.FilePath)</span>
+                        @if (sum is not null)
+                        {
+                            <span class="text-gray-400">Lines <span class="text-gray-100 tabular-nums">@Percent(sum.LinesCovered, sum.LinesTotal)</span></span>
+                            <span class="text-gray-400">Branches <span class="text-gray-100 tabular-nums">@Percent(sum.BranchesCovered, sum.BranchesTotal)</span></span>
+                            @if (sum.Module is { } m)
+                            {
+                                <span class="text-gray-500">@m</span>
+                            }
+                            @if (sum.IsStale)
+                            {
+                                <span class="text-yellow-400">Changed since it was measured: line marks may be out of place until the next run.</span>
+                            }
+                        }
+                    </div>
+                    <div class="flex-1 min-h-0 overflow-auto font-mono text-[12px] leading-5 py-1">
+                        @if (_file.Source is { } source)
+                        {
+                            for (var i = 0; i < source.Count; i++)
+                            {
+                                var number = i + 1;
+                                var line = _lines.GetValueOrDefault(number);
+                                <div class="flex @LineTint(line)" title="@LineTitle(line)">
+                                    <span class="w-1 shrink-0 @GutterColor(line)" aria-hidden="true"></span>
+                                    <span class="w-12 pr-2 text-right text-gray-500 select-none shrink-0 tabular-nums">@number</span>
+                                    <span class="w-10 pr-2 text-right text-gray-500 select-none shrink-0 tabular-nums">@HitText(line)</span>
+                                    <span class="whitespace-pre text-gray-200 pr-4">@source[i]</span>
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <div class="text-gray-600 italic px-4 py-2">Source unavailable (file missing or too large).</div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private enum CoverageSort { Path, Uncovered }
+
+    private sealed record ModuleGroup(string Name, int Covered, int Total, List<CoverageFileSummaryDto> Files);
+
+    private bool _coverageEnabled;
+    private DateTimeOffset? _lastRunTime;
+    private DateTimeOffset? _lastChangeTime;
+    private CoverageSummaryDto? _summary;
+    private int _staleCount;
+    private string? _filter;
+    private CoverageSort _sort = CoverageSort.Path;
+    private string? _selectedPath;
+    private FileCoverageDto? _file;
+    private Dictionary<int, CoverageLineDto> _lines = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        Client.StateChanged += OnStateChanged;
+        if (Client.CurrentSnapshot is { } snapshot)
+        {
+            Capture(snapshot);
+        }
+
+        await RefreshAsync();
+    }
+
+    private void Capture(StateSnapshotNotification snapshot)
+    {
+        _coverageEnabled = snapshot.CoverageEnabled;
+        _lastRunTime = snapshot.LastRunTime;
+        _lastChangeTime = snapshot.LastFileChangeTime;
+    }
+
+    private void OnStateChanged(StateSnapshotNotification snapshot)
+    {
+        // Reload after a run finishes (new data) or a file changes (staleness).
+        var changed = snapshot.CoverageEnabled != _coverageEnabled
+            || snapshot.LastRunTime != _lastRunTime
+            || snapshot.LastFileChangeTime != _lastChangeTime;
+        Capture(snapshot);
+        if (changed)
+        {
+            _ = InvokeAsync(RefreshAsync);
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (!_coverageEnabled)
+        {
+            StateHasChanged();
+            return;
+        }
+
+        if (await Client.GetCoverageSummaryAsync() is { } summary)
+        {
+            _summary = summary;
+            _staleCount = summary.Files.Count(f => f.IsStale);
+        }
+
+        if (_selectedPath is not null)
+        {
+            await LoadFileAsync(_selectedPath);
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task SelectFileAsync(string path)
+    {
+        _selectedPath = path;
+        _file = null;
+        _lines = [];
+        await LoadFileAsync(path);
+    }
+
+    private async Task LoadFileAsync(string path)
+    {
+        var file = await Client.GetFileCoverageAsync(path, includeSource: true);
+        if (_selectedPath != path)
+        {
+            return;
+        }
+
+        _file = file;
+        _lines = file?.Lines.ToDictionary(l => l.LineNumber) ?? [];
+    }
+
+    private IEnumerable<ModuleGroup> VisibleModules()
+    {
+        var files = _summary!.Files.Where(f => string.IsNullOrWhiteSpace(_filter)
+            || f.RelativePath.Contains(_filter.Trim(), StringComparison.OrdinalIgnoreCase));
+        return files
+            .GroupBy(f => f.Module ?? "(unknown)")
+            .Select(g =>
+            {
+                var sorted = _sort == CoverageSort.Uncovered
+                    ? g.OrderByDescending(f => f.LinesTotal - f.LinesCovered).ThenBy(f => f.RelativePath, StringComparer.Ordinal)
+                    : g.OrderBy(f => f.RelativePath, StringComparer.Ordinal);
+                return new ModuleGroup(g.Key, g.Sum(f => f.LinesCovered), g.Sum(f => f.LinesTotal), sorted.ToList());
+            })
+            .OrderBy(m => m.Name, StringComparer.Ordinal);
+    }
+
+    private static double Ratio(int covered, int total) =>
+        total == 0 ? 100 : Math.Round(100.0 * covered / total, 1);
+
+    private static string Percent(int covered, int total) =>
+        total == 0 ? "–" : $"{Math.Floor(1000.0 * covered / total) / 10:0.0}%";
+
+    private static string PercentColor(int covered, int total) => total == 0
+        ? "text-gray-500"
+        : ((double)covered / total) switch
+        {
+            >= 0.8 => "text-green-400",
+            >= 0.5 => "text-yellow-400",
+            _ => "text-red-400",
+        };
+
+    private static string LineTint(CoverageLineDto? line) => line?.Status switch
+    {
+        "covered" => "bg-green-400/10",
+        "partial" => "bg-yellow-400/15",
+        "uncovered" => "bg-red-400/15",
+        _ => "",
+    };
+
+    private static string GutterColor(CoverageLineDto? line) => line?.Status switch
+    {
+        "covered" => "bg-green-400",
+        "partial" => "bg-yellow-400",
+        "uncovered" => "bg-red-400",
+        _ => "",
+    };
+
+    private static string HitText(CoverageLineDto? line) => line switch
+    {
+        null => "",
+        { HitCount: 0 } => "0",
+        { HitCount: > 999 } => "999+",
+        _ => $"{line.HitCount}×",
+    };
+
+    private static string? LineTitle(CoverageLineDto? line) => line switch
+    {
+        null => null,
+        { BranchesTotal: > 0 } => $"{line.HitCount} hit(s) · {line.BranchesCovered}/{line.BranchesTotal} branches",
+        _ => $"{line.HitCount} hit(s)",
+    };
+
+    public void Dispose() => Client.StateChanged -= OnStateChanged;
+
+    private static (string Directory, string Name) SplitPath(string path)
+    {
+        var slash = path.LastIndexOfAny(['/', '\\']);
+        return slash < 0 ? ("", path) : (path[..slash], path[(slash + 1)..]);
+    }
+}
