@@ -4,6 +4,7 @@
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Piston.Engine;
+using Piston.Engine.Services;
 using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
 using Piston.Protocol.JsonRpc;
@@ -144,6 +145,9 @@ public static class HostHelpers
                 $"Invalid 'impactBackfill' in .piston.json: expected \"class\", \"test\" or \"off\"; got \"{config.ImpactBackfill}\".");
         }
 
+        var hangThreshold = ParseDuration(config.HangThreshold, "hangThreshold", TimeSpan.FromSeconds(60));
+        var testTimeout = ParseDuration(config.TestTimeout, "testTimeout", null);
+
         var memoryReservationMb = config.Execution?.MemoryMb;
         if (memoryReservationMb is <= 0)
         {
@@ -158,12 +162,27 @@ public static class HostHelpers
             TestFilter = filter,
             CoverageEnabled = coverageEnabled,
             ImpactBackfill = coverageEnabled ? impactBackfill : ImpactBackfillMode.Off,
+            HangThreshold = hangThreshold,
+            TestTimeout = testTimeout,
             ProcessPoolSize = processPoolSize,
             ProcessRecycleAfter = processRecycleAfter,
             TestExecutionMode = testExecutionMode,
             ExecutionMemoryReservationMb = memoryReservationMb,
             OwnerHost = ownerHost,
         };
+    }
+
+    private static TimeSpan? ParseDuration(string? text, string key, TimeSpan? defaultValue)
+    {
+        if (text is null)
+        {
+            return defaultValue;
+        }
+
+        return Durations.TryParse(text, out var value)
+            ? value
+            : throw new InvalidOperationException(
+                $"Invalid '{key}' in .piston.json: expected seconds (90), a number with a unit (500ms, 30s, 5m, 1.5h), 0 or \"off\"; got \"{text}\".");
     }
 
     public static bool DotnetSdkAvailable()

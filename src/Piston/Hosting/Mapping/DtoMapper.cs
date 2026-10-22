@@ -69,6 +69,7 @@ public static class DtoMapper
         ProjectRunStatus.Completed => ProjectRunStatusDto.Completed,
         ProjectRunStatus.Failed => ProjectRunStatusDto.Failed,
         ProjectRunStatus.Crashed => ProjectRunStatusDto.Crashed,
+        ProjectRunStatus.TimedOut => ProjectRunStatusDto.TimedOut,
         _ => ProjectRunStatusDto.Pending,
     };
 
@@ -332,6 +333,9 @@ public static class DtoMapper
             LastBuiltProject: state.LastBuiltProject,
             ImpactBackfill: state.ImpactBackfill is { } backfill
                 ? new ImpactBackfillDto(backfill.Granularity, backfill.Completed, backfill.Total, backfill.CurrentUnit, backfill.ProjectPath)
+                : null,
+            LongestRunningTest: state.LongestRunningTest is { } running
+                ? new RunningTestDto(running.Name, running.ProjectPath, running.StartedAt, running.PossiblyHanging)
                 : null
         );
 

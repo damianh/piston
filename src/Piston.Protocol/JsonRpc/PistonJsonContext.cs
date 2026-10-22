@@ -44,6 +44,7 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(ProjectRunStatusDto))]
 [JsonSerializable(typeof(TestRunDto))]
 [JsonSerializable(typeof(ImpactBackfillDto))]
+[JsonSerializable(typeof(RunningTestDto))]
 [JsonSerializable(typeof(TestRunAdmissionDto))]
 [JsonSerializable(typeof(SourceFingerprintDto))]
 [JsonSerializable(typeof(ExecutionLogDto))]

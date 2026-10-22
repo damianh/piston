@@ -63,6 +63,23 @@
             </span>
         }
 
+        @if (phase == PistonPhaseDto.Testing && Snapshot.LongestRunningTest is { } longest)
+        {
+            var elapsed = TestNode.FormatDuration(Math.Max(0, (DateTimeOffset.UtcNow - longest.StartedAt).TotalMilliseconds));
+            var shortName = ShortTestName(longest.Name);
+            <span class="flex items-center gap-1.5 min-w-0 @(longest.PossiblyHanging ? "text-amber-400" : "text-gray-400")"
+                  data-testid="longest-running-test"
+                  title="@($"Running longest: {longest.Name}{Environment.NewLine}{Path.GetFileNameWithoutExtension(longest.ProjectPath)}{(longest.PossiblyHanging ? $"{Environment.NewLine}Running longer than the hang threshold: possibly hanging" : "")}")">
+                <span class="shrink-0">@(longest.PossiblyHanging ? "⚠" : "⏱")</span>
+                <span class="truncate">@shortName</span>
+                <span class="shrink-0 tabular-nums">@elapsed</span>
+                @if (longest.PossiblyHanging)
+                {
+                    <span class="shrink-0">possibly hanging</span>
+                }
+            </span>
+        }
+
         @if (Snapshot.ImpactBackfill is { } backfill)
         {
             var unit = backfill.CurrentUnit is { } key ? key[(key.LastIndexOf('.') + 1)..] : null;
@@ -130,10 +147,20 @@
 
     private StateSnapshotNotification? Snapshot { get; set; }
 
+    // Advances the longest-running test's elapsed time while no progress arrives (a hanging test sends none).
+    private Timer? _tick;
+
     protected override void OnInitialized()
     {
         Client.StateChanged += OnStateChanged;
         Snapshot = Client.CurrentSnapshot;
+        _tick = new Timer(_ =>
+        {
+            if (Snapshot?.LongestRunningTest is not null)
+            {
+                _ = InvokeAsync(StateHasChanged);
+            }
+        }, null, TimeSpan.FromSeconds(1), TimeSpan.FromSeconds(1));
     }
 
     private void OnStateChanged(StateSnapshotNotification snapshot)
@@ -142,7 +169,19 @@
         InvokeAsync(StateHasChanged);
     }
 
-    public void Dispose() => Client.StateChanged -= OnStateChanged;
+    public void Dispose()
+    {
+        Client.StateChanged -= OnStateChanged;
+        _tick?.Dispose();
+    }
+
+    // The method name (and arguments) of a fully qualified test name.
+    private static string ShortTestName(string name)
+    {
+        var args = name.IndexOf('(');
+        var dot = name.LastIndexOf('.', args < 0 ? name.Length - 1 : args);
+        return dot < 0 ? name : name[(dot + 1)..];
+    }
 
     private static string Count(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
 

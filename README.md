@@ -280,6 +280,8 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `testFilter` | `string` | Default filter passed to the selected test runner. |
 | `coverageEnabled` | `bool` | Request coverage collection (see `--coverage`). |
 | `impactBackfill` | `string` | With coverage, how finely to measure the impact map while idle: `"class"` (default), `"test"` or `"off"`. See [Coverage and impact selection](#coverage-and-impact-selection). |
+| `hangThreshold` | `string` | How long a test runs before it is reported as possibly hanging (default `60s`). See [Slow and hanging tests](#slow-and-hanging-tests). |
+| `testTimeout` | `string` | Per-test limit; off by default. See [Slow and hanging tests](#slow-and-hanging-tests). |
 | `parallelism` | `int` | Max concurrent test processes. `0` = auto: half the logical processor count, at least one. |
 | `processRecycleAfter` | `int` | Runs after which a pool slot logs a recycling warning (default 50). |
 | `pipeName` | `string` | Override the named pipe name. |
@@ -287,6 +289,21 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `mcpPort` | `int` | Port for the daemon's MCP server (default 5200). |
 | `testExecutionMode` | `string` | `"Auto"` and `"Process"` currently both route between MTP and VSTest. `"InProcess"` is not implemented and throws at startup. |
 | `execution.memoryMb` | `int` | Memory in MiB each run reserves from the machine execution budget (see [Worktree ownership and machine execution budget](#worktree-ownership-and-machine-execution-budget)). Must be positive; required when the budget sets `memoryMb`. A reservation, not a cap. |
+
+### Slow and hanging tests
+
+While tests run, the status bar shows the test that has been running longest and its elapsed time, and
+`get_test_results` reports it as `Longest running:`. After `hangThreshold` the test is marked **possibly hanging**,
+a warning goes to `.piston/diagnostics.log` once, and the run's `possiblyHangingTests` (in `get_test_run`) lists it.
+
+`testTimeout` is a per-test limit. When a test runs longer, Piston cancels that project's test process (other projects
+go on). The test fails with "Timed out after 30 s: the test ran longer than the test timeout (30 s).", the project's
+other unfinished tests are `NotRun`, its finished tests keep their results, and the project's outcome is `TimedOut`
+with `timedOutTest`. The run ends `Incomplete`, and its status reason names the test.
+
+Durations are seconds (`90`) or a number with a unit (`500ms`, `30s`, `5m`, `1.5h`); `0` or `"off"` turns the setting
+off. Tests are timed from when the runner reports them started, so only runners that report running tests (MTP server
+mode and VSTest with Piston's live collector) can time them; elsewhere neither setting applies.
 
 ### User settings
 

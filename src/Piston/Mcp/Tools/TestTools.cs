@@ -9,6 +9,7 @@ using ModelContextProtocol.Server;
 using Piston.Engine;
 using Piston.Engine.Execution;
 using Piston.Engine.Models;
+using Piston.Engine.Services;
 
 namespace Piston.Mcp.Tools;
 
@@ -118,6 +119,12 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         if (state.CurrentRun is { } active)
         {
             _ = sb.AppendLine($"Active {DescribeRun(active, includeCounts: false)}");
+        }
+
+        if (state.LongestRunningTest is { } running)
+        {
+            var elapsed = Durations.Format(DateTimeOffset.UtcNow - running.StartedAt);
+            _ = sb.AppendLine($"Longest running: {running.Name} ({elapsed}{(running.PossiblyHanging ? ", possibly hanging" : "")})");
         }
 
         _ = sb.AppendLine("Note: these aggregate results may combine several runs; use GetTestRun for run-bound provenance.");

@@ -1209,6 +1209,54 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
             var testStart = DateTimeOffset.UtcNow;
 
+            // Times running tests from live progress, for the longest-running test and the hang warning.
+            var runningClock = new RunningTestClock(RunningTestTime);
+            var possiblyHanging = new List<string>();
+
+            void CheckRunningTests()
+            {
+                RunningTest? longest = null;
+                List<(string ProjectPath, string Test, TimeSpan Elapsed)> newlyHanging = [];
+                lock (liveResultsLock)
+                {
+                    if (testPhaseOver)
+                    {
+                        return;
+                    }
+
+                    var running = runningClock.Running();
+                    foreach (var (projectPath, test, _, elapsed) in running)
+                    {
+                        if (HangThreshold is { } threshold && elapsed >= threshold && !possiblyHanging.Contains(test))
+                        {
+                            possiblyHanging.Add(test);
+                            newlyHanging.Add((projectPath, test, elapsed));
+                        }
+                    }
+
+                    if (running is [var first, ..])
+                    {
+                        longest = new RunningTest(first.Test, first.ProjectPath, first.StartedAt, possiblyHanging.Contains(first.Test));
+                    }
+                }
+
+                foreach (var (projectPath, test, elapsed) in newlyHanging)
+                {
+                    var message = $"{test} ({Path.GetFileNameWithoutExtension(projectPath)}) has been running for {Durations.Format(elapsed)} and may be hanging";
+                    log?.Write("Orchestrator", message);
+                    DiagnosticLog.Instance?.Write("Orchestrator", message);
+                }
+
+                if (longest != _state.LongestRunningTest)
+                {
+                    _state.LongestRunningTest = longest;
+                    _state.NotifyChanged();
+                }
+            }
+
+            using var runningWatch = RunningTestTime.CreateTimer(
+                _ => CheckRunningTests(), null, RunningTestCheckInterval, RunningTestCheckInterval);
+
             // Frequent updates (live progress, streamed discovery) recompose the overlay at most every
             // ProgressNotifyInterval; the trailing invocation guarantees the latest state is shown.
             using var throttledRefresh = new TrailingThrottle(
@@ -1265,13 +1313,20 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             });
 
             void OnProjectProgress(string projectPath, IReadOnlyList<TestSuite> liveSuites) =>
-                UpdateOverlay(() => liveByProject[projectPath] = liveSuites, throttle: true);
+                UpdateOverlay(() =>
+                {
+                    liveByProject[projectPath] = liveSuites;
+                    runningClock.Observe(projectPath, liveSuites);
+                }, throttle: true);
 
             void OnProjectCompleted(Models.ProjectTestResult result) => UpdateOverlay(() =>
             {
                 _state.CompletedTestProjects++;
+                runningClock.Clear(result.ProjectPath);
 
-                var projectStatus = result.Crashed
+                var projectStatus = result.TimedOut is not null
+                    ? Models.ProjectRunStatus.TimedOut
+                    : result.Crashed
                     ? Models.ProjectRunStatus.Crashed
                     : result.RunnerError is not null && result.Suites.Count == 0
                         ? Models.ProjectRunStatus.Failed
@@ -1284,7 +1339,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
                 var testCount = result.Suites.Sum(s => s.Tests.Count);
                 string? noTestsReason = null;
-                if (testCount == 0 && !filtered && !result.Crashed)
+                if (testCount == 0 && !filtered && !result.Crashed && result.TimedOut is null)
                 {
                     noTestsReason = NoTestsDiagnosis.Diagnose(_impactAnalyzer.GetTestProjectFacts(result.ProjectPath), result.Log);
                     DiagnosticLog.Instance?.Write("Orchestrator",
@@ -1292,7 +1347,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 }
 
                 projectOutcomes[result.ProjectPath] = new TestRunProjectOutcome(
-                    result.ProjectPath, projectStatus, testCount, noTestsReason);
+                    result.ProjectPath, projectStatus, testCount, noTestsReason, result.TimedOut);
 
                 if (result.Suites.Count > 0)
                 {
@@ -1340,6 +1395,12 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 lock (liveResultsLock)
                 {
                     testPhaseOver = true;
+                }
+
+                if (_state.LongestRunningTest is not null)
+                {
+                    _state.LongestRunningTest = null;
+                    _state.NotifyChanged();
                 }
 
                 await discoveryCts.CancelAsync().ConfigureAwait(false);
@@ -1470,9 +1531,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             }
 
             List<TestRunProjectOutcome> outcomes;
+            List<string> hangingTests;
             lock (liveResultsLock)
             {
                 outcomes = projectOutcomes.Values.ToList();
+                hangingTests = [.. possiblyHanging];
             }
 
             var duplicates = newSuites
@@ -1488,6 +1551,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 Suites = newSuites,
                 Projects = outcomes,
                 DuplicateTestIds = duplicates,
+                PossiblyHangingTests = hangingTests,
                 RunnerError = runnerError,
             };
 
@@ -1673,9 +1737,13 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         // A filter can legitimately select no tests in a project; filtered runs are never full scope anyway.
         var problems = outcomes
             .Where(o => o.Status != Models.ProjectRunStatus.Completed || (o.TestCount == 0 && !filtered))
-            .Select(o => $"{Path.GetFileNameWithoutExtension(o.ProjectPath)}: " +
-                (o.Status == Models.ProjectRunStatus.Completed ? "no test results" : o.Status.ToString()) +
-                (o.NoTestsReason is null ? "" : $" ({o.NoTestsReason})"))
+            .Select(o => $"{Path.GetFileNameWithoutExtension(o.ProjectPath)}: " + o.Status switch
+            {
+                Models.ProjectRunStatus.Completed => "no test results" + (o.NoTestsReason is null ? "" : $" ({o.NoTestsReason})"),
+                Models.ProjectRunStatus.TimedOut when o.TimedOut is { } timeout =>
+                    $"timed out ({timeout.Test} ran longer than the test timeout of {Durations.Format(timeout.Limit)})",
+                _ => o.Status.ToString(),
+            })
             .ToList();
 
         if (solutionTarget && suites.Count == 0 && !filtered)
@@ -1846,6 +1914,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     }
 
     private static readonly TimeSpan ProgressNotifyInterval = TimeSpan.FromMilliseconds(250);
+
 
     /// <summary>
     /// Builds the live test overlay shown while tests run. Starts from the last known results for the

@@ -71,6 +71,8 @@ public static class TestRunJson
                     ["status"] = p.Status.ToString(),
                     ["testCount"] = p.TestCount,
                     ["noTestsReason"] = p.NoTestsReason,
+                    ["timedOutTest"] = p.TimedOut?.Test,
+                    ["testTimeoutMs"] = p.TimedOut is { } timeout ? Math.Round(timeout.Limit.TotalMilliseconds, 3) : null,
                 })
                 .ToArray()),
             ["runnerError"] = run.RunnerError,
@@ -84,6 +86,7 @@ public static class TestRunJson
                 ["other"] = tests.Count(t => t.Status is not (TestStatus.Passed or TestStatus.Failed or TestStatus.Skipped)),
             },
             ["duplicateTestIds"] = new JsonArray(run.DuplicateTestIds.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
+            ["possiblyHangingTests"] = new JsonArray(run.PossiblyHangingTests.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
             ["tests"] = testArray,
         };
     }

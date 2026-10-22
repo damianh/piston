@@ -158,7 +158,13 @@ public sealed record TestRunAdmission(
 /// <param name="Status">How its run ended.</param>
 /// <param name="TestCount">The tests it reported.</param>
 /// <param name="NoTestsReason">Why an unfiltered run of the project reported no tests, when it reported none.</param>
-public sealed record TestRunProjectOutcome(string ProjectPath, ProjectRunStatus Status, int TestCount, string? NoTestsReason = null);
+/// <param name="TimedOut">The test that ran longer than the test timeout, when the project's run timed out.</param>
+public sealed record TestRunProjectOutcome(
+    string ProjectPath,
+    ProjectRunStatus Status,
+    int TestCount,
+    string? NoTestsReason = null,
+    TestTimeout? TimedOut = null);
 
 /// <summary>
 /// Provenance and results of exactly one test run. Unlike the aggregate
@@ -218,6 +224,9 @@ public sealed record TestRunRecord
 
     /// <summary>Fully-qualified names reported more than once by this run.</summary>
     public IReadOnlyList<string> DuplicateTestIds { get; init; } = [];
+
+    /// <summary>Tests that ran longer than the hang threshold during this run.</summary>
+    public IReadOnlyList<string> PossiblyHangingTests { get; init; } = [];
 
     public string? RunnerError { get; init; }
 

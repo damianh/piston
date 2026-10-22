@@ -22,6 +22,15 @@ public sealed partial class PistonOrchestrator
     /// <summary>The granularity measured when idle; null disables the backfill.</summary>
     internal ImpactGranularity? BackfillGranularity { get; set; }
 
+    /// <summary>How long a test runs before it is reported as possibly hanging; null turns the warning off.</summary>
+    internal TimeSpan? HangThreshold { get; set; }
+
+    /// <summary>The clock that times running tests.</summary>
+    internal TimeProvider RunningTestTime { get; set; } = TimeProvider.System;
+
+    /// <summary>How often running tests are checked against the hang threshold.</summary>
+    internal TimeSpan RunningTestCheckInterval { get; set; } = TimeSpan.FromSeconds(1);
+
     /// <summary>How long the engine must be idle before the backfill starts.</summary>
     internal TimeSpan BackfillDelay { get; set; } = TimeSpan.FromSeconds(3);
 

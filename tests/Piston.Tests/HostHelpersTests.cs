@@ -181,6 +181,36 @@ public sealed class HostHelpersTests : IDisposable
         Assert.Contains("impactBackfill", ex.Message);
     }
 
+    [Fact]
+    public void HangThresholdDefaultsTo60SecondsAndTestTimeoutIsOff()
+    {
+        var options = HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, new Piston.Hosting.Configuration.PistonConfig());
+
+        Assert.Equal(TimeSpan.FromSeconds(60), options.HangThreshold);
+        Assert.Null(options.TestTimeout);
+    }
+
+    [Fact]
+    public void HangThresholdAndTestTimeoutAreRead()
+    {
+        var config = new Piston.Hosting.Configuration.PistonConfig { HangThreshold = "off", TestTimeout = "5m" };
+
+        var options = HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config);
+
+        Assert.Null(options.HangThreshold);
+        Assert.Equal(TimeSpan.FromMinutes(5), options.TestTimeout);
+    }
+
+    [Fact]
+    public void InvalidTestTimeoutIsRejected()
+    {
+        var config = new Piston.Hosting.Configuration.PistonConfig { TestTimeout = "soon" };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config));
+
+        Assert.Contains("testTimeout", ex.Message);
+    }
+
     private string WriteSolution(string relativePath)
     {
         var path = Path.Combine(_root, relativePath);

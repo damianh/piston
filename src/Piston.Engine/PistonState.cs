@@ -98,6 +98,9 @@ public sealed class PistonState
     /// <summary>Progress of the idle-time impact backfill; null when it is not running.</summary>
     public ImpactBackfillProgress? ImpactBackfill { get; set; }
 
+    /// <summary>The test that has been running longest in the current run, or null when none is running.</summary>
+    public RunningTest? LongestRunningTest { get; set; }
+
     // ── Run provenance ───────────────────────────────────────────────────────
 
     /// <summary>Number of terminal runs retained in <see cref="RecentRuns"/> (in memory only).</summary>

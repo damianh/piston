@@ -85,6 +85,11 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             _ => new CompositeTestExecutionStrategy(mtpStrategy, vsTestStrategy),
         };
 
+        if (options.TestTimeout is { } testTimeout)
+        {
+            strategy = new TimeoutTestExecutionStrategy(strategy, testTimeout);
+        }
+
         var effectivePoolSize = options.ProcessPoolSize > 0
             ? options.ProcessPoolSize
             : Math.Max(1, Environment.ProcessorCount / 2);
@@ -119,6 +124,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             ImpactBackfillMode.Test => Impact.ImpactGranularity.Test,
             _ => null,
         };
+        _orchestrator.HangThreshold = options.HangThreshold;
         _orchestrator.SdkVersionProvider = dir => sdkVersions.GetOrAdd(dir, d => new Lazy<string?>(() => ProbeSdkVersion(d))).Value;
     }
 

@@ -31,6 +31,18 @@ public sealed class PistonConfig
     public string? ImpactBackfill { get; set; }
 
     /// <summary>
+    /// How long a test runs before it is reported as possibly hanging: seconds (<c>90</c>) or a number with a
+    /// unit (<c>500ms</c>, <c>30s</c>, <c>5m</c>, <c>1.5h</c>); <c>0</c> or <c>off</c> turns it off. Default 60 s.
+    /// </summary>
+    public string? HangThreshold { get; set; }
+
+    /// <summary>
+    /// Per-test limit, in the same format as <see cref="HangThreshold"/>: a test that runs longer fails as timed
+    /// out and its project's run is cancelled. Off by default.
+    /// </summary>
+    public string? TestTimeout { get; set; }
+
+    /// <summary>
     /// Maximum number of concurrent <c>dotnet test</c> processes.
     /// 0 means auto-detect. Corresponds to the <c>--parallelism</c> CLI flag.
     /// </summary>

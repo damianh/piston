@@ -68,6 +68,18 @@ public sealed class PistonOptions
     public ImpactBackfillMode ImpactBackfill { get; init; } = ImpactBackfillMode.Off;
 
     /// <summary>
+    /// How long a test runs before it is reported as possibly hanging (a warning only). Null turns the
+    /// warning off. Default is 60 seconds.
+    /// </summary>
+    public TimeSpan? HangThreshold { get; init; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Per-test limit: a test that runs longer fails as timed out and its project's run is cancelled
+    /// (other projects go on). Null (the default) turns it off.
+    /// </summary>
+    public TimeSpan? TestTimeout { get; init; }
+
+    /// <summary>
     /// Maximum number of concurrent <c>dotnet test</c> processes.
     /// 0 means auto-detect: <c>Math.Max(1, Environment.ProcessorCount / 2)</c>.
     /// </summary>

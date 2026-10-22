@@ -3,6 +3,7 @@
 
 using System.Text;
 using Piston.Engine.Models;
+using Piston.Engine.Services;
 using Piston.Engine.Verification;
 
 namespace Piston.Mcp.Tools;
@@ -68,7 +69,12 @@ internal static class VerificationReport
         {
             var problems = run.Projects.Where(p => p.Status != ProjectRunStatus.Completed || p.TestCount == 0).ToList();
             AppendList(sb, "Projects without complete results", problems,
-                p => $"{p.ProjectPath}: {(p.Status == ProjectRunStatus.Completed ? NoResults(p) : p.Status.ToString())}");
+                p => $"{p.ProjectPath}: {p.Status switch
+                {
+                    ProjectRunStatus.Completed => NoResults(p),
+                    ProjectRunStatus.TimedOut when p.TimedOut is { } timeout => $"TimedOut ({timeout.Test} ran longer than {Durations.Format(timeout.Limit)})",
+                    _ => p.Status.ToString(),
+                }}");
             AppendList(sb, "Tests without complete results",
                 tests.Where(t => t.Status is TestStatus.NotRun or TestStatus.Running).ToList(),
                 t => $"{t.ResultKey}: {t.Status}");

@@ -280,6 +280,38 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     }
 
     [Fact]
+    public async Task TimedOutProject_MarksRunIncompleteWithTheSlowTest()
+    {
+        await StartAndWaitForStartupRunAsync();
+        _runner.TimedOutProjects[Projects[1]] = new TestTimeout("B.Tests.Slow", TimeSpan.FromSeconds(30));
+
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(TestRunStatus.Incomplete, run!.Status);
+        Assert.Contains("B.Tests: timed out (B.Tests.Slow ran longer than the test timeout of 30 s)", run.StatusReason, StringComparison.Ordinal);
+        var outcome = Assert.Single(run.Projects, p => p.Status == ProjectRunStatus.TimedOut);
+        Assert.Equal("B.Tests.Slow", outcome.TimedOut?.Test);
+    }
+
+    [Fact]
+    public async Task TestRunningPastTheHangThreshold_IsReportedAsPossiblyHanging()
+    {
+        await StartAndWaitForStartupRunAsync();
+        _orchestrator.HangThreshold = TimeSpan.FromMilliseconds(50);
+        _orchestrator.RunningTestCheckInterval = TimeSpan.FromMilliseconds(10);
+        _runner.RunningTest = "A.Tests.Slow";
+        _runner.HoldRunning = TimeSpan.FromMilliseconds(400);
+        RunningTest? seen = null;
+        _state.StateChanged += () => seen = _state.LongestRunningTest is { PossiblyHanging: true } hanging ? hanging : seen;
+
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(["A.Tests.Slow"], run!.PossiblyHangingTests);
+        Assert.Equal("A.Tests.Slow", seen?.Name);
+        Assert.Null(_state.LongestRunningTest);
+    }
+
+    [Fact]
     public async Task CrashedProject_MarksRunIncomplete()
     {
         await StartAndWaitForStartupRunAsync();
@@ -406,6 +438,9 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
     public bool DuplicateFirstTest { get; set; }
     public HashSet<string> ProjectsWithoutResults { get; } = [];
     public HashSet<string> CrashedProjects { get; } = [];
+    public Dictionary<string, TestTimeout> TimedOutProjects { get; } = [];
+    public string? RunningTest { get; set; }
+    public TimeSpan HoldRunning { get; set; }
     public string? LastFilter { get; private set; }
 
     public Task<TestRunResult> RunTestsAsync(
@@ -417,12 +452,20 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
         Action<IReadOnlyList<TestSuite>>? onProgress, CancellationToken ct) =>
         RunTestsAsync(solutionPath, testProjectPaths, filter, collectCoverage, onProgress, null, ct);
 
-    public Task<TestRunResult> RunTestsAsync(
+    public async Task<TestRunResult> RunTestsAsync(
         string solutionPath, IReadOnlyList<string>? testProjectPaths, string? filter, bool collectCoverage,
         Action<IReadOnlyList<TestSuite>>? onProgress, Action<ProjectTestResult>? onProjectCompleted, CancellationToken ct)
     {
         LastFilter = filter;
         DuringRun?.Invoke();
+
+        if (RunningTest is { } running)
+        {
+            onProgress?.Invoke([new TestSuite("A.Tests",
+                [new TestResult(running, running, TestStatus.Running, TimeSpan.Zero, null, null, null, null)],
+                DateTimeOffset.UtcNow, TimeSpan.Zero)]);
+            await Task.Delay(HoldRunning, ct);
+        }
 
         var all = new List<TestSuite>();
         foreach (var path in testProjectPaths ?? [])
@@ -431,6 +474,14 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
             if (CrashedProjects.Contains(path))
             {
                 onProjectCompleted?.Invoke(new ProjectTestResult(path, [], "crashed", [], Crashed: true));
+                continue;
+            }
+            if (TimedOutProjects.TryGetValue(path, out var timeout))
+            {
+                var timedOutTest = new TestResult(timeout.Test, timeout.Test, TestStatus.Failed, timeout.Limit, null, "Timed out", null, null);
+                var timedOutSuite = new TestSuite(name, [timedOutTest], DateTimeOffset.UtcNow, timeout.Limit);
+                all.Add(timedOutSuite);
+                onProjectCompleted?.Invoke(new ProjectTestResult(path, [timedOutSuite], null, [], Crashed: false) { TimedOut = timeout });
                 continue;
             }
             if (ProjectsWithoutResults.Contains(path))
@@ -455,6 +506,6 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
             onProjectCompleted?.Invoke(new ProjectTestResult(path, [suite], null, [], Crashed: false));
         }
 
-        return Task.FromResult(new TestRunResult(all, null, []));
+        return new TestRunResult(all, null, []);
     }
 }

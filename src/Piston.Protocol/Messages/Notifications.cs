@@ -38,7 +38,8 @@ public sealed record StateSnapshotNotification(
     int TotalBuildProjects = 0,
     int CompletedBuildProjects = 0,
     string? LastBuiltProject = null,
-    ImpactBackfillDto? ImpactBackfill = null
+    ImpactBackfillDto? ImpactBackfill = null,
+    RunningTestDto? LongestRunningTest = null
 );
 
 public sealed record TestProgressNotification(

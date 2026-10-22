@@ -217,6 +217,18 @@ warning after a configured number of runs; it does not recycle persistent hosts.
 There is no per-test or per-class process-isolation option. Test-framework
 parallelism inside each process is separate from Piston's project concurrency.
 
+Slow tests are timed from live progress: a test is timed from the first snapshot
+that reports it `Running`. The orchestrator checks running tests every second,
+publishes the longest one in the state snapshot (`LongestRunningTest`) and, past
+`hangThreshold`, flags it as possibly hanging, logs it once and records it in the
+run's `PossiblyHangingTests`. With `testTimeout` set,
+`TimeoutTestExecutionStrategy` wraps the execution strategy for each project: past
+the limit it cancels a linked token for that project only. The runners kill the
+process and return an empty result, and the decorator rebuilds the result from the
+last live snapshot: the slow test `Failed` with a timed-out message, other
+`Running` tests `NotRun`. The project's outcome is `TimedOut`, which makes the run
+`Incomplete`.
+
 ## Worktree ownership and machine execution budget
 
 `src/Piston.Engine/Execution` coordinates daemon processes of one OS user through
