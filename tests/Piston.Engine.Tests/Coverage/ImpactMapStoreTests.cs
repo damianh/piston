@@ -1,0 +1,183 @@
+// Copyright (c) Damian Hickey. All rights reserved.
+// See LICENSE in the project root for license information.
+
+using Piston.Engine.Coverage;
+using Piston.Engine.Impact;
+using Xunit;
+
+namespace Piston.Engine.Tests.Coverage;
+
+public sealed class ImpactMapStoreTests : IAsyncLifetime
+{
+    private const string Project = "/repo/tests/Lib.Tests/Lib.Tests.csproj";
+    private const string File = "/repo/src/Lib/Code.cs";
+
+    private static readonly string Original = Source(30);
+
+    private string _tempDir = string.Empty;
+    private SqliteCoverageStore _sut = null!;
+
+    public async ValueTask InitializeAsync()
+    {
+        _tempDir = Directory.CreateTempSubdirectory("piston-impact-store-test-").FullName;
+        _sut = new SqliteCoverageStore();
+        await _sut.InitializeAsync(_tempDir);
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _sut.Dispose();
+        Directory.Delete(_tempDir, recursive: true);
+        return ValueTask.CompletedTask;
+    }
+
+    private static string Source(int lines) => string.Join("\n", Enumerable.Range(1, lines).Select(i => $"line {i}"));
+
+    private static string Edit(string content, int line, string replacement)
+    {
+        var lines = SnapshotDiff.SplitLines(content);
+        lines[line - 1] = replacement;
+        return string.Join("\n", lines);
+    }
+
+    private Task Record(
+        ImpactGranularity granularity,
+        string unitKey,
+        string[] tests,
+        LineSpan[] spans,
+        string? content = null,
+        bool merge = false) =>
+        _sut.RecordImpactAsync(new ImpactRecording(
+            Project, granularity, unitKey, _sut.CreateRunId(), tests, [new ImpactFile(File, spans, content ?? Original)], merge));
+
+    [Fact]
+    public async Task SelectTests_ChangeInsideAnExecutedSpan_SelectsTheUnitsTestsWithTheSpan()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A", "T.B"], [new(3, 5), new(10, 12)]);
+
+        var selection = _sut.SelectTests([new ChangedFile(File, Edit(Original, 4, "changed"))]);
+
+        Assert.Equal(["T.A", "T.B"], selection.Tests.Keys.Order());
+        var reason = Assert.Single(selection.Tests["T.A"]);
+        Assert.Equal(new LineSpan(4, 4), reason.ChangedLines);
+        Assert.Equal(new LineSpan(3, 5), reason.ExecutedSpan);
+        Assert.Equal(ImpactGranularity.Run, reason.Granularity);
+        Assert.Equal(Project, reason.ProjectPath);
+        Assert.Empty(selection.UnmappedFiles);
+    }
+
+    [Fact]
+    public async Task SelectTests_ChangeOutsideEveryExecutedSpan_FallsBackToEveryTestThatRanTheFile()
+    {
+        await Record(ImpactGranularity.Class, "T.A", ["T.A.One"], [new(3, 5)]);
+        await Record(ImpactGranularity.Class, "T.B", ["T.B.One"], [new(10, 12)]);
+
+        var selection = _sut.SelectTests([new ChangedFile(File, Edit(Original, 20, "new member"))]);
+
+        Assert.Equal(["T.A.One", "T.B.One"], selection.Tests.Keys.Order());
+        Assert.All(selection.Tests.Values, r => Assert.Null(Assert.Single(r).ExecutedSpan));
+    }
+
+    [Fact]
+    public async Task SelectTests_UnchangedContent_SelectsNothing()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A"], [new(1, 30)]);
+
+        var selection = _sut.SelectTests([new ChangedFile(File, Original)]);
+
+        Assert.Empty(selection.Tests);
+        Assert.Empty(selection.UnmappedFiles);
+    }
+
+    [Fact]
+    public async Task SelectTests_FileWithNoRecording_IsUnmapped()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A"], [new(1, 30)]);
+
+        var selection = _sut.SelectTests([new ChangedFile("/repo/src/Lib/Other.cs", "x")]);
+
+        Assert.Empty(selection.Tests);
+        Assert.Equal(["/repo/src/Lib/Other.cs"], selection.UnmappedFiles);
+    }
+
+    [Fact]
+    public async Task SelectTests_DeletedFile_SelectsEveryTestThatRanIt()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A"], [new(3, 5)]);
+
+        var selection = _sut.SelectTests([new ChangedFile(File, null)]);
+
+        var reason = Assert.Single(selection.Tests["T.A"]);
+        Assert.Null(reason.ExecutedSpan);
+    }
+
+    [Fact]
+    public async Task SelectTests_CurrentClassUnits_OverrideTheRunUnit()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A.One", "T.B.One"], [new(1, 30)]);
+        await Record(ImpactGranularity.Class, "T.A", ["T.A.One"], [new(3, 5)]);
+        await Record(ImpactGranularity.Class, "T.B", ["T.B.One"], [new(10, 12)]);
+
+        var selection = _sut.SelectTests([new ChangedFile(File, Edit(Original, 11, "changed"))]);
+
+        var (fqn, reasons) = Assert.Single(selection.Tests);
+        Assert.Equal("T.B.One", fqn);
+        Assert.Equal(ImpactGranularity.Class, Assert.Single(reasons).Granularity);
+    }
+
+    [Fact]
+    public async Task MarkChangedAsync_MakesClassUnitsDirtySoTheRunUnitDecides()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A.One", "T.B.One"], [new(1, 30)]);
+        await Record(ImpactGranularity.Class, "T.A", ["T.A.One"], [new(3, 5)]);
+        var edited = new ChangedFile(File, Edit(Original, 11, "changed"));
+
+        await _sut.MarkChangedAsync([edited]);
+
+        Assert.False(Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Class)).IsCurrent);
+        Assert.True(Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Run)).IsCurrent);
+        Assert.Equal(["T.A.One", "T.B.One"], _sut.SelectTests([edited]).Tests.Keys.Order());
+    }
+
+    [Fact]
+    public async Task RecordImpactAsync_Replace_MakesTheUnitCurrentAndDropsOldTests()
+    {
+        await Record(ImpactGranularity.Class, "T.A", ["T.A.Old"], [new(3, 5)]);
+        var edited = Edit(Original, 4, "changed");
+        await _sut.MarkChangedAsync([new ChangedFile(File, edited)]);
+
+        await Record(ImpactGranularity.Class, "T.A", ["T.A.New"], [new(3, 5)], edited);
+
+        var unit = Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Class));
+        Assert.True(unit.IsCurrent);
+        var selection = _sut.SelectTests([new ChangedFile(File, Edit(edited, 4, "again"))]);
+        Assert.Equal(["T.A.New"], selection.Tests.Keys);
+    }
+
+    [Fact]
+    public async Task RecordImpactAsync_MergeAfterAnEdit_RemapsTheEarlierSpans()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A"], [new(3, 5)]);
+        var shifted = "new 1\nnew 2\n" + Original;
+
+        await Record(ImpactGranularity.Run, "run", ["T.B"], [new(25, 26)], shifted, merge: true);
+
+        var selection = _sut.SelectTests([new ChangedFile(File, Edit(shifted, 6, "changed"))]);
+        Assert.Equal(["T.A", "T.B"], selection.Tests.Keys.Order());
+        Assert.Equal(new LineSpan(5, 7), Assert.Single(selection.Tests["T.A"]).ExecutedSpan);
+    }
+
+    [Fact]
+    public async Task Clear_RemovesTheImpactMap()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A"], [new(1, 30)]);
+        _sut.Dispose();
+
+        SqliteCoverageStore.Clear(_tempDir);
+        _sut = new SqliteCoverageStore();
+        await _sut.InitializeAsync(_tempDir);
+
+        Assert.Empty(_sut.GetUnits(Project, ImpactGranularity.Run));
+        Assert.Equal([File], _sut.SelectTests([new ChangedFile(File, "x")]).UnmappedFiles);
+    }
+}

@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Xml.Linq;
+using Piston.Engine.Impact;
 
 namespace Piston.Engine.Coverage;
 
@@ -49,6 +50,7 @@ internal sealed class CoberturaParser : ICoberturaParser
         // Group by file path — multiple <class> elements can map to the same file
         var linesByFile = new Dictionary<string, Dictionary<int, LineCoverage>>(StringComparer.OrdinalIgnoreCase);
         var moduleByFile = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var spansByFile = new Dictionary<string, List<LineSpan>>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var classEl in root.Descendants("class"))
         {
@@ -70,6 +72,35 @@ internal sealed class CoberturaParser : ICoberturaParser
                 && classEl.Ancestors("package").FirstOrDefault()?.Attribute("name")?.Value is { Length: > 0 } module)
             {
                 moduleByFile[absolutePath] = module;
+            }
+
+            // A method any test entered contributes its whole line range, so an edit to a line the tests
+            // skipped (an untaken branch) still counts as touching code they executed.
+            foreach (var methodEl in classEl.Elements("methods").Elements("method"))
+            {
+                int? first = null, last = null;
+                var executed = false;
+                foreach (var lineEl in methodEl.Elements("lines").Elements("line"))
+                {
+                    if (!int.TryParse(lineEl.Attribute("number")?.Value, out var number))
+                    {
+                        continue;
+                    }
+
+                    first = first is null ? number : Math.Min(first.Value, number);
+                    last = last is null ? number : Math.Max(last.Value, number);
+                    executed |= int.TryParse(lineEl.Attribute("hits")?.Value, out var methodHits) && methodHits > 0;
+                }
+
+                if (executed)
+                {
+                    if (!spansByFile.TryGetValue(absolutePath, out var spans))
+                    {
+                        spansByFile[absolutePath] = spans = [];
+                    }
+
+                    spans.Add(new LineSpan(first!.Value, last!.Value));
+                }
             }
 
             foreach (var lineEl in classEl.Elements("lines").Elements("line"))
@@ -103,7 +134,10 @@ internal sealed class CoberturaParser : ICoberturaParser
                 var lines = kvp.Value.Values
                     .OrderBy(l => l.LineNumber)
                     .ToList();
-                return new FileCoverage(kvp.Key, lines, moduleByFile.GetValueOrDefault(kvp.Key));
+                return new FileCoverage(kvp.Key, lines, moduleByFile.GetValueOrDefault(kvp.Key))
+                {
+                    ExecutedSpans = spansByFile.TryGetValue(kvp.Key, out var spans) ? LineSpan.Normalize(spans) : null,
+                };
             })
             .ToList();
 

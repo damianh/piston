@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Coverage;
+using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
 using Xunit;
 
@@ -10,6 +11,42 @@ namespace Piston.Engine.Tests.Orchestration;
 public sealed class OrchestratorCoverageTests
 {
     private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
+    [Fact]
+    public void RunImpactUnits_ReplacesOnlyProjectsWhoseTestsAllRanCleanly()
+    {
+        static ProjectTestResult Project(string path, string? error = null, bool crashed = false) => new(
+            path,
+            [new TestSuite("S", [Test($"{path}.T1"), Test($"{path}.T2"), Test($"{path}.T1")], DateTimeOffset.UtcNow, TimeSpan.Zero)],
+            error,
+            [$"{path}.xml"],
+            crashed);
+
+        var units = PistonOrchestrator.RunImpactUnits(
+            [Project("A"), Project("B", error: "boom"), Project("C", crashed: true)], "/repo/s.slnx", [], [], filter: null);
+
+        Assert.Equal(["A", "B", "C"], units.Select(u => u.ProjectPath));
+        Assert.Equal([false, true, true], units.Select(u => u.Merge));
+        Assert.All(units, u => Assert.Equal("run", u.UnitKey));
+        Assert.Equal(["A.T1", "A.T2"], units[0].TestFqns);
+        Assert.Equal(["A.xml"], units[0].ReportPaths);
+    }
+
+    [Fact]
+    public void RunImpactUnits_FilteredRunMerges_AndWithoutProjectsUsesTheSolution()
+    {
+        var filtered = PistonOrchestrator.RunImpactUnits(
+            [new ProjectTestResult("A", [], null, [], false)], "/repo/s.slnx", [], [], filter: "FullyQualifiedName=X");
+        var solution = PistonOrchestrator.RunImpactUnits([], "/repo/s.slnx", ["r.xml"], ["T"], filter: null);
+
+        Assert.True(Assert.Single(filtered).Merge);
+        var unit = Assert.Single(solution);
+        Assert.Equal("/repo/s.slnx", unit.ProjectPath);
+        Assert.Equal(["r.xml"], unit.ReportPaths);
+        Assert.Equal(["T"], unit.TestFqns);
+    }
+
+    private static TestResult Test(string fqn) => new(fqn, fqn, TestStatus.Passed, TimeSpan.Zero, null, null, null, null);
 
     [Fact]
     public void CoverageResultsDirectory_FindsThePistonTempDirectoryAtAnyDepth()
@@ -117,7 +154,7 @@ public sealed class OrchestratorCoverageTests
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task ProcessCoverageAsync(
-            long runId, IReadOnlyList<string> paths, IReadOnlyList<string> testFqns, ICoverageStore store, bool isFullRun, string? sourceRoot)
+            long runId, IReadOnlyList<string> paths, IReadOnlyList<string> testFqns, ICoverageStore store, bool isFullRun, string? sourceRoot, CoverageImpactOptions? impact)
         {
             await store.StoreCoverageAsync(runId,
                 new Dictionary<string, IReadOnlyList<TestLineCoverage>>

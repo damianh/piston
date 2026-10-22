@@ -3,6 +3,7 @@
 
 using Piston.Engine.Coverage;
 using Piston.Engine.Execution;
+using Piston.Engine.Impact;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
 using Piston.Engine.Verification;
@@ -624,6 +625,33 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         return file is null ? null : new FileCoverageSnapshot(WithCurrentStaleness(file), lines);
     }
 
+    /// <summary>
+    /// One run-granularity impact unit per test project. A project's unit is replaced only when all its tests ran
+    /// cleanly; otherwise the run adds to what is stored.
+    /// </summary>
+    internal static IReadOnlyList<CoverageRunUnit> RunImpactUnits(
+        IReadOnlyList<ProjectTestResult> projects,
+        string solutionPath,
+        IReadOnlyList<string> reportPaths,
+        IReadOnlyList<string> testFqns,
+        string? filter)
+    {
+        var filtered = !string.IsNullOrWhiteSpace(filter);
+        if (projects.Count == 0)
+        {
+            return [new CoverageRunUnit(solutionPath, RunUnitKey, reportPaths, testFqns, Merge: true)];
+        }
+
+        return [.. projects.Select(p => new CoverageRunUnit(
+            p.ProjectPath,
+            RunUnitKey,
+            p.CoverageReportPaths,
+            [.. p.Suites.SelectMany(s => s.Tests).Select(t => t.FullyQualifiedName).Distinct(StringComparer.Ordinal)],
+            Merge: filtered || p.Crashed || p.RunnerError is not null))];
+    }
+
+    private const string RunUnitKey = "run";
+
     /// <summary>Flags a file stale when its content no longer matches what was measured, e.g. after edits while stopped.</summary>
     private static CoverageFileSummary WithCurrentStaleness(CoverageFileSummary file) =>
         file.IsStale || file.ContentHash is null
@@ -632,7 +660,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             : file with { IsStale = true };
 
     internal async Task ProcessCoverageAsync(
-        long runId, IReadOnlyList<string> reportPaths, IReadOnlyList<string> testFqns, bool isFullRun = false)
+        long runId,
+        IReadOnlyList<string> reportPaths,
+        IReadOnlyList<string> testFqns,
+        bool isFullRun = false,
+        CoverageImpactOptions? impact = null)
     {
         var processor = _coverageProcessor
             ?? throw new InvalidOperationException("Coverage processing is not enabled.");
@@ -642,7 +674,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         try
         {
             var solutionDir = _solutionPath is null ? null : Path.GetDirectoryName(_solutionPath);
-            await processor.ProcessCoverageAsync(runId, reportPaths, testFqns, store, isFullRun, solutionDir)
+            await processor.ProcessCoverageAsync(runId, reportPaths, testFqns, store, isFullRun, solutionDir, impact)
                 .ConfigureAwait(false);
             _state.HasCoverageData = true;
         }
@@ -1265,6 +1297,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
             IReadOnlyList<TestSuite> newSuites;
             IReadOnlyList<string> coverageReportPaths;
+            IReadOnlyList<ProjectTestResult> projectResults;
             string? runnerError;
             try
             {
@@ -1282,6 +1315,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                     ct).ConfigureAwait(false);
                 newSuites = result.Suites.Select(s => s with { RunId = run.RunId }).ToList();
                 coverageReportPaths = result.CoverageReportPaths;
+                projectResults = result.Projects;
                 runnerError = result.RunnerError;
                 _state.LastTestRunnerError = result.RunnerError;
 
@@ -1324,7 +1358,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                     var isFullCoverageRun = impactResult.IsFullRun
                         && string.IsNullOrWhiteSpace(effectiveFilter)
                         && runnerError is null;
-                    await ProcessCoverageAsync(runId, coverageReportPaths, testFqns, isFullCoverageRun)
+                    var impact = new CoverageImpactOptions(
+                        RunImpactUnits(projectResults, solutionPath, coverageReportPaths, testFqns, effectiveFilter),
+                        ImpactGranularity.Run,
+                        (run.StartedAt ?? DateTimeOffset.UtcNow).UtcDateTime);
+                    await ProcessCoverageAsync(runId, coverageReportPaths, testFqns, isFullCoverageRun, impact)
                         .ConfigureAwait(false);
                 }
                 catch

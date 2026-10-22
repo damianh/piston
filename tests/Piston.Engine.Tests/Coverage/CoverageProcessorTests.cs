@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Coverage;
+using Piston.Engine.Impact;
 using Xunit;
 
 namespace Piston.Engine.Tests.Coverage;
@@ -118,6 +119,45 @@ public sealed class CoverageProcessorTests : IDisposable
         // Both files should appear
         Assert.Contains(files, f => f.EndsWith("File1.cs", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(files, f => f.EndsWith("File2.cs", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(-1, false)]
+    public async Task ProcessCoverageAsync_Impact_RecordsEachUnitsSpansUnlessTheFileChangedSinceTheBuild(
+        int startedOffsetMinutes, bool expectMapped)
+    {
+        var source = Path.Combine(_tempDir, "Code.cs");
+        File.WriteAllText(source, string.Join("\n", Enumerable.Range(1, 10).Select(i => $"line {i}")));
+        var reportA = WriteCoberturaXml(SimpleXml(source, 2, 3));
+        var reportB = WriteCoberturaXml(SimpleXml(source, 8));
+        using var store = new SqliteCoverageStore();
+        await store.InitializeAsync(_tempDir);
+        var impact = new CoverageImpactOptions(
+            [
+                new CoverageRunUnit("/repo/A.Tests.csproj", "run", [reportA], ["A.Test"], Merge: false),
+                new CoverageRunUnit("/repo/B.Tests.csproj", "run", [reportB], ["B.Test"], Merge: false),
+            ],
+            ImpactGranularity.Run,
+            DateTime.UtcNow.AddMinutes(startedOffsetMinutes));
+
+        await new CoverageProcessor(new CoberturaParser()).ProcessCoverageAsync(
+            store.CreateRunId(), [reportA, reportB], ["A.Test", "B.Test"], store, impact: impact);
+
+        _ = Assert.Single(store.GetUnits("/repo/A.Tests.csproj", ImpactGranularity.Run));
+        var edited = File.ReadAllText(source).Replace("line 3", "changed", StringComparison.Ordinal);
+        var selection = store.SelectTests([new ChangedFile(source, edited)]);
+        if (expectMapped)
+        {
+            var (fqn, reasons) = Assert.Single(selection.Tests);
+            Assert.Equal("A.Test", fqn);
+            Assert.Equal(new LineSpan(2, 3), Assert.Single(reasons).ExecutedSpan);
+        }
+        else
+        {
+            Assert.Empty(selection.Tests);
+            Assert.Equal([source], selection.UnmappedFiles);
+        }
     }
 
     [Fact]

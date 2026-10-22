@@ -39,7 +39,7 @@ namespace Piston.Engine.Coverage;
 /// )
 /// </code>
 /// </remarks>
-internal sealed class SqliteCoverageStore : ICoverageStore
+internal sealed partial class SqliteCoverageStore : ICoverageStore
 {
     private const string SetSchema = """
         CREATE TABLE IF NOT EXISTS coverage_sets (
@@ -123,7 +123,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
                 last_updated TEXT    NOT NULL
             );
 
-            """ + SetSchema + ReportSchema;
+            """ + SetSchema + ReportSchema + ImpactSchema;
         _ = await createCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
 
         // Older databases stored one coverage_map row per test per line, which grows to millions of rows on
@@ -148,7 +148,8 @@ internal sealed class SqliteCoverageStore : ICoverageStore
             SELECT MAX(
                 $legacy,
                 (SELECT COALESCE(MAX(run_id), 0) FROM coverage_sets),
-                (SELECT COALESCE(MAX(run_id), 0) FROM coverage_files));
+                (SELECT COALESCE(MAX(run_id), 0) FROM coverage_files),
+                (SELECT COALESCE(MAX(run_id), 0) FROM impact_units));
             """;
         _ = maxRunCmd.Parameters.AddWithValue("$legacy", legacyMaxRunId);
         var result = await maxRunCmd.ExecuteScalarAsync().ConfigureAwait(false);
@@ -180,7 +181,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
         using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = SetSchema + ReportSchema + """
+        command.CommandText = SetSchema + ReportSchema + ImpactSchema + ClearImpact + """
             DROP TABLE IF EXISTS coverage_map;
             DELETE FROM coverage_set_lines;
             DELETE FROM coverage_set_tests;

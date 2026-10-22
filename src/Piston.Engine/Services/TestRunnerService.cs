@@ -87,7 +87,7 @@ public sealed class TestRunnerService : ITestRunnerService
             }
 
             callbacks.OnProjectCompleted?.Invoke(single);
-            return new TestRunResult(single.Suites, single.RunnerError, single.CoverageReportPaths);
+            return new TestRunResult(single.Suites, single.RunnerError, single.CoverageReportPaths) { Projects = [single] };
         }
 
         // Multiple projects — use pool if available, otherwise sequential
@@ -194,7 +194,7 @@ public sealed class TestRunnerService : ITestRunnerService
             }
         }
 
-        return new TestRunResult(allSuites, lastRunnerError, allCoveragePaths);
+        return new TestRunResult(allSuites, lastRunnerError, allCoveragePaths) { Projects = results };
     }
 
     private async Task<TestRunResult> RunSequentialAsync(
@@ -206,13 +206,14 @@ public sealed class TestRunnerService : ITestRunnerService
     {
         var allSuites = new List<TestSuite>();
         var allCoveragePaths = new List<string>();
+        var projects = new List<ProjectTestResult>();
         string? lastRunnerError = null;
 
         foreach (var projectPath in testProjectPaths)
         {
             if (ct.IsCancellationRequested)
             {
-                return new TestRunResult(allSuites, null, allCoveragePaths);
+                return new TestRunResult(allSuites, null, allCoveragePaths) { Projects = projects };
             }
 
             try
@@ -225,6 +226,7 @@ public sealed class TestRunnerService : ITestRunnerService
                     result = await _strategy.ExecuteAsync(request, ProgressFor(callbacks, projectPath), ct).ConfigureAwait(false);
                 }
 
+                projects.Add(result);
                 allSuites.AddRange(result.Suites);
                 allCoveragePaths.AddRange(result.CoverageReportPaths);
                 if (result.RunnerError is not null)
@@ -236,11 +238,11 @@ public sealed class TestRunnerService : ITestRunnerService
             }
             catch (OperationCanceledException)
             {
-                return new TestRunResult(allSuites, null, allCoveragePaths);
+                return new TestRunResult(allSuites, null, allCoveragePaths) { Projects = projects };
             }
         }
 
-        return new TestRunResult(allSuites, lastRunnerError, allCoveragePaths);
+        return new TestRunResult(allSuites, lastRunnerError, allCoveragePaths) { Projects = projects };
     }
 
     private sealed class SoloSlotRelease(SemaphoreSlim slot) : IDisposable
