@@ -92,6 +92,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
         ) WITHOUT ROWID;
         """;
 
+    private readonly SemaphoreSlim _gate = new(1, 1);
     private SqliteConnection? _connection;
     private long _runCounter;
 
@@ -196,7 +197,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
         long runId,
         IReadOnlyDictionary<string, IReadOnlyList<TestLineCoverage>> testCoverageMap)
     {
-        EnsureInitialized();
+        using var gate = Enter();
 
         // Tests given the same line list (by reference) share one set.
         var sets = new Dictionary<IReadOnlyList<TestLineCoverage>, List<string>>(ReferenceEqualityComparer.Instance);
@@ -319,7 +320,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
 
     public IReadOnlyList<string> GetTestsCoveringFile(string filePath)
     {
-        EnsureInitialized();
+        using var gate = Enter();
 
         using var cmd = _connection!.CreateCommand();
         cmd.CommandText = """
@@ -343,7 +344,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
 
     public IReadOnlyList<string> GetTestsCoveringLines(string filePath, int startLine, int endLine)
     {
-        EnsureInitialized();
+        using var gate = Enter();
 
         using var cmd = _connection!.CreateCommand();
         cmd.CommandText = """
@@ -370,7 +371,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
 
     public bool HasCoverageData(string filePath)
     {
-        EnsureInitialized();
+        using var gate = Enter();
 
         using var cmd = _connection!.CreateCommand();
         cmd.CommandText = """
@@ -385,7 +386,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
 
     public async Task MarkFileStaleAsync(string filePath)
     {
-        EnsureInitialized();
+        using var gate = Enter();
 
         using var cmd = _connection!.CreateCommand();
         cmd.CommandText = """
@@ -403,7 +404,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
 
     public async Task StoreReportAsync(long runId, IReadOnlyList<CoverageReportFile> files, bool isFullRun)
     {
-        EnsureInitialized();
+        using var gate = Enter();
 
         using var transaction = _connection!.BeginTransaction();
         try
@@ -446,7 +447,7 @@ internal sealed class SqliteCoverageStore : ICoverageStore
 
     public IReadOnlyList<CoverageFileSummary> GetReportFiles()
     {
-        EnsureInitialized();
+        using var gate = Enter();
 
         using var cmd = _connection!.CreateCommand();
         cmd.CommandText = $"{SelectFileColumns} ORDER BY file_path;";
@@ -462,13 +463,13 @@ internal sealed class SqliteCoverageStore : ICoverageStore
 
     public CoverageFileSummary? GetReportFile(string filePath)
     {
-        EnsureInitialized();
+        using var gate = Enter();
         return ReadFile(filePath, transaction: null);
     }
 
     public IReadOnlyList<LineCoverage> GetReportLines(string filePath)
     {
-        EnsureInitialized();
+        using var gate = Enter();
         return ReadLines(filePath, transaction: null);
     }
 
@@ -603,16 +604,37 @@ internal sealed class SqliteCoverageStore : ICoverageStore
 
     public void Dispose()
     {
-        _connection?.Dispose();
-        _connection = null;
+        _gate.Wait();
+        try
+        {
+            _connection?.Dispose();
+            _connection = null;
+        }
+        finally
+        {
+            _ = _gate.Release();
+        }
     }
 
-    private void EnsureInitialized()
+    /// <summary>
+    /// Serializes use of the single connection: the orchestrator and the impact analyzer call the store from
+    /// different threads, and a <see cref="SqliteConnection"/> must not be used concurrently.
+    /// </summary>
+    private Gate Enter()
     {
+        _gate.Wait();
         if (_connection is null)
         {
+            _ = _gate.Release();
             throw new InvalidOperationException(
                 $"{nameof(SqliteCoverageStore)} has not been initialized. Call {nameof(InitializeAsync)} first.");
         }
+
+        return new Gate(_gate);
+    }
+
+    private readonly struct Gate(SemaphoreSlim semaphore) : IDisposable
+    {
+        public void Dispose() => semaphore.Release();
     }
 }
