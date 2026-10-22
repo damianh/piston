@@ -13,7 +13,7 @@ deleted. The hub/worker split and later UI/canvas decisions remain deferred.
 ## Requirements
 
 - .NET 10 SDK
-- A `.sln`, `.slnx`, or `.slnf` solution with compatible test projects (for example xUnit, NUnit, or MSTest)
+- A `.sln`, `.slnx`, or `.slnf` solution with compatible test projects (for example xUnit v2/v3, NUnit, MSTest or TUnit; [`samples/`](samples/README.md) has one of each on Microsoft.Testing.Platform)
 - The SDK and test adapters/extensions required by the target solution; MTP projects need the appropriate `global.json` test-runner configuration
 
 ## Delivery
@@ -429,6 +429,20 @@ command's whole Unix session or Windows job, including descendants that
 outlive their parent. Setup
 commands and engine builds disable MSBuild node reuse in their child environment
 to prevent persistent nodes retaining redirected output pipes after `dotnet` exits.
+
+### Framework smoke test
+
+[`samples/Samples.slnx`](samples/README.md) holds an MSTest, NUnit, xUnit v3 and TUnit project, each with one passing,
+one deliberately failing and one skipped test. CI packs the tool, installs it and runs
+`node eng/smoke-test.mjs`, which starts `piston daemon` on the samples, waits for the startup run and checks its
+counts (12 tests: 4 passed, 4 failed, 4 skipped) on Linux, Windows and macOS. To run it locally (with no other Piston
+process owning this worktree):
+
+```sh
+dotnet build Piston.slnx -c Release
+node eng/smoke-test.mjs --tool src/Piston/bin/Release/net10.0/Piston.dll \
+  --total 12 --failed 4 --skipped 4 --projects 4 -- samples/Samples.slnx
+```
 
 ### Dogfooding Piston on itself
 
