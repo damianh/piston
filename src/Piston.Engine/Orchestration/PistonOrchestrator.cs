@@ -576,7 +576,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     }
 
     internal async Task ProcessCoverageAsync(
-        long runId, IReadOnlyList<string> reportPaths, IReadOnlyList<string> testFqns)
+        long runId, IReadOnlyList<string> reportPaths, IReadOnlyList<string> testFqns, bool isFullRun = false)
     {
         var processor = _coverageProcessor
             ?? throw new InvalidOperationException("Coverage processing is not enabled.");
@@ -585,7 +585,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         await _coverageLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            await processor.ProcessCoverageAsync(runId, reportPaths, testFqns, store)
+            await processor.ProcessCoverageAsync(runId, reportPaths, testFqns, store, isFullRun)
                 .ConfigureAwait(false);
             _state.HasCoverageData = true;
         }
@@ -1263,7 +1263,12 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
                 try
                 {
-                    await ProcessCoverageAsync(runId, coverageReportPaths, testFqns).ConfigureAwait(false);
+                    // Only an unfiltered run of every test project, with none crashing, measures the whole solution.
+                    var isFullCoverageRun = impactResult.IsFullRun
+                        && string.IsNullOrWhiteSpace(effectiveFilter)
+                        && runnerError is null;
+                    await ProcessCoverageAsync(runId, coverageReportPaths, testFqns, isFullCoverageRun)
+                        .ConfigureAwait(false);
                 }
                 catch
                 {

@@ -180,4 +180,37 @@ public sealed class CoverageProcessorTests : IDisposable
         // Good file coverage is stored
         _ = Assert.Single(store.StoredCoverage);
     }
+
+    [Fact]
+    public async Task ProcessCoverageAsync_RecordsMergedReportWithContentHash()
+    {
+        var store = new StubCoverageStore();
+        var processor = new CoverageProcessor(new CoberturaParser());
+        var source = Path.Combine(_tempDir, "Code.cs");
+        File.WriteAllText(source, "class C {}");
+        var xml1 = WriteCoberturaXml(SimpleXml(source, 1, 2));
+        var xml2 = WriteCoberturaXml(SimpleXml(source, 2, 3));
+
+        await processor.ProcessCoverageAsync(store.CreateRunId(), [xml1, xml2], [], store, isFullRun: true);
+
+        var (_, files, isFullRun) = Assert.Single(store.StoredReports);
+        Assert.True(isFullRun);
+        var file = Assert.Single(files);
+        Assert.Equal(CoverageReportFile.ComputeContentHash(source), file.ContentHash);
+        Assert.NotNull(file.ContentHash);
+        Assert.Equal("Lib", file.Coverage.Module);
+        Assert.Equal([new LineCoverage(1, 1), new LineCoverage(2, 2), new LineCoverage(3, 1)], file.Coverage.Lines);
+        Assert.Empty(store.StoredCoverage);
+    }
+
+    [Fact]
+    public async Task ProcessCoverageAsync_OnlyMalformedReports_RecordsNoReport()
+    {
+        var store = new StubCoverageStore();
+        var processor = new CoverageProcessor(new CoberturaParser());
+
+        await processor.ProcessCoverageAsync(store.CreateRunId(), [WriteCoberturaXml("<not xml")], ["T"], store, isFullRun: true);
+
+        Assert.Empty(store.StoredReports);
+    }
 }

@@ -19,7 +19,7 @@ namespace Piston.Engine.Coverage;
 ///       &lt;classes&gt;
 ///         &lt;class filename="relative/file.cs"&gt;
 ///           &lt;lines&gt;
-///             &lt;line number="10" hits="1" /&gt;
+///             &lt;line number="10" hits="1" branch="True" condition-coverage="50% (1/2)" /&gt;
 ///           &lt;/lines&gt;
 ///         &lt;/class&gt;
 ///       &lt;/classes&gt;
@@ -29,6 +29,7 @@ namespace Piston.Engine.Coverage;
 /// </code>
 /// The <c>filename</c> attribute on <c>class</c> elements is relative to the
 /// first <c>source</c> entry. All returned paths are normalized to absolute paths.
+/// The enclosing <c>package</c> name (the assembly) is reported as the file's module.
 /// </remarks>
 internal sealed class CoberturaParser : ICoberturaParser
 {
@@ -46,7 +47,8 @@ internal sealed class CoberturaParser : ICoberturaParser
             .ToList() ?? [];
 
         // Group by file path — multiple <class> elements can map to the same file
-        var linesByFile = new Dictionary<string, Dictionary<int, int>>(StringComparer.OrdinalIgnoreCase);
+        var linesByFile = new Dictionary<string, Dictionary<int, LineCoverage>>(StringComparer.OrdinalIgnoreCase);
+        var moduleByFile = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var classEl in root.Descendants("class"))
         {
@@ -64,6 +66,12 @@ internal sealed class CoberturaParser : ICoberturaParser
                 linesByFile[absolutePath] = lineMap;
             }
 
+            if (!moduleByFile.ContainsKey(absolutePath)
+                && classEl.Ancestors("package").FirstOrDefault()?.Attribute("name")?.Value is { Length: > 0 } module)
+            {
+                moduleByFile[absolutePath] = module;
+            }
+
             foreach (var lineEl in classEl.Elements("lines").Elements("line"))
             {
                 var numberStr = lineEl.Attribute("number")?.Value;
@@ -75,24 +83,53 @@ internal sealed class CoberturaParser : ICoberturaParser
                     continue;
                 }
 
+                var (branchesCovered, branchesTotal) = ParseConditionCoverage(lineEl.Attribute("condition-coverage")?.Value);
+
                 // Accumulate hits for lines that appear in multiple methods/classes
-                _ = lineMap.TryGetValue(lineNumber, out var existingHits);
-                lineMap[lineNumber] = existingHits + hits;
+                lineMap[lineNumber] = lineMap.TryGetValue(lineNumber, out var existing)
+                    ? existing with
+                    {
+                        HitCount = existing.HitCount + hits,
+                        BranchesCovered = Math.Max(existing.BranchesCovered, branchesCovered),
+                        BranchesTotal = Math.Max(existing.BranchesTotal, branchesTotal),
+                    }
+                    : new LineCoverage(lineNumber, hits, branchesCovered, branchesTotal);
             }
         }
 
         var files = linesByFile
             .Select(kvp =>
             {
-                var lines = kvp.Value
-                    .Select(l => new LineCoverage(l.Key, l.Value))
+                var lines = kvp.Value.Values
                     .OrderBy(l => l.LineNumber)
                     .ToList();
-                return new FileCoverage(kvp.Key, lines);
+                return new FileCoverage(kvp.Key, lines, moduleByFile.GetValueOrDefault(kvp.Key));
             })
             .ToList();
 
         return new CoberturaReport(files);
+    }
+
+    /// <summary>Parses <c>condition-coverage="50% (1/2)"</c> into (covered, total).</summary>
+    internal static (int Covered, int Total) ParseConditionCoverage(string? value)
+    {
+        if (value is null)
+        {
+            return (0, 0);
+        }
+
+        var open = value.IndexOf('(', StringComparison.Ordinal);
+        var slash = value.IndexOf('/', StringComparison.Ordinal);
+        var close = value.IndexOf(')', StringComparison.Ordinal);
+        if (open < 0 || slash < open || close < slash
+            || !int.TryParse(value.AsSpan(open + 1, slash - open - 1), out var covered)
+            || !int.TryParse(value.AsSpan(slash + 1, close - slash - 1), out var total)
+            || total <= 0 || covered < 0)
+        {
+            return (0, 0);
+        }
+
+        return (Math.Min(covered, total), total);
     }
 
     private static string ResolveFilePath(string filename, IReadOnlyList<string> sources)

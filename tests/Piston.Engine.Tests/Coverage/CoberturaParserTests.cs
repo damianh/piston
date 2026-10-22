@@ -217,4 +217,51 @@ public sealed class CoberturaParserTests : IDisposable
         File.WriteAllText(path, content);
         return path;
     }
+
+    [Fact]
+    public void Parse_BranchLinesAndPackage_ReportsBranchesAndModule()
+    {
+        var xml = """
+            <?xml version="1.0" encoding="utf-8"?>
+            <coverage>
+              <sources><source>/repo</source></sources>
+              <packages>
+                <package name="Lib">
+                  <classes>
+                    <class filename="/repo/src/Branchy.cs">
+                      <lines>
+                        <line number="3" hits="2" branch="True" condition-coverage="50% (1/2)" />
+                        <line number="4" hits="0" />
+                      </lines>
+                    </class>
+                    <class filename="/repo/src/Branchy.cs">
+                      <lines>
+                        <line number="3" hits="1" branch="True" condition-coverage="100% (2/2)" />
+                      </lines>
+                    </class>
+                  </classes>
+                </package>
+              </packages>
+            </coverage>
+            """;
+        var xmlPath = Path.Combine(_tempDir, "branches.xml");
+        File.WriteAllText(xmlPath, xml);
+
+        var file = Assert.Single(new CoberturaParser().Parse(xmlPath).Files);
+
+        Assert.Equal("Lib", file.Module);
+        Assert.Equal(
+            [new LineCoverage(3, 3, 2, 2), new LineCoverage(4, 0)],
+            file.Lines);
+    }
+
+    [Theory]
+    [InlineData("50% (1/2)", 1, 2)]
+    [InlineData("100% (4/4)", 4, 4)]
+    [InlineData("0% (0/6)", 0, 6)]
+    [InlineData("garbage", 0, 0)]
+    [InlineData("50% (3/0)", 0, 0)]
+    [InlineData(null, 0, 0)]
+    public void ParseConditionCoverage_ReadsCoveredAndTotal(string? value, int covered, int total) =>
+        Assert.Equal((covered, total), CoberturaParser.ParseConditionCoverage(value));
 }

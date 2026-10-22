@@ -5,8 +5,8 @@ namespace Piston.Engine.Coverage;
 
 /// <summary>
 /// Bridges Cobertura XML coverage reports into the <see cref="ICoverageStore"/>.
-/// Uses suite-level granularity: all tests in the suite are attributed to every
-/// covered file/line in the Cobertura report.
+/// Records the merged report, and uses run-level granularity for attribution: all tests
+/// in the run are attributed to every covered file/line in the Cobertura reports.
 /// </summary>
 internal sealed class CoverageProcessor : ICoverageProcessor
 {
@@ -18,9 +18,10 @@ internal sealed class CoverageProcessor : ICoverageProcessor
         long runId,
         IReadOnlyList<string> coberturaXmlPaths,
         IReadOnlyList<string> testFqns,
-        ICoverageStore store)
+        ICoverageStore store,
+        bool isFullRun = false)
     {
-        if (coberturaXmlPaths.Count == 0 || testFqns.Count == 0)
+        if (coberturaXmlPaths.Count == 0)
         {
             return;
         }
@@ -28,6 +29,8 @@ internal sealed class CoverageProcessor : ICoverageProcessor
         // Aggregate all file→line coverage from all Cobertura reports
         // Key: filePath, Value: set of line numbers with hits > 0
         var coveredLines = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
+        var reportFiles = new Dictionary<string, FileCoverage>(StringComparer.OrdinalIgnoreCase);
+        var parsedAny = false;
 
         foreach (var xmlPath in coberturaXmlPaths)
         {
@@ -42,8 +45,13 @@ internal sealed class CoverageProcessor : ICoverageProcessor
                 continue;
             }
 
+            parsedAny = true;
             foreach (var fileCoverage in report.Files)
             {
+                reportFiles[fileCoverage.FilePath] = reportFiles.TryGetValue(fileCoverage.FilePath, out var seen)
+                    ? MergeFile(seen, fileCoverage)
+                    : fileCoverage;
+
                 if (!coveredLines.TryGetValue(fileCoverage.FilePath, out var lineSet))
                 {
                     lineSet = [];
@@ -60,7 +68,15 @@ internal sealed class CoverageProcessor : ICoverageProcessor
             }
         }
 
-        if (coveredLines.Count == 0)
+        if (parsedAny)
+        {
+            var files = reportFiles.Values
+                .Select(f => new CoverageReportFile(f, CoverageReportFile.ComputeContentHash(f.FilePath)))
+                .ToList();
+            await store.StoreReportAsync(runId, files, isFullRun).ConfigureAwait(false);
+        }
+
+        if (coveredLines.Count == 0 || testFqns.Count == 0)
         {
             return;
         }
@@ -85,5 +101,23 @@ internal sealed class CoverageProcessor : ICoverageProcessor
         }
 
         await store.StoreCoverageAsync(runId, testCoverageMap).ConfigureAwait(false);
+    }
+
+    /// <summary>Combines two test projects' coverage of the same file: hits add up, branches take the best.</summary>
+    private static FileCoverage MergeFile(FileCoverage a, FileCoverage b)
+    {
+        var lines = a.Lines.ToDictionary(l => l.LineNumber);
+        foreach (var line in b.Lines)
+        {
+            lines[line.LineNumber] = lines.TryGetValue(line.LineNumber, out var old)
+                ? new LineCoverage(
+                    line.LineNumber,
+                    old.HitCount + line.HitCount,
+                    Math.Max(old.BranchesCovered, line.BranchesCovered),
+                    Math.Max(old.BranchesTotal, line.BranchesTotal))
+                : line;
+        }
+
+        return new FileCoverage(a.FilePath, [.. lines.Values.OrderBy(l => l.LineNumber)], a.Module ?? b.Module);
     }
 }

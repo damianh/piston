@@ -342,4 +342,113 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
         _sut = new SqliteCoverageStore();
         await _sut.InitializeAsync(_dbDir);
     }
+
+    private static CoverageReportFile ReportFile(string path, string? hash, params LineCoverage[] lines) =>
+        new(new FileCoverage(path, lines, "Lib"), hash);
+
+    [Fact]
+    public async Task StoreReportAsync_FullRun_ReplacesWholeReportWithTotals()
+    {
+        await _sut.StoreReportAsync(_sut.CreateRunId(), [ReportFile("/repo/Old.cs", "h0", new LineCoverage(1, 1))], isFullRun: true);
+        var run = _sut.CreateRunId();
+
+        await _sut.StoreReportAsync(run, [
+            ReportFile("/repo/A.cs", "h1", new LineCoverage(1, 3, 1, 2), new LineCoverage(2, 0), new LineCoverage(5, 1)),
+        ], isFullRun: true);
+
+        var file = Assert.Single(_sut.GetReportFiles());
+        Assert.Equal("/repo/A.cs", file.FilePath);
+        Assert.Equal("Lib", file.Module);
+        Assert.Equal((3, 2, 2, 1), (file.LinesTotal, file.LinesCovered, file.BranchesTotal, file.BranchesCovered));
+        Assert.False(file.IsStale);
+        Assert.False(file.IsPartial);
+        Assert.Equal("h1", file.ContentHash);
+        Assert.Equal(run, file.RunId);
+        Assert.Equal(new LineCoverage(1, 3, 1, 2), _sut.GetReportLines("/repo/A.cs")[0]);
+        Assert.Null(_sut.GetReportFile("/repo/Old.cs"));
+    }
+
+    [Fact]
+    public async Task StoreReportAsync_SelectiveRunOnUnchangedFile_MergesHigherCounts()
+    {
+        await _sut.StoreReportAsync(_sut.CreateRunId(), [
+            ReportFile("/repo/A.cs", "h1", new LineCoverage(1, 5), new LineCoverage(2, 0, 0, 2)),
+            ReportFile("/repo/B.cs", "h2", new LineCoverage(1, 1)),
+        ], isFullRun: true);
+
+        await _sut.StoreReportAsync(_sut.CreateRunId(), [
+            ReportFile("/repo/A.cs", "h1", new LineCoverage(1, 1), new LineCoverage(2, 2, 1, 2)),
+        ], isFullRun: false);
+
+        Assert.Equal([new LineCoverage(1, 5), new LineCoverage(2, 2, 1, 2)], _sut.GetReportLines("/repo/A.cs"));
+        var a = _sut.GetReportFile("/repo/A.cs")!;
+        Assert.Equal((2, 2, 1), (a.LinesCovered, a.BranchesTotal, a.BranchesCovered));
+        Assert.False(a.IsPartial);
+        Assert.NotNull(_sut.GetReportFile("/repo/B.cs"));
+    }
+
+    [Fact]
+    public async Task StoreReportAsync_SelectiveRunOnChangedFile_ReplacesAndFlagsPartial()
+    {
+        await _sut.StoreReportAsync(_sut.CreateRunId(), [
+            ReportFile("/repo/A.cs", "h1", new LineCoverage(1, 5), new LineCoverage(9, 1)),
+        ], isFullRun: true);
+        await _sut.MarkFileStaleAsync("/repo/A.cs");
+        Assert.True(_sut.GetReportFile("/repo/A.cs")!.IsStale);
+
+        await _sut.StoreReportAsync(_sut.CreateRunId(), [
+            ReportFile("/repo/A.cs", "h2", new LineCoverage(1, 1)),
+        ], isFullRun: false);
+
+        Assert.Equal([new LineCoverage(1, 1)], _sut.GetReportLines("/repo/A.cs"));
+        var a = _sut.GetReportFile("/repo/A.cs")!;
+        Assert.False(a.IsStale);
+        Assert.True(a.IsPartial);
+        Assert.Equal("h2", a.ContentHash);
+    }
+
+    [Fact]
+    public async Task Clear_RemovesReport()
+    {
+        await _sut.StoreReportAsync(_sut.CreateRunId(), [ReportFile("/repo/A.cs", "h1", new LineCoverage(1, 1))], isFullRun: true);
+
+        SqliteCoverageStore.Clear(_dbDir);
+
+        Assert.Empty(_sut.GetReportFiles());
+        Assert.Empty(_sut.GetReportLines("/repo/A.cs"));
+    }
+
+    [Fact]
+    public async Task InitializeAsync_DatabaseFromOlderVersion_AddsReportTablesAndGranularity()
+    {
+        _sut.Dispose();
+        var dbPath = Path.Combine(_dbDir, ".piston", "piston.db");
+        File.Delete(dbPath);
+        using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+        {
+            await connection.OpenAsync(_ct);
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE coverage_map (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, test_fqn TEXT NOT NULL,
+                    file_path TEXT NOT NULL, line_number INTEGER NOT NULL,
+                    hit_count INTEGER NOT NULL DEFAULT 0, is_stale INTEGER NOT NULL DEFAULT 0);
+                INSERT INTO coverage_map (run_id, test_fqn, file_path, line_number) VALUES (7, 'T', '/repo/A.cs', 1);
+                """;
+            _ = await command.ExecuteNonQueryAsync(_ct);
+        }
+
+        _sut = new SqliteCoverageStore();
+        await _sut.InitializeAsync(_dbDir);
+
+        Assert.Equal(8, _sut.CreateRunId());
+        Assert.Empty(_sut.GetReportFiles());
+        using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+        {
+            await connection.OpenAsync(_ct);
+            using var command = connection.CreateCommand();
+            command.CommandText = "SELECT granularity FROM coverage_map;";
+            Assert.Equal("run", await command.ExecuteScalarAsync(_ct));
+        }
+    }
 }

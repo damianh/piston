@@ -45,5 +45,19 @@ internal sealed class StubCoverageStore : ICoverageStore
         return Task.CompletedTask;
     }
 
+    public List<(long RunId, IReadOnlyList<CoverageReportFile> Files, bool IsFullRun)> StoredReports { get; } = [];
+
+    public Task StoreReportAsync(long runId, IReadOnlyList<CoverageReportFile> files, bool isFullRun)
+    {
+        StoredReports.Add((runId, files, isFullRun));
+        return Task.CompletedTask;
+    }
+
+    public IReadOnlyList<CoverageFileSummary> GetReportFiles() => [];
+
+    public CoverageFileSummary? GetReportFile(string filePath) => null;
+
+    public IReadOnlyList<LineCoverage> GetReportLines(string filePath) => [];
+
     public void Dispose() { }
 }

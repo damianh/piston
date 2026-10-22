@@ -53,4 +53,24 @@ internal interface ICoverageStore : IDisposable
     /// Stale entries are excluded from Tier 3 queries until refreshed by a new test run.
     /// </summary>
     Task MarkFileStaleAsync(string filePath);
+
+    /// <summary>
+    /// Records a run's merged line and branch coverage in the solution-wide coverage report.
+    /// </summary>
+    /// <param name="runId">Run identifier returned by <see cref="CreateRunId"/>.</param>
+    /// <param name="files">Each covered file with the hash of the content it was measured against.</param>
+    /// <param name="isFullRun">
+    /// True when every test ran unfiltered: the report is replaced. Otherwise only files whose content is
+    /// unchanged are merged (taking the higher counts); other files are replaced and flagged partial.
+    /// </param>
+    Task StoreReportAsync(long runId, IReadOnlyList<CoverageReportFile> files, bool isFullRun);
+
+    /// <summary>Returns the totals for every file in the coverage report, ordered by path.</summary>
+    IReadOnlyList<CoverageFileSummary> GetReportFiles();
+
+    /// <summary>Returns the stored totals for <paramref name="filePath"/>, or null when it has no coverage.</summary>
+    CoverageFileSummary? GetReportFile(string filePath);
+
+    /// <summary>Returns the stored line coverage for <paramref name="filePath"/>, ordered by line number.</summary>
+    IReadOnlyList<LineCoverage> GetReportLines(string filePath);
 }

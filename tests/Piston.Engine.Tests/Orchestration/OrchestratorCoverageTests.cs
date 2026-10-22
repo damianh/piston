@@ -79,7 +79,7 @@ public sealed class OrchestratorCoverageTests
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task ProcessCoverageAsync(
-            long runId, IReadOnlyList<string> paths, IReadOnlyList<string> testFqns, ICoverageStore store)
+            long runId, IReadOnlyList<string> paths, IReadOnlyList<string> testFqns, ICoverageStore store, bool isFullRun)
         {
             await store.StoreCoverageAsync(runId,
                 new Dictionary<string, IReadOnlyList<TestLineCoverage>>
