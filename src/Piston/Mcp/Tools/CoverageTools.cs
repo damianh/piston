@@ -21,6 +21,16 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
     public const string GetChangedLineCoverageTool = "get_changed_line_coverage";
     public const string ExportCoverageTool = "export_coverage";
     public const string PlanAffectedTestsTool = "plan_affected_tests";
+    public const string RunAffectedTestsTool = "run_affected_tests";
+
+    private const string BaseDescription =
+        "What to compare: working (staged, unstaged and untracked changes against HEAD), branch (everything since the " +
+        "branch left baseRef, uncommitted changes included; baseRef defaults to origin/HEAD, else origin/main, " +
+        "origin/master, main or master) or range (baseRef is A..B, A...B or one commit). Defaults to working, or " +
+        "branch when baseRef is set.";
+
+    private const string BaseRefDescription =
+        "For branch: the branch or commit to compare against, e.g. main or origin/main. For range: the range or commit.";
 
     /// <summary>Source file types whose changed lines can be measured.</summary>
     private static readonly HashSet<string> CodeExtensions = new(StringComparer.OrdinalIgnoreCase) { ".cs", ".fs", ".vb" };
@@ -87,12 +97,14 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
 
     [McpServerTool(Name = GetChangedLineCoverageTool), Description(
         "Get coverage of the lines you changed, as JSON (schema piston.changed-line-coverage/v1). Compares the working " +
-        "tree (staged, unstaged and untracked files) with HEAD, or with the merge base of baseRef and HEAD. For each " +
+        "tree (staged, unstaged and untracked files) with HEAD, or with the merge base of baseRef and HEAD, or a commit " +
+        "range (whose line numbers match the coverage only when it ends at the checked-out state). For each " +
         "changed source file: covered, partially covered and uncovered changed lines (non-executable lines are ignored). " +
         "Files changed since the last run that measured them are reported as stale with no line verdicts: run the tests " +
         "first. Requires the daemon to run with coverage enabled.")]
     public async Task<string> GetChangedLineCoverageAsync(
-        [Description("Branch or commit to compare against, e.g. main or origin/main. Defaults to HEAD.")] string? baseRef = null,
+        [Description(BaseRefDescription)] string? baseRef = null,
+        [Description(BaseDescription)] string? @base = null,
         CancellationToken ct = default)
     {
         availability?.ThrowIfUnavailable();
@@ -106,22 +118,9 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                 throw new McpException("Coverage is disabled. Start Piston with --coverage or set coverageEnabled in .piston.json.");
             }
 
-            if (!string.IsNullOrWhiteSpace(baseRef) && !ChangedLines.IsValidRevision(baseRef))
-            {
-                throw new McpException($"'{baseRef}' is not a valid git revision.");
-            }
-
             var solutionDirectory = SolutionDirectory()
                 ?? throw new McpException("No solution is loaded.");
-            ChangedLinesResult changes;
-            try
-            {
-                changes = await ChangedLines.GetAsync(solutionDirectory, baseRef, ct).ConfigureAwait(false);
-            }
-            catch (InvalidOperationException ex)
-            {
-                throw new McpException(ex.Message);
-            }
+            var changes = await GitChangesAsync(solutionDirectory, @base, baseRef, ct).ConfigureAwait(false);
 
             var json = ChangedLineCoverage(changes, solutionDirectory, engine.GetFileCoverage);
             summary = $"{json["totals"]!["uncovered"]} uncovered of {json["totals"]!["executable"]} changed executable line(s)";
@@ -202,19 +201,79 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
             ["files"] = files,
             ["staleFiles"] = stale,
             ["notMeasuredFiles"] = notMeasured,
+            ["warnings"] = Strings(changes.Warnings),
         };
+    }
+
+    private static JsonArray Strings(IEnumerable<string> values) => [.. values.Select(v => (JsonNode)v!)];
+
+    /// <summary>Reads git changes for the tools, turning bad input and git failures into tool errors.</summary>
+    private static async Task<ChangedLinesResult> GitChangesAsync(
+        string solutionDirectory, string? @base, string? baseRef, CancellationToken ct)
+    {
+        if (!ChangedLines.TryParseBase(@base, baseRef, out var kind))
+        {
+            throw new McpException($"'{@base}' is not a base: use working, branch or range.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(baseRef) && !ChangedLines.IsValidRevision(baseRef))
+        {
+            throw new McpException($"'{baseRef}' is not a valid git revision.");
+        }
+
+        try
+        {
+            return await ChangedLines.GetAsync(solutionDirectory, kind, baseRef, ct).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new McpException(ex.Message);
+        }
+    }
+
+    /// <summary>The changed files and the plan for them; an empty change set plans nothing.</summary>
+    private async Task<(JsonObject Json, ImpactAnalysisResult Plan)> PlanAsync(
+        string solutionDirectory, string[]? files, string? @base, string? baseRef, CancellationToken ct)
+    {
+        string basis;
+        IReadOnlyList<string> changed;
+        IReadOnlyList<string> warnings = [];
+        if (files is { Length: > 0 })
+        {
+            basis = "files";
+            changed = [.. files.Where(f => !string.IsNullOrWhiteSpace(f)).Select(f => Path.GetFullPath(f, solutionDirectory))];
+        }
+        else
+        {
+            var changes = await GitChangesAsync(solutionDirectory, @base, baseRef, ct).ConfigureAwait(false);
+            basis = changes.Basis;
+            warnings = changes.Warnings;
+            changed = [.. changes.Files.Keys.Order(StringComparer.Ordinal)];
+        }
+
+        var plan = changed.Count == 0
+            ? new ImpactAnalysisResult([], [], RequiresGraphRebuild: false, IsFullRun: false)
+            {
+                Explanation = "No file changed, so nothing would run.",
+            }
+            : engine.PlanAffected(changed) ?? throw new McpException("This engine cannot plan affected tests.");
+        var json = AffectedPlan(basis, changed, plan, solutionDirectory);
+        json["warnings"] = Strings(warnings);
+        return (json, plan);
     }
 
     [McpServerTool(Name = PlanAffectedTestsTool), Description(
         "Preview which projects and tests Piston would build and run for a set of changed files, as JSON (schema " +
-        "piston.affected-plan/v1). Runs nothing and changes no state. Without files, uses the working tree's changes " +
-        "against HEAD (or the merge base with baseRef). scope is full (every test), projects (every test in the listed " +
-        "test projects) or tests (only the listed tests); explanation says why. With coverage, each selected test lists " +
-        "the changed lines that selected it and the granularity of the evidence: run- or class-level evidence " +
-        "over-selects and does not mean that test executed those lines.")]
+        "piston.affected-plan/v1). Runs nothing and changes no state. Without files, uses git changes: the working " +
+        "tree against HEAD by default, a branch since it left its base, or a commit range (see base). scope is full " +
+        "(every test), projects (every test in the listed test projects), tests (only the listed tests) or none; " +
+        "explanation says why. With coverage, each selected test lists the changed lines that selected it and the " +
+        "granularity of the evidence: run- or class-level evidence over-selects and does not mean that test executed " +
+        "those lines. Use run_affected_tests to run the plan.")]
     public async Task<string> PlanAffectedTestsAsync(
         [Description("Changed files, absolute or relative to the solution directory. Omit to use git changes.")] string[]? files = null,
-        [Description("When files is omitted: branch or commit to compare against. Defaults to HEAD.")] string? baseRef = null,
+        [Description("When files is omitted: " + BaseRefDescription)] string? baseRef = null,
+        [Description("When files is omitted: " + BaseDescription)] string? @base = null,
         CancellationToken ct = default)
     {
         availability?.ThrowIfUnavailable();
@@ -225,51 +284,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         {
             var solutionDirectory = SolutionDirectory()
                 ?? throw new McpException("No solution is loaded.");
-            string basis;
-            IReadOnlyList<string> changed;
-            if (files is { Length: > 0 })
-            {
-                basis = "files";
-                changed = [.. files.Where(f => !string.IsNullOrWhiteSpace(f)).Select(f => Path.GetFullPath(f, solutionDirectory))];
-            }
-            else
-            {
-                if (!string.IsNullOrWhiteSpace(baseRef) && !ChangedLines.IsValidRevision(baseRef))
-                {
-                    throw new McpException($"'{baseRef}' is not a valid git revision.");
-                }
-
-                ChangedLinesResult changes;
-                try
-                {
-                    changes = await ChangedLines.GetAsync(solutionDirectory, baseRef, ct).ConfigureAwait(false);
-                }
-                catch (InvalidOperationException ex)
-                {
-                    throw new McpException(ex.Message);
-                }
-
-                basis = changes.Basis;
-                changed = [.. changes.Files.Keys.Order(StringComparer.Ordinal)];
-            }
-
-            JsonObject json;
-            if (changed.Count == 0)
-            {
-                json = AffectedPlan(basis, changed,
-                    new ImpactAnalysisResult([], [], RequiresGraphRebuild: false, IsFullRun: false)
-                    {
-                        Explanation = "No file changed, so nothing would run.",
-                    },
-                    solutionDirectory);
-            }
-            else
-            {
-                var plan = engine.PlanAffected(changed)
-                    ?? throw new McpException("This engine cannot plan affected tests.");
-                json = AffectedPlan(basis, changed, plan, solutionDirectory);
-            }
-
+            var (json, _) = await PlanAsync(solutionDirectory, files, @base, baseRef, ct).ConfigureAwait(false);
             summary = $"{json["scope"]}: {json["explanation"]}";
             succeeded = true;
             return json.ToJsonString(WriteOptions);
@@ -277,10 +292,100 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         finally
         {
             sw.Stop();
-            recorder.Record(PlanAffectedTestsTool, files is { Length: > 0 } ? string.Join(", ", files) : baseRef, summary,
+            recorder.Record(PlanAffectedTestsTool, Describe(files, @base, baseRef), summary,
                 sw.Elapsed.TotalMilliseconds, succeeded);
         }
     }
+
+    [McpServerTool(Name = RunAffectedTestsTool), Description(
+        "Run the tests affected by a set of changed files and wait for the run, as JSON: the plan of " +
+        "plan_affected_tests (schema piston.affected-plan/v1) plus run (its ID, status and counts, or null when nothing " +
+        "is affected). Without files, uses git changes (see base): e.g. base=branch runs what changed since the branch " +
+        "left main. A full-scope plan runs every test. Selection is a heuristic: use verify for full verification.")]
+    public async Task<string> RunAffectedTestsAsync(
+        [Description("Changed files, absolute or relative to the solution directory. Omit to use git changes.")] string[]? files = null,
+        [Description("When files is omitted: " + BaseRefDescription)] string? baseRef = null,
+        [Description("When files is omitted: " + BaseDescription)] string? @base = null,
+        [Description("How long to wait for the run in seconds (default 600). On timeout the run continues.")] int timeoutSeconds = 600,
+        CancellationToken ct = default)
+    {
+        availability?.ThrowIfUnavailable();
+        var sw = Stopwatch.StartNew();
+        var succeeded = false;
+        string? summary = null;
+        try
+        {
+            var solutionDirectory = SolutionDirectory()
+                ?? throw new McpException("No solution is loaded.");
+            var (json, plan) = await PlanAsync(solutionDirectory, files, @base, baseRef, ct).ConfigureAwait(false);
+            var scope = json["scope"]!.GetValue<string>();
+            Task<TestRunRecord?> run;
+            try
+            {
+                run = scope switch
+                {
+                    "none" => Task.FromResult<TestRunRecord?>(null),
+                    "full" => engine.RequestRunAsync(),
+                    _ => AsNullable(engine.RunSelectedAsync(Selection(plan))),
+                };
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NotSupportedException)
+            {
+                throw new McpException($"Could not start the run: {ex.Message}");
+            }
+
+            TestRunRecord? record;
+            try
+            {
+                record = await run.WaitAsync(TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 3600)), ct)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException)
+            {
+                throw new McpException(
+                    $"The run did not finish within {timeoutSeconds}s; it continues. Use get_test_results to follow it.");
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+            {
+                throw new McpException($"Could not start the run: {ex.Message}");
+            }
+
+            json["run"] = record is null ? null : RunSummary(record);
+            summary = record is null
+                ? $"{scope}: nothing to run"
+                : $"{scope}: run {record.RunId} {record.Status}";
+            succeeded = true;
+            return json.ToJsonString(WriteOptions);
+        }
+        finally
+        {
+            sw.Stop();
+            recorder.Record(RunAffectedTestsTool, Describe(files, @base, baseRef), summary,
+                sw.Elapsed.TotalMilliseconds, succeeded);
+        }
+
+        static async Task<TestRunRecord?> AsNullable(Task<TestRunRecord> task) => await task.ConfigureAwait(false);
+    }
+
+    /// <summary>The test projects of a narrowed or project-scope plan, by suite name, with its tests when narrowed.</summary>
+    internal static TestSelection Selection(ImpactAnalysisResult plan) => new(
+        [.. plan.AffectedTestProjectPaths.Select(Path.GetFileNameWithoutExtension).OfType<string>()
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
+        plan.NarrowsToTests ? [.. (plan.AffectedTestFqns ?? []).Order(StringComparer.Ordinal)] : null);
+
+    private static JsonObject RunSummary(TestRunRecord run) => new()
+    {
+        ["runId"] = run.RunId,
+        ["status"] = run.Status.ToString(),
+        ["passed"] = run.Tests.Count(t => t.Status == TestStatus.Passed),
+        ["failed"] = run.Tests.Count(t => t.Status == TestStatus.Failed),
+        ["skipped"] = run.Tests.Count(t => t.Status == TestStatus.Skipped),
+    };
+
+    private static string? Describe(string[]? files, string? @base, string? baseRef) =>
+        files is { Length: > 0 } ? string.Join(", ", files)
+        : @base is null && baseRef is null ? null
+        : $"{@base ?? "branch"} {baseRef}".Trim();
 
     internal static JsonObject AffectedPlan(
         string basis, IReadOnlyList<string> changedFiles, ImpactAnalysisResult plan, string solutionDirectory)

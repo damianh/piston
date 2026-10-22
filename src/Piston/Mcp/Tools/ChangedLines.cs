@@ -24,22 +24,129 @@ internal static partial class ChangedLines
 
     public static bool IsValidRevision(string revision) => revision.Length <= 200 && RevisionPattern().IsMatch(revision);
 
+    /// <summary>The git object name of the empty tree, used as the parent of a root commit.</summary>
+    private const string EmptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+    /// <summary>Bases tried, in order, when <see cref="ChangeBase.Branch"/> has no ref and origin/HEAD is not set.</summary>
+    private static readonly string[] DefaultBranchCandidates = ["origin/main", "origin/master", "main", "master"];
+
+    /// <summary>Parses a base name; null or empty means <see cref="ChangeBase.Working"/>, or <see cref="ChangeBase.Branch"/> with a ref.</summary>
+    public static bool TryParseBase(string? text, string? reference, out ChangeBase kind)
+    {
+        ChangeBase? parsed = text?.Trim().ToLowerInvariant() switch
+        {
+            null or "" => string.IsNullOrWhiteSpace(reference) ? ChangeBase.Working : ChangeBase.Branch,
+            "working" => ChangeBase.Working,
+            "branch" => ChangeBase.Branch,
+            "range" => ChangeBase.Range,
+            _ => null,
+        };
+        kind = parsed ?? ChangeBase.Working;
+        return parsed is not null;
+    }
+
     /// <summary>
     /// Returns each changed file's absolute path with its added or modified line numbers. Untracked files count
     /// as wholly changed. With a <paramref name="baseRevision"/>, changes are taken since its merge base with HEAD.
     /// </summary>
-    public static async Task<ChangedLinesResult> GetAsync(string directory, string? baseRevision, CancellationToken ct)
+    public static Task<ChangedLinesResult> GetAsync(string directory, string? baseRevision, CancellationToken ct) =>
+        GetAsync(directory, string.IsNullOrWhiteSpace(baseRevision) ? ChangeBase.Working : ChangeBase.Branch, baseRevision, ct);
+
+    /// <summary>
+    /// Returns each changed file's absolute path with its added or modified line numbers (new side).
+    /// <list type="bullet">
+    /// <item><see cref="ChangeBase.Working"/>: staged, unstaged and untracked changes against HEAD.</item>
+    /// <item><see cref="ChangeBase.Branch"/>: the working tree, untracked files included, against the merge base of
+    /// <paramref name="reference"/> (default: origin/HEAD, else origin/main, origin/master, main or master) and HEAD.
+    /// Without a merge base, as in a shallow clone, it compares with the ref directly and adds a warning.</item>
+    /// <item><see cref="ChangeBase.Range"/>: <c>A..B</c> (A against B), <c>A...B</c> (the merge base of A and B against
+    /// B) or a single commit (its own changes). An empty side means HEAD.</item>
+    /// </list>
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Git failed, a ref is unknown or invalid, or no base was found.</exception>
+    public static async Task<ChangedLinesResult> GetAsync(
+        string directory, ChangeBase kind, string? reference, CancellationToken ct)
     {
         var top = (await RunGitAsync(directory, ["rev-parse", "--show-toplevel"], ct).ConfigureAwait(false)).Trim();
-        var basis = "HEAD";
-        if (!string.IsNullOrWhiteSpace(baseRevision))
+        var warnings = new List<string>();
+        string basis;
+        string[] revisions;
+        var includeUntracked = true;
+        switch (kind)
         {
-            basis = (await RunGitAsync(directory, ["merge-base", baseRevision, "HEAD"], ct).ConfigureAwait(false)).Trim();
+            case ChangeBase.Branch:
+                {
+                    var target = string.IsNullOrWhiteSpace(reference)
+                        ? await DefaultBranchAsync(top, ct).ConfigureAwait(false)
+                            ?? throw new InvalidOperationException(
+                                "No base branch found (origin/HEAD, origin/main, origin/master, main, master): pass baseRef.")
+                        : RequireRevision(reference);
+                    await RequireKnownAsync(top, target, ct).ConfigureAwait(false);
+                    var mergeBase = await TryRunGitAsync(top, ["merge-base", target, "HEAD"], ct).ConfigureAwait(false);
+                    if (string.IsNullOrWhiteSpace(mergeBase))
+                    {
+                        warnings.Add($"{target} and HEAD have no merge base (shallow clone?): compared with {target} directly.");
+                        basis = target;
+                    }
+                    else
+                    {
+                        basis = mergeBase.Trim();
+                    }
+
+                    revisions = [basis];
+                    break;
+                }
+
+            case ChangeBase.Range:
+                {
+                    if (string.IsNullOrWhiteSpace(reference))
+                    {
+                        throw new InvalidOperationException("A range needs baseRef, e.g. main..HEAD, main...HEAD or a commit.");
+                    }
+
+                    includeUntracked = false;
+                    basis = reference;
+                    var threeDot = reference.IndexOf("...", StringComparison.Ordinal);
+                    var twoDot = reference.IndexOf("..", StringComparison.Ordinal);
+                    if (threeDot >= 0 || twoDot >= 0)
+                    {
+                        var (left, right) = threeDot >= 0
+                            ? (reference[..threeDot], reference[(threeDot + 3)..])
+                            : (reference[..twoDot], reference[(twoDot + 2)..]);
+                        var from = Side(left);
+                        var to = Side(right);
+                        await RequireKnownAsync(top, from, ct).ConfigureAwait(false);
+                        await RequireKnownAsync(top, to, ct).ConfigureAwait(false);
+                        if (threeDot >= 0)
+                        {
+                            from = (await TryRunGitAsync(top, ["merge-base", from, to], ct).ConfigureAwait(false))?.Trim() is { Length: > 0 } mb
+                                ? mb
+                                : throw new InvalidOperationException($"{from} and {to} have no merge base.");
+                        }
+
+                        revisions = [from, to];
+                    }
+                    else
+                    {
+                        var commit = RequireRevision(reference);
+                        await RequireKnownAsync(top, commit, ct).ConfigureAwait(false);
+                        var parent = await TryRunGitAsync(top, ["rev-parse", "--verify", "--quiet", commit + "^"], ct)
+                            .ConfigureAwait(false);
+                        revisions = [string.IsNullOrWhiteSpace(parent) ? EmptyTree : parent.Trim(), commit];
+                    }
+
+                    break;
+                }
+
+            default:
+                basis = "HEAD";
+                revisions = ["HEAD"];
+                break;
         }
 
         var diff = await RunGitAsync(
             top,
-            ["-c", "core.quotepath=off", "diff", "--unified=0", "--no-color", "--no-ext-diff", "--no-renames", basis, "--"],
+            ["-c", "core.quotepath=off", "diff", "--unified=0", "--no-color", "--no-ext-diff", "--no-renames", .. revisions, "--"],
             ct).ConfigureAwait(false);
         var files = new Dictionary<string, SortedSet<int>>(StringComparer.Ordinal);
         foreach (var (path, lines) in ParseAddedLines(diff))
@@ -47,14 +154,66 @@ internal static partial class ChangedLines
             files[Path.GetFullPath(Path.Combine(top, path))] = lines;
         }
 
-        var untracked = await RunGitAsync(top, ["ls-files", "--others", "--exclude-standard", "-z"], ct).ConfigureAwait(false);
-        foreach (var path in untracked.Split('\0', StringSplitOptions.RemoveEmptyEntries))
+        if (includeUntracked)
         {
-            var full = Path.GetFullPath(Path.Combine(top, path));
-            files[full] = new SortedSet<int>(Enumerable.Range(1, CountLines(full)));
+            var untracked = await RunGitAsync(top, ["ls-files", "--others", "--exclude-standard", "-z"], ct).ConfigureAwait(false);
+            foreach (var path in untracked.Split('\0', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var full = Path.GetFullPath(Path.Combine(top, path));
+                files[full] = new SortedSet<int>(Enumerable.Range(1, CountLines(full)));
+            }
         }
 
-        return new ChangedLinesResult(basis, files);
+        return new ChangedLinesResult(basis, files) { Warnings = warnings };
+
+        static string Side(string side) => side.Length == 0 ? "HEAD" : RequireRevision(side);
+    }
+
+    private static string RequireRevision(string revision) =>
+        IsValidRevision(revision) && !revision.Contains("..", StringComparison.Ordinal)
+            ? revision
+            : throw new InvalidOperationException($"'{revision}' is not a valid git revision.");
+
+    private static async Task RequireKnownAsync(string top, string revision, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(
+            await TryRunGitAsync(top, ["rev-parse", "--verify", "--quiet", revision + "^{commit}"], ct).ConfigureAwait(false)))
+        {
+            throw new InvalidOperationException($"'{revision}' is not a known commit.");
+        }
+    }
+
+    private static async Task<string?> DefaultBranchAsync(string top, CancellationToken ct)
+    {
+        var originHead = await TryRunGitAsync(top, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], ct)
+            .ConfigureAwait(false);
+        if (!string.IsNullOrWhiteSpace(originHead))
+        {
+            return originHead.Trim();
+        }
+
+        foreach (var candidate in DefaultBranchCandidates)
+        {
+            if (!string.IsNullOrWhiteSpace(
+                await TryRunGitAsync(top, ["rev-parse", "--verify", "--quiet", candidate + "^{commit}"], ct).ConfigureAwait(false)))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    private static async Task<string?> TryRunGitAsync(string directory, IReadOnlyList<string> args, CancellationToken ct)
+    {
+        try
+        {
+            return await RunGitAsync(directory, args, ct).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Parses <c>git diff --unified=0</c> output into repository-relative paths and added line numbers.</summary>
@@ -177,6 +336,8 @@ internal static partial class ChangedLines
         }
 
         _ = ChildProcessEnvironment.Prepare(psi);
+        psi.Environment["GIT_OPTIONAL_LOCKS"] = "0";
+        psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("Could not start git.");
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(GitTimeout);
@@ -202,4 +363,16 @@ internal static partial class ChangedLines
 }
 
 /// <summary>Changed lines per absolute file path, relative to <paramref name="Basis"/>.</summary>
-internal sealed record ChangedLinesResult(string Basis, IReadOnlyDictionary<string, SortedSet<int>> Files);
+internal sealed record ChangedLinesResult(string Basis, IReadOnlyDictionary<string, SortedSet<int>> Files)
+{
+    /// <summary>Caveats about the comparison, such as a missing merge base.</summary>
+    public IReadOnlyList<string> Warnings { get; init; } = [];
+}
+
+/// <summary>What changes are compared against: see <see cref="ChangedLines.GetAsync(string, ChangeBase, string?, CancellationToken)"/>.</summary>
+internal enum ChangeBase
+{
+    Working,
+    Branch,
+    Range,
+}

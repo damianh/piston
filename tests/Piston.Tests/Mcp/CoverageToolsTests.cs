@@ -198,7 +198,7 @@ public sealed class CoverageToolsTests : IDisposable
         engine.CoverageReport = new CoverageReportSnapshot([]);
         var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
 
-        _ = await Assert.ThrowsAsync<McpException>(() => tools.GetChangedLineCoverageAsync("--output=/tmp/x", _ct));
+        _ = await Assert.ThrowsAsync<McpException>(() => tools.GetChangedLineCoverageAsync("--output=/tmp/x", ct: _ct));
     }
 
     [Fact]

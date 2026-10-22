@@ -157,9 +157,10 @@ To set up a coding agent, follow [docs/agent-usage.md](docs/agent-usage.md). It 
 | `get_test_results` | Read current accumulated test results (may combine several runs; each suite shows its run ID). |
 | `set_test_filter` | Apply a test name filter. |
 | `get_coverage` | Line and branch coverage as JSON (`piston.coverage/v1`). Without `file`: solution and per-module totals plus the files with the most uncovered lines (`maxFiles`, default 50). With `file`: its totals and its uncovered and partly covered line ranges. Requires coverage. |
-| `get_changed_line_coverage` | Coverage of the lines changed in the working tree (staged, unstaged and untracked) against `HEAD`, or against the merge base with `baseRef`, as JSON (`piston.changed-line-coverage/v1`). Files changed since they were last measured are reported as stale with no line verdicts. Requires coverage. |
+| `get_changed_line_coverage` | Coverage of the changed lines (see [git bases](#git-bases)), as JSON (`piston.changed-line-coverage/v1`). Files changed since they were last measured are reported as stale with no line verdicts. Requires coverage. |
 | `export_coverage` | Write the coverage report as LCOV or Cobertura (`format`) to `outputPath`, which must be inside the solution directory (default `.piston/coverage/lcov.info` or `cobertura.xml`). Requires coverage. |
-| `plan_affected_tests` | Preview what Piston would build and run for `files` (or the working tree's git changes against `HEAD`/`baseRef`) without running anything, as JSON (`piston.affected-plan/v1`): `scope` (`full`, `projects` or `tests`), an `explanation`, the projects, and with coverage the selected tests with the changed lines that selected each and the granularity of that evidence (`run`, `class` or `test`). |
+| `plan_affected_tests` | Preview what Piston would build and run for `files` (or git changes, see [git bases](#git-bases)) without running anything, as JSON (`piston.affected-plan/v1`): `scope` (`full`, `projects`, `tests` or `none`), an `explanation`, the projects, any `warnings`, and with coverage the selected tests with the changed lines that selected each and the granularity of that evidence (`run`, `class` or `test`). |
+| `run_affected_tests` | Run that plan and wait for it: the same JSON plus `run` (ID, status and counts; null when nothing is affected). For example, `base: "branch"` runs the tests affected by everything since the branch left `main`. |
 | `clear_results` | Clear current test suites, last-run timestamp, coverage state, and persisted coverage in the current solution directory. A running test run may publish new results afterwards. |
 
 These are the retained test tools. `LoadWorkspace`, `GetDiagnostics`,
@@ -241,6 +242,16 @@ Project ownership and transitive dependencies determine affected test projects (
 Selection by lines is a heuristic, not a proof: code reached through reflection, static state, configuration or data files can affect a test without appearing in its executed lines, and a forced or full run remains the authority. `plan_affected_tests` previews a selection with the changed lines and evidence granularity behind each test.
 
 Coverage persists in `.piston/piston.db`: the merged line and branch report (what the dashboard, `get_coverage` and the exports read), the file-level test associations and the impact map used for selection. Test-result history and the project graph do not persist. Only files under the solution directory are recorded, so code a test loads from elsewhere (such as fixture projects built in a temp directory) does not count. A full, unfiltered run replaces the report; a selective run adds hits to unchanged files and marks new or changed files it measured as partial. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, running it through `dotnet test` rather than server mode (so without live per-test progress); without it, the project runs without coverage and its run log says why.
+
+### Git bases
+
+The git-based tools take `base` and `baseRef`:
+
+| `base` | Changes |
+| --- | --- |
+| `working` (default) | Staged, unstaged and untracked changes against `HEAD`. |
+| `branch` (default when `baseRef` is set) | Everything since the branch left `baseRef`, uncommitted and untracked changes included. Without `baseRef`, the base is `origin/HEAD`, else the first of `origin/main`, `origin/master`, `main` and `master` that exists. Without a merge base (a shallow clone), Piston compares with `baseRef` directly and warns. |
+| `range` | `baseRef` is `A..B` (A against B), `A...B` (the merge base of A and B against B) or one commit (its own changes). An empty side means `HEAD`. |
 
 ### Selective builds
 
