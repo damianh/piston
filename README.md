@@ -62,11 +62,16 @@ piston mcp [<solution>] [--debounce <ms>] [--filter <pattern>] [--coverage] [--p
 # Manage a running daemon / inspect worktree owners
 piston stop [<solution>] [--force]
 piston status [<solution>] [--all]
+
+# Export the running daemon's coverage report (stdout unless -o is given)
+piston coverage-export [<solution>] [--format lcov|cobertura] [-o <file>]
 ```
 
 `piston status --all` lists every live worktree owner (PID, `mcp` or `daemon`, solution, worktree) and stale ownership records. If a worktree's owner cannot be reached over the daemon pipe (for example a `piston mcp` process, or a daemon whose worktree was deleted), `piston stop` prints the owner's PID, solution and worktree and exits 1; `piston stop --force` sends SIGTERM and kills the process if it has not exited.
 
 `piston status` prints the daemon's PID, solution, phase, web and MCP URLs, and its latest and active run. `piston stop` asks the daemon to shut down, then waits for its process to exit. It exits 0 only once the process has exited, so the ports are free; with no daemon running it prints `No daemon running` and also exits 0. Startup failures exit with code 1 and an `error:` message: a worktree that already has a daemon, or an occupied `--mcp-port`/`--web-port`. Endpoints bind after worktree ownership is taken and before the startup run, so a port conflict starts no build or test run.
+
+`piston coverage-export` asks the running daemon for its coverage report and writes it as LCOV (default) or Cobertura XML, for editors, CI or ReportGenerator. Files changed since they were measured are left out. It exits 1 when no daemon is running or coverage is disabled.
 
 `<solution>` is a path to a `.sln`, `.slnx`, or `.slnf` file. An explicit argument wins; otherwise Piston uses the `solution` field in the current directory's `.piston.json`, resolved relative to that file. Without a configured path, exactly one solution must exist in the current directory; multiple candidates require an explicit or configured path. A missing or invalid configured solution is an error, not a discovery fallback.
 
@@ -104,6 +109,8 @@ The daemon serves a Blazor WebAssembly dashboard (default `http://localhost:5199
 Clicking any node in the tree shows its details; double-click or the chevron expands or collapses it. A test's details show its captured output (what the test wrote, e.g. via xUnit's `TestContext.Current.TestOutputHelper`) and link to its project. A project, framework, namespace, class, status or pinned node shows its result counts, failures, slowest tests and (for status and pinned groups) the projects they come from. Every details pane has a **Run** button that builds the affected projects and runs just those tests; it is disabled while another run is in progress. The build is skipped (status `Skipped`) when the last successful build covered those projects, its run finished `Current`, and since then the source fingerprint is unchanged, the watcher has seen no change and the test outputs still exist. A run selects tests by name, so a framework node or a multi-targeted test runs on every framework its project targets, and a theory runs all of its cases. Projects are named by file name, so test projects sharing one (e.g. `One/Tests.csproj` and `Two/Tests.csproj`) show as a single node and run together. A project's details also show the run log of its latest run, one process covering all of its target frameworks: the runner Piston chose (VSTest, MTP server or MTP `dotnet test`), the command line, fallbacks, the process's console output and its exit code. Each log keeps the first 1,500 and last 500 lines of a run.
 
 Project, framework, namespace, class and pinned rows show how many tests they contain, with how many passed (✓) and failed (✗), and every group row shows its tests' summed duration. **Run failed** in the toolbar re-runs every failed test, and the ⏱ toggle lists tests slowest first. When a failure message has an expected and an actual value (xUnit, NUnit, MSTest or Shouldly), the test's details show them side by side with the difference highlighted. The browser tab's title and favicon show the run state (busy, passed or failed), so a background tab still tells you how the last run went, and screen readers announce when a run starts and finishes.
+
+The **Coverage** tab (when the daemon runs with coverage enabled) shows line and branch totals, the measured files grouped by module (filterable, sorted by path or by most uncovered lines) and the selected file's source with each line's hit count: covered lines green, partly covered branches yellow, uncovered lines red. A file is marked *stale* when it changed since it was measured and *partial* when only a selective run measured it. The figures are aggregate coverage of the tests that ran, not per-test attribution. The tab links to LCOV and Cobertura downloads, which the daemon also serves at `/api/coverage/lcov` and `/api/coverage/cobertura`.
 
 Keyboard shortcuts (press `?` in the dashboard for the list): `R` runs the selection, `[` and `]` move to the previous or next failure, `1`–`4` show or hide failed, passed, skipped and not-run tests, `G` cycles the grouping, `E` expands or collapses all, and `S` sorts slowest first.
 
@@ -146,6 +153,9 @@ To set up a coding agent, follow [docs/agent-usage.md](docs/agent-usage.md). It 
 | `get_test_run` | Read one run's solution path, provenance, build diagnostics and per-test results as JSON (`piston.test-run/v1`): `runId` = an ID, `latest` (default) or `active`. |
 | `get_test_results` | Read current accumulated test results (may combine several runs; each suite shows its run ID). |
 | `set_test_filter` | Apply a test name filter. |
+| `get_coverage` | Line and branch coverage as JSON (`piston.coverage/v1`). Without `file`: solution and per-module totals plus the files with the most uncovered lines (`maxFiles`, default 50). With `file`: its totals and its uncovered and partly covered line ranges. Requires coverage. |
+| `get_changed_line_coverage` | Coverage of the lines changed in the working tree (staged, unstaged and untracked) against `HEAD`, or against the merge base with `baseRef`, as JSON (`piston.changed-line-coverage/v1`). Files changed since they were last measured are reported as stale with no line verdicts. Requires coverage. |
+| `export_coverage` | Write the coverage report as LCOV or Cobertura (`format`) to `outputPath`, which must be inside the solution directory (default `.piston/coverage/lcov.info` or `cobertura.xml`). Requires coverage. |
 | `clear_results` | Clear current test suites, last-run timestamp, coverage state, and persisted coverage in the current solution directory. A running test run may publish new results afterwards. |
 
 These are the retained test tools. `LoadWorkspace`, `GetDiagnostics`,
@@ -217,7 +227,7 @@ Limits: this is admission control by reservation. Piston does not cap the actual
 
 Project ownership and transitive dependencies determine affected test projects. The optional Tier 3 path adds a file-based test-FQN filter when usable coverage exists. It is **not verified per-test/changed-line selection**: `CoverageProcessor` unions covered lines across reports and attributes them to every test returned in that run. The analyzer queries whole files, not changed line ranges.
 
-Coverage associations persist in `.piston/piston.db`; test-result history and the project graph do not. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, running it through `dotnet test` rather than server mode (so without live per-test progress); without it, the project runs without coverage and its run log says why. Fine-grained attribution and selection correctness are future experiments.
+Coverage persists in `.piston/piston.db`: the merged line and branch report (what the dashboard, `get_coverage` and the exports read) and the run-level test associations used for selection. Test-result history and the project graph do not persist. Only files under the solution directory are recorded, so code a test loads from elsewhere (such as fixture projects built in a temp directory) does not count. A full, unfiltered run replaces the report; a selective run adds hits to unchanged files and marks new or changed files it measured as partial. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, running it through `dotnet test` rather than server mode (so without live per-test progress); without it, the project runs without coverage and its run log says why. Fine-grained attribution and selection correctness are future experiments.
 
 ### Selective builds
 

@@ -61,11 +61,12 @@ Its URL is the root, `http://localhost:5200`, not `/mcp`.
 Implemented protocol operations include stop, force run, set filter, clear
 results, state retrieval, and MCP call-log retrieval. `engine/start` is rejected
 by the headless dispatcher because the solution is configured at launch.
-The file-coverage request currently returns an empty line list; the presence of
-coverage contracts does not establish a working line-coverage client API.
+Coverage requests return the solution's coverage summary, one file's line
+coverage (optionally with its source), and LCOV or Cobertura exports; the daemon
+also serves the exports over HTTP at `/api/coverage/{lcov|cobertura}`.
 Clients receive state, test progress, build errors, and activity notifications.
-The dashboard presents current test/build state, activity, and MCP call history;
-there is no diagnostic view.
+The dashboard presents current test/build state, aggregate coverage, activity,
+and MCP call history; there is no diagnostic view.
 
 See [README.md](README.md) for executable commands and the actual configuration
 shape. The protocol's stdio transport is not an MCP stdio server.
@@ -279,24 +280,41 @@ CI is configured for Linux and Windows. macOS execution has not been validated.
 ## Coverage and persistence
 
 Coverage is opt-in. The VSTest path requests `XPlat Code Coverage`, so the target
-test project needs a compatible collector (such as `coverlet.collector`). It
-parses Cobertura XML. The current MTP path does not pass coverage arguments or
-return coverage reports, so enabling `--coverage` does not make that backend
-produce coverage data.
+test project needs a compatible collector (such as `coverlet.collector`). The MTP
+path passes `--coverage --coverage-output-format cobertura` when the test app
+references `Microsoft.Testing.Extensions.CodeCoverage`, running it through
+`dotnet test` rather than server mode. Both produce Cobertura XML, which
+`CoverageProcessor` parses and merges across reports, dropping files outside the
+solution directory.
 
 When enabled, `SqliteCoverageStore` creates `<solution-directory>/.piston/piston.db`
-and uses WAL mode. Its implemented tables are:
+and uses WAL mode. Its tables are:
 
 | Table | Stored data |
 |---|---|
-| `coverage_map` | Run ID, test FQN, file path, line number, hit count, stale flag. |
+| `coverage_files` | Per-file line/branch totals, module, content hash, stale and partial flags. |
+| `coverage_lines` | Per-line hits and branch counts: the merged report. |
+| `coverage_sets` | One row per attribution set: run ID and granularity (currently always `run`). |
+| `coverage_set_tests` | The tests credited with a set. |
+| `coverage_set_lines` | The lines a set covers, with stale flag. |
 | `coverage_summary` | File path, last run ID, last-updated timestamp. |
 
-Processing replaces old associations for files present in new coverage data.
-Rows reflect the coarse attribution described above; hit counts are association
-values, not independently measured per-test execution counts.
+The report tables answer the dashboard, `get_coverage`, changed-line coverage and
+exports. A full, unfiltered run replaces them. A selective run merges its hits
+into files whose content hash is unchanged, and replaces (and marks partial) files
+that are new or changed. A file whose content no longer matches its hash is
+reported stale.
 
-Clearing results deletes both coverage tables' rows transactionally using a
+The set tables hold the coarse attribution described above. Tests that share one
+line list share one set, so a run stores its covered lines once rather than once
+per test. Processing replaces old associations for files present in new coverage
+data and prunes sets left without lines. Hit counts are association values, not
+independently measured per-test execution counts. Databases from older versions
+held a per-test `coverage_map` table; it is dropped on startup and refilled by the
+next coverage run. The store serializes all use of its connection, since the
+orchestrator and the impact analyzer call it from different threads.
+
+Clearing results deletes every coverage table's rows transactionally using a
 separate connection, including when collection is currently disabled. No database
 is created just to clear results. The storage boundary is the solution directory:
 solutions in the same directory share this database and its reset scope; other
