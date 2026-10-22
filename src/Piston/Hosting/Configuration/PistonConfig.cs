@@ -25,6 +25,12 @@ public sealed class PistonConfig
     public bool? CoverageEnabled { get; set; }
 
     /// <summary>
+    /// With coverage enabled, how finely to measure which tests execute which lines while idle:
+    /// "class" (default), "test" or "off".
+    /// </summary>
+    public string? ImpactBackfill { get; set; }
+
+    /// <summary>
     /// Maximum number of concurrent <c>dotnet test</c> processes.
     /// 0 means auto-detect. Corresponds to the <c>--parallelism</c> CLI flag.
     /// </summary>

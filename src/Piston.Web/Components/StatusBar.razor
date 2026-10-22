@@ -63,6 +63,20 @@
             </span>
         }
 
+        @if (Snapshot.ImpactBackfill is { } backfill)
+        {
+            var unit = backfill.CurrentUnit is { } key ? key[(key.LastIndexOf('.') + 1)..] : null;
+            <span class="flex items-center gap-1.5 min-w-0 text-violet-300"
+                  title="Measuring which lines each test @backfill.Granularity executes, so a change runs only the tests that executed it@(backfill.CurrentUnit is null ? "" : $"{Environment.NewLine}{backfill.CurrentUnit}")">
+                <span class="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse shrink-0"></span>
+                <span class="shrink-0 tabular-nums">Mapping coverage @backfill.Completed/@backfill.Total @(backfill.Granularity == "test" ? "tests" : "classes")</span>
+                @if (unit is not null)
+                {
+                    <span class="truncate text-gray-500">@unit</span>
+                }
+            </span>
+        }
+
         var suites = phase == PistonPhaseDto.Testing
             ? TestTreeBuilder.WithLiveOverlay(Snapshot.Suites, Snapshot.InProgressSuites)
             : Snapshot.Suites;

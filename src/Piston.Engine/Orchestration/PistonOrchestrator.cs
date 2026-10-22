@@ -10,7 +10,7 @@ using Piston.Engine.Verification;
 
 namespace Piston.Engine.Orchestration;
 
-public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
+public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 {
     private readonly IFileWatcherService _fileWatcher;
     private readonly IBuildService _buildService;
@@ -202,6 +202,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 {
                     _stopping = _disposed;
                     _cts?.Cancel();
+                    CancelBackfill();
                 }
 
                 // A pipeline holds the run lock until it finishes, so holding it here means no run
@@ -266,6 +267,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         _state.LastBuild = null;
         _state.LastBuildDuration = null;
         _buildBaseline = null;
+        _backfillFailed.Clear();
         _state.LastTestDuration = null;
         _state.LastTestRunnerError = null;
         _state.TotalExpectedTests = 0;
@@ -560,6 +562,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
     internal void ClearResults(string solutionDirectory)
     {
+        lock (_lifecycleLock)
+        {
+            CancelBackfill();
+        }
+
         _coverageLock.Wait();
         try
         {
@@ -696,6 +703,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         lock (_lifecycleLock)
         {
             _cts?.Cancel();
+            CancelBackfill();
         }
 
         _state.Phase = PistonPhase.Idle;
@@ -742,6 +750,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 _pipelinesDrained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             }
 
+            CancelBackfill();
             cts = new CancellationTokenSource();
             var oldCts = _cts;
             _cts = cts;
@@ -770,6 +779,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 if (--_activePipelines == 0)
                 {
                     _pipelinesDrained!.SetResult();
+                    ScheduleBackfill();
                 }
             }
         }
@@ -2008,16 +2018,18 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             _disposed = true;
             _stopping = true;
             _cts?.Cancel();
-            _disposeTask = DisposeCoreAsync(_activePipelines == 0 ? Task.CompletedTask : _pipelinesDrained!.Task);
+            CancelBackfill();
+            _disposeTask = DisposeCoreAsync(_activePipelines == 0 ? Task.CompletedTask : _pipelinesDrained!.Task, _backfillTask);
             return new ValueTask(_disposeTask);
         }
     }
 
-    private async Task DisposeCoreAsync(Task drained)
+    private async Task DisposeCoreAsync(Task drained, Task backfill)
     {
         _fileWatcher.FileChanged -= OnFileChanged;
         _fileWatcher.Dispose();
         await drained.ConfigureAwait(false);
+        await backfill.ConfigureAwait(false);
         if (_graphInitTask is { } graphInit)
         {
             await graphInit.ConfigureAwait(false);

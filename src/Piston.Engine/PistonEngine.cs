@@ -113,6 +113,12 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             _executionCoordinator);
 
         var sdkVersions = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<string?>>(StringComparer.Ordinal);
+        _orchestrator.BackfillGranularity = options.ImpactBackfill switch
+        {
+            ImpactBackfillMode.Class => Impact.ImpactGranularity.Class,
+            ImpactBackfillMode.Test => Impact.ImpactGranularity.Test,
+            _ => null,
+        };
         _orchestrator.SdkVersionProvider = dir => sdkVersions.GetOrAdd(dir, d => new Lazy<string?>(() => ProbeSdkVersion(d))).Value;
     }
 

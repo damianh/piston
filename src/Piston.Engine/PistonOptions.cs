@@ -24,6 +24,19 @@ public enum TestExecutionMode
     InProcess,
 }
 
+/// <summary>How finely the idle-time impact backfill measures which tests execute which lines.</summary>
+public enum ImpactBackfillMode
+{
+    /// <summary>No backfill: tests are attributed to lines per test project.</summary>
+    Off,
+
+    /// <summary>Measure each test class separately when idle.</summary>
+    Class,
+
+    /// <summary>Measure each test method separately when idle; precise but slow.</summary>
+    Test,
+}
+
 /// <summary>
 /// Resolved runtime options — merged from CLI args, .piston.json, and defaults.
 /// Passed into services at startup.
@@ -47,6 +60,12 @@ public sealed class PistonOptions
     /// <c>--collect "XPlat Code Coverage"</c> (coverlet). Default is false (opt-in).
     /// </summary>
     public bool CoverageEnabled { get; init; } = false;
+
+    /// <summary>
+    /// When coverage is enabled, measures each test class (or test) separately while the engine is idle so a
+    /// change runs only the tests that executed the changed lines. Default is <see cref="ImpactBackfillMode.Off"/>.
+    /// </summary>
+    public ImpactBackfillMode ImpactBackfill { get; init; } = ImpactBackfillMode.Off;
 
     /// <summary>
     /// Maximum number of concurrent <c>dotnet test</c> processes.

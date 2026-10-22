@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Coverage;
+using Piston.Engine.Impact;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
 using Xunit;
@@ -164,5 +165,8 @@ public sealed class OrchestratorCoverageTests
             _ = Committed.TrySetResult();
             await Release.Task;
         }
+
+        public Task RecordImpactAsync(long runId, CoverageImpactOptions impact, IImpactMapStore store, string? sourceRoot) =>
+            Task.CompletedTask;
     }
 }

@@ -95,6 +95,9 @@ public sealed class PistonState
     /// <summary>Human-readable Tier 3 impact detail, e.g. "Tier 3: 5 test(s) (coverage)". Null when using Tier 2.</summary>
     public string? CoverageImpactDetail { get; set; }
 
+    /// <summary>Progress of the idle-time impact backfill; null when it is not running.</summary>
+    public ImpactBackfillProgress? ImpactBackfill { get; set; }
+
     // ── Run provenance ───────────────────────────────────────────────────────
 
     /// <summary>Number of terminal runs retained in <see cref="RecentRuns"/> (in memory only).</summary>

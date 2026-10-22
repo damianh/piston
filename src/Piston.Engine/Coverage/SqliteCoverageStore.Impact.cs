@@ -323,18 +323,92 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
         _ = cmd.Parameters.AddWithValue("$project", projectPath);
         _ = cmd.Parameters.AddWithValue("$granularity", (int)granularity);
 
-        var units = new List<ImpactUnitInfo>();
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        var rows = new List<(string Key, long RunId, bool IsCurrent, DateTimeOffset RecordedAt)>();
+        using (var reader = cmd.ExecuteReader())
         {
-            units.Add(new ImpactUnitInfo(
-                reader.GetString(0),
-                reader.GetInt64(1),
-                reader.GetInt64(2) == 0,
-                DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture)));
+            while (reader.Read())
+            {
+                rows.Add((
+                    reader.GetString(0),
+                    reader.GetInt64(1),
+                    reader.GetInt64(2) == 0,
+                    DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture)));
+            }
         }
 
-        return units;
+        using var testsCmd = _connection!.CreateCommand();
+        testsCmd.CommandText = """
+            SELECT u.unit_key, t.test_fqn FROM impact_units u
+            JOIN impact_unit_tests t ON t.unit_id = u.unit_id
+            WHERE u.project_path = $project AND u.granularity = $granularity;
+            """;
+        _ = testsCmd.Parameters.AddWithValue("$project", projectPath);
+        _ = testsCmd.Parameters.AddWithValue("$granularity", (int)granularity);
+        var tests = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        using (var reader = testsCmd.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                var key = reader.GetString(0);
+                if (!tests.TryGetValue(key, out var list))
+                {
+                    tests[key] = list = [];
+                }
+
+                list.Add(reader.GetString(1));
+            }
+        }
+
+        return [.. rows.Select(r => new ImpactUnitInfo(
+            r.Key, r.RunId, r.IsCurrent, r.RecordedAt,
+            tests.TryGetValue(r.Key, out var list) ? [.. list.Order(StringComparer.Ordinal)] : []))];
+    }
+
+    public async Task RemoveUnitsAsync(string projectPath, ImpactGranularity granularity, IReadOnlyCollection<string> unitKeys)
+    {
+        if (unitKeys.Count == 0)
+        {
+            return;
+        }
+
+        using var gate = Enter();
+
+        using var transaction = _connection!.BeginTransaction();
+        try
+        {
+            using (var cmd = Command(transaction, """
+                DELETE FROM impact_unit_tests WHERE unit_id IN (
+                    SELECT unit_id FROM impact_units WHERE project_path = $project AND granularity = $granularity AND unit_key = $key);
+                DELETE FROM impact_unit_files WHERE unit_id IN (
+                    SELECT unit_id FROM impact_units WHERE project_path = $project AND granularity = $granularity AND unit_key = $key);
+                DELETE FROM impact_units WHERE project_path = $project AND granularity = $granularity AND unit_key = $key;
+                """))
+            {
+                _ = cmd.Parameters.AddWithValue("$project", projectPath);
+                _ = cmd.Parameters.AddWithValue("$granularity", (int)granularity);
+                var pKey = cmd.Parameters.Add("$key", SqliteType.Text);
+                foreach (var key in unitKeys)
+                {
+                    pKey.Value = key;
+                    _ = await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+            }
+
+            using (var pruneCmd = Command(transaction, """
+                DELETE FROM impact_snapshots
+                WHERE NOT EXISTS (SELECT 1 FROM impact_unit_files f WHERE f.snapshot_hash = impact_snapshots.snapshot_hash);
+                """))
+            {
+                _ = await pruneCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }
+
+            await transaction.CommitAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            await transaction.RollbackAsync().ConfigureAwait(false);
+            throw;
+        }
     }
 
     private sealed record FileUnit(long UnitId, string ProjectPath, ImpactGranularity Granularity, string Hash, string Spans);

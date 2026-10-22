@@ -313,7 +313,10 @@ public static class DtoMapper
             ActiveRun: state.CurrentRun?.ToDto(),
             TotalBuildProjects: state.TotalBuildProjects,
             CompletedBuildProjects: state.CompletedBuildProjects,
-            LastBuiltProject: state.LastBuiltProject
+            LastBuiltProject: state.LastBuiltProject,
+            ImpactBackfill: state.ImpactBackfill is { } backfill
+                ? new ImpactBackfillDto(backfill.Granularity, backfill.Completed, backfill.Total, backfill.CurrentUnit, backfill.ProjectPath)
+                : null
         );
 
     /// <summary>Largest source file whose text a coverage response carries, keeping it within message limits.</summary>

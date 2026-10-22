@@ -34,46 +34,25 @@ internal sealed class CoverageProcessor : ICoverageProcessor
         // Key: filePath, Value: set of line numbers with hits > 0
         var coveredLines = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
         var reportFiles = new Dictionary<string, FileCoverage>(StringComparer.OrdinalIgnoreCase);
-        var parsedAny = false;
-        var rootPrefix = sourceRoot is null ? null : Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourceRoot)) + Path.DirectorySeparatorChar;
-
-        var parsed = new Dictionary<string, IReadOnlyList<FileCoverage>>(StringComparer.Ordinal);
-
-        foreach (var xmlPath in coberturaXmlPaths)
+        var parsed = Parse(coberturaXmlPaths, sourceRoot);
+        var parsedAny = parsed.Count > 0;
+        foreach (var fileCoverage in parsed.Values.SelectMany(f => f))
         {
-            CoberturaReport report;
-            try
+            reportFiles[fileCoverage.FilePath] = reportFiles.TryGetValue(fileCoverage.FilePath, out var seen)
+                ? MergeFile(seen, fileCoverage)
+                : fileCoverage;
+
+            if (!coveredLines.TryGetValue(fileCoverage.FilePath, out var lineSet))
             {
-                report = _parser.Parse(xmlPath);
+                lineSet = [];
+                coveredLines[fileCoverage.FilePath] = lineSet;
             }
-            catch
+
+            foreach (var line in fileCoverage.Lines)
             {
-                // Malformed XML — skip this report
-                continue;
-            }
-
-            parsedAny = true;
-            parsed[xmlPath] = [.. report.Files.Where(f => rootPrefix is null
-                || Path.GetFullPath(f.FilePath).StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))];
-            foreach (var fileCoverage in parsed[xmlPath])
-            {
-
-                reportFiles[fileCoverage.FilePath] = reportFiles.TryGetValue(fileCoverage.FilePath, out var seen)
-                    ? MergeFile(seen, fileCoverage)
-                    : fileCoverage;
-
-                if (!coveredLines.TryGetValue(fileCoverage.FilePath, out var lineSet))
+                if (line.HitCount > 0)
                 {
-                    lineSet = [];
-                    coveredLines[fileCoverage.FilePath] = lineSet;
-                }
-
-                foreach (var line in fileCoverage.Lines)
-                {
-                    if (line.HitCount > 0)
-                    {
-                        _ = lineSet.Add(line.LineNumber);
-                    }
+                    _ = lineSet.Add(line.LineNumber);
                 }
             }
         }
@@ -88,7 +67,7 @@ internal sealed class CoverageProcessor : ICoverageProcessor
 
         if (impact is not null && store is IImpactMapStore impactMap)
         {
-            await RecordImpactAsync(runId, impact, parsed, impactMap).ConfigureAwait(false);
+            await WriteImpactAsync(runId, impact, parsed, impactMap).ConfigureAwait(false);
         }
 
         if (coveredLines.Count == 0 || testFqns.Count == 0)
@@ -111,7 +90,38 @@ internal sealed class CoverageProcessor : ICoverageProcessor
         await store.StoreCoverageAsync(runId, testCoverageMap).ConfigureAwait(false);
     }
 
-    private static async Task RecordImpactAsync(
+    public async Task RecordImpactAsync(long runId, CoverageImpactOptions impact, IImpactMapStore store, string? sourceRoot = null)
+    {
+        var parsed = Parse([.. impact.Units.SelectMany(u => u.ReportPaths).Distinct(StringComparer.Ordinal)], sourceRoot);
+        await WriteImpactAsync(runId, impact, parsed, store).ConfigureAwait(false);
+    }
+
+    /// <summary>Parses each report, keeping only files under <paramref name="sourceRoot"/>; malformed reports are skipped.</summary>
+    private Dictionary<string, IReadOnlyList<FileCoverage>> Parse(IReadOnlyList<string> reportPaths, string? sourceRoot)
+    {
+        var rootPrefix = sourceRoot is null ? null : Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourceRoot)) + Path.DirectorySeparatorChar;
+        var parsed = new Dictionary<string, IReadOnlyList<FileCoverage>>(StringComparer.Ordinal);
+        foreach (var xmlPath in reportPaths)
+        {
+            CoberturaReport report;
+            try
+            {
+                report = _parser.Parse(xmlPath);
+            }
+            catch
+            {
+                // Malformed XML — skip this report
+                continue;
+            }
+
+            parsed[xmlPath] = [.. report.Files.Where(f => rootPrefix is null
+                || Path.GetFullPath(f.FilePath).StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))];
+        }
+
+        return parsed;
+    }
+
+    private static async Task WriteImpactAsync(
         long runId,
         CoverageImpactOptions impact,
         Dictionary<string, IReadOnlyList<FileCoverage>> parsed,

@@ -134,6 +134,16 @@ public static class HostHelpers
             testExecutionMode = parsedMode;
         }
 
+        var impactBackfill = ImpactBackfillMode.Class;
+        if (config.ImpactBackfill is not null
+            && (!Enum.TryParse(config.ImpactBackfill, ignoreCase: true, out impactBackfill)
+                || !Enum.IsDefined(impactBackfill)
+                || int.TryParse(config.ImpactBackfill, out _)))
+        {
+            throw new InvalidOperationException(
+                $"Invalid 'impactBackfill' in .piston.json: expected \"class\", \"test\" or \"off\"; got \"{config.ImpactBackfill}\".");
+        }
+
         var memoryReservationMb = config.Execution?.MemoryMb;
         if (memoryReservationMb is <= 0)
         {
@@ -147,6 +157,7 @@ public static class HostHelpers
             DebounceInterval = TimeSpan.FromMilliseconds(debounceMs),
             TestFilter = filter,
             CoverageEnabled = coverageEnabled,
+            ImpactBackfill = coverageEnabled ? impactBackfill : ImpactBackfillMode.Off,
             ProcessPoolSize = processPoolSize,
             ProcessRecycleAfter = processRecycleAfter,
             TestExecutionMode = testExecutionMode,

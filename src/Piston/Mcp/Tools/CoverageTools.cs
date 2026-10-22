@@ -34,7 +34,8 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         "Get line and branch coverage as JSON (schema piston.coverage/v1). Without a file: solution totals, per-module " +
         "totals and the files with the most uncovered lines. With a file (absolute or solution-relative): its totals plus " +
         "uncovered and partially covered line ranges. Requires the daemon to run with coverage enabled. " +
-        "stale means the file changed since it was measured; partial means only a selective run measured it.")]
+        "stale means the file changed since it was measured; partial means only a selective run measured it. " +
+        "impactBackfill, when present, is the progress of measuring which test classes execute which lines.")]
     public string GetCoverage(
         [Description("Source file to report on. Omit for the solution summary.")] string? file = null,
         [Description("Most files to list in the summary, worst first (default 50).")] int maxFiles = 50)
@@ -52,6 +53,18 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
             if (string.IsNullOrWhiteSpace(file))
             {
                 json = Summary(report, solutionDirectory, Math.Clamp(maxFiles, 0, 1000));
+                if (engine.State.ImpactBackfill is { } backfill)
+                {
+                    // Until it finishes, tests not yet measured on their own are selected per project.
+                    json["impactBackfill"] = new JsonObject
+                    {
+                        ["granularity"] = backfill.Granularity,
+                        ["completed"] = backfill.Completed,
+                        ["total"] = backfill.Total,
+                        ["current"] = backfill.CurrentUnit,
+                    };
+                }
+
                 summary = $"{report.Files.Count} file(s), {Percent(report.LinesCovered, report.LinesTotal)}% lines";
             }
             else

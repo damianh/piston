@@ -168,6 +168,31 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task GetUnits_ListsEachUnitsTests()
+    {
+        await Record(ImpactGranularity.Class, "T.B", ["T.B.Two", "T.B.One"], [new(3, 5)]);
+        await Record(ImpactGranularity.Class, "T.A", ["T.A.One"], [new(3, 5)]);
+
+        var units = _sut.GetUnits(Project, ImpactGranularity.Class).OrderBy(u => u.UnitKey, StringComparer.Ordinal).ToList();
+
+        Assert.Equal(["T.A", "T.B"], units.Select(u => u.UnitKey));
+        Assert.Equal(["T.A.One"], units[0].Tests);
+        Assert.Equal(["T.B.One", "T.B.Two"], units[1].Tests);
+    }
+
+    [Fact]
+    public async Task RemoveUnitsAsync_ForgetsOnlyTheNamedUnits()
+    {
+        await Record(ImpactGranularity.Class, "T.A", ["T.A.One"], [new(3, 5)]);
+        await Record(ImpactGranularity.Class, "T.B", ["T.B.One"], [new(3, 5)]);
+
+        await _sut.RemoveUnitsAsync(Project, ImpactGranularity.Class, ["T.A"]);
+
+        Assert.Equal("T.B", Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Class)).UnitKey);
+        Assert.Equal(["T.B.One"], _sut.SelectTests([new ChangedFile(File, Edit(Original, 4, "changed"))]).Tests.Keys);
+    }
+
+    [Fact]
     public async Task Clear_RemovesTheImpactMap()
     {
         await Record(ImpactGranularity.Run, "run", ["T.A"], [new(1, 30)]);

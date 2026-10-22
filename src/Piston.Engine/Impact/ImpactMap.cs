@@ -100,10 +100,15 @@ internal interface IImpactMapStore
 
     /// <summary>Returns the units recorded for <paramref name="projectPath"/> at <paramref name="granularity"/>, with whether each is current.</summary>
     IReadOnlyList<ImpactUnitInfo> GetUnits(string projectPath, ImpactGranularity granularity);
+
+    /// <summary>Forgets the named units of a project, e.g. test classes that no longer exist.</summary>
+    Task RemoveUnitsAsync(string projectPath, ImpactGranularity granularity, IReadOnlyCollection<string> unitKeys);
 }
 
 /// <summary>A recorded unit's identity and state.</summary>
-internal sealed record ImpactUnitInfo(string UnitKey, long RunId, bool IsCurrent, DateTimeOffset RecordedAt);
+/// <param name="Tests">The tests credited with the unit's files.</param>
+internal sealed record ImpactUnitInfo(
+    string UnitKey, long RunId, bool IsCurrent, DateTimeOffset RecordedAt, IReadOnlyList<string> Tests);
 
 internal static class ImpactContent
 {

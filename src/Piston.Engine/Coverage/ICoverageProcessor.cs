@@ -33,6 +33,12 @@ internal interface ICoverageProcessor
         bool isFullRun = false,
         string? sourceRoot = null,
         CoverageImpactOptions? impact = null);
+
+    /// <summary>
+    /// Records only what each unit in <paramref name="impact"/> executed, leaving the coverage report untouched:
+    /// for measurements of part of a test suite, such as one class.
+    /// </summary>
+    Task RecordImpactAsync(long runId, CoverageImpactOptions impact, Impact.IImpactMapStore store, string? sourceRoot = null);
 }
 
 /// <summary>The units a coverage run measured, for the impact map.</summary>

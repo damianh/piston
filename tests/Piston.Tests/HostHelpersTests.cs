@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Text.Json;
+using Piston.Engine;
 using Piston.Hosting;
 using Xunit;
 
@@ -154,6 +155,30 @@ public sealed class HostHelpersTests : IDisposable
 
         Assert.Equal(2048, HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, configured).ExecutionMemoryReservationMb);
         Assert.Null(HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, new()).ExecutionMemoryReservationMb);
+    }
+
+    [Theory]
+    [InlineData(null, true, ImpactBackfillMode.Class)]
+    [InlineData("test", true, ImpactBackfillMode.Test)]
+    [InlineData("OFF", true, ImpactBackfillMode.Off)]
+    [InlineData("class", false, ImpactBackfillMode.Off)]
+    public void ImpactBackfillDefaultsToClassWhenCoverageIsEnabled(string? configured, bool coverage, ImpactBackfillMode expected)
+    {
+        var config = new Piston.Hosting.Configuration.PistonConfig { ImpactBackfill = configured };
+
+        Assert.Equal(expected, HostHelpers.BuildOptions("/w/App.slnx", 0, null, coverage, 0, config).ImpactBackfill);
+    }
+
+    [Theory]
+    [InlineData("method")]
+    [InlineData("2")]
+    public void UnknownImpactBackfillIsRejected(string configured)
+    {
+        var config = new Piston.Hosting.Configuration.PistonConfig { ImpactBackfill = configured };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => HostHelpers.BuildOptions("/w/App.slnx", 0, null, true, 0, config));
+
+        Assert.Contains("impactBackfill", ex.Message);
     }
 
     private string WriteSolution(string relativePath)
