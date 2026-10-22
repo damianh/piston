@@ -576,6 +576,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         _state.NotifyChanged();
     }
 
+    /// <summary>What a run triggered by changes to <paramref name="filePaths"/> would select, without changing state.</summary>
+    internal ImpactAnalysisResult PlanAffected(IReadOnlyList<string> filePaths) =>
+        _impactAnalyzer.Preview([.. filePaths.Select(p => new FileChangeEvent(
+            p, File.Exists(p) ? WatcherChangeTypes.Changed : WatcherChangeTypes.Deleted, DateTimeOffset.UtcNow))]);
+
     /// <summary>Returns the coverage report, or null when coverage is disabled.</summary>
     internal CoverageReportSnapshot? GetCoverageReport()
     {
@@ -947,7 +952,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                     BuildTargets: buildTargets?.ToList(),
                     UserFilter: string.IsNullOrWhiteSpace(userFilter) ? null : userFilter,
                     EffectiveFilter: string.IsNullOrWhiteSpace(effectiveFilter) ? null : effectiveFilter,
-                    CoverageSelectedTestCount: impactResult.AffectedTestFqns is { Count: > 0 and <= 100 } selected
+                    CoverageSelectedTestCount: impactResult.AffectedTestFqns is { Count: > 0 and <= ImpactAnalysisResult.MaxFilteredTests } selected
                         ? selected.Count
                         : null,
                     CoverageEnabled: _coverageEnabled,
@@ -1664,7 +1669,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         if (impactResult.AffectedTestFqns is { Count: > 0 } fqns)
         {
             // Limit to 100 FQNs to avoid command-line length issues; fall back to Tier 2 if over limit
-            if (fqns.Count <= 100)
+            if (fqns.Count <= ImpactAnalysisResult.MaxFilteredTests)
             {
                 tier3Filter = string.Join("|",
                     fqns.Select(f => $"FullyQualifiedName={f}"));

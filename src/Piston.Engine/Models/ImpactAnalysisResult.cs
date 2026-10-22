@@ -11,6 +11,12 @@ public sealed record ImpactAnalysisResult(
 )
 {
     /// <summary>
+    /// Most tests a run narrows to by name; a larger <see cref="AffectedTestFqns"/> runs the affected test projects
+    /// whole, to keep the test command line short.
+    /// </summary>
+    public const int MaxFilteredTests = 100;
+
+    /// <summary>
     /// Optional list of test FQNs produced by Tier 3 (coverage-based) impact detection.
     /// When non-null and non-empty, the orchestrator narrows the test run to only these tests.
     /// When null, run all tests in <see cref="AffectedTestProjectPaths"/> (Tier 2 behavior).
@@ -22,6 +28,9 @@ public sealed record ImpactAnalysisResult(
     /// changed-line comparison. Null for file-level coverage selection and for Tier 1/2 runs.
     /// </summary>
     public IReadOnlyDictionary<string, IReadOnlyList<TestSelectionReason>>? SelectionReasons { get; init; }
+
+    /// <summary>One sentence saying why the analysis chose this scope, e.g. why it could not narrow to tests.</summary>
+    public string? Explanation { get; init; }
 
     /// <summary>
     /// Projects that must be built before a selective test run: every affected non-test

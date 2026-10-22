@@ -6,6 +6,7 @@ using System.Text.Json.Nodes;
 using ModelContextProtocol;
 using Piston.Engine;
 using Piston.Engine.Coverage;
+using Piston.Engine.Models;
 using Piston.Mcp.Tools;
 using Xunit;
 
@@ -241,5 +242,66 @@ public sealed class CoverageToolsTests : IDisposable
         using var process = Process.Start(psi)!;
         process.WaitForExit();
         Assert.True(process.ExitCode == 0, process.StandardError.ReadToEnd());
+    }
+
+    [Fact]
+    public async Task PlanAffectedTests_WithFiles_ListsSelectedTestsWithReasons()
+    {
+        var engine = Engine();
+        var lib = Path.Combine(_root, "src", "Lib", "Code.cs");
+        var project = Path.Combine(_root, "tests", "Lib.Tests", "Lib.Tests.csproj");
+        engine.AffectedPlan = new ImpactAnalysisResult([Path.Combine(_root, "src", "Lib", "Lib.csproj")], [project], false, false)
+        {
+            AffectedTestFqns = ["Lib.Tests.B.Two", "Lib.Tests.A.One"],
+            SelectionReasons = new Dictionary<string, IReadOnlyList<TestSelectionReason>>
+            {
+                ["Lib.Tests.A.One"] = [new(lib, "12", "10-14", "class", project)],
+            },
+            Explanation = "Tests whose recorded execution touches the changed lines.",
+        };
+        var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
+
+        var json = JsonNode.Parse(await tools.PlanAffectedTestsAsync(["src/Lib/Code.cs"], ct: _ct))!;
+
+        Assert.Equal([lib], engine.PlannedFiles);
+        Assert.Equal("piston.affected-plan/v1", (string?)json["schema"]);
+        Assert.Equal("files", (string?)json["base"]);
+        Assert.Equal("tests", (string?)json["scope"]);
+        Assert.Equal(["src/Lib/Lib.csproj"], json["buildProjects"]!.AsArray().Select(n => (string?)n));
+        Assert.Equal(["tests/Lib.Tests/Lib.Tests.csproj"], json["testProjects"]!.AsArray().Select(n => (string?)n));
+        var tests = json["tests"]!.AsArray();
+        Assert.Equal(["Lib.Tests.A.One", "Lib.Tests.B.Two"], tests.Select(t => (string?)t!["name"]));
+        var reason = Assert.Single(tests[0]!["reasons"]!.AsArray())!;
+        Assert.Equal("src/Lib/Code.cs", (string?)reason["file"]);
+        Assert.Equal(("12", "10-14", "class"), ((string?)reason["changedLines"], (string?)reason["executedLines"], (string?)reason["granularity"]));
+        Assert.Null(tests[1]!["reasons"]);
+    }
+
+    [Fact]
+    public void AffectedPlan_MoreTestsThanARunNarrowsTo_IsProjectScope()
+    {
+        var project = Path.Combine(_root, "T.csproj");
+        var plan = new ImpactAnalysisResult([], [project], false, false)
+        {
+            AffectedTestFqns = [.. Enumerable.Range(0, ImpactAnalysisResult.MaxFilteredTests + 1).Select(i => $"T.Test{i}")],
+        };
+
+        var json = CoverageTools.AffectedPlan("HEAD", [Path.Combine(_root, "A.cs")], plan, _root);
+
+        Assert.Equal("projects", (string?)json["scope"]);
+        Assert.Empty(json["tests"]!.AsArray());
+        Assert.Contains("101 tests", (string?)json["explanation"], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AffectedPlan_FullRun_IsFullScope()
+    {
+        var plan = new ImpactAnalysisResult([], [], false, IsFullRun: true) { Explanation = "A solution file changed." };
+
+        var json = CoverageTools.AffectedPlan("files", [Path.Combine(_root, "App.slnx")], plan, _root);
+
+        Assert.Equal("full", (string?)json["scope"]);
+        Assert.Equal("A solution file changed.", (string?)json["explanation"]);
+        Assert.Equal(["App.slnx"], json["changedFiles"]!.AsArray().Select(n => (string?)n));
     }
 }

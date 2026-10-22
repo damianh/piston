@@ -92,6 +92,18 @@ internal sealed class StubEngine : IEngine
 
     public Engine.Coverage.CoverageReportSnapshot? GetCoverageReport() => CoverageReport;
 
+    /// <summary>Plan returned by <see cref="PlanAffected"/>.</summary>
+    public ImpactAnalysisResult? AffectedPlan { get; set; }
+
+    /// <summary>Files passed to the last <see cref="PlanAffected"/> call.</summary>
+    public IReadOnlyList<string>? PlannedFiles { get; private set; }
+
+    public ImpactAnalysisResult? PlanAffected(IReadOnlyList<string> filePaths)
+    {
+        PlannedFiles = filePaths;
+        return AffectedPlan;
+    }
+
     public Engine.Coverage.FileCoverageSnapshot? GetFileCoverage(string filePath) =>
         FileCoverage.GetValueOrDefault(filePath);
 

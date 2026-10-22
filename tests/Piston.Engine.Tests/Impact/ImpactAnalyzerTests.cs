@@ -463,6 +463,7 @@ public sealed class ImpactAnalyzerTests : IDisposable
 
         Assert.Null(result.AffectedTestFqns);
         Assert.Contains(_testsCsproj, result.AffectedTestProjectPaths, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("Program.cs", result.Explanation, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -477,6 +478,7 @@ public sealed class ImpactAnalyzerTests : IDisposable
 
         Assert.Null(result.AffectedTestFqns);
         Assert.Contains(_testsCsproj, result.AffectedTestProjectPaths, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("test file changed", result.Explanation, StringComparison.Ordinal);
     }
 
     [Fact]

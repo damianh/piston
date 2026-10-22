@@ -241,6 +241,21 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     public FileCoverageSnapshot? GetFileCoverage(string filePath) =>
         _orchestrator.GetFileCoverage(Path.GetFullPath(filePath, _solutionDirectory));
 
+    public ImpactAnalysisResult PlanAffected(IReadOnlyList<string> filePaths)
+    {
+        // Mirror the watcher: changes under bin, obj and other excluded directories trigger nothing.
+        var watched = filePaths
+            .Select(p => Path.GetFullPath(p, _solutionDirectory))
+            .Where(p => !File.Exists(p) || SourceFingerprinter.CoversPath(_solutionDirectory, p))
+            .ToList();
+        return watched.Count > 0
+            ? _orchestrator.PlanAffected(watched)
+            : new ImpactAnalysisResult([], [], RequiresGraphRebuild: false, IsFullRun: false)
+            {
+                Explanation = "No watched file changed, so nothing would run.",
+            };
+    }
+
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
     public async ValueTask DisposeAsync()

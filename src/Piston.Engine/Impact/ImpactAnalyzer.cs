@@ -72,7 +72,7 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         // If graph is not available, fall back to full run
         if (_graph is null)
         {
-            return FullRunResult();
+            return FullRunResult() with { Explanation = "The solution graph is not loaded." };
         }
 
         // Check for solution/project file changes that require graph rebuild
@@ -83,14 +83,14 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
 
         if (hasSolutionChange)
         {
-            return FullRunResult();
+            return FullRunResult() with { Explanation = "A solution file changed." };
         }
 
         var graph = _graph;
         var affectedProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var affectedTestProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var requiresGraphRebuild = false;
-        var hasUnknownFile = false;
+        string? unknownFile = null;
         var hasTestFileChange = false;
 
         foreach (var change in changes)
@@ -102,7 +102,11 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
             {
                 requiresGraphRebuild = true;
                 // A props/targets change potentially affects everything — full run
-                return FullRunResult() with { RequiresGraphRebuild = true };
+                return FullRunResult() with
+                {
+                    RequiresGraphRebuild = true,
+                    Explanation = $"{Path.GetFileName(change.FilePath)} can affect every project.",
+                };
             }
 
             if (ext.Equals(".csproj", StringComparison.OrdinalIgnoreCase))
@@ -124,7 +128,7 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
 
             if (owningProject is null)
             {
-                hasUnknownFile = true;
+                unknownFile ??= change.FilePath;
                 continue;
             }
 
@@ -144,14 +148,14 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
             }
         }
 
-        if (hasUnknownFile)
+        if (unknownFile is not null)
         {
-            return FullRunResult();
+            return FullRunResult() with { Explanation = $"{unknownFile} is not in a known project." };
         }
 
         if (affectedProjects.Count == 0 && affectedTestProjects.Count == 0)
         {
-            return FullRunResult();
+            return FullRunResult() with { Explanation = "No project owns the changed files." };
         }
 
         // From affected projects (non-test), find test projects that depend on them
@@ -173,12 +177,15 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
             AffectedTestProjectPaths: [.. affectedTestProjects],
             RequiresGraphRebuild: requiresGraphRebuild,
             IsFullRun: false
-        );
+        )
+        {
+            Explanation = "Tests are selected by project.",
+        };
 
         // ── Tier 3: coverage-based test-level narrowing ────────────────────────
         if (_coverageStore is null)
         {
-            return tier2Result;
+            return tier2Result with { Explanation = "Coverage is disabled, so tests are selected by project." };
         }
 
         var csPaths = changes
@@ -188,10 +195,13 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
             .ToList();
         if (csPaths.Count == 0)
         {
-            return tier2Result;
+            return tier2Result with { Explanation = "No C# source changed, so tests are selected by project." };
         }
 
         ImpactAnalysisResult? tier3Result = null;
+        var abstained = hasTestFileChange
+            ? "A test file changed and coverage cannot know its new tests, so tests are selected by project."
+            : null;
 
         // An edited test file may add tests no recording knows about, so only Tier 2 is safe.
         if (!hasTestFileChange && _coverageStore is IImpactMapStore impactMap)
@@ -207,7 +217,12 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
                         kv => kv.Key,
                         kv => (IReadOnlyList<TestSelectionReason>)[.. kv.Value.Select(ToSelectionReason)],
                         StringComparer.Ordinal),
+                    Explanation = "Tests whose recorded execution touches the changed lines.",
                 };
+            }
+            else if (selection.UnmappedFiles.Count > 0)
+            {
+                abstained = $"No coverage recording includes {string.Join(", ", selection.UnmappedFiles.Select(Path.GetFileName))}, so tests are selected by project.";
             }
 
             if (record)
@@ -253,10 +268,17 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         if (allHaveCoverage && tier3Fqns.Count > 0)
         {
             // File-level coverage narrowed the run — attach the FQN list
-            return tier2Result with { AffectedTestFqns = [.. tier3Fqns] };
+            return tier2Result with
+            {
+                AffectedTestFqns = [.. tier3Fqns],
+                Explanation = "Tests whose coverage includes the changed files.",
+            };
         }
 
-        return tier2Result;
+        return tier2Result with
+        {
+            Explanation = abstained ?? "Coverage has not measured every changed file, so tests are selected by project.",
+        };
     }
 
     public ImpactAnalysisResult AnalyzeFullRun()
@@ -267,7 +289,7 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
             {
                 _ = TryRefreshGraph(_solutionPath);
             }
-            return FullRunResult();
+            return FullRunResult() with { Explanation = "A full run was requested." };
         }
     }
 

@@ -10,6 +10,7 @@ using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using Piston.Engine;
 using Piston.Engine.Coverage;
+using Piston.Engine.Models;
 
 namespace Piston.Mcp.Tools;
 
@@ -19,6 +20,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
     public const string GetCoverageTool = "get_coverage";
     public const string GetChangedLineCoverageTool = "get_changed_line_coverage";
     public const string ExportCoverageTool = "export_coverage";
+    public const string PlanAffectedTestsTool = "plan_affected_tests";
 
     /// <summary>Source file types whose changed lines can be measured.</summary>
     private static readonly HashSet<string> CodeExtensions = new(StringComparer.OrdinalIgnoreCase) { ".cs", ".fs", ".vb" };
@@ -187,6 +189,136 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
             ["files"] = files,
             ["staleFiles"] = stale,
             ["notMeasuredFiles"] = notMeasured,
+        };
+    }
+
+    [McpServerTool(Name = PlanAffectedTestsTool), Description(
+        "Preview which projects and tests Piston would build and run for a set of changed files, as JSON (schema " +
+        "piston.affected-plan/v1). Runs nothing and changes no state. Without files, uses the working tree's changes " +
+        "against HEAD (or the merge base with baseRef). scope is full (every test), projects (every test in the listed " +
+        "test projects) or tests (only the listed tests); explanation says why. With coverage, each selected test lists " +
+        "the changed lines that selected it and the granularity of the evidence: run- or class-level evidence " +
+        "over-selects and does not mean that test executed those lines.")]
+    public async Task<string> PlanAffectedTestsAsync(
+        [Description("Changed files, absolute or relative to the solution directory. Omit to use git changes.")] string[]? files = null,
+        [Description("When files is omitted: branch or commit to compare against. Defaults to HEAD.")] string? baseRef = null,
+        CancellationToken ct = default)
+    {
+        availability?.ThrowIfUnavailable();
+        var sw = Stopwatch.StartNew();
+        var succeeded = false;
+        string? summary = null;
+        try
+        {
+            var solutionDirectory = SolutionDirectory()
+                ?? throw new McpException("No solution is loaded.");
+            string basis;
+            IReadOnlyList<string> changed;
+            if (files is { Length: > 0 })
+            {
+                basis = "files";
+                changed = [.. files.Where(f => !string.IsNullOrWhiteSpace(f)).Select(f => Path.GetFullPath(f, solutionDirectory))];
+            }
+            else
+            {
+                if (!string.IsNullOrWhiteSpace(baseRef) && !ChangedLines.IsValidRevision(baseRef))
+                {
+                    throw new McpException($"'{baseRef}' is not a valid git revision.");
+                }
+
+                ChangedLinesResult changes;
+                try
+                {
+                    changes = await ChangedLines.GetAsync(solutionDirectory, baseRef, ct).ConfigureAwait(false);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    throw new McpException(ex.Message);
+                }
+
+                basis = changes.Basis;
+                changed = [.. changes.Files.Keys.Order(StringComparer.Ordinal)];
+            }
+
+            JsonObject json;
+            if (changed.Count == 0)
+            {
+                json = AffectedPlan(basis, changed,
+                    new ImpactAnalysisResult([], [], RequiresGraphRebuild: false, IsFullRun: false)
+                    {
+                        Explanation = "No file changed, so nothing would run.",
+                    },
+                    solutionDirectory);
+            }
+            else
+            {
+                var plan = engine.PlanAffected(changed)
+                    ?? throw new McpException("This engine cannot plan affected tests.");
+                json = AffectedPlan(basis, changed, plan, solutionDirectory);
+            }
+
+            summary = $"{json["scope"]}: {json["explanation"]}";
+            succeeded = true;
+            return json.ToJsonString(WriteOptions);
+        }
+        finally
+        {
+            sw.Stop();
+            recorder.Record(PlanAffectedTestsTool, files is { Length: > 0 } ? string.Join(", ", files) : baseRef, summary,
+                sw.Elapsed.TotalMilliseconds, succeeded);
+        }
+    }
+
+    internal static JsonObject AffectedPlan(
+        string basis, IReadOnlyList<string> changedFiles, ImpactAnalysisResult plan, string solutionDirectory)
+    {
+        var explanation = plan.Explanation ?? string.Empty;
+        var fqns = plan.AffectedTestFqns ?? [];
+        var narrowed = fqns.Count is > 0 and <= ImpactAnalysisResult.MaxFilteredTests;
+        if (fqns.Count > ImpactAnalysisResult.MaxFilteredTests)
+        {
+            explanation = $"{fqns.Count} tests were selected, more than the {ImpactAnalysisResult.MaxFilteredTests} a run " +
+                "narrows to, so tests are selected by project.";
+        }
+
+        var scope = plan.IsFullRun ? "full"
+            : narrowed ? "tests"
+            : plan.AffectedTestProjectPaths.Count > 0 ? "projects"
+            : "none";
+        var tests = new JsonArray();
+        if (narrowed)
+        {
+            foreach (var fqn in fqns.Order(StringComparer.Ordinal))
+            {
+                var test = new JsonObject { ["name"] = fqn };
+                if (plan.SelectionReasons?.GetValueOrDefault(fqn) is { } reasons)
+                {
+                    test["reasons"] = new JsonArray([.. reasons.Select(r => (JsonNode)new JsonObject
+                    {
+                        ["file"] = Relative(r.FilePath, solutionDirectory),
+                        ["changedLines"] = r.ChangedLines,
+                        ["executedLines"] = r.ExecutedLines,
+                        ["granularity"] = r.Granularity,
+                        ["project"] = Relative(r.ProjectPath, solutionDirectory),
+                    })]);
+                }
+
+                tests.Add(test);
+            }
+        }
+
+        return new JsonObject
+        {
+            ["schema"] = "piston.affected-plan/v1",
+            ["base"] = basis,
+            ["changedFiles"] = new JsonArray([.. changedFiles.Select(f => (JsonNode)Relative(f, solutionDirectory)!)]),
+            ["scope"] = scope,
+            ["explanation"] = explanation,
+            ["buildProjects"] = new JsonArray([.. plan.AffectedProjectPaths
+                .Select(p => Relative(p, solutionDirectory)).Order(StringComparer.Ordinal).Select(p => (JsonNode)p!)]),
+            ["testProjects"] = new JsonArray([.. plan.AffectedTestProjectPaths
+                .Select(p => Relative(p, solutionDirectory)).Order(StringComparer.Ordinal).Select(p => (JsonNode)p!)]),
+            ["tests"] = tests,
         };
     }
 

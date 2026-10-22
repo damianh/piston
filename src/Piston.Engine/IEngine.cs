@@ -54,6 +54,12 @@ public interface IEngine : IDisposable
     /// </summary>
     Coverage.FileCoverageSnapshot? GetFileCoverage(string filePath) => null;
 
+    /// <summary>
+    /// Returns what a run triggered by changes to <paramref name="filePaths"/> (absolute, or relative to the solution
+    /// directory) would build and test, without running anything or changing any state. Null when unsupported.
+    /// </summary>
+    Models.ImpactAnalysisResult? PlanAffected(IReadOnlyList<string> filePaths) => null;
+
     // Configuration
     void SetFilter(string? filter);
     void ClearResults();
