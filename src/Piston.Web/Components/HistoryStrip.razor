@@ -43,7 +43,7 @@
     private const double SparkHeight = 14;
 
     private TestHistoryDto? _history;
-    private string? _loadedKey;
+    private (string? Project, string Test)? _loadedKey;
     private DateTimeOffset? _lastRunTime;
 
     /// <summary>The test's result key: fully-qualified name, with the framework when multi-targeted.</summary>
@@ -51,7 +51,7 @@
 
     [Parameter] public string? Project { get; set; }
 
-    private TestMarkDto? Mark => View.TestMarks.GetValueOrDefault(TestKey);
+    private TestMarkDto? Mark => View.GetTestMark(Project, TestKey);
 
     protected override void OnInitialized()
     {
@@ -61,9 +61,9 @@
 
     protected override async Task OnParametersSetAsync()
     {
-        if (_loadedKey != TestKey)
+        if (_loadedKey != (Project, TestKey))
         {
-            _loadedKey = TestKey;
+            _loadedKey = (Project, TestKey);
             _history = null;
             await LoadAsync();
         }
@@ -85,11 +85,12 @@
     private async Task LoadAsync()
     {
         var key = TestKey;
-        var result = await Client.GetTestHistoryAsync(key, Project);
-        if (key == TestKey)
+        var project = Project;
+        var result = await Client.GetTestHistoryAsync(key, project);
+        if (key == TestKey && project == Project)
         {
             // The key names one framework's results, so the match is exact.
-            _history = result?.Tests.FirstOrDefault(t => t.Test == key && (Project is null || t.Project == Project)) is { Runs.Count: > 0 } h ? h : null;
+            _history = result?.Tests.FirstOrDefault(t => t.Test == key && (project is null || t.Project == project)) is { Runs.Count: > 0 } h ? h : null;
         }
     }
 

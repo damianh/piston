@@ -92,6 +92,13 @@ public sealed class FileWatcherService : IFileWatcherService
 
     private void OnFileSystemEvent(object sender, FileSystemEventArgs e)
     {
+        // Windows reports directory timestamp changes when a build creates bin/obj entries beneath a project.
+        // The fingerprint contains files, not directory metadata; their own events cover real source changes.
+        if (e.ChangeType == WatcherChangeTypes.Changed && Directory.Exists(e.FullPath))
+        {
+            return;
+        }
+
         if (!IsFingerprintInput(e.FullPath))
         {
             return;

@@ -82,6 +82,10 @@ public static class WatchStrip
         ? run.TotalTests == 1 ? "passed" : $"all {run.Passed} passed"
         : $"{run.Passed} passed, {run.Skipped} skipped";
 
+    public static bool ShowOutcomeSummary(TestRunDto run) =>
+        run.Status is "Cancelled" or "Faulted" or "Incomplete"
+        || (run.FixedTests is not { Count: > 0 } && run.NewlyFailingTests is not { Count: > 0 });
+
     private static string FileName(string path) => path[(path.LastIndexOfAny(['/', '\\']) + 1)..];
 
     private static string Relative(string path, string? directory)

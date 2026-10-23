@@ -14,6 +14,7 @@ public sealed class TestNode
     public required TestNodeKind Kind { get; init; }
     public TestResultDto? Test { get; init; }
     public TestSuiteDto? Suite { get; init; }
+    public string? Project { get; init; }
     public string? GroupKey { get; init; }
 
     /// <summary>Stable identity used to remember this node's expansion across tree rebuilds.</summary>

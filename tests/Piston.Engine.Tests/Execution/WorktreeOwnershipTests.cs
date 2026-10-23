@@ -139,6 +139,19 @@ public sealed class WorktreeOwnershipTests : IDisposable
     }
 
     [Fact]
+    public void ExistingPathSpelling_PreservesCaseDistinctEntries()
+    {
+        var upper = CreateWorktree("Case");
+        var lower = CreateWorktree("case");
+        var directories = Directory.GetDirectories(_root);
+
+        Assert.Equal(directories.Single(d => string.Equals(d, upper, StringComparison.OrdinalIgnoreCase)
+            && (!directories.Contains(upper) || d == upper)), WorktreeIdentity.GetExistingPathSpelling(upper));
+        Assert.Equal(directories.Single(d => string.Equals(d, lower, StringComparison.OrdinalIgnoreCase)
+            && (!directories.Contains(lower) || d == lower)), WorktreeIdentity.GetExistingPathSpelling(lower));
+    }
+
+    [Fact]
     public void Acquire_RefusesSecondOwnerOfSameWorktree_EvenForAnotherSolution()
     {
         var worktree = CreateWorktree("wt");

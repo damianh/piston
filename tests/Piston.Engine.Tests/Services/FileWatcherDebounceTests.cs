@@ -152,8 +152,10 @@ public sealed class FileWatcherDebounceTests
         }
     }
 
-    [Fact]
-    public async Task ExcludedPaths_DoNotFireEvent()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExcludedPaths_DoNotFireEvent(bool nestedProject)
     {
         var debounce = TimeSpan.FromMilliseconds(50);
         using var sut = new FileWatcherService(debounce);
@@ -164,11 +166,12 @@ public sealed class FileWatcherDebounceTests
         var dir = Directory.CreateTempSubdirectory("piston-test-");
         try
         {
+            var outputParent = nestedProject ? Directory.CreateDirectory(Path.Combine(dir.FullName, "Project")).FullName : dir.FullName;
             sut.Start(dir.FullName);
 
             foreach (var excluded in new[] { "bin", "obj", "TestResults", ".git", ".vs", ".idea", ".piston", "node_modules" })
             {
-                var excludedDir = Directory.CreateDirectory(Path.Combine(dir.FullName, excluded));
+                var excludedDir = Directory.CreateDirectory(Path.Combine(outputParent, excluded));
                 await File.WriteAllTextAsync(Path.Combine(excludedDir.FullName, "output.cs"), "// generated", _ct);
             }
 

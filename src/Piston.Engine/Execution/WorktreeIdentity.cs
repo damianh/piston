@@ -1,9 +1,6 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
-using System.ComponentModel;
-using System.Runtime.InteropServices;
-using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -40,7 +37,7 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
                 ?? throw new ExecutionCoordinationException($"Cannot canonicalize path '{path}'.");
         }
 
-        var canonical = GetMacDirectoryPath(ancestor);
+        var canonical = GetExistingPathSpelling(ancestor);
         foreach (var segment in suffix)
         {
             canonical = Path.Combine(canonical, segment);
@@ -75,39 +72,35 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
         var trimmed = Path.TrimEndingDirectorySeparator(path);
         if (OperatingSystem.IsMacOS())
         {
-            return GetMacDirectoryPath(trimmed);
+            return GetExistingPathSpelling(trimmed);
         }
 
         return OperatingSystem.IsWindows() ? trimmed.ToLowerInvariant() : trimmed;
     }
 
-    [SupportedOSPlatform("macos")]
-    private static string GetMacDirectoryPath(string path)
+    internal static string GetExistingPathSpelling(string path)
     {
-        // F_GETPATH returns the actual directory spelling on both case-sensitive and insensitive volumes.
-        var fd = Open(path, 0);
-        if (fd < 0)
+        try
+        {
+            var current = Path.GetPathRoot(path)!;
+            foreach (var segment in path[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+            {
+                // Prefer the exact entry on case-sensitive volumes; on insensitive volumes, recover the stored spelling.
+                var matches = Directory.EnumerateFileSystemEntries(current)
+                    .Where(entry => string.Equals(Path.GetFileName(entry), segment, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                current = matches.FirstOrDefault(entry => string.Equals(Path.GetFileName(entry), segment, StringComparison.Ordinal))
+                    ?? (matches.Count == 1 ? matches[0] : throw new IOException($"Cannot resolve the spelling of '{segment}'."));
+            }
+
+            return Path.TrimEndingDirectorySeparator(current);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw new ExecutionCoordinationException(
-                $"Cannot canonicalize worktree '{path}': {new Win32Exception(Marshal.GetLastPInvokeError()).Message}");
+                $"Cannot canonicalize worktree '{path}': {ex.Message}", ex);
         }
-
-        using var handle = new Microsoft.Win32.SafeHandles.SafeFileHandle(new IntPtr(fd), ownsHandle: true);
-        var buffer = new byte[1024];
-        if (GetPath(fd, 50, buffer) < 0)
-        {
-            throw new ExecutionCoordinationException(
-                $"Cannot canonicalize worktree '{path}': {new Win32Exception(Marshal.GetLastPInvokeError()).Message}");
-        }
-
-        return Path.TrimEndingDirectorySeparator(Encoding.UTF8.GetString(buffer, 0, Array.IndexOf(buffer, (byte)0)));
     }
-
-    [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "open", SetLastError = true)]
-    private static extern int Open([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
-
-    [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "fcntl", SetLastError = true)]
-    private static extern int GetPath(int fd, int command, [Out] byte[] buffer);
 
     /// <summary>Resolves symbolic links in every segment of an absolute path.</summary>
     private static string ResolveLinks(string path)

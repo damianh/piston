@@ -23,11 +23,11 @@ public sealed class TestHistoryFilterTests
         Grouping = GroupingMode.Flat,
         OnlyNewFailures = onlyNew,
         OnlyFlaky = onlyFlaky,
-        TestMarks = new Dictionary<string, TestMarkDto>
+        TestMarks = new Dictionary<(string Project, string Test), TestMarkDto>
         {
-            ["A.Tests.C.Broke"] = new("A.Tests", "A.Tests.C.Broke", "New", "Passed in run r1.", Flaky: false),
-            ["A.Tests.C.Wobbles"] = new("A.Tests", "A.Tests.C.Wobbles", null, null, Flaky: true),
-            ["A.Tests.C.OldFailure"] = new("A.Tests", "A.Tests.C.OldFailure", "PreExisting", "Failed before.", Flaky: false),
+            [("A.Tests", "A.Tests.C.Broke")] = new("A.Tests", "A.Tests.C.Broke", "New", "Passed in run r1.", Flaky: false),
+            [("A.Tests", "A.Tests.C.Wobbles")] = new("A.Tests", "A.Tests.C.Wobbles", null, null, Flaky: true),
+            [("A.Tests", "A.Tests.C.OldFailure")] = new("A.Tests", "A.Tests.C.OldFailure", "PreExisting", "Failed before.", Flaky: false),
         },
     };
 
@@ -61,8 +61,48 @@ public sealed class TestHistoryFilterTests
     {
         var view = View(false, false);
 
-        Assert.False(TestTreeBuilder.IsNewFailure(Result("A.Tests.C.Broke", TestStatusDto.Passed), view));
-        Assert.True(TestTreeBuilder.IsNewFailure(Result("A.Tests.C.Broke", TestStatusDto.Failed), view));
+        Assert.False(TestTreeBuilder.IsNewFailure(Result("A.Tests.C.Broke", TestStatusDto.Passed), "A.Tests", view));
+        Assert.True(TestTreeBuilder.IsNewFailure(Result("A.Tests.C.Broke", TestStatusDto.Failed), "A.Tests", view));
+    }
+
+    [Theory]
+    [InlineData(GroupingMode.ProjectNamespaceClass)]
+    [InlineData(GroupingMode.ByStatus)]
+    [InlineData(GroupingMode.Flat)]
+    public void HistoryMarksStayWithinTheirProjectInEveryGrouping(GroupingMode grouping)
+    {
+        var test = Result("Shared.Test", TestStatusDto.Failed);
+        var suites = new[]
+        {
+            new TestSuiteDto("A.Tests", [test], DateTimeOffset.UnixEpoch, 10),
+            new TestSuiteDto("B.Tests", [test], DateTimeOffset.UnixEpoch, 10),
+        };
+        var view = new ViewState
+        {
+            Grouping = grouping,
+            OnlyNewFailures = true,
+            TestMarks = new Dictionary<(string Project, string Test), TestMarkDto>
+            {
+                [("A.Tests", test.Key)] = new("A.Tests", test.Key, "New", null, Flaky: false),
+                [("B.Tests", test.Key)] = new("B.Tests", test.Key, "PreExisting", null, Flaky: true),
+            },
+        };
+
+        var visible = Assert.Single(Leaves(TestTreeBuilder.Build(suites, null, view, null)));
+        Assert.Equal("A.Tests", visible.Project);
+        Assert.True(TestTreeBuilder.IsNewFailure(visible.Test!, visible.Project, view));
+        Assert.False(TestTreeBuilder.IsFlaky(visible.Test!, visible.Project, view));
+
+        view.OnlyNewFailures = false;
+        view.OnlyFlaky = true;
+        var flaky = Assert.Single(Leaves(TestTreeBuilder.Build(suites, null, view, null)));
+        Assert.Equal("B.Tests", flaky.Project);
+
+        _ = view.PinnedTestFqns.Add(test.FullyQualifiedName);
+        var pinned = TestTreeBuilder.Build(suites, null, view, null).Single(n => n.Structure == NodeStructure.Pinned);
+        Assert.Equal(["A.Tests", "B.Tests"], pinned.Children.Select(n => n.Project));
+        Assert.False(TestTreeBuilder.IsFlaky(pinned.Children[0].Test!, pinned.Children[0].Project, view));
+        Assert.True(TestTreeBuilder.IsFlaky(pinned.Children[1].Test!, pinned.Children[1].Project, view));
     }
 
     [Fact]

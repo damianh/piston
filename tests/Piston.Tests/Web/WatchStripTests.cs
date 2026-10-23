@@ -83,4 +83,17 @@ public sealed class WatchStripTests
 
         Assert.Equal(expected, WatchStrip.PassedSkippedLabel(run));
     }
+
+    [Theory]
+    [InlineData("Incomplete", true)]
+    [InlineData("Faulted", true)]
+    [InlineData("Cancelled", true)]
+    [InlineData("Completed", false)]
+    public void UnsuccessfulRunsKeepTheirStatusEvenWhenOutcomesChange(string status, bool expected)
+    {
+        var run = Run("Forced") with { Status = status, FixedTests = ["Fixed"], NewlyFailingTests = ["Broke"] };
+
+        Assert.Equal(expected, WatchStrip.ShowOutcomeSummary(run));
+        Assert.True(WatchStrip.ShowOutcomeSummary(run with { FixedTests = [], NewlyFailingTests = [] }));
+    }
 }

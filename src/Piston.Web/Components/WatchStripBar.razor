@@ -45,7 +45,7 @@
                     ✗ @newlyFailing.Count newly failing
                 </button>
             }
-            @if (fixedTests.Count == 0 && newlyFailing.Count == 0)
+            @if (WatchStrip.ShowOutcomeSummary(run))
             {
                 @if (run.Status is "Cancelled" or "Faulted" or "Incomplete")
                 {

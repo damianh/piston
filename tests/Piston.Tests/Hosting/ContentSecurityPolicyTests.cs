@@ -38,4 +38,19 @@ public sealed class ContentSecurityPolicyTests
         Assert.Contains("object-src 'none'", policy, StringComparison.Ordinal);
         Assert.DoesNotContain("frame-ancestors", policy, StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData("\r\n")]
+    [InlineData("\r")]
+    [InlineData("\n")]
+    public void Build_HashesImportMapsWithBrowserNormalizedLineEndings(string lineEnding)
+    {
+        var importMap = $"{{{lineEnding}  \"imports\": {{}}{lineEnding}}}";
+        const string normalized = "{\n  \"imports\": {}\n}";
+        var expected = Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(normalized)));
+
+        var policy = ContentSecurityPolicy.Build($"<script type=\"importmap\">{importMap}</script>");
+
+        Assert.Contains($"'sha256-{expected}'", policy, StringComparison.Ordinal);
+    }
 }

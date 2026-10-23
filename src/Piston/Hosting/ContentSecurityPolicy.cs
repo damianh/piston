@@ -50,6 +50,7 @@ internal static partial class ContentSecurityPolicy
     internal static IEnumerable<string> InlineScriptHashes(string html) =>
         InlineScript().Matches(html)
             .Select(match => match.Groups["body"].Value)
+            .Select(body => body.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n'))
             .Where(body => body.Length > 0)
             .Select(body => $"'sha256-{Convert.ToBase64String(SHA256.HashData(Encoding.UTF8.GetBytes(body)))}'")
             .Distinct(StringComparer.Ordinal);

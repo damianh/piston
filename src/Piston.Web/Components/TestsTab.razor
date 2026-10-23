@@ -152,10 +152,10 @@
         }
 
         _historyEnabled = marks.Enabled;
-        var byKey = new Dictionary<string, TestMarkDto>(StringComparer.Ordinal);
+        var byKey = new Dictionary<(string Project, string Test), TestMarkDto>();
         foreach (var mark in marks.Tests)
         {
-            byKey[mark.Test] = mark;
+            byKey[(mark.Project, mark.Test)] = mark;
         }
 
         _viewState.TestMarks = byKey;
@@ -209,6 +209,7 @@
             return;
         }
 
+        var selectedProject = _viewState.RevealSelectedTest ? null : ProjectOf(_selectedTest);
         _displayedSuites = _snapshot.Phase == PistonPhaseDto.Testing
             ? TestTreeBuilder.WithLiveOverlay(_snapshot.Suites, _snapshot.InProgressSuites)
             : _snapshot.Suites;
@@ -229,7 +230,8 @@
         if (_viewState.SelectedTestKey is not null)
         {
             // A live result gains its framework when final results arrive, so fall back to the name.
-            var tests = _displayedSuites.SelectMany(s => s.Tests).ToList();
+            var tests = _displayedSuites.Where(s => selectedProject is null || s.Name == selectedProject)
+                .SelectMany(s => s.Tests).ToList();
             _selectedTest = tests.FirstOrDefault(t => t.Key == _viewState.SelectedTestKey)
                 ?? tests.FirstOrDefault(t => t.FullyQualifiedName == _viewState.SelectedTestKey
                     || _viewState.SelectedTestKey.StartsWith(t.FullyQualifiedName + " [", StringComparison.Ordinal));
@@ -307,7 +309,7 @@
             : null;
 
     private string? ProjectOf(TestResultDto? test) =>
-        test is null ? null : _displayedSuites.FirstOrDefault(s => s.Tests.Any(t => t.Key == test.Key))?.Name;
+        test is null ? null : _displayedSuites.FirstOrDefault(s => s.Tests.Any(t => ReferenceEquals(t, test)))?.Name;
 
     // Why the last run selected the test, when the impact map narrowed it by changed lines.
     private IReadOnlyList<TestSelectionReasonDto>? SelectionReasonsOf(TestResultDto? test) =>

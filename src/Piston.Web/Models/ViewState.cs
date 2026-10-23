@@ -19,8 +19,12 @@ public sealed class ViewState
 
     // ── Run history ──
 
-    /// <summary>History marks of failing and flaky tests, keyed by <see cref="Piston.Protocol.Dtos.TestResultDto.Key"/>.</summary>
-    public IReadOnlyDictionary<string, TestMarkDto> TestMarks { get; set; } = new Dictionary<string, TestMarkDto>();
+    /// <summary>History marks of failing and flaky tests, keyed by project and test result key.</summary>
+    public IReadOnlyDictionary<(string Project, string Test), TestMarkDto> TestMarks { get; set; } =
+        new Dictionary<(string Project, string Test), TestMarkDto>();
+
+    public TestMarkDto? GetTestMark(string? project, string testKey) =>
+        project is null ? null : TestMarks.GetValueOrDefault((project, testKey));
 
     /// <summary>Show only failing tests whose previous result passed (with <see cref="OnlyFlaky"/>, either kind).</summary>
     public bool OnlyNewFailures { get; set; }
