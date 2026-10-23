@@ -62,7 +62,6 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         };
 
         var fileWatcher = new FileWatcherService(options.DebounceInterval);
-        var buildService = new BuildService();
         var trxParser = new TrxResultParser();
 
         ICoverageProcessor? coverageProcessor = null;
@@ -81,6 +80,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
         var vsTestStrategy = new ProcessTestExecutionStrategy(trxParser);
         _warmHosts = options.WarmTestHosts ? new MtpWarmHostPool() : null;
+        var buildService = new BuildService(_warmHosts);
         var mtpStrategy = new MtpTestExecutionStrategy(
             projectPath => impactAnalyzer.GetMtpOutputPath(projectPath),
             solutionDir,

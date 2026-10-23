@@ -152,6 +152,30 @@ public sealed class WorktreeOwnershipTests : IDisposable
     }
 
     [Fact]
+    public void Identity_UnicodeSpelling_FollowsFileSystemEquivalence()
+    {
+        var composed = CreateWorktree("caf\u00e9");
+        var decomposed = Path.Combine(_root, "cafe\u0301");
+        var solution = CreateSolution(composed);
+
+        if (Directory.Exists(decomposed))
+        {
+            Assert.Equal(WorktreeIdentity.GetExistingPathSpelling(composed), WorktreeIdentity.GetExistingPathSpelling(decomposed));
+            Assert.Equal(WorktreeIdentity.CanonicalizePath(solution),
+                WorktreeIdentity.CanonicalizePath(Path.Combine(decomposed, "App.slnx")));
+            Assert.Equal(WorktreeIdentity.FromSolutionPath(solution),
+                WorktreeIdentity.FromSolutionPath(Path.Combine(decomposed, "App.slnx")));
+        }
+        else
+        {
+            _ = CreateWorktree("cafe\u0301");
+            var otherSolution = CreateSolution(decomposed);
+            Assert.NotEqual(WorktreeIdentity.GetExistingPathSpelling(composed), WorktreeIdentity.GetExistingPathSpelling(decomposed));
+            Assert.NotEqual(WorktreeIdentity.FromSolutionPath(solution).Key, WorktreeIdentity.FromSolutionPath(otherSolution).Key);
+        }
+    }
+
+    [Fact]
     public void Acquire_RefusesSecondOwnerOfSameWorktree_EvenForAnotherSolution()
     {
         var worktree = CreateWorktree("wt");

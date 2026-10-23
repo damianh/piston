@@ -8,6 +8,14 @@ namespace Piston.Engine.Services;
 
 public sealed class BuildService : IBuildService
 {
+    private readonly MtpWarmHostPool? _warmHosts;
+
+    public BuildService()
+    {
+    }
+
+    internal BuildService(MtpWarmHostPool? warmHosts) => _warmHosts = warmHosts;
+
     public Task<BuildResult> BuildAsync(string solutionPath, CancellationToken ct) =>
         BuildAsync(solutionPath, null, null, ct);
 
@@ -23,6 +31,11 @@ public sealed class BuildService : IBuildService
         Action<string>? onProjectBuilt,
         CancellationToken ct)
     {
+        if (_warmHosts is not null)
+        {
+            await _warmHosts.RetireBeforeBuildAsync().ConfigureAwait(false);
+        }
+
         if (projectPaths is null || projectPaths.Count == 0)
         {
             // Absolute, since the build starts in the solution's directory: a relative path with a

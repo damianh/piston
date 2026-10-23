@@ -348,7 +348,9 @@ evidence. The dashboard's **Runs** tab browses and compares the kept runs, and t
 
 With `"warmTestHosts": true`, Piston keeps each Microsoft.Testing.Platform test app running in server mode after a
 discovery or run, and sends later requests for that app over the same connection, so they skip process start-up and
-initialization. A host is replaced when anything in its app's output directory changes (a rebuild), when it exits,
+initialization. Before any build, Piston stops its retained hosts and waits for them to exit, releasing loaded DLLs
+so MSBuild can overwrite output on Windows. No-build requests can keep reusing a host. A host is also replaced
+when anything in its app's output directory changes, when it exits,
 and after a failed, timed-out or cancelled request; cancelling kills it. A host serves one request at a time, so a
 second concurrent request for the same app gets its own process, and a reused host that fails before reporting any
 test is retried once in a new process. Coverage runs still go through `dotnet test` in a fresh process. Warm hosts

@@ -85,11 +85,13 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
             var current = Path.GetPathRoot(path)!;
             foreach (var segment in path[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
             {
-                // Prefer the exact entry on case-sensitive volumes; on insensitive volumes, recover the stored spelling.
+                // macOS treats canonical Unicode spellings as equivalent, including on case-sensitive volumes.
+                var comparableSegment = ComparableSpelling(segment);
                 var matches = Directory.EnumerateFileSystemEntries(current)
-                    .Where(entry => string.Equals(Path.GetFileName(entry), segment, StringComparison.OrdinalIgnoreCase))
+                    .Where(entry => string.Equals(ComparableSpelling(Path.GetFileName(entry)), comparableSegment, StringComparison.OrdinalIgnoreCase))
                     .ToList();
                 current = matches.FirstOrDefault(entry => string.Equals(Path.GetFileName(entry), segment, StringComparison.Ordinal))
+                    ?? matches.FirstOrDefault(entry => string.Equals(ComparableSpelling(Path.GetFileName(entry)), comparableSegment, StringComparison.Ordinal))
                     ?? (matches.Count == 1 ? matches[0] : throw new IOException($"Cannot resolve the spelling of '{segment}'."));
             }
 
@@ -101,6 +103,9 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
                 $"Cannot canonicalize worktree '{path}': {ex.Message}", ex);
         }
     }
+
+    private static string ComparableSpelling(string name) =>
+        OperatingSystem.IsMacOS() ? name.Normalize(NormalizationForm.FormC) : name;
 
     /// <summary>Resolves symbolic links in every segment of an absolute path.</summary>
     private static string ResolveLinks(string path)

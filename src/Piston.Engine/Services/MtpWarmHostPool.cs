@@ -11,7 +11,7 @@ namespace Piston.Engine.Services;
 /// <summary>
 /// Keeps one Microsoft.Testing.Platform host per test app alive in server mode, so repeated discoveries
 /// and runs skip process start-up and initialization. A host is replaced when its app's output directory
-/// changes (a rebuild), when it exits, and after a failed, timed-out or cancelled request (cancellation
+/// changes, when it exits, and after a failed, timed-out or cancelled request (cancellation
 /// kills it). A host serves one request at a time: a request for a busy host runs in a cold process.
 /// Hosts get <c>PISTON_WARM_HOST=1</c>.
 /// </summary>
@@ -201,6 +201,27 @@ internal sealed class MtpWarmHostPool : IAsyncDisposable
         }
 
         return string.Create(CultureInfo.InvariantCulture, $"{files}:{hash.ToHashCode():x8}");
+    }
+
+    /// <summary>
+    /// Releases loaded output files before MSBuild can overwrite them. The caller must have finished
+    /// all test requests first; unlike disposal, this leaves the pool available for the next build.
+    /// </summary>
+    internal async Task RetireBeforeBuildAsync()
+    {
+        List<WarmHost> hosts;
+        lock (_gate)
+        {
+            if (_hosts.Values.Any(h => h.Busy))
+            {
+                throw new InvalidOperationException("Cannot build while a warm test host is serving a request.");
+            }
+
+            hosts = [.. _hosts.Values];
+            _hosts.Clear();
+        }
+
+        await Task.WhenAll(hosts.Select(h => h.DisposeAsync().AsTask())).ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()
