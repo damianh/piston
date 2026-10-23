@@ -664,13 +664,12 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             return [];
         }
 
-        var currentHash = ImpactContent.TryRead(filePath) is { } content ? ImpactContent.Hash(content) : null;
         return [.. executors.Select(e => new CoveringTest(
             e.TestFqn,
             e.ProjectPath,
             e.Granularity.ToString().ToLowerInvariant(),
             [.. e.Spans.Select(s => new CoveredLineRange(s.Start, s.End))],
-            e.IsUnitCurrent && string.Equals(e.SnapshotHash, currentHash, StringComparison.Ordinal)))];
+            e.IsUnitCurrent && e.IsContentCurrent))];
     }
 
     /// <summary>

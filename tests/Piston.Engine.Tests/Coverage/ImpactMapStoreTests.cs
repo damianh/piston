@@ -31,12 +31,13 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         return ValueTask.CompletedTask;
     }
 
-    private static string Source(int lines) => string.Join("\n", Enumerable.Range(1, lines).Select(i => $"line {i}"));
+    private static string Source(int lines) => string.Join("\n", Enumerable.Range(1, lines).Select(i => $"int line{i} = {i};"));
 
     private static string Edit(string content, int line, string replacement)
     {
         var lines = SnapshotDiff.SplitLines(content);
-        lines[line - 1] = replacement;
+        var identifier = string.Concat(replacement.Where(char.IsLetterOrDigit));
+        lines[line - 1] = $"int changed_{identifier} = {line};";
         return string.Join("\n", lines);
     }
 
@@ -88,6 +89,33 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
 
         Assert.Empty(selection.Tests);
         Assert.Empty(selection.UnmappedFiles);
+    }
+
+    [Fact]
+    public async Task SelectTests_CommentsAndWhitespaceOnly_MarksFileUnchangedWithoutSelectingTests()
+    {
+        const string original = "class C\n{\n    void M() { int x = 1; }\n}";
+        const string edited = "class C\n{\n    // comment\n\n    void M(){int x=1;}\n}";
+        var path = Path.Combine(_tempDir, "Code.cs");
+        System.IO.File.WriteAllText(path, edited);
+        await _sut.RecordImpactAsync(new ImpactRecording(
+            Project,
+            ImpactGranularity.Test,
+            "T.A.One",
+            _sut.CreateRunId(),
+            ["T.A.One"],
+            [new ImpactFile(path, [new(3, 3)], original)],
+            Merge: false));
+
+        var selection = _sut.SelectTests([new ChangedFile(path, edited)]);
+
+        Assert.Empty(selection.Tests);
+        Assert.Empty(selection.UnmappedFiles);
+        Assert.Equal([path], selection.UnchangedFiles);
+        var executor = Assert.Single(_sut.GetTestsExecuting(path));
+        Assert.True(executor.IsUnitCurrent);
+        Assert.True(executor.IsContentCurrent);
+        Assert.Equal([new LineSpan(3, 5)], executor.Spans);
     }
 
     [Fact]

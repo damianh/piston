@@ -63,9 +63,9 @@ public sealed class PistonOptions
 
     /// <summary>
     /// When coverage is enabled, measures each test class (or test) separately while the engine is idle so a
-    /// change runs only the tests that executed the changed lines. Default is <see cref="ImpactBackfillMode.Off"/>.
+    /// change runs only the tests that executed the changed lines. Default is <see cref="ImpactBackfillMode.Test"/>.
     /// </summary>
-    public ImpactBackfillMode ImpactBackfill { get; init; } = ImpactBackfillMode.Off;
+    public ImpactBackfillMode ImpactBackfill { get; init; } = ImpactBackfillMode.Test;
 
     /// <summary>
     /// How long a test runs before it is reported as possibly hanging (a warning only). Null turns the

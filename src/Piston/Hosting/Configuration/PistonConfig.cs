@@ -26,7 +26,7 @@ public sealed class PistonConfig
 
     /// <summary>
     /// With coverage enabled, how finely to measure which tests execute which lines while idle:
-    /// "class" (default), "test" or "off".
+    /// "test" (default), "class" or "off". Per-test backfill is precise but expensive.
     /// </summary>
     public string? ImpactBackfill { get; set; }
 

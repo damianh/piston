@@ -82,7 +82,11 @@ internal sealed record ImpactReason(
 /// </param>
 internal sealed record ImpactSelection(
     IReadOnlyDictionary<string, IReadOnlyList<ImpactReason>> Tests,
-    IReadOnlyList<string> UnmappedFiles);
+    IReadOnlyList<string> UnmappedFiles)
+{
+    /// <summary>Mapped files whose source differs only in comments or whitespace.</summary>
+    public IReadOnlyList<string> UnchangedFiles { get; init; } = [];
+}
 
 /// <summary>Persisted map of which tests executed which code, used to select the tests a change affects.</summary>
 internal interface IImpactMapStore
@@ -121,13 +125,15 @@ internal interface IImpactMapStore
 /// <param name="Spans">The executed method ranges, numbered as in the snapshot the unit was measured against.</param>
 /// <param name="SnapshotHash">Hash of the file's content when measured.</param>
 /// <param name="IsUnitCurrent">False when the unit's code changed and it awaits re-measurement.</param>
+/// <param name="IsContentCurrent">False when the file's current code differs from the measured snapshot.</param>
 internal sealed record ImpactExecutor(
     string ProjectPath,
     string TestFqn,
     ImpactGranularity Granularity,
     IReadOnlyList<LineSpan> Spans,
     string SnapshotHash,
-    bool IsUnitCurrent);
+    bool IsUnitCurrent,
+    bool IsContentCurrent);
 
 /// <summary>A recorded unit's identity and state.</summary>
 /// <param name="Tests">The tests credited with the unit's files.</param>

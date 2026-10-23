@@ -358,30 +358,30 @@ Linux, 16 cores, Microsoft.Testing.Extensions.CodeCoverage and
 - Tests that drive child processes (stdio smoke tests) record only the in-process
   lines; cross-process coverage stays out of scope.
 
-Decision: build the impact map on **class** granularity, backfilled one class
-process at a time when the daemon is idle. The backfill is cancellable,
-incremental (only classes whose recorded files changed, or that have no map
-entry, are re-measured) and never concurrent with another coverage run of the
-same test app. A full backfill exceeds the 2× goal, so it is amortised over idle
-time rather than run as part of verification. Per-test granularity stays
-optional (an on-demand refinement of one class) and is labelled as such. A
-blocking in-process hook (an injected xUnit `BeforeAfterTestAttribute` or MTP
-extension) could reach about 1.2× but modifies the user's test project; it is
-deferred.
+The original implementation used **class** granularity by default because a
+complete per-test backfill measured about 80× one coverage run. Following the
+user's choice, the default is now **test** granularity: it measures one test
+method per process while idle. It remains cancellable, incremental (only tests
+whose recorded files changed, or that have no map entry, are re-measured) and
+never concurrent with another coverage run of the same test app. Users can
+choose `"class"` for a faster, coarser map or `"off"` to disable backfill. The
+blocking in-process hook remains deferred because it would require changes to
+the user's test project and framework-specific integration.
 
 ### Status
 
 Implemented:
 
-- An impact map of `run` units recorded by every coverage run and `class` (or,
-  with `impactBackfill: "test"`, `test`) units measured by the idle backfill, each
+- An impact map of `run` units recorded by every coverage run and `test` (or,
+  with `impactBackfill: "class"`, `class`) units measured by the idle backfill, each
   with executed line spans and a content snapshot. Aggregate line coverage is
   stored separately and labelled as aggregate.
 - Changed-line selection (Tier 3) diffing changed files against the snapshots,
   with per-test reasons, conservative fallback to project selection, and a
-  `plan_affected_tests` preview. Spans merged after an edit are remapped with a
-  line diff; class and test units of an edited file are treated as outdated until
-  remeasured.
+  `plan_affected_tests` preview. C# syntax tokens are compared so ordinary
+  comments and whitespace do not trigger tests or invalidate measurements.
+  Spans merged after an edit are remapped with a line diff; class and test units
+  of an edited file are treated as outdated until remeasured.
 - Dashboard: a covering-tests panel per file and per line with evidence
   granularity and outdated markers, drill-down to the test, "Why it ran" in test
   details, backfill progress and the last run's scope in the status bar.

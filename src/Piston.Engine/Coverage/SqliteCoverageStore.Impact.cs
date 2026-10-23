@@ -180,9 +180,10 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
 
         var finest = ReadFinestCurrentGranularity();
         var unitTests = new Dictionary<long, IReadOnlyList<string>>();
-        var snapshots = new Dictionary<string, string[]?>(StringComparer.Ordinal);
+        var snapshots = new Dictionary<string, (string? Content, IReadOnlyList<SnapshotDiff.CodeItem>? Items)>(StringComparer.Ordinal);
         var selected = new Dictionary<string, List<ImpactReason>>(StringComparer.Ordinal);
         var unmapped = new List<string>();
+        var unchanged = new List<string>();
 
         foreach (var change in changes)
         {
@@ -194,9 +195,10 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             }
 
             var currentHash = change.Content is null ? null : ImpactContent.Hash(change.Content);
-            var currentLines = change.Content is null ? null : SnapshotDiff.SplitLines(change.Content);
+            var currentCodeItems = change.Content is null ? null : SnapshotDiff.CodeItems(change.Content);
             var hits = new List<(FileUnit Unit, ImpactReason Reason)>();
             var touched = new List<(FileUnit Unit, ImpactReason Reason)>();
+            var hasCodeChange = false;
 
             foreach (var row in rows)
             {
@@ -208,24 +210,30 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
 
                 var spans = LineSpan.Parse(row.Spans);
                 LineSpan changed;
-                if (currentLines is null)
+                if (change.Content is null)
                 {
+                    hasCodeChange = true;
                     changed = new LineSpan(1, spans.Count == 0 ? 1 : spans[^1].End);
                 }
                 else
                 {
-                    if (!snapshots.TryGetValue(row.Hash, out var oldLines))
+                    if (!snapshots.TryGetValue(row.Hash, out var snapshot))
                     {
-                        snapshots[row.Hash] = oldLines = ReadSnapshot(row.Hash, null) is { } text ? SnapshotDiff.SplitLines(text) : null;
+                        var oldContent = ReadSnapshot(row.Hash, null);
+                        snapshots[row.Hash] = snapshot = (
+                            oldContent,
+                            oldContent is null ? null : SnapshotDiff.CodeItems(oldContent));
                     }
 
-                    if (oldLines is null)
+                    if (snapshot.Content is null || snapshot.Items is null || currentCodeItems is null)
                     {
+                        hasCodeChange = true;
                         changed = new LineSpan(1, spans.Count == 0 ? 1 : spans[^1].End);
                     }
-                    else if (SnapshotDiff.Compute(oldLines, currentLines) is { } diff)
+                    else if (SnapshotDiff.ComputeCodeRange(snapshot.Content, snapshot.Items, currentCodeItems) is { } changedRange)
                     {
-                        changed = diff.OldRange;
+                        hasCodeChange = true;
+                        changed = changedRange;
                         if (spans.FirstOrDefault(s => s.Overlaps(changed)) is { Start: > 0 } span)
                         {
                             hits.Add((row, new ImpactReason(change.FilePath, changed, span, row.Granularity, row.ProjectPath)));
@@ -239,6 +247,11 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                 }
 
                 touched.Add((row, new ImpactReason(change.FilePath, changed, null, row.Granularity, row.ProjectPath)));
+            }
+
+            if (!hasCodeChange)
+            {
+                unchanged.Add(change.FilePath);
             }
 
             var fileSelected = new Dictionary<string, ImpactReason>(StringComparer.Ordinal);
@@ -292,7 +305,10 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
 
         return new ImpactSelection(
             selected.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<ImpactReason>)kv.Value, StringComparer.Ordinal),
-            unmapped);
+            unmapped)
+        {
+            UnchangedFiles = unchanged,
+        };
     }
 
     public async Task MarkChangedAsync(IReadOnlyList<ChangedFile> changes)
@@ -422,12 +438,17 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
         using var gate = Enter();
 
         var finest = ReadFinestCurrentGranularity();
+        var currentContent = ImpactContent.TryRead(filePath);
+        var currentHash = currentContent is null ? null : ImpactContent.Hash(currentContent);
+        var currentItems = currentContent is null ? null : SnapshotDiff.CodeItems(currentContent);
+        var snapshotItems = new Dictionary<string, IReadOnlyList<SnapshotDiff.CodeItem>>(StringComparer.Ordinal);
         using var cmd = _connection!.CreateCommand();
         cmd.CommandText = """
-            SELECT u.project_path, t.test_fqn, u.granularity, u.is_dirty, f.snapshot_hash, f.spans
+            SELECT u.project_path, t.test_fqn, u.granularity, u.is_dirty, f.snapshot_hash, f.spans, s.content
             FROM impact_unit_files f
             JOIN impact_units u ON u.unit_id = f.unit_id
             JOIN impact_unit_tests t ON t.unit_id = u.unit_id
+            LEFT JOIN impact_snapshots s ON s.snapshot_hash = f.snapshot_hash
             WHERE f.file_path = $path;
             """;
         _ = cmd.Parameters.AddWithValue("$path", filePath);
@@ -445,8 +466,32 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                 continue;
             }
 
+            var snapshotHash = reader.GetString(4);
+            var snapshotContent = reader.IsDBNull(6) ? null : reader.GetString(6);
+            var contentIsCurrent = string.Equals(snapshotHash, currentHash, StringComparison.Ordinal);
+            if (!contentIsCurrent && currentItems is not null && snapshotContent is not null)
+            {
+                if (!snapshotItems.TryGetValue(snapshotHash, out var items))
+                {
+                    snapshotItems[snapshotHash] = items = SnapshotDiff.CodeItems(snapshotContent);
+                }
+
+                contentIsCurrent = SnapshotDiff.ComputeCodeRange(snapshotContent, items, currentItems) is null;
+            }
+
+            var spans = LineSpan.Parse(reader.GetString(5));
+            if (contentIsCurrent
+                && !string.Equals(snapshotHash, currentHash, StringComparison.Ordinal)
+                && snapshotContent is not null
+                && currentContent is not null
+                && SnapshotDiff.Compute(SnapshotDiff.SplitLines(snapshotContent), SnapshotDiff.SplitLines(currentContent)) is { } lineDiff)
+            {
+                spans = lineDiff.Remap(spans);
+            }
+
             var row = new ImpactExecutor(
-                key.Item1, key.Item2, granularity, LineSpan.Parse(reader.GetString(5)), reader.GetString(4), reader.GetInt64(3) == 0);
+                key.Item1, key.Item2, granularity, spans, snapshotHash,
+                reader.GetInt64(3) == 0, contentIsCurrent);
             if (!best.TryGetValue(key, out var existing)
                 || (row.IsUnitCurrent, row.Granularity).CompareTo((existing.IsUnitCurrent, existing.Granularity)) > 0)
             {

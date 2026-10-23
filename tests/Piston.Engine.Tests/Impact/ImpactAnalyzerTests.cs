@@ -399,7 +399,7 @@ public sealed class ImpactAnalyzerTests : IDisposable
 
     // ── Tier 3 with the impact map ─────────────────────────────────────────────
 
-    private static readonly string LibSource = string.Join("\n", Enumerable.Range(1, 20).Select(i => $"// line {i}"));
+    private static readonly string LibSource = string.Join("\n", Enumerable.Range(1, 20).Select(i => $"int line{i} = {i};"));
 
     private async Task<SqliteCoverageStore> ImpactStoreAsync()
     {
@@ -414,8 +414,12 @@ public sealed class ImpactAnalyzerTests : IDisposable
         return store;
     }
 
-    private void EditLibLine(int line) =>
-        File.WriteAllText(_libCode, LibSource.Replace($"// line {line}\n", "// edited\n", StringComparison.Ordinal));
+    private void EditLibLine(int line)
+    {
+        var lines = SnapshotDiff.SplitLines(LibSource);
+        lines[line - 1] = $"int changedLine{line} = {line};";
+        File.WriteAllText(_libCode, string.Join("\n", lines));
+    }
 
     [Fact]
     public async Task Tier3_ImpactMap_SelectsOnlyTestsWhoseExecutedLinesTheEditTouches()
@@ -449,6 +453,48 @@ public sealed class ImpactAnalyzerTests : IDisposable
         _ = analyzer.Analyze([Change(_libCode)]);
 
         Assert.All(store.GetUnits(_testsCsproj, ImpactGranularity.Class), u => Assert.False(u.IsCurrent));
+    }
+
+    [Fact]
+    public async Task Tier3_ImpactMap_CommentAndWhitespaceOnlyEditSkipsTestsAndKeepsUnitsCurrent()
+    {
+        using var store = await ImpactStoreAsync();
+        var analyzer = new ImpactAnalyzer(_factory, store);
+        await analyzer.InitializeAsync("solution.slnx", _ct);
+        var edited = LibSource.Replace("int line11 = 11;", "int line11=11; // comment", StringComparison.Ordinal);
+        File.WriteAllText(_libCode, "// heading\n" + edited);
+
+        var result = analyzer.Analyze([Change(_libCode)]);
+
+        Assert.Empty(result.AffectedTestProjectPaths);
+        Assert.Empty(result.AffectedTestFqns!);
+        Assert.Contains("Only comments or whitespace", result.Explanation, StringComparison.Ordinal);
+        Assert.All(store.GetUnits(_testsCsproj, ImpactGranularity.Class), unit => Assert.True(unit.IsCurrent));
+    }
+
+    [Fact]
+    public async Task Tier3_ImpactMap_CommentOnlyTestFileEditSkipsTestsWhenMapped()
+    {
+        using var store = await ImpactStoreAsync();
+        var testSource = "// test file";
+        await store.RecordImpactAsync(new ImpactRecording(
+            _testsCsproj,
+            ImpactGranularity.Test,
+            "T.A.One",
+            store.CreateRunId(),
+            ["T.A.One"],
+            [new ImpactFile(Path.GetFullPath(_testsFile), [new(1, 1)], testSource)],
+            Merge: false));
+
+        var analyzer = new ImpactAnalyzer(_factory, store);
+        await analyzer.InitializeAsync("solution.slnx", _ct);
+        File.WriteAllText(_testsFile, "// heading\n// updated comment");
+
+        var result = analyzer.Analyze([Change(_testsFile)]);
+
+        Assert.Empty(result.AffectedTestProjectPaths);
+        Assert.Empty(result.AffectedTestFqns!);
+        Assert.Contains("Only comments or whitespace", result.Explanation, StringComparison.Ordinal);
     }
 
     [Fact]

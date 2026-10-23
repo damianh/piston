@@ -135,7 +135,7 @@ public static class HostHelpers
             testExecutionMode = parsedMode;
         }
 
-        var impactBackfill = ImpactBackfillMode.Class;
+        var impactBackfill = ImpactBackfillMode.Test;
         if (config.ImpactBackfill is not null
             && (!Enum.TryParse(config.ImpactBackfill, ignoreCase: true, out impactBackfill)
                 || !Enum.IsDefined(impactBackfill)

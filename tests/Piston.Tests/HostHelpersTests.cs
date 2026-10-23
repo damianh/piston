@@ -158,11 +158,11 @@ public sealed class HostHelpersTests : IDisposable
     }
 
     [Theory]
-    [InlineData(null, true, ImpactBackfillMode.Class)]
+    [InlineData(null, true, ImpactBackfillMode.Test)]
     [InlineData("test", true, ImpactBackfillMode.Test)]
     [InlineData("OFF", true, ImpactBackfillMode.Off)]
     [InlineData("class", false, ImpactBackfillMode.Off)]
-    public void ImpactBackfillDefaultsToClassWhenCoverageIsEnabled(string? configured, bool coverage, ImpactBackfillMode expected)
+    public void ImpactBackfillDefaultsToTestWhenCoverageIsEnabled(string? configured, bool coverage, ImpactBackfillMode expected)
     {
         var config = new Piston.Hosting.Configuration.PistonConfig { ImpactBackfill = configured };
 

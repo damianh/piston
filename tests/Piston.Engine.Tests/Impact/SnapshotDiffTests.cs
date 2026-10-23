@@ -58,6 +58,33 @@ public sealed class SnapshotDiffTests
     }
 
     [Fact]
+    public void ComputeCodeRange_CommentsAndWhitespaceOnly_ReturnsNull()
+    {
+        const string original = "class C\n{\n    void M() { int x = 1; }\n}";
+        const string edited = "class C\n{\n    // a comment\n\n    void M(){int x=1;}\n}";
+
+        Assert.Null(SnapshotDiff.ComputeCodeRange(original, edited));
+    }
+
+    [Fact]
+    public void ComputeCodeRange_CodeChange_ReturnsOldLineRange()
+    {
+        const string original = "class C\n{\n    void M() { int x = 1; }\n}";
+        const string edited = "class C\n{\n    void M() { int x = 2; }\n}";
+
+        Assert.Equal(new LineSpan(3, 3), SnapshotDiff.ComputeCodeRange(original, edited));
+    }
+
+    [Fact]
+    public void ComputeCodeRange_DirectiveChangesAreSignificant()
+    {
+        const string original = "#if DEBUG\nclass C {}\n#endif";
+        const string edited = "#if RELEASE\nclass C {}\n#endif";
+
+        Assert.True(SnapshotDiff.ComputeCodeRange(original, edited) is not null);
+    }
+
+    [Fact]
     public void Remap_KeepsSpansBeforeAndShiftsSpansAfterTheChange()
     {
         var diff = new SnapshotDiff(Prefix: 10, OldCount: 2, NewCount: 5);

@@ -45,7 +45,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         "totals and the files with the most uncovered lines. With a file (absolute or solution-relative): its totals plus " +
         "uncovered and partially covered line ranges. Requires the daemon to run with coverage enabled. " +
         "stale means the file changed since it was measured; partial means only a selective run measured it. " +
-        "impactBackfill, when present, is the progress of measuring which test classes execute which lines.")]
+        "impactBackfill, when present, is the progress of measuring which tests execute which lines.")]
     public string GetCoverage(
         [Description("Source file to report on. Omit for the solution summary.")] string? file = null,
         [Description("Most files to list in the summary, worst first (default 50).")] int maxFiles = 50)

@@ -204,11 +204,26 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
             : null;
 
         // An edited test file may add tests no recording knows about, so only Tier 2 is safe.
-        if (!hasTestFileChange && _coverageStore is IImpactMapStore impactMap)
+        if (_coverageStore is IImpactMapStore impactMap)
         {
             var changed = csPaths.Select(p => new ChangedFile(p, ImpactContent.TryRead(p))).ToList();
             var selection = impactMap.SelectTests(changed);
-            if (selection.UnmappedFiles.Count == 0 && selection.Tests.Count > 0)
+            if (selection.UnmappedFiles.Count == 0
+                && selection.Tests.Count == 0
+                && selection.UnchangedFiles.Count == changed.Count)
+            {
+                tier3Result = tier2Result with
+                {
+                    AffectedTestProjectPaths = [],
+                    AffectedTestFqns = [],
+                    Explanation = "Only comments or whitespace changed, so no tests need to run.",
+                };
+            }
+            else if (hasTestFileChange)
+            {
+                abstained = "A test file changed and coverage cannot know its new tests, so tests are selected by project.";
+            }
+            else if (selection.UnmappedFiles.Count == 0 && selection.Tests.Count > 0)
             {
                 tier3Result = tier2Result with
                 {
@@ -217,7 +232,7 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
                         kv => kv.Key,
                         kv => (IReadOnlyList<TestSelectionReason>)[.. kv.Value.Select(ToSelectionReason)],
                         StringComparer.Ordinal),
-                    Explanation = "Tests whose recorded execution touches the changed lines.",
+                    Explanation = "Tests whose recorded execution touches the changed code.",
                 };
             }
             else if (selection.UnmappedFiles.Count > 0)
@@ -230,7 +245,8 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
                 try
                 {
                     // Class and test recordings of the old content no longer describe the file.
-                    impactMap.MarkChangedAsync(changed).GetAwaiter().GetResult();
+                    var unchanged = selection.UnchangedFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    impactMap.MarkChangedAsync([.. changed.Where(file => !unchanged.Contains(file.FilePath))]).GetAwaiter().GetResult();
                 }
                 catch
                 {
