@@ -4,6 +4,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using Piston.Hosting.Protocol;
+using Piston.Hosting.Services;
 using Piston.Protocol.JsonRpc;
 using Piston.Tests.Mcp;
 using Xunit;
@@ -132,6 +133,18 @@ public sealed class SourceCommandTests : IDisposable
         Assert.Contains("not text", (await GetAsync("bin.dll"))["unavailable"]!.GetValue<string>(), StringComparison.Ordinal);
         Assert.Contains("no longer exists", (await GetAsync("gone.cs"))["unavailable"]!.GetValue<string>(), StringComparison.Ordinal);
         Assert.Contains("too large", (await GetAsync("big.cs"))["unavailable"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReadsSourceWhenTheSolutionDirectoryIsAFileSystemRoot()
+    {
+        var path = Path.Combine(_root, "Root.cs");
+        await File.WriteAllTextAsync(path, "class Root {}", _ct);
+
+        var result = SourceFileReader.Read(path, Path.GetPathRoot(_root));
+
+        Assert.Null(result.Unavailable);
+        Assert.Equal(["class Root {}"], result.Lines);
     }
 
     [Fact]

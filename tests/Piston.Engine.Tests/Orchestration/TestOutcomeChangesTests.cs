@@ -34,8 +34,8 @@ public sealed class TestOutcomeChangesTests
 
         var (fixedTests, newlyFailing) = TestOutcomeChanges.Compare(previous, current);
 
-        Assert.Equal(["A.Fixed"], fixedTests);
-        Assert.Equal(["A.Broke", "A.NewAndFailing"], newlyFailing);
+        Assert.Equal([new("Tests", "A.Fixed")], fixedTests);
+        Assert.Equal([new("Tests", "A.Broke"), new("Tests", "A.NewAndFailing")], newlyFailing);
     }
 
     [Fact]
@@ -77,7 +77,38 @@ public sealed class TestOutcomeChangesTests
 
         var (_, newlyFailing) = TestOutcomeChanges.Compare(previous, current);
 
-        Assert.Equal(["Shared.Test"], newlyFailing);
+        Assert.Equal([new("Other.Tests", "Shared.Test")], newlyFailing);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void PreservesSameNamedFixesAndOppositeTransitionsInDifferentProjects(bool opposite)
+    {
+        IReadOnlyList<TestSuite> previous =
+        [
+            new("A.Tests", [Test("Shared.Test", TestStatus.Failed)], DateTimeOffset.UnixEpoch, TimeSpan.Zero),
+            new("B.Tests", [Test("Shared.Test", opposite ? TestStatus.Passed : TestStatus.Failed)], DateTimeOffset.UnixEpoch, TimeSpan.Zero),
+        ];
+        IReadOnlyList<TestSuite> current =
+        [
+            previous[0] with { Tests = [Test("Shared.Test", TestStatus.Passed)] },
+            previous[1] with { Tests = [Test("Shared.Test", opposite ? TestStatus.Failed : TestStatus.Passed)] },
+        ];
+
+        var (fixedTests, newlyFailing) = TestOutcomeChanges.Compare(previous, current);
+
+        Assert.Contains(new("A.Tests", "Shared.Test"), fixedTests);
+        if (opposite)
+        {
+            _ = Assert.Single(fixedTests);
+            Assert.Equal([new("B.Tests", "Shared.Test")], newlyFailing);
+        }
+        else
+        {
+            Assert.Equal([new("A.Tests", "Shared.Test"), new("B.Tests", "Shared.Test")], fixedTests);
+            Assert.Empty(newlyFailing);
+        }
     }
 
     [Fact]
@@ -94,7 +125,7 @@ public sealed class TestOutcomeChangesTests
 
         var (fixedTests, newlyFailing) = TestOutcomeChanges.Compare(previous, current);
 
-        Assert.Equal(["A.Became", "A.Multi [net8.0]"], fixedTests);
-        Assert.Equal(["A.Multi [net10.0]"], newlyFailing);
+        Assert.Equal([new("Tests", "A.Became"), new("Tests", "A.Multi [net8.0]")], fixedTests);
+        Assert.Equal([new("Tests", "A.Multi [net10.0]")], newlyFailing);
     }
 }

@@ -15,14 +15,14 @@
     /// <summary>Who executed the code the evidence describes, e.g. "its class".</summary>
     public static string Executor(string granularity) => granularity switch
     {
-        "test" => "it",
+        "test" => "its test method (all parameterized cases measured together)",
         "class" => "its class",
         _ => "its project's run",
     };
 
     public static string Description(string granularity) => granularity switch
     {
-        "test" => "Measured alone: the test itself executed this code.",
+        "test" => "Measured with its test method: parameterized cases share this measurement, so this case may not have executed the code.",
         "class" => "Measured with its class: some test in the class executed this code, not necessarily this one.",
         _ => "Measured with its whole project's run: some test in the project executed this code, not necessarily this one.",
     };

@@ -31,14 +31,21 @@ public static class Durations
         };
 
         if (!double.TryParse(number.Trim(), NumberStyles.AllowDecimalPoint, CultureInfo.InvariantCulture, out var amount)
-            || double.IsInfinity(amount * unit))
+            || !double.IsFinite(amount * unit))
         {
             return false;
         }
 
         if (amount > 0)
         {
-            value = TimeSpan.FromSeconds(amount * unit);
+            try
+            {
+                value = TimeSpan.FromSeconds(amount * unit);
+            }
+            catch (OverflowException)
+            {
+                return false;
+            }
         }
 
         return true;

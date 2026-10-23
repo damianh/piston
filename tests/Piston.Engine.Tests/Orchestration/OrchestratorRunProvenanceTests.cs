@@ -242,10 +242,10 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         var fixedRun = _state.LastRun!;
 
         Assert.Empty(broken!.ChangedFiles);
-        Assert.Equal(["A.Tests.Test1"], broken.NewlyFailingTests);
+        Assert.Equal([new("A.Tests", "A.Tests.Test1")], broken.NewlyFailingTests);
         Assert.Empty(broken.FixedTests);
         Assert.Equal([code], fixedRun.ChangedFiles);
-        Assert.Equal(["A.Tests.Test1"], fixedRun.FixedTests);
+        Assert.Equal([new("A.Tests", "A.Tests.Test1")], fixedRun.FixedTests);
         Assert.Empty(fixedRun.NewlyFailingTests);
     }
 

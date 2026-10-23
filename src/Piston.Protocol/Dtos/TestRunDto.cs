@@ -3,6 +3,9 @@
 
 namespace Piston.Protocol.Dtos;
 
+/// <summary>A test result key scoped to the project suite that produced it.</summary>
+public sealed record TestOutcomeReferenceDto(string Project, string Key);
+
 /// <summary>Source-input fingerprint captured for a run (see <c>piston-source-v2</c>).</summary>
 public sealed record SourceFingerprintDto(string Algorithm, string Value, int FileCount);
 
@@ -32,7 +35,7 @@ public sealed record TestRunAdmissionDto(
 /// <c>GetTestRun</c> tool; suites in snapshots carry <see cref="TestSuiteDto.RunId"/>.
 /// <see cref="SelectionExplanation"/> says why the run has its scope; <see cref="SelectionReasons"/> says why each
 /// test was selected when the impact map narrowed the run by changed lines. <see cref="ChangedFiles"/> are the files
-/// whose change triggered the run; <see cref="FixedTests"/> and <see cref="NewlyFailingTests"/> are the result keys of
+/// whose change triggered the run; <see cref="FixedTests"/> and <see cref="NewlyFailingTests"/> are the project-scoped result keys of
 /// tests whose outcome the run changed from failed to passed, and to failed from passed or no result.
 /// </summary>
 public sealed record TestRunDto(
@@ -66,6 +69,6 @@ public sealed record TestRunDto(
     string? SelectionExplanation = null,
     IReadOnlyDictionary<string, IReadOnlyList<TestSelectionReasonDto>>? SelectionReasons = null,
     IReadOnlyList<string>? ChangedFiles = null,
-    IReadOnlyList<string>? FixedTests = null,
-    IReadOnlyList<string>? NewlyFailingTests = null
+    IReadOnlyList<TestOutcomeReferenceDto>? FixedTests = null,
+    IReadOnlyList<TestOutcomeReferenceDto>? NewlyFailingTests = null
 );

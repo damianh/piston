@@ -125,6 +125,8 @@ public sealed class FileWatcherService : IFileWatcherService
             Filter = "*",
             IncludeSubdirectories = includeSubdirectories,
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.DirectoryName,
+            // Filtering excluded paths happens after OS notifications arrive; restore/build output can fill the default 8 KiB.
+            InternalBufferSize = 64 * 1024,
         };
 
         if (filters is not null)
@@ -189,6 +191,7 @@ public sealed class FileWatcherService : IFileWatcherService
             }
 
             _monitoringError = $"Source monitoring failed: {error.GetType().Name}: {error.Message}. Restart the daemon before verifying.";
+            DiagnosticLog.Instance?.Write("FileWatcher", _monitoringError);
             ScheduleDebounce(new FileChangeEvent(root, WatcherChangeTypes.All, _timeProvider.GetUtcNow()));
         }
     }

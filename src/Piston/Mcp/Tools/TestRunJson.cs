@@ -97,11 +97,14 @@ public static class TestRunJson
                 .ToArray()),
             ["possiblyHangingTests"] = new JsonArray(run.PossiblyHangingTests.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
             ["changedFiles"] = Strings(run.ChangedFiles),
-            ["fixedTests"] = Strings(run.FixedTests),
-            ["newlyFailingTests"] = Strings(run.NewlyFailingTests),
+            ["fixedTests"] = OutcomeReferences(run.FixedTests),
+            ["newlyFailingTests"] = OutcomeReferences(run.NewlyFailingTests),
             ["tests"] = testArray,
         };
     }
+
+    private static JsonArray OutcomeReferences(IReadOnlyList<TestOutcomeReference> tests) =>
+        new(tests.Select(t => (JsonNode)new JsonObject { ["project"] = t.Project, ["key"] = t.Key }).ToArray());
 
     private static JsonObject? Fingerprint(SourceFingerprint? fp) => fp is null
         ? null

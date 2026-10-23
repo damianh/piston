@@ -47,6 +47,33 @@ public sealed class TestRunToolTests
         };
 
     [Fact]
+    public void OutcomeChangesPreserveProjectIdentityInMcpAndProtocolJson()
+    {
+        var run = Run("outcomes", 1) with
+        {
+            FixedTests = [new("A.Tests", "Shared.Test"), new("B.Tests", "Shared.Test")],
+            NewlyFailingTests = [new("C.Tests", "Shared.Test")],
+        };
+        var engine = new StubEngine();
+        engine.State.RecentRuns = [run];
+        var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
+
+        using var mcp = JsonDocument.Parse(tools.GetTestRun(run.RunId));
+        var fixedTests = mcp.RootElement.GetProperty("fixedTests");
+        Assert.Equal(2, fixedTests.GetArrayLength());
+        Assert.Equal("A.Tests", fixedTests[0].GetProperty("project").GetString());
+        Assert.Equal("B.Tests", fixedTests[1].GetProperty("project").GetString());
+        Assert.Equal("Shared.Test", fixedTests[1].GetProperty("key").GetString());
+        Assert.Equal("C.Tests", mcp.RootElement.GetProperty("newlyFailingTests")[0].GetProperty("project").GetString());
+
+        var dto = run.ToDto();
+        var json = JsonSerializer.Serialize(dto, PistonJsonContext.Default.TestRunDto);
+        var restored = JsonSerializer.Deserialize(json, PistonJsonContext.Default.TestRunDto)!;
+        Assert.Equal([new("A.Tests", "Shared.Test"), new("B.Tests", "Shared.Test")], restored.FixedTests!);
+        Assert.Equal([new("C.Tests", "Shared.Test")], restored.NewlyFailingTests!);
+    }
+
+    [Fact]
     public async Task RunTestsReportsTheRequestedRunsProvenance()
     {
         var engine = new StubEngine { NextRun = Run("run-1", 2) };

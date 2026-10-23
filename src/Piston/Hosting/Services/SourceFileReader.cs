@@ -82,7 +82,8 @@ internal static class SourceFileReader
         var root = Path.TrimEndingDirectorySeparator(directory);
         return path.Length > root.Length
             && path.StartsWith(root, PathComparison)
-            && (path[root.Length] == Path.DirectorySeparatorChar || path[root.Length] == Path.AltDirectorySeparatorChar);
+            && (Path.EndsInDirectorySeparator(root)
+                || path[root.Length] == Path.DirectorySeparatorChar || path[root.Length] == Path.AltDirectorySeparatorChar);
     }
 
     // Resolves symbolic links in every segment, so a link inside the solution can't point outside it.

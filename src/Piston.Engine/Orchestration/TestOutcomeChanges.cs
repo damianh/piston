@@ -13,7 +13,7 @@ internal static class TestOutcomeChanges
     /// matched by suite and result key (or, for a result without a target framework, by suite and name). Nothing is newly failing
     /// when there are no earlier results, so the first run doesn't report every failure as new.
     /// </summary>
-    public static (IReadOnlyList<string> Fixed, IReadOnlyList<string> NewlyFailing) Compare(
+    public static (IReadOnlyList<TestOutcomeReference> Fixed, IReadOnlyList<TestOutcomeReference> NewlyFailing) Compare(
         IReadOnlyList<TestSuite> previous, IReadOnlyList<TestSuite> current)
     {
         var before = new Dictionary<(string Suite, string Key), bool>();
@@ -35,8 +35,8 @@ internal static class TestOutcomeChanges
             return ([], []);
         }
 
-        var fixedTests = new SortedSet<string>(StringComparer.Ordinal);
-        var newlyFailing = new SortedSet<string>(StringComparer.Ordinal);
+        var fixedTests = new HashSet<TestOutcomeReference>();
+        var newlyFailing = new HashSet<TestOutcomeReference>();
         foreach (var suite in current)
         {
             foreach (var test in suite.Tests)
@@ -46,17 +46,19 @@ internal static class TestOutcomeChanges
                     : null;
                 if (test.Status == TestStatus.Passed && failedBefore == true)
                 {
-                    _ = fixedTests.Add(test.ResultKey);
+                    _ = fixedTests.Add(new(suite.Name, test.ResultKey));
                 }
                 else if (test.Status == TestStatus.Failed && failedBefore != true)
                 {
-                    _ = newlyFailing.Add(test.ResultKey);
+                    _ = newlyFailing.Add(new(suite.Name, test.ResultKey));
                 }
             }
         }
 
         // A test that passed under one framework and failed under another is not fixed.
         fixedTests.ExceptWith(newlyFailing);
-        return ([.. fixedTests], [.. newlyFailing]);
+        return (
+            [.. fixedTests.OrderBy(t => t.Project, StringComparer.Ordinal).ThenBy(t => t.Key, StringComparer.Ordinal)],
+            [.. newlyFailing.OrderBy(t => t.Project, StringComparer.Ordinal).ThenBy(t => t.Key, StringComparer.Ordinal)]);
     }
 }

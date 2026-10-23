@@ -187,6 +187,52 @@ public sealed class FileWatcherDebounceTests
     }
 
     [Fact]
+    public async Task BuildOutputBurst_DoesNotLoseSourceMonitoring()
+    {
+        using var sut = new FileWatcherService(TimeSpan.FromMilliseconds(50));
+        var fired = new ConcurrentQueue<FileChangeBatch>();
+        sut.FileChanged += fired.Enqueue;
+        var dir = Directory.CreateTempSubdirectory("piston-watcher-burst-");
+        try
+        {
+            var projects = new[] { "First.Tests", "Second.Tests" }
+                .Select(name => Directory.CreateDirectory(Path.Combine(dir.FullName, name)).FullName).ToArray();
+            sut.Start(dir.FullName);
+            foreach (var project in projects)
+            {
+                foreach (var excluded in new[] { "bin", "obj" })
+                {
+                    var output = Directory.CreateDirectory(Path.Combine(project, excluded, "Debug", "net10.0")).FullName;
+                    for (var i = 0; i < 400; i++)
+                    {
+                        await File.WriteAllTextAsync(Path.Combine(output, $"Generated.Build.Output.{i:D4}.cs"), "// generated", _ct);
+                    }
+                }
+            }
+
+            var source = Path.Combine(projects[0], "Source.cs");
+            var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            sut.FileChanged += batch =>
+            {
+                if (batch.Changes.Any(change => change.FilePath == source))
+                {
+                    _ = received.TrySetResult();
+                }
+            };
+            await File.WriteAllTextAsync(source, "// source", _ct);
+            await received.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+            Assert.Null(sut.MonitoringError);
+            Assert.All(fired.SelectMany(batch => batch.Changes), change => Assert.Equal(source, change.FilePath));
+        }
+        finally
+        {
+            sut.Stop();
+            dir.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task FingerprintedFilesWithAnyExtension_AreWatched()
     {
         var debounce = TimeSpan.FromMilliseconds(50);

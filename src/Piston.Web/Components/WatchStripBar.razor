@@ -76,8 +76,8 @@
 @code {
     [Parameter] public StateSnapshotNotification? Snapshot { get; set; }
 
-    /// <summary>Selects a test by its result key.</summary>
-    [Parameter] public EventCallback<string> OnRevealTest { get; set; }
+    /// <summary>Selects a test by its project-scoped result key.</summary>
+    [Parameter] public EventCallback<TestOutcomeReferenceDto> OnRevealTest { get; set; }
 
     private TestRunDto? Run => Snapshot?.ActiveRun ?? Snapshot?.LastRun;
 
@@ -85,8 +85,8 @@
         ? path[..i]
         : null;
 
-    private static string TestList(string heading, IReadOnlyList<string> keys) =>
+    private static string TestList(string heading, IReadOnlyList<TestOutcomeReferenceDto> keys) =>
         $"{heading} (click to show the first):{Environment.NewLine}" +
-        string.Join(Environment.NewLine, keys.Take(20).Select(WatchStrip.ShortTestName)) +
+        string.Join(Environment.NewLine, keys.Take(20).Select(t => $"{t.Project}: {WatchStrip.ShortTestName(t.Key)}")) +
         (keys.Count > 20 ? $"{Environment.NewLine}… and {keys.Count - 20} more" : "");
 }

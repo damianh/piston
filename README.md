@@ -185,7 +185,7 @@ Every run, including startup and file-change runs, gets a record in the
 - the scope (`Full` or `Selective`), `isFiltered` and the effective filter;
 - the run context: solution, test projects, build targets, configuration, SDK, runtime and OS;
 - run-local `build` output (status, raw MSBuild errors/warnings including diagnostic IDs and locations, duration), or null if the build did not return. A targeted run that reused the last build reports status `Skipped`;
-- `fixedTests` (failed before the run, passed in it) and `newlyFailingTests` (failed in the run but not before it, including new tests; empty for the daemon's first run);
+- `fixedTests` (failed before the run, passed in it) and `newlyFailingTests` (failed in the run but not before it, including new tests; empty for the daemon's first run). Each entry carries a `project` suite name and a result `key`, so identically named tests in different projects remain distinct;
 - per-project outcomes, duplicate test IDs, and every test's fully qualified name and status. A multi-targeted project reports each test once per framework, with a `targetFramework` field (e.g. `net8.0`); test names in failure lists then carry the framework, as in `Ns.Class.Method [net8.0]`.
 
 When a project reports no tests, its outcome carries a `noTestsReason` and the run's status reason repeats it. Piston checks the project file first (an MTP project without `<OutputType>Exe</OutputType>`, no known test framework, a VSTest project missing `Microsoft.NET.Test.Sdk` or its framework adapter), then the runner output ("No test is available", exit code 8, testhost crashes), and otherwise points at `.piston/diagnostics.log`.

@@ -286,8 +286,8 @@ public static class DtoMapper
                 kv => (IReadOnlyList<TestSelectionReasonDto>)[.. kv.Value.Select(r => r.ToDto())],
                 StringComparer.Ordinal),
             ChangedFiles: run.ChangedFiles,
-            FixedTests: run.FixedTests,
-            NewlyFailingTests: run.NewlyFailingTests);
+            FixedTests: [.. run.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
+            NewlyFailingTests: [.. run.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))]);
     }
 
     public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>

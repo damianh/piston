@@ -3,6 +3,9 @@
 
 namespace Piston.Engine.Models;
 
+/// <summary>A test result key scoped to the project suite that produced it.</summary>
+public sealed record TestOutcomeReference(string Project, string Key);
+
 /// <summary>What caused a test run to be requested.</summary>
 public enum TestRunTrigger
 {
@@ -231,14 +234,14 @@ public sealed record TestRunRecord
     /// <summary>The files whose change triggered this run; empty unless it was triggered by a file change.</summary>
     public IReadOnlyList<string> ChangedFiles { get; init; } = [];
 
-    /// <summary>Result keys of tests that failed before this run and passed in it.</summary>
-    public IReadOnlyList<string> FixedTests { get; init; } = [];
+    /// <summary>Project-scoped result keys of tests that failed before this run and passed in it.</summary>
+    public IReadOnlyList<TestOutcomeReference> FixedTests { get; init; } = [];
 
     /// <summary>
     /// Result keys of tests that failed in this run but had not failed before it (including new tests);
     /// empty when there were no earlier results to compare with.
     /// </summary>
-    public IReadOnlyList<string> NewlyFailingTests { get; init; } = [];
+    public IReadOnlyList<TestOutcomeReference> NewlyFailingTests { get; init; } = [];
 
     /// <summary>
     /// How each failed test relates to the worktree's run history (new, pre-existing, flaky or unknown);

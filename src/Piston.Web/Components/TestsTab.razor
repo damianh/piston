@@ -329,9 +329,10 @@
         SelectTest(test);
     }
 
-    private void RevealTestByKey(string key)
+    private void RevealTestByKey(TestOutcomeReferenceDto reference)
     {
-        if (_snapshot?.Suites.SelectMany(s => s.Tests).FirstOrDefault(t => t.Key == key) is { } test)
+        if (_snapshot?.Suites.Where(s => s.Name == reference.Project)
+            .SelectMany(s => s.Tests).FirstOrDefault(t => t.Key == reference.Key) is { } test)
         {
             RevealTest(test);
         }

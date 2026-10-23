@@ -91,7 +91,7 @@ public sealed class WatchStripTests
     [InlineData("Completed", false)]
     public void UnsuccessfulRunsKeepTheirStatusEvenWhenOutcomesChange(string status, bool expected)
     {
-        var run = Run("Forced") with { Status = status, FixedTests = ["Fixed"], NewlyFailingTests = ["Broke"] };
+        var run = Run("Forced") with { Status = status, FixedTests = [new("Tests", "Fixed")], NewlyFailingTests = [new("Tests", "Broke")] };
 
         Assert.Equal(expected, WatchStrip.ShowOutcomeSummary(run));
         Assert.True(WatchStrip.ShowOutcomeSummary(run with { FixedTests = [], NewlyFailingTests = [] }));

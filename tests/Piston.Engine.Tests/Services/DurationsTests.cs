@@ -36,6 +36,11 @@ public sealed class DurationsTests
     [InlineData("soon")]
     [InlineData("-5s")]
     [InlineData("5d")]
+    [InlineData("NaN")]
+    [InlineData("NaNs")]
+    [InlineData("Infinity")]
+    [InlineData("1000000000000s")]
+    [InlineData("1000000000000h")]
     public void RejectsOtherText(string text) => Assert.False(Durations.TryParse(text, out _));
 
     [Theory]
