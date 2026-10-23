@@ -61,6 +61,29 @@ public sealed class ViewState
 
     // ── Selection: a test or another tree node, never both ──
     public string? SelectedTestKey { get; set; }
+    public string? SelectedTestProject { get; set; }
+
+    public void RevealTest(TestReference test)
+    {
+        SelectedNodeKey = null;
+        SelectedTestKey = test.Key;
+        SelectedTestProject = test.Project;
+        RevealSelectedTest = true;
+    }
+
+    public TestResultDto? FindSelectedTest(IEnumerable<TestSuiteDto> suites)
+    {
+        if (SelectedTestKey is not { } key)
+        {
+            return null;
+        }
+
+        var tests = suites.Where(s => SelectedTestProject is null || s.Name == SelectedTestProject)
+            .SelectMany(s => s.Tests).ToList();
+        return tests.FirstOrDefault(t => t.Key == key)
+            ?? tests.FirstOrDefault(t => t.FullyQualifiedName == key
+                || key.StartsWith(t.FullyQualifiedName + " [", StringComparison.Ordinal));
+    }
 
     /// <summary>
     /// Set when another view opens <see cref="SelectedTestKey"/>; the Tests tab then expands the test's ancestors and
@@ -122,6 +145,13 @@ public sealed class ViewState
 
     public DashboardSettings ToSettings() =>
         new(DetailPosition == DetailPosition.Bottom ? DetailPanePosition.Bottom : DetailPanePosition.Right);
+}
+
+/// <summary>A test result key scoped to its suite name, independent of the host's project path separators.</summary>
+public sealed record TestReference(string Project, string Key)
+{
+    public static TestReference FromProjectPath(string projectPath, string key) =>
+        new(Path.GetFileNameWithoutExtension(projectPath.Replace('\\', '/')), key);
 }
 
 public enum DetailPosition

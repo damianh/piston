@@ -39,11 +39,9 @@
 
     private void SetTab(DashboardTab tab) => _activeTab = tab;
 
-    private void OpenTest(string fullyQualifiedName)
+    private void OpenTest(TestReference test)
     {
-        View.SelectedNodeKey = null;
-        View.SelectedTestKey = fullyQualifiedName;
-        View.RevealSelectedTest = true;
+        View.RevealTest(test);
         _activeTab = DashboardTab.Tests;
     }
 

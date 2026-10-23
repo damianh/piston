@@ -114,7 +114,7 @@
                                 <div class="flex items-center gap-2">
                                     <span class="w-14 shrink-0 @StatusText(result.Status)">@result.Status</span>
                                     <button class="truncate text-left text-gray-200 hover:underline" title="@result.Project :: @result.Test"
-                                            @onclick="() => OnOpenTest.InvokeAsync(result.Test)">@result.Test</button>
+                                            @onclick="() => OnOpenTest.InvokeAsync(new TestReference(result.Project, result.Test))">@result.Test</button>
                                     <span class="flex-1"></span>
                                     <span class="text-yellow-600 tabular-nums shrink-0">@TestNode.FormatDuration(result.DurationMs)</span>
                                 </div>
@@ -139,8 +139,8 @@
     private RunComparison? _comparison;
     private DateTimeOffset? _lastRunTime;
 
-    /// <summary>Opens a test, by fully-qualified name, in the Tests tab.</summary>
-    [Parameter] public EventCallback<string> OnOpenTest { get; set; }
+    /// <summary>Opens a test, by project and result key, in the Tests tab.</summary>
+    [Parameter] public EventCallback<TestReference> OnOpenTest { get; set; }
 
     protected override async Task OnInitializedAsync()
     {
@@ -236,7 +236,7 @@
             {
                 <div class="flex items-center gap-2 pl-3">
                     <button class="truncate text-left text-gray-300 hover:underline" title="@entry.Project :: @entry.Test"
-                            @onclick="() => OnOpenTest.InvokeAsync(entry.Test)">@entry.Test</button>
+                            @onclick="() => OnOpenTest.InvokeAsync(new TestReference(entry.Project, entry.Test))">@entry.Test</button>
                     <span class="flex-1"></span>
                     @if (showDelta && entry.Before is { } before && entry.After is { } after)
                     {

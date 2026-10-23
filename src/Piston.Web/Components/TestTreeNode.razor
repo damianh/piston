@@ -6,7 +6,7 @@
     var indent = Depth * 16;
     var isTest = Node.Kind == TestNodeKind.Test;
     var isSelected = isTest
-        ? Node.Test?.Key == SelectedKey
+        ? Node.Test?.Key == SelectedKey && (SelectedProject is null || Node.Project == SelectedProject)
         : Node.ExpansionKey is { } key && key == SelectedNodeKey;
     var isPinned = isTest && Node.Test is not null && PinnedFqns.Contains(Node.Test.FullyQualifiedName);
     NodeCounts? counts = isTest ? null : Node.Counts();
@@ -122,6 +122,7 @@
     [Parameter] public required TestNode Node { get; set; }
     [Parameter] public int Depth { get; set; }
     [Parameter] public string? SelectedKey { get; set; }
+    [Parameter] public string? SelectedProject { get; set; }
 
     /// <summary>The expansion key of the selected non-test node.</summary>
     [Parameter] public string? SelectedNodeKey { get; set; }

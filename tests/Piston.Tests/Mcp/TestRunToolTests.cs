@@ -181,7 +181,7 @@ public sealed class TestRunToolTests
     }
 
     [Fact]
-    public void SelectionExplanationAndReasonsRoundTripThroughTheProtocol()
+    public void SelectionExplanationAndReasonsRoundTripThroughTheProtocolAndMcp()
     {
         var reason = new TestSelectionReason("/w/src/A.cs", "4", "3-5", "class", "/w/T/T.csproj");
         var baseRun = Run("selective", 4, scope: TestRunScope.Selective);
@@ -201,6 +201,25 @@ public sealed class TestRunToolTests
         var mapped = Assert.Single(Assert.Single(dto.SelectionReasons!).Value);
         Assert.Equal(("/w/src/A.cs", "4", "3-5", "class"), (mapped.FilePath, mapped.ChangedLines, mapped.ExecutedLines, mapped.Granularity));
         Assert.Null(Run("full", 5).ToDto().SelectionReasons);
+
+        var engine = new StubEngine();
+        engine.State.RecentRuns = [run, Run("full", 5)];
+        var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
+        using var document = JsonDocument.Parse(tools.GetTestRun("selective"));
+        var context = document.RootElement.GetProperty("context");
+        Assert.Equal("Selected by changed lines.", context.GetProperty("selectionExplanation").GetString());
+        var reasons = context.GetProperty("selectionReasons").GetProperty("Ns.A.First");
+        Assert.Equal(1, reasons.GetArrayLength());
+        Assert.Equal(reason.FilePath, reasons[0].GetProperty("filePath").GetString());
+        Assert.Equal(reason.ChangedLines, reasons[0].GetProperty("changedLines").GetString());
+        Assert.Equal(reason.ExecutedLines, reasons[0].GetProperty("executedLines").GetString());
+        Assert.Equal(reason.Granularity, reasons[0].GetProperty("granularity").GetString());
+        Assert.Equal(reason.ProjectPath, reasons[0].GetProperty("projectPath").GetString());
+
+        using var fullDocument = JsonDocument.Parse(tools.GetTestRun("full"));
+        var fullContext = fullDocument.RootElement.GetProperty("context");
+        Assert.Equal(JsonValueKind.Null, fullContext.GetProperty("selectionExplanation").ValueKind);
+        Assert.Equal(JsonValueKind.Null, fullContext.GetProperty("selectionReasons").ValueKind);
     }
 
     [Fact]

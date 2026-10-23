@@ -78,6 +78,29 @@ public sealed class VerifyToolTests
     }
 
     [Fact]
+    public async Task TestsFailed_MatchesHistoryByProjectBeforeCappingFailures()
+    {
+        var projects = Enumerable.Range(0, 20).Select(i => $"Old{i}").Append("New").ToList();
+        var run = Run() with
+        {
+            Suites = projects.Select(project => new TestSuite(project,
+                [Test("Shared.Test", TestStatus.Failed)], DateTimeOffset.UnixEpoch, TimeSpan.Zero)).ToList(),
+            FailureClassifications = projects.Select(project => new FailureClassification(project, "Shared.Test",
+                project == "New" ? FailureKind.New : FailureKind.PreExisting, "history")).ToList(),
+        };
+
+        var text = await VerifyAsync(new(VerificationVerdict.TestsFailed, "21 test(s) failed.",
+            VerificationSource.Forced, 1, run, Source));
+
+        Assert.Contains("Failure history: 1 new, 20 pre-existing", text);
+        var newlyFailed = text.IndexOf("  - New :: Shared.Test [new]", StringComparison.Ordinal);
+        var old = text.IndexOf("  - Old0 :: Shared.Test [pre-existing]", StringComparison.Ordinal);
+        Assert.True(newlyFailed >= 0 && old > newlyFailed, text);
+        Assert.DoesNotContain("Old19 ::", text);
+        Assert.Contains("... 1 more", text);
+    }
+
+    [Fact]
     public async Task TestsFailed_WithoutHistory_HasNoHistoryLine()
     {
         var text = await VerifyAsync(new(VerificationVerdict.TestsFailed, "1 test(s) failed.", VerificationSource.Forced, 1,

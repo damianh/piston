@@ -753,6 +753,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             return;
         }
 
+        foreach (var change in batch.Changes)
+        {
+            DiagnosticLog.Instance?.Write("FileWatcher", $"{change.ChangeType}: {change.FilePath}");
+        }
+
         _ = Interlocked.Increment(ref _fileChangeGeneration);
         _state.LastFileChangeTime = batch.Timestamp;
         _state.LastChangedFiles = batch.Changes.Select(e => e.FilePath).ToList();

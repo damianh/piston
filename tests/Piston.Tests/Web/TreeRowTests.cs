@@ -9,10 +9,11 @@ namespace Piston.Tests.Web;
 
 public sealed class TreeRowTests
 {
-    private static TestNode Test(string name) => new()
+    private static TestNode Test(string name, string? project = null) => new()
     {
         Label = name,
         Kind = TestNodeKind.Test,
+        Project = project,
         Test = new TestResultDto(name, name, TestStatusDto.Passed, 1, null, null, null, null),
     };
 
@@ -45,6 +46,17 @@ public sealed class TreeRowTests
         var rows = TreeRow.Flatten(Tree(innerExpanded: false));
 
         Assert.Equal(["P", "N", "P.C", "Q"], rows.Select(r => r.Node.Label));
+    }
+
+    [Fact]
+    public void IndexOfSelected_DistinguishesDuplicateTestKeysByProject()
+    {
+        var first = Test("Shared.Test", "A.Tests");
+        var second = Test("Shared.Test", "B.Tests");
+        var rows = TreeRow.Flatten([first, second]);
+
+        Assert.Equal(1, TreeRow.IndexOfSelected(rows, "Shared.Test", null, "B.Tests"));
+        Assert.Equal(-1, TreeRow.IndexOfSelected(rows, "Shared.Test", null, "Missing.Tests"));
     }
 
     [Fact]

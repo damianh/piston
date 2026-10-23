@@ -150,6 +150,17 @@ public static class TestRunJson
             ["testWorkingDirectories"] = c.TestWorkingDirectories is null ? null
                 : new JsonObject(c.TestWorkingDirectories.Select(pair =>
                     new KeyValuePair<string, JsonNode?>(pair.Key, JsonValue.Create(pair.Value)))),
+            ["selectionExplanation"] = c.SelectionExplanation,
+            ["selectionReasons"] = c.SelectionReasons is null ? null
+                : new JsonObject(c.SelectionReasons.Select(pair =>
+                    new KeyValuePair<string, JsonNode?>(pair.Key, new JsonArray(pair.Value.Select(reason => (JsonNode)new JsonObject
+                    {
+                        ["filePath"] = reason.FilePath,
+                        ["changedLines"] = reason.ChangedLines,
+                        ["executedLines"] = reason.ExecutedLines,
+                        ["granularity"] = reason.Granularity,
+                        ["projectPath"] = reason.ProjectPath,
+                    }).ToArray())))),
         };
 
     private static JsonArray? Strings(IReadOnlyList<string>? values) => values is null

@@ -153,7 +153,7 @@
     private bool _backfilling;
 
     /// <summary>Opens a test, by fully-qualified name, in the Tests tab.</summary>
-    [Parameter] public EventCallback<string> OnOpenTest { get; set; }
+    [Parameter] public EventCallback<TestReference> OnOpenTest { get; set; }
 
     protected override async Task OnInitializedAsync()
     {
@@ -307,7 +307,7 @@
                         foreach (var test in shown)
                         {
                             <button type="button" class="flex items-center gap-2 w-full px-4 py-0.5 text-left text-gray-300 hover:bg-gray-800/50"
-                                    title="@test.TestFqn" @onclick="() => OnOpenTest.InvokeAsync(test.TestFqn)">
+                                    title="@test.TestFqn" @onclick="() => OnOpenTest.InvokeAsync(TestReference.FromProjectPath(test.ProjectPath, test.TestFqn))">
                                 <GranularityBadge Granularity="@test.Granularity" />
                                 <span class="min-w-0 truncate">@ShortTestName(test.TestFqn)</span>
                                 <span class="shrink-0 text-gray-500">@Path.GetFileNameWithoutExtension(test.ProjectPath)</span>

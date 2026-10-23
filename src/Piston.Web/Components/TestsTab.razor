@@ -44,6 +44,7 @@
             <TestTree @ref="_tree"
                       Nodes="@_treeNodes"
                       SelectedKey="@_viewState.SelectedTestKey"
+                      SelectedProject="@_viewState.SelectedTestProject"
                       SelectedNodeKey="@_viewState.SelectedNodeKey"
                       PinnedFqns="@_viewState.PinnedTestFqns"
                       OnSelectTest="SelectTest"
@@ -209,7 +210,6 @@
             return;
         }
 
-        var selectedProject = _viewState.RevealSelectedTest ? null : ProjectOf(_selectedTest);
         _displayedSuites = _snapshot.Phase == PistonPhaseDto.Testing
             ? TestTreeBuilder.WithLiveOverlay(_snapshot.Suites, _snapshot.InProgressSuites)
             : _snapshot.Suites;
@@ -230,18 +230,15 @@
         if (_viewState.SelectedTestKey is not null)
         {
             // A live result gains its framework when final results arrive, so fall back to the name.
-            var tests = _displayedSuites.Where(s => selectedProject is null || s.Name == selectedProject)
-                .SelectMany(s => s.Tests).ToList();
-            _selectedTest = tests.FirstOrDefault(t => t.Key == _viewState.SelectedTestKey)
-                ?? tests.FirstOrDefault(t => t.FullyQualifiedName == _viewState.SelectedTestKey
-                    || _viewState.SelectedTestKey.StartsWith(t.FullyQualifiedName + " [", StringComparison.Ordinal));
+            _selectedTest = _viewState.FindSelectedTest(_displayedSuites);
             if (_selectedTest is not null)
             {
                 _viewState.SelectedTestKey = _selectedTest.Key;
+                _viewState.SelectedTestProject = ProjectOf(_selectedTest);
                 if (_viewState.RevealSelectedTest)
                 {
                     _viewState.RevealSelectedTest = false;
-                    _scrollToSelected = ExpandAncestors(_treeNodes, _selectedTest.Key);
+                    _scrollToSelected = ExpandAncestors(_treeNodes, _selectedTest.Key, _viewState.SelectedTestProject);
                 }
             }
         }
@@ -320,6 +317,7 @@
         _viewState.SelectedNodeKey = null;
         _nodeDetail = null;
         _viewState.SelectedTestKey = test.Key;
+        _viewState.SelectedTestProject = ProjectOf(test);
         _selectedTest = test;
         StateHasChanged();
     }
@@ -327,7 +325,7 @@
     /// <summary>Selects <paramref name="test"/>, expanding its ancestors and scrolling it into view.</summary>
     private void RevealTest(TestResultDto test)
     {
-        _scrollToSelected = ExpandAncestors(_treeNodes, test.Key);
+        _scrollToSelected = ExpandAncestors(_treeNodes, test.Key, ProjectOf(test));
         SelectTest(test);
     }
 
@@ -344,6 +342,7 @@
     private void SelectNode(string key)
     {
         _viewState.SelectedTestKey = null;
+        _viewState.SelectedTestProject = null;
         _selectedTest = null;
         _viewState.SelectedNodeKey = key;
         UpdateNodeDetail();
@@ -474,16 +473,16 @@
     private TestTree? _tree;
 
     /// <summary>Expands every collapsed ancestor of the test with <paramref name="key"/>; false when it is not in the tree.</summary>
-    private bool ExpandAncestors(IEnumerable<TestNode> nodes, string key)
+    private bool ExpandAncestors(IEnumerable<TestNode> nodes, string key, string? project)
     {
         foreach (var node in nodes)
         {
-            if (node.Test?.Key == key)
+            if (node.Test?.Key == key && (project is null || node.Project == project))
             {
                 return true;
             }
 
-            if (ExpandAncestors(node.Children, key))
+            if (ExpandAncestors(node.Children, key, project))
             {
                 if (!node.IsExpanded && node.ExpansionKey is { } expansionKey)
                 {

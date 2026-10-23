@@ -38,13 +38,15 @@ public sealed record TreeRow(TestNode Node, int Depth)
     /// The index of the selected row: the test with <paramref name="selectedKey"/>, or else the group with
     /// <paramref name="selectedNodeKey"/>; -1 when neither is visible.
     /// </summary>
-    public static int IndexOfSelected(IReadOnlyList<TreeRow> rows, string? selectedKey, string? selectedNodeKey)
+    public static int IndexOfSelected(IReadOnlyList<TreeRow> rows, string? selectedKey, string? selectedNodeKey,
+        string? selectedProject = null)
     {
         for (var i = 0; i < rows.Count; i++)
         {
             var node = rows[i].Node;
             if (node.Kind == TestNodeKind.Test
                 ? selectedKey is not null && node.Test?.Key == selectedKey
+                    && (selectedProject is null || node.Project == selectedProject)
                 : selectedNodeKey is not null && node.ExpansionKey == selectedNodeKey)
             {
                 return i;

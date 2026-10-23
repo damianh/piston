@@ -62,22 +62,28 @@ internal static class VerificationReport
         if (result.Verdict is VerificationVerdict.TestsFailed)
         {
             var kinds = run.FailureClassifications
-                .GroupBy(c => c.Test, StringComparer.Ordinal)
-                .ToDictionary(g => g.Key, g => g.First().Kind, StringComparer.Ordinal);
+                .GroupBy(c => (c.Project, c.Test))
+                .ToDictionary(g => g.Key, g => g.First().Kind);
             if (kinds.Count > 0)
             {
                 _ = sb.AppendLine(DescribeFailureHistory(run.FailureClassifications));
             }
 
-            FailureKind? KindOf(TestResult t) => kinds.TryGetValue(t.ResultKey, out var kind) ? kind : null;
-            AppendList(sb, "Failed tests", tests
-                    .Where(t => t.Status == TestStatus.Failed)
-                    .OrderBy(t => KindOrder(KindOf(t)))
+            FailureKind? KindOf(string project, TestResult t) =>
+                kinds.TryGetValue((project, t.ResultKey), out var kind) ? kind : null;
+            var repeatedKeys = tests.GroupBy(t => t.ResultKey, StringComparer.Ordinal)
+                .Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet(StringComparer.Ordinal);
+            AppendList(sb, "Failed tests", run.Suites
+                    .SelectMany(s => s.Tests.Select(t => (Project: s.Name, Test: t)))
+                    .Where(t => t.Test.Status == TestStatus.Failed)
+                    .OrderBy(t => KindOrder(KindOf(t.Project, t.Test)))
                     .ToList(),
-                t =>
+                entry =>
                 {
-                    var tag = KindOf(t) is { } kind ? $" [{Label(kind)}]" : "";
-                    return t.ErrorMessage is { } message ? $"{t.ResultKey}{tag}: {Cap(message)}" : t.ResultKey + tag;
+                    var (project, test) = entry;
+                    var tag = KindOf(project, test) is { } kind ? $" [{Label(kind)}]" : "";
+                    var name = repeatedKeys.Contains(test.ResultKey) ? $"{project} :: {test.ResultKey}" : test.ResultKey;
+                    return test.ErrorMessage is { } message ? $"{name}{tag}: {Cap(message)}" : name + tag;
                 });
         }
 
