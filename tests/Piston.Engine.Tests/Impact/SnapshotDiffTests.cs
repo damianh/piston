@@ -85,6 +85,10 @@ public sealed class SnapshotDiffTests
     }
 
     [Fact]
+    public void ComputeCodeRange_SkippedInvalidTokensRemainSignificant() =>
+        _ = Assert.NotNull(SnapshotDiff.ComputeCodeRange("class C { int x = 1 2; }", "class C { int x = 1 3; }"));
+
+    [Fact]
     public void Remap_KeepsSpansBeforeAndShiftsSpansAfterTheChange()
     {
         var diff = new SnapshotDiff(Prefix: 10, OldCount: 2, NewCount: 5);

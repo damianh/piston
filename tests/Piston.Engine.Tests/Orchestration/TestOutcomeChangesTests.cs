@@ -47,6 +47,39 @@ public sealed class TestOutcomeChangesTests
         Assert.Empty(newlyFailing);
     }
 
+    [Theory]
+    [InlineData(null)]
+    [InlineData("net10.0")]
+    public void DoesNotMixOutcomesFromDifferentProjects(string? framework)
+    {
+        IReadOnlyList<TestSuite> previous =
+        [
+            new("A.Tests", [Test("Shared.Test", TestStatus.Passed, framework)], DateTimeOffset.UnixEpoch, TimeSpan.Zero),
+            new("B.Tests", [Test("Shared.Test", TestStatus.Failed, "net10.0")], DateTimeOffset.UnixEpoch, TimeSpan.Zero),
+        ];
+        IReadOnlyList<TestSuite> current =
+        [
+            previous[0],
+            previous[1] with { Tests = [Test("Shared.Test", TestStatus.Failed, framework)] },
+        ];
+
+        var (fixedTests, newlyFailing) = TestOutcomeChanges.Compare(previous, current);
+
+        Assert.Empty(fixedTests);
+        Assert.Empty(newlyFailing);
+    }
+
+    [Fact]
+    public void FailureInAnotherProjectDoesNotHideANewFailure()
+    {
+        var previous = Suites(Test("Shared.Test", TestStatus.Failed));
+        var current = new[] { previous[0] with { Name = "Other.Tests" } };
+
+        var (_, newlyFailing) = TestOutcomeChanges.Compare(previous, current);
+
+        Assert.Equal(["Shared.Test"], newlyFailing);
+    }
+
     [Fact]
     public void MatchesFrameworkResultsByKeyAndFallsBackToTheName()
     {

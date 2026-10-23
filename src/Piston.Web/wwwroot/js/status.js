@@ -22,6 +22,7 @@ window.pistonStatus = (() => {
             current = state;
 
             const svg = await baseIcon();
+            if (state !== current) return;
             const link = document.querySelector('link[rel="icon"][type="image/svg+xml"]');
             if (!svg || !link) return;
 

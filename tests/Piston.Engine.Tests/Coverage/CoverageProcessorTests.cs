@@ -92,9 +92,10 @@ public sealed class CoverageProcessorTests : IDisposable
             store.CreateRunId(), [inside, outside], ["Lib.Tests.Test1"], store, sourceRoot: "/repo");
 
         var report = Assert.Single(store.StoredReports);
-        Assert.Equal(["/repo/src/Lib/Code.cs"], report.Files.Select(f => f.Coverage.FilePath));
+        var expectedPath = Path.GetFullPath("/repo/src/Lib/Code.cs");
+        Assert.Equal([expectedPath], report.Files.Select(f => f.Coverage.FilePath));
         var (_, map) = Assert.Single(store.StoredCoverage);
-        Assert.All(map["Lib.Tests.Test1"], line => Assert.Equal("/repo/src/Lib/Code.cs", line.FilePath));
+        Assert.All(map["Lib.Tests.Test1"], line => Assert.Equal(expectedPath, line.FilePath));
     }
 
     [Fact]

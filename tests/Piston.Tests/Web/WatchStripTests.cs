@@ -70,4 +70,17 @@ public sealed class WatchStripTests
     [Fact]
     public void ShortTestName_KeepsTheMethodAndArguments() =>
         Assert.Equal("Adds(a: \"x.y\")", WatchStrip.ShortTestName("App.Tests.CalcTests.Adds(a: \"x.y\")"));
+
+    [Theory]
+    [InlineData(1, 0, "passed")]
+    [InlineData(3, 0, "all 3 passed")]
+    [InlineData(0, 1, "0 passed, 1 skipped")]
+    [InlineData(0, 3, "0 passed, 3 skipped")]
+    [InlineData(2, 1, "2 passed, 1 skipped")]
+    public void PassedSkippedLabel_DoesNotDescribeSkippedTestsAsPassing(int passed, int skipped, string expected)
+    {
+        var run = Run("Forced") with { TotalTests = passed + skipped, Passed = passed, Skipped = skipped };
+
+        Assert.Equal(expected, WatchStrip.PassedSkippedLabel(run));
+    }
 }

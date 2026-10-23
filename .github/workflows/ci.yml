@@ -35,6 +35,8 @@ jobs:
         run: dotnet build Piston.slnx -c Release
       - name: Test
         run: dotnet test Piston.slnx -c Release --no-build
+      - name: Test dashboard scripts
+        run: node --test eng/status.test.mjs
 
   smoke:
     name: Smoke test samples (${{ matrix.os }})

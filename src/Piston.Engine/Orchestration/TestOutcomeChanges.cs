@@ -10,19 +10,24 @@ internal static class TestOutcomeChanges
 {
     /// <summary>
     /// Compares each test <paramref name="current"/> ran with its earlier result in <paramref name="previous"/>,
-    /// matched by result key (or, for a result without a target framework, by name). Nothing is newly failing
+    /// matched by suite and result key (or, for a result without a target framework, by suite and name). Nothing is newly failing
     /// when there are no earlier results, so the first run doesn't report every failure as new.
     /// </summary>
     public static (IReadOnlyList<string> Fixed, IReadOnlyList<string> NewlyFailing) Compare(
         IReadOnlyList<TestSuite> previous, IReadOnlyList<TestSuite> current)
     {
-        var before = new Dictionary<string, bool>(StringComparer.Ordinal);
-        var beforeByName = new Dictionary<string, bool>(StringComparer.Ordinal);
-        foreach (var test in previous.SelectMany(s => s.Tests))
+        var before = new Dictionary<(string Suite, string Key), bool>();
+        var beforeByName = new Dictionary<(string Suite, string Name), bool>();
+        foreach (var suite in previous)
         {
-            var failed = test.Status == TestStatus.Failed;
-            before[test.ResultKey] = failed || before.GetValueOrDefault(test.ResultKey);
-            beforeByName[test.FullyQualifiedName] = failed || beforeByName.GetValueOrDefault(test.FullyQualifiedName);
+            foreach (var test in suite.Tests)
+            {
+                var failed = test.Status == TestStatus.Failed;
+                var key = (suite.Name, test.ResultKey);
+                var name = (suite.Name, test.FullyQualifiedName);
+                before[key] = failed || before.GetValueOrDefault(key);
+                beforeByName[name] = failed || beforeByName.GetValueOrDefault(name);
+            }
         }
 
         if (before.Count == 0)
@@ -32,18 +37,21 @@ internal static class TestOutcomeChanges
 
         var fixedTests = new SortedSet<string>(StringComparer.Ordinal);
         var newlyFailing = new SortedSet<string>(StringComparer.Ordinal);
-        foreach (var test in current.SelectMany(s => s.Tests))
+        foreach (var suite in current)
         {
-            bool? failedBefore = before.TryGetValue(test.ResultKey, out var f) ? f
-                : test.TargetFramework is null && beforeByName.TryGetValue(test.FullyQualifiedName, out var n) ? n
-                : null;
-            if (test.Status == TestStatus.Passed && failedBefore == true)
+            foreach (var test in suite.Tests)
             {
-                _ = fixedTests.Add(test.ResultKey);
-            }
-            else if (test.Status == TestStatus.Failed && failedBefore != true)
-            {
-                _ = newlyFailing.Add(test.ResultKey);
+                bool? failedBefore = before.TryGetValue((suite.Name, test.ResultKey), out var f) ? f
+                    : test.TargetFramework is null && beforeByName.TryGetValue((suite.Name, test.FullyQualifiedName), out var n) ? n
+                    : null;
+                if (test.Status == TestStatus.Passed && failedBefore == true)
+                {
+                    _ = fixedTests.Add(test.ResultKey);
+                }
+                else if (test.Status == TestStatus.Failed && failedBefore != true)
+                {
+                    _ = newlyFailing.Add(test.ResultKey);
+                }
             }
         }
 

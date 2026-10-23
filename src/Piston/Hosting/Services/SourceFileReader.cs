@@ -13,10 +13,10 @@ internal static class SourceFileReader
 {
     internal const long MaxBytes = 1024 * 1024;
 
-    private const int BinarySniffBytes = 8000;
+    private const int BinarySniffCharacters = 8000;
 
     private static StringComparison PathComparison =>
-        OperatingSystem.IsWindows() || OperatingSystem.IsMacOS() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
     public static SourceFileDto Read(string? requestedPath, string? solutionDirectory)
     {
@@ -55,14 +55,16 @@ internal static class SourceFileReader
             }
 
             var bytes = File.ReadAllBytes(info.FullName);
-            if (bytes.AsSpan(0, Math.Min(bytes.Length, BinarySniffBytes)).Contains((byte)0))
+            using var reader = new StreamReader(new MemoryStream(bytes), detectEncodingFromByteOrderMarks: true);
+            var text = reader.ReadToEnd();
+            if (text.AsSpan(0, Math.Min(text.Length, BinarySniffCharacters)).Contains('\0'))
             {
                 return new SourceFileDto(fullPath, null, "The file is not text.");
             }
 
-            using var reader = new StreamReader(new MemoryStream(bytes), detectEncodingFromByteOrderMarks: true);
+            using var linesReader = new StringReader(text);
             var lines = new List<string>();
-            while (reader.ReadLine() is { } line)
+            while (linesReader.ReadLine() is { } line)
             {
                 lines.Add(line);
             }

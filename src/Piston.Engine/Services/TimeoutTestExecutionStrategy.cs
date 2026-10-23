@@ -76,7 +76,7 @@ public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
         }
 
         ProjectTestResult result;
-        using (_time.CreateTimer(_ => Check(), null, _checkInterval, _checkInterval))
+        await using (_time.CreateTimer(_ => Check(), null, _checkInterval, _checkInterval))
         {
             try
             {

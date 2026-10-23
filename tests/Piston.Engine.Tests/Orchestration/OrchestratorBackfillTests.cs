@@ -115,7 +115,7 @@ public sealed class OrchestratorBackfillTests : IDisposable
         var code = Path.Combine(_root, "Code.cs");
         await _store.RecordImpactAsync(new ImpactRecording(
             Project, ImpactGranularity.Run, "run", _store.CreateRunId(), ["A.Tests.Bar.One", "A.Tests.Foo.One"],
-            [new ImpactFile(code, [new LineSpan(1, 2)], "class Code\n{ }")], Merge: false));
+            [new ImpactFile(code, [new LineSpan(1, 2)], "class Code\n{ int Value = 1; }")], Merge: false));
         await _store.RecordImpactAsync(new ImpactRecording(
             Project, ImpactGranularity.Class, "A.Tests.Foo", _store.CreateRunId(), ["A.Tests.Foo.One"],
             [new ImpactFile(code, [new LineSpan(1, 1)], "class Code { }")], Merge: false));

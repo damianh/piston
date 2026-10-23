@@ -57,7 +57,7 @@
                 }
                 else if (run.TotalTests > 0)
                 {
-                    <span class="shrink-0 text-green-400">@(run.TotalTests == 1 ? "passed" : $"all {run.Passed} passed")</span>
+                    <span class="shrink-0 @(run.Passed == run.TotalTests ? "text-green-400" : "")">@WatchStrip.PassedSkippedLabel(run)</span>
                 }
                 else
                 {

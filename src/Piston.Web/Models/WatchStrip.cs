@@ -78,6 +78,10 @@ public static class WatchStrip
 
     public static string Count(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
 
+    public static string PassedSkippedLabel(TestRunDto run) => run.Passed == run.TotalTests
+        ? run.TotalTests == 1 ? "passed" : $"all {run.Passed} passed"
+        : $"{run.Passed} passed, {run.Skipped} skipped";
+
     private static string FileName(string path) => path[(path.LastIndexOfAny(['/', '\\']) + 1)..];
 
     private static string Relative(string path, string? directory)

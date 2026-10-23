@@ -46,9 +46,9 @@ const daemon = spawn(daemonCommand, daemonArgs, { stdio: ["ignore", "pipe", "pip
 daemon.stdout.on("data", (chunk) => (output += chunk));
 daemon.stderr.on("data", (chunk) => (output += chunk));
 let exited = false;
-daemon.on("exit", (code) => {
+daemon.on("exit", (code, signal) => {
   exited = true;
-  output += `\n[daemon exited with code ${code}]\n`;
+  output += `\n[daemon exited with code ${code}, signal ${signal ?? "none"}]\n`;
 });
 
 let exitCode = 1;

@@ -141,6 +141,7 @@ internal readonly record struct SnapshotDiff(int Prefix, int OldCount, int NewCo
         items.AddRange(root.DescendantTrivia(descendIntoTrivia: true)
             .Where(trivia => trivia.IsDirective
                 || trivia.IsKind(SyntaxKind.DisabledTextTrivia)
+                || trivia.IsKind(SyntaxKind.SkippedTokensTrivia)
                 || trivia.GetStructure() is DocumentationCommentTriviaSyntax)
             .Select(trivia => new CodeItem(trivia.RawKind, IsTrivia: true, trivia.ToFullString(), trivia.SpanStart, trivia.Span.End)));
 

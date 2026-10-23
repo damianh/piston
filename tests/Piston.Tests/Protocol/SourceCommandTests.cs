@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Text;
 using System.Text.Json.Nodes;
 using Piston.Hosting.Protocol;
 using Piston.Protocol.JsonRpc;
@@ -52,6 +53,40 @@ public sealed class SourceCommandTests : IDisposable
         var result = await GetAsync("B.cs");
 
         Assert.Equal("b", result["lines"]![0]!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData("utf-16")]
+    [InlineData("utf-16BE")]
+    [InlineData("utf-32")]
+    [InlineData("utf-32BE")]
+    public async Task ReadsBomMarkedUnicodeSource(string encodingName)
+    {
+        var encoding = Encoding.GetEncoding(encodingName);
+        await File.WriteAllTextAsync(Path.Combine(_root, "Unicode.cs"), "class Unicode\n{\n}", encoding, _ct);
+
+        var result = await GetAsync("Unicode.cs");
+
+        Assert.Null(result["unavailable"]);
+        Assert.Equal(["class Unicode", "{", "}"], result["lines"]!.AsArray().Select(l => l!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task RefusesCaseDistinctSiblingOnCaseSensitiveFileSystems()
+    {
+        var sibling = Path.Combine(_parent, "REPO");
+        _ = Directory.CreateDirectory(sibling);
+        var path = Path.Combine(sibling, "Secret.cs");
+        await File.WriteAllTextAsync(path, "secret", _ct);
+        if (File.Exists(Path.Combine(_root, "Secret.cs")))
+        {
+            return;
+        }
+
+        var result = await GetAsync(path);
+
+        Assert.Null(result["lines"]);
+        Assert.Contains("outside the solution", result["unavailable"]!.GetValue<string>(), StringComparison.Ordinal);
     }
 
     [Theory]
