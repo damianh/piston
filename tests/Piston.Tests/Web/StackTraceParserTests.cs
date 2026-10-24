@@ -53,4 +53,24 @@ public sealed class StackTraceParserTests
 
     [Fact]
     public void Parse_EmptyTrace_HasNoFrames() => Assert.Empty(StackTraceParser.Parse(null));
+
+    [Theory]
+    [InlineData("/work/repo", "/work/REPO/Dependency.cs", "/work/repo/Tests.cs")]
+    [InlineData("/work/repo", "/work/repository/Dependency.cs", "/work/repo/Tests.cs")]
+    public void FirstInSolution_SkipsCaseDistinctUnixSiblings(string root, string sibling, string testFile)
+    {
+        var frames = StackTraceParser.Parse(
+            $"at Dependency.Call() in {sibling}:line 2\nat Tests.Fails() in {testFile}:line 12");
+
+        Assert.False(StackTraceParser.IsInSolution(sibling, root));
+        Assert.Equal(testFile, StackTraceParser.FirstInSolution(frames, root)!.FilePath);
+    }
+
+    [Theory]
+    [InlineData(@"C:\work\Repo", @"c:\WORK\REPO\Tests.cs")]
+    [InlineData("C:/work/Repo", "c:/WORK/REPO/Tests.cs")]
+    [InlineData(@"\\server\share\Repo", @"\\SERVER\SHARE\repo\Tests.cs")]
+    [InlineData("//server/share/Repo", "//SERVER/SHARE/repo/Tests.cs")]
+    public void WindowsDaemonPaths_AreCaseInsensitiveOnAnyBrowserHost(string root, string file) =>
+        Assert.True(StackTraceParser.IsInSolution(file, root));
 }

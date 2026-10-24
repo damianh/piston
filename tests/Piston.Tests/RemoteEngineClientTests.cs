@@ -2,9 +2,12 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine;
+using Piston.Engine.Coverage;
 using Piston.Hosting;
 using Piston.Hosting.Protocol;
 using Piston.Protocol;
+using Piston.Protocol.Dtos;
+using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
 using Xunit;
@@ -25,6 +28,51 @@ public sealed class RemoteEngineClientTests
         var listener = new NamedPipeListener(pipeName);
         var router = new ProtocolRouter(engine, listener);
         return (listener, router, engine);
+    }
+
+    [Theory]
+    [InlineData("lcov", 400_000)]
+    [InlineData("cobertura", 100_000)]
+    public async Task CoverageExport_LargerThanPipeFrameLimit_ReassemblesWithoutDisconnecting(string format, int lineCount)
+    {
+        var pipeName = UniquePipeName();
+        var engine = new Mcp.StubEngine();
+        var path = Path.Combine(Path.GetTempPath(), "piston-export", "A.cs");
+        engine.State.SolutionPath = Path.Combine(Path.GetDirectoryName(path)!, "App.slnx");
+        var summary = new CoverageFileSummary(path, "Lib", lineCount, lineCount, 0, 0, false, false, "hash", 1, DateTimeOffset.UnixEpoch);
+        engine.CoverageReport = new CoverageReportSnapshot([summary]);
+        engine.FileCoverage[path] = new FileCoverageSnapshot(summary, Enumerable.Range(1, lineCount).Select(n => new LineCoverage(n, 1)).ToArray());
+        Assert.True(CoverageExporter.TryParseFormat(format, out var exportFormat));
+        var expected = CoverageExporter.Export(engine, exportFormat)!;
+        var oversizedResponse = JsonRpcSerializer.Serialize(new JsonRpcResponse("1",
+            System.Text.Json.JsonSerializer.SerializeToNode(new CoverageExportDto(
+                format, CoverageExporter.FileName(exportFormat), expected.Content, 1, 0), JsonRpcSerializer.Options)));
+        Assert.True(oversizedResponse.Length > MessageFramer.DefaultMaxMessageSize);
+
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(60));
+        await using var router = new ProtocolRouter(engine, new NamedPipeListener(pipeName));
+        var server = router.RunAsync(cts.Token);
+        await using var client = new RemoteEngineClient(pipeName);
+        try
+        {
+            await client.ConnectAsync(cts.Token);
+            var export = await client.ExportCoverageAsync(format).WaitAsync(cts.Token);
+
+            Assert.NotNull(export);
+            Assert.Equal(expected.Content, export.Content);
+            Assert.Equal(1, export.FileCount);
+            Assert.Null(export.NextOffset);
+            Assert.Null(export.ExportId);
+            Assert.Equal(ConnectionState.Connected, client.ConnectionState);
+            await client.ForceRunAsync().WaitAsync(cts.Token);
+            Assert.True(engine.ForceRunCalled);
+        }
+        finally
+        {
+            await cts.CancelAsync();
+            await server;
+        }
     }
 
     // ── Connect → CurrentSnapshot populated ──────────────────────────────────

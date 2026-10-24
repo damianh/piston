@@ -1,10 +1,14 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Piston.Engine.Coverage;
 using Piston.Hosting.Protocol;
+using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
+using Piston.Protocol.Messages;
 using Piston.Tests.Mcp;
 using Xunit;
 
@@ -199,6 +203,74 @@ public sealed class CoverageCommandTests : IDisposable
         Assert.Equal("lcov.info", result["fileName"]!.GetValue<string>());
         Assert.Equal(1, result["fileCount"]!.GetValue<int>());
         Assert.Contains("DA:2,0", result["content"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Export_ChunksOneSnapshotAndPreservesUnicodeAtTheBoundary()
+    {
+        var engine = new StubEngine();
+        var path = new string('x', EngineCommandDispatcher.CoverageExportChunkChars - 8) + "\U0001F600.cs";
+        var summary = Summary(path, 1, 1);
+        engine.CoverageReport = new CoverageReportSnapshot([summary]);
+        engine.FileCoverage[path] = new FileCoverageSnapshot(summary, [new(1, 1)]);
+        var expected = CoverageExporter.Export(engine, CoverageExportFormat.Lcov)!.Content;
+        var dispatcher = new EngineCommandDispatcher(engine);
+        var result = await dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageExport, new JsonObject { ["format"] = "lcov" }, _ct);
+        var chunk = result!.Deserialize<CoverageExportDto>(JsonRpcSerializer.Options)!;
+        var content = new StringBuilder(chunk.Content);
+        _ = Assert.NotNull(chunk.NextOffset);
+        Assert.Equal(EngineCommandDispatcher.CoverageExportChunkChars - 1, chunk.Content.Length);
+        Assert.False(char.IsHighSurrogate(chunk.Content[^1]));
+        Assert.True(JsonRpcSerializer.Serialize(new JsonRpcResponse("1", result)).Length < MessageFramer.DefaultMaxMessageSize);
+
+        var id = chunk.ExportId;
+        foreach (var command in new[]
+        {
+            new ExportCoverageCommand("lcov", id, chunk.NextOffset.Value + 1),
+            new ExportCoverageCommand("cobertura", id, chunk.NextOffset.Value)
+        })
+        {
+            var invalid = await Assert.ThrowsAsync<JsonRpcException>(() => dispatcher.HandleCommandAsync(
+                ProtocolMethods.CoverageExport, JsonSerializer.SerializeToNode(command, JsonRpcSerializer.Options), _ct));
+            Assert.Equal(JsonRpcErrorCodes.InvalidParams, invalid.Code);
+        }
+
+        var otherConnection = new EngineCommandDispatcher(engine);
+        var unknown = await Assert.ThrowsAsync<JsonRpcException>(() => otherConnection.HandleCommandAsync(
+            ProtocolMethods.CoverageExport,
+            JsonSerializer.SerializeToNode(new ExportCoverageCommand("lcov", id, chunk.NextOffset.Value), JsonRpcSerializer.Options), _ct));
+        Assert.Equal(JsonRpcErrorCodes.InvalidParams, unknown.Code);
+
+        engine.CoverageReport = null;
+        while (chunk.NextOffset is { } offset)
+        {
+            result = await dispatcher.HandleCommandAsync(
+                ProtocolMethods.CoverageExport,
+                JsonSerializer.SerializeToNode(new ExportCoverageCommand("lcov", id, offset), JsonRpcSerializer.Options), _ct);
+            chunk = result!.Deserialize<CoverageExportDto>(JsonRpcSerializer.Options)!;
+            Assert.Equal(id, chunk.ExportId);
+            Assert.True(JsonRpcSerializer.Serialize(new JsonRpcResponse("1", result)).Length < MessageFramer.DefaultMaxMessageSize);
+            _ = content.Append(chunk.Content);
+        }
+
+        Assert.Equal(expected, content.ToString());
+        var completed = await Assert.ThrowsAsync<JsonRpcException>(() => dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageExport,
+            JsonSerializer.SerializeToNode(new ExportCoverageCommand("lcov", id, 1), JsonRpcSerializer.Options), _ct));
+        Assert.Equal(JsonRpcErrorCodes.InvalidParams, completed.Code);
+    }
+
+    [Theory]
+    [InlineData(null, 1)]
+    [InlineData("unknown", 0)]
+    public async Task Export_RejectsInvalidContinuation(string? exportId, int offset)
+    {
+        var dispatcher = new EngineCommandDispatcher(new StubEngine());
+        var error = await Assert.ThrowsAsync<JsonRpcException>(() => dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageExport,
+            JsonSerializer.SerializeToNode(new ExportCoverageCommand("lcov", exportId, offset), JsonRpcSerializer.Options), _ct));
+        Assert.Equal(JsonRpcErrorCodes.InvalidParams, error.Code);
     }
 
     [Fact]

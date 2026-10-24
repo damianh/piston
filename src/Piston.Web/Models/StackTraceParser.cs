@@ -61,8 +61,12 @@ public static partial class StackTraceParser
         }
 
         var root = solutionDirectory.TrimEnd('/', '\\');
+        // These are the daemon's paths, not the browser host's paths.
+        var windowsPath = (root.Length >= 2 && char.IsAsciiLetter(root[0]) && root[1] == ':')
+            || root.StartsWith(@"\\", StringComparison.Ordinal)
+            || root.StartsWith("//", StringComparison.Ordinal);
         return filePath.Length > root.Length
-            && filePath.StartsWith(root, StringComparison.OrdinalIgnoreCase)
+            && filePath.StartsWith(root, windowsPath ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
             && filePath[root.Length] is '/' or '\\';
     }
 }

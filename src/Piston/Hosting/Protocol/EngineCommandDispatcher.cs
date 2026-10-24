@@ -26,6 +26,10 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
     private DaemonControl? _daemonControl;
     private ActivityHistory? _activityHistory;
     private UserSettingsStore? _userSettings;
+    private (string Id, CoverageExportDto Export, int Offset)? _pendingCoverageExport;
+
+    // Even JSON's worst-case six-byte character escaping stays well below the 4 MiB pipe frame limit.
+    internal const int CoverageExportChunkChars = 64 * 1024;
 
     public EngineCommandDispatcher(IEngine engine) => _engine = engine;
 
@@ -158,19 +162,12 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
             case ProtocolMethods.CoverageExport:
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<ExportCoverageCommand>(@params);
-                    if (!CoverageExporter.TryParseFormat(cmd?.Format, out var format))
+                    if (cmd is null || !CoverageExporter.TryParseFormat(cmd.Format, out var format))
                     {
                         throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "format must be 'lcov' or 'cobertura'.");
                     }
 
-                    var export = CoverageExporter.Export(_engine, format)
-                        ?? throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, "Coverage is disabled.");
-                    var result = new CoverageExportDto(
-                        format.ToString().ToLowerInvariant(),
-                        CoverageExporter.FileName(format),
-                        export.Content,
-                        export.FileCount,
-                        export.StaleFilesSkipped);
+                    var result = ExportCoverageChunk(cmd, format);
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
                 }
@@ -294,6 +291,53 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                     JsonRpcErrorCodes.MethodNotFound,
                     $"Method not found: {method}");
         }
+    }
+
+    private CoverageExportDto ExportCoverageChunk(ExportCoverageCommand command, CoverageExportFormat format)
+    {
+        CoverageExportDto snapshot;
+        var id = command.ExportId;
+        if (id is null)
+        {
+            if (command.Offset != 0)
+            {
+                throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "A new export must start at offset zero.");
+            }
+
+            _pendingCoverageExport = null;
+            var export = CoverageExporter.Export(_engine, format)
+                ?? throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, "Coverage is disabled.");
+            snapshot = new CoverageExportDto(
+                format.ToString().ToLowerInvariant(), CoverageExporter.FileName(format),
+                export.Content, export.FileCount, export.StaleFilesSkipped);
+        }
+        else if (_pendingCoverageExport is { } pending
+            && pending.Id == id && pending.Offset == command.Offset
+            && pending.Export.Format == format.ToString().ToLowerInvariant())
+        {
+            snapshot = pending.Export;
+        }
+        else
+        {
+            throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "Unknown export or invalid continuation offset or format.");
+        }
+
+        var next = (int)Math.Min((long)command.Offset + CoverageExportChunkChars, snapshot.Content.Length);
+        if (next < snapshot.Content.Length && char.IsHighSurrogate(snapshot.Content[next - 1]))
+        {
+            next--;
+        }
+
+        var content = snapshot.Content[command.Offset..next];
+        if (next < snapshot.Content.Length)
+        {
+            id ??= Guid.NewGuid().ToString("N");
+            _pendingCoverageExport = (id, snapshot, next);
+            return snapshot with { Content = content, ExportId = id, NextOffset = next };
+        }
+
+        _pendingCoverageExport = null;
+        return snapshot with { Content = content, ExportId = id };
     }
 
     private DaemonControl RequireDaemonControl(string method) =>

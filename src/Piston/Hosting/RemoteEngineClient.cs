@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Piston.Protocol;
@@ -25,6 +26,7 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
     private CancellationTokenSource? _receiveCts;
     private Task? _receiveLoop;
     private bool _disposed;
+    private readonly SemaphoreSlim _coverageExportLock = new(1, 1);
 
     private ConnectionState _connectionState = ConnectionState.Disconnected;
     private readonly Lock _stateLock = new();
@@ -152,9 +154,45 @@ public sealed class RemoteEngineClient(string pipeName) : IEngineClient
     /// <summary>Exports the coverage report as <c>lcov</c> or <c>cobertura</c>.</summary>
     public async Task<CoverageExportDto?> ExportCoverageAsync(string format)
     {
-        var @params = JsonSerializer.SerializeToNode(new ExportCoverageCommand(format), JsonRpcSerializer.Options);
-        var result = await RequestAsync(ProtocolMethods.CoverageExport, @params).ConfigureAwait(false);
-        return result?.Deserialize<CoverageExportDto>(JsonRpcSerializer.Options);
+        // The daemon retains one export snapshot per connection until its final chunk.
+        await _coverageExportLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            var @params = JsonSerializer.SerializeToNode(new ExportCoverageCommand(format), JsonRpcSerializer.Options);
+            var result = await RequestAsync(ProtocolMethods.CoverageExport, @params).ConfigureAwait(false);
+            var export = result?.Deserialize<CoverageExportDto>(JsonRpcSerializer.Options);
+            if (export?.NextOffset is null)
+            {
+                return export;
+            }
+
+            var content = new StringBuilder(export.Content);
+            var chunk = export;
+            while (chunk.NextOffset is { } offset)
+            {
+                if (export.ExportId is null || chunk.ExportId != export.ExportId || offset != content.Length || chunk.Content.Length == 0)
+                {
+                    throw new InvalidOperationException("The daemon returned an invalid coverage export continuation.");
+                }
+
+                @params = JsonSerializer.SerializeToNode(new ExportCoverageCommand(format, export.ExportId, offset), JsonRpcSerializer.Options);
+                result = await RequestAsync(ProtocolMethods.CoverageExport, @params).ConfigureAwait(false);
+                chunk = result?.Deserialize<CoverageExportDto>(JsonRpcSerializer.Options)
+                    ?? throw new InvalidOperationException("The daemon returned an empty coverage export continuation.");
+                if (chunk.ExportId != export.ExportId)
+                {
+                    throw new InvalidOperationException("The daemon changed the coverage export snapshot during download.");
+                }
+
+                _ = content.Append(chunk.Content);
+            }
+
+            return export with { Content = content.ToString(), ExportId = null, NextOffset = null };
+        }
+        finally
+        {
+            _ = _coverageExportLock.Release();
+        }
     }
 
     /// <summary>Asks the daemon to stop its engine and exit.</summary>

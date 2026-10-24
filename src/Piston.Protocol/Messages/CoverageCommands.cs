@@ -10,7 +10,9 @@ public sealed record GetFileCoverageCommand(string FilePath, bool IncludeSource 
 
 /// <summary>Export the solution-wide coverage report.</summary>
 /// <param name="Format"><c>lcov</c> or <c>cobertura</c>.</param>
-public sealed record ExportCoverageCommand(string Format);
+/// <param name="ExportId">Snapshot identifier from the previous chunk; null starts a new export.</param>
+/// <param name="Offset">Character offset requested by the previous chunk's <c>nextOffset</c>.</param>
+public sealed record ExportCoverageCommand(string Format, string? ExportId = null, int Offset = 0);
 
 /// <summary>Request the tests recorded as executing a source file.</summary>
 /// <param name="FilePath">Absolute path, or a path relative to the solution directory.</param>
