@@ -33,33 +33,22 @@
             }
             <span class="text-gray-500" title="Line marks merge every test that ran. Select a file to see which tests executed it, and how precisely each was measured.">aggregate line marks</span>
             <div class="flex-1"></div>
-            @{
-                var dockLabel = View.CoverageDetailPosition == DetailPosition.Right ? "Dock source at bottom" : "Dock source on right";
-            }
-            <button type="button" class="p-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
-                    title="@dockLabel" aria-label="@dockLabel" @onclick="ToggleDetailPosition">
-                <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                    <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" />
-                    @if (View.CoverageDetailPosition == DetailPosition.Right)
-                    {
-                        <rect x="2" y="8.5" width="12" height="4.5" rx="1" fill="currentColor" />
-                    }
-                    else
-                    {
-                        <rect x="9" y="3" width="4.5" height="10" rx="1" fill="currentColor" />
-                    }
-                </svg>
-            </button>
             <input type="search" placeholder="Filter files" aria-label="Filter files"
                    class="w-48 px-2 py-0.5 rounded bg-gray-950 border border-gray-700 text-gray-200 placeholder:text-gray-500 focus:outline-none focus:border-blue-500"
                    value="@_filter" @oninput="e => _filter = e.Value?.ToString()" />
-            <select class="px-1.5 py-0.5 rounded bg-gray-950 border border-gray-700 text-gray-200 focus:outline-none focus:border-blue-500"
-                    title="Group files by" aria-label="Group files by"
-                    value="@View.CoverageGrouping" @onchange="ChangeGrouping">
-                <option value="@CoverageGrouping.Module">By module</option>
-                <option value="@CoverageGrouping.Folder">By folder</option>
-                <option value="@CoverageGrouping.Flat">Flat list</option>
-            </select>
+            <div class="relative">
+                <select class="appearance-none bg-gray-800 border border-gray-700 rounded pl-2 pr-6 py-0.5 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
+                        title="Group files by" aria-label="Group files by"
+                        value="@View.CoverageGrouping" @onchange="ChangeGrouping">
+                    <option value="@CoverageGrouping.Module">By module</option>
+                    <option value="@CoverageGrouping.Folder">Project tree</option>
+                    <option value="@CoverageGrouping.Flat">Flat list</option>
+                </select>
+                <svg class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-gray-400"
+                     viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                    <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+            </div>
             @if (View.CoverageGrouping != CoverageGrouping.Flat)
             {
                 var anyCollapsed = AnyCollapsed();
@@ -79,6 +68,23 @@
                 <a class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300" href="api/coverage/lcov" download>lcov</a>
                 <a class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300" href="api/coverage/cobertura" download>cobertura</a>
             </span>
+            @{
+                var dockLabel = View.CoverageDetailPosition == DetailPosition.Right ? "Dock source at bottom" : "Dock source on right";
+            }
+            <button type="button" class="p-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+                    title="@dockLabel" aria-label="@dockLabel" @onclick="ToggleDetailPosition">
+                <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" />
+                    @if (View.CoverageDetailPosition == DetailPosition.Right)
+                    {
+                        <rect x="2" y="8.5" width="12" height="4.5" rx="1" fill="currentColor" />
+                    }
+                    else
+                    {
+                        <rect x="8.5" y="3" width="5.5" height="10" rx="1" fill="currentColor" />
+                    }
+                </svg>
+            </button>
         </div>
 
         <div class="@(_isBottom ? "flex flex-col" : "flex") flex-1 min-h-0 overflow-hidden"

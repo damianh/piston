@@ -72,15 +72,21 @@
                             <span class="text-gray-500 font-mono" title="Source fingerprint @source">@Short(source)</span>
                         }
                         <div class="flex-1"></div>
-                        <label class="text-gray-400">Compare with
-                            <select class="ml-1 px-1.5 py-0.5 rounded bg-gray-950 border border-gray-700 text-gray-200 focus:outline-none focus:border-blue-500"
-                                    aria-label="Compare with run" value="@(_baselineId ?? "")" @onchange="ChangeBaselineAsync">
-                                <option value="">(none)</option>
-                                @foreach (var other in Earlier())
-                                {
-                                    <option value="@other.RunId">@FormatTime(other.RequestedAt) · @Describe(other)</option>
-                                }
-                            </select>
+                        <label class="flex items-center gap-1 text-gray-400">Compare with
+                            <span class="relative">
+                                <select class="appearance-none bg-gray-800 border border-gray-700 rounded pl-2 pr-6 py-0.5 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
+                                        aria-label="Compare with run" value="@(_baselineId ?? "")" @onchange="ChangeBaselineAsync">
+                                    <option value="">(none)</option>
+                                    @foreach (var other in Earlier())
+                                    {
+                                        <option value="@other.RunId">@FormatTime(other.RequestedAt) · @Describe(other)</option>
+                                    }
+                                </select>
+                                <svg class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-gray-400"
+                                     viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                                    <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                                </svg>
+                            </span>
                         </label>
                     </div>
 
