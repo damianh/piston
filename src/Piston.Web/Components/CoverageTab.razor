@@ -51,10 +51,16 @@
             </div>
             @if (View.CoverageGrouping != CoverageGrouping.Flat)
             {
-                var anyCollapsed = AnyCollapsed();
-                <button class="px-2 py-0.5 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800/50"
-                        title="@(anyCollapsed ? "Expand all groups" : "Collapse all groups")"
-                        @onclick="ToggleAll">@(anyCollapsed ? "Expand all" : "Collapse all")</button>
+                <div class="flex items-center gap-1">
+                    <button type="button" class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+                            title="Expand all" aria-label="Expand all" @onclick="ExpandAll">
+                        ⊞
+                    </button>
+                    <button type="button" class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+                            title="Collapse all" aria-label="Collapse all" @onclick="CollapseAll">
+                        ⊟
+                    </button>
+                </div>
             }
             <div class="flex items-center gap-0.5" role="group" aria-label="Sort files">
                 @foreach (var (sort, label) in new[] { (CoverageSort.Path, "Path"), (CoverageSort.Uncovered, "Most uncovered") })
@@ -416,21 +422,11 @@
     private static IEnumerable<CoverageGroup> Descendants(CoverageGroup group) =>
         group.Groups.SelectMany(g => Descendants(g).Prepend(g));
 
-    private bool AnyCollapsed() =>
-        _summary is not null && Descendants(BuildTree()).Any(g => !IsExpanded(g));
+    private void ExpandAll() =>
+        View.CollapsedCoverageGroups.ExceptWith(Descendants(BuildTree()).Select(ExpansionKey));
 
-    private void ToggleAll()
-    {
-        var groups = Descendants(BuildTree()).Select(ExpansionKey).ToList();
-        if (AnyCollapsed())
-        {
-            View.CollapsedCoverageGroups.ExceptWith(groups);
-        }
-        else
-        {
-            View.CollapsedCoverageGroups.UnionWith(groups);
-        }
-    }
+    private void CollapseAll() =>
+        View.CollapsedCoverageGroups.UnionWith(Descendants(BuildTree()).Select(ExpansionKey));
 
     private void ChangeGrouping(ChangeEventArgs e)
     {
