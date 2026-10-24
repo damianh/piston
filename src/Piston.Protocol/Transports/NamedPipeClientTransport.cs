@@ -61,8 +61,21 @@ public sealed class NamedPipeClientTransport : IProtocolTransport
 
     public ValueTask DisposeAsync()
     {
-        _reader?.Dispose();
-        _pipe?.Dispose();
+        try
+        {
+            _reader?.Dispose();
+        }
+        catch (IOException)
+        {
+            // BufferedStream flushes even a read-only buffer; a disconnected Windows pipe can reject that flush.
+        }
+        finally
+        {
+            _reader = null;
+            _pipe?.Dispose();
+            _pipe = null;
+        }
+
         return ValueTask.CompletedTask;
     }
 
