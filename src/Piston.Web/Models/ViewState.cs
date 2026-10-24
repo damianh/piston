@@ -48,7 +48,7 @@ public sealed class ViewState
         NodeExpansion.TryGetValue(key, out var expanded) ? expanded : TreeExpanded;
 
     // ── Coverage tab ──
-    public CoverageGrouping CoverageGrouping { get; set; } = CoverageGrouping.Module;
+    public CoverageGrouping CoverageGrouping { get; set; } = CoverageGrouping.Folder;
 
     public CoverageSort CoverageSort { get; private set; } = CoverageSort.Name;
     public bool CoverageSortDescending { get; private set; }

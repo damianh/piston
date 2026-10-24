@@ -40,8 +40,8 @@
                 <select class="appearance-none bg-gray-800 border border-gray-700 rounded pl-2 pr-6 py-0.5 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
                         title="Group files by" aria-label="Group files by"
                         value="@View.CoverageGrouping" @onchange="ChangeGrouping">
-                    <option value="@CoverageGrouping.Module">By module</option>
                     <option value="@CoverageGrouping.Folder">Project tree</option>
+                    <option value="@CoverageGrouping.Module">By module</option>
                     <option value="@CoverageGrouping.Flat">Flat list</option>
                 </select>
                 <svg class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-gray-400"
