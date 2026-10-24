@@ -53,6 +53,36 @@ public sealed class ViewState
     /// <summary>Coverage groups the user collapsed, keyed by grouping and <see cref="CoverageGroup.Key"/>.</summary>
     public HashSet<string> CollapsedCoverageGroups { get; } = new(StringComparer.Ordinal);
 
+    public const double DefaultCoverageSplitRightPercent = 40;
+
+    public DetailPosition CoverageDetailPosition { get; set; } = DetailPosition.Right;
+    public double CoverageSplitRightPercent { get; set; } = DefaultCoverageSplitRightPercent;
+    public double CoverageSplitBottomPercent { get; set; } = DefaultSplitBottomPercent;
+
+    public double CoverageSplitPercent
+    {
+        get => CoverageDetailPosition == DetailPosition.Right
+            ? CoverageSplitRightPercent
+            : CoverageSplitBottomPercent;
+        set
+        {
+            var clamped = Math.Clamp(value, MinSplitPercent, MaxSplitPercent);
+            if (CoverageDetailPosition == DetailPosition.Right)
+            {
+                CoverageSplitRightPercent = clamped;
+            }
+            else
+            {
+                CoverageSplitBottomPercent = clamped;
+            }
+        }
+    }
+
+    public void ResetCoverageSplit() =>
+        CoverageSplitPercent = CoverageDetailPosition == DetailPosition.Right
+            ? DefaultCoverageSplitRightPercent
+            : DefaultSplitBottomPercent;
+
     // ── Pinned tests ──
     public HashSet<string> PinnedTestFqns { get; } = new(StringComparer.Ordinal);
 
@@ -108,10 +138,10 @@ public sealed class ViewState
 
     public DetailPosition DetailPosition { get; set; } = DetailPosition.Right;
 
-    /// <summary>Width of the test tree, as a percentage, when details are docked on the right.</summary>
+    /// <summary>Width of the first pane, as a percentage, when details are docked on the right.</summary>
     public double SplitRightPercent { get; set; } = DefaultSplitRightPercent;
 
-    /// <summary>Height of the test tree, as a percentage, when details are docked at the bottom.</summary>
+    /// <summary>Height of the first pane, as a percentage, when details are docked at the bottom.</summary>
     public double SplitBottomPercent { get; set; } = DefaultSplitBottomPercent;
 
     public double SplitPercent

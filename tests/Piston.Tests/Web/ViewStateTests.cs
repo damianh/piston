@@ -61,4 +61,32 @@ public sealed class ViewStateTests
     public void CoverageReferencesUseTheSuiteNameForEitherHostPathFormat(string projectPath) =>
         Assert.Equal(new TestReference("B.Tests", "Shared.Test"),
             TestReference.FromProjectPath(projectPath, "Shared.Test"));
+
+    [Fact]
+    public void CoverageSplitLayoutIsIndependentAndRetainedAcrossOrientations()
+    {
+        var view = new ViewState();
+
+        view.CoverageSplitPercent = 32;
+        view.CoverageDetailPosition = DetailPosition.Bottom;
+        view.CoverageSplitPercent = 68;
+        view.CoverageDetailPosition = DetailPosition.Right;
+
+        Assert.Equal(32, view.CoverageSplitPercent);
+        Assert.Equal(ViewState.DefaultCoverageSplitRightPercent, new ViewState().CoverageSplitPercent);
+        Assert.Equal(ViewState.DefaultSplitRightPercent, view.SplitRightPercent);
+        Assert.Equal(68, view.CoverageSplitBottomPercent);
+    }
+
+    [Theory]
+    [InlineData(0, ViewState.MinSplitPercent)]
+    [InlineData(100, ViewState.MaxSplitPercent)]
+    public void CoverageSplitPercentIsClamped(double value, double expected)
+    {
+        var view = new ViewState();
+
+        view.CoverageSplitPercent = value;
+
+        Assert.Equal(expected, view.CoverageSplitPercent);
+    }
 }
