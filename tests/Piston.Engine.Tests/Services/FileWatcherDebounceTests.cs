@@ -152,6 +152,38 @@ public sealed class FileWatcherDebounceTests
         }
     }
 
+    [Fact]
+    public async Task NestedDirectoriesCreatedAfterStart_AreWatched()
+    {
+        using var sut = new FileWatcherService(TimeSpan.FromMilliseconds(50));
+        var dir = Directory.CreateTempSubdirectory("piston-test-");
+        try
+        {
+            sut.Start(dir.FullName);
+            var sourceDirectory = Directory.CreateDirectory(Path.Combine(dir.FullName, "Project", "Sources"));
+            var sourcePath = Path.Combine(sourceDirectory.FullName, "Source.cs");
+            await Task.Delay(100, _ct);
+            var received = new TaskCompletionSource<FileChangeBatch>(TaskCreationOptions.RunContinuationsAsynchronously);
+            sut.FileChanged += batch =>
+            {
+                if (batch.Changes.Any(change => change.FilePath == sourcePath))
+                {
+                    _ = received.TrySetResult(batch);
+                }
+            };
+
+            await File.WriteAllTextAsync(sourcePath, "// source", _ct);
+
+            var batch = await received.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            Assert.Contains(batch.Changes, change => change.FilePath == sourcePath);
+        }
+        finally
+        {
+            sut.Stop();
+            dir.Delete(recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
