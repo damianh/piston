@@ -24,7 +24,7 @@ public sealed class CoverageTreeTests
     [Fact]
     public void Build_ByModule_GroupsFilesAndTotalsTheirLines()
     {
-        var root = CoverageTreeBuilder.Build(Files, CoverageGrouping.Module, byUncovered: false);
+        var root = CoverageTreeBuilder.Build(Files, CoverageGrouping.Module);
 
         Assert.Equal(["(unknown)", "App", "Lib"], root.Groups.Select(g => g.Name));
         var lib = root.Groups[2];
@@ -36,7 +36,7 @@ public sealed class CoverageTreeTests
     [Fact]
     public void Build_ByFolder_NestsDirectoriesAndMergesSingleChildChains()
     {
-        var root = CoverageTreeBuilder.Build(Files, CoverageGrouping.Folder, byUncovered: false);
+        var root = CoverageTreeBuilder.Build(Files, CoverageGrouping.Folder);
 
         var src = Assert.Single(root.Groups);
         Assert.Equal("src", src.Name);
@@ -51,7 +51,7 @@ public sealed class CoverageTreeTests
     [Fact]
     public void Build_ByFolder_MergedChainKeepsTheDeepestKey()
     {
-        var root = CoverageTreeBuilder.Build([File("src/Only/Deep/X.cs", "M", 1, 2)], CoverageGrouping.Folder, byUncovered: false);
+        var root = CoverageTreeBuilder.Build([File("src/Only/Deep/X.cs", "M", 1, 2)], CoverageGrouping.Folder);
 
         var group = Assert.Single(root.Groups);
         Assert.Equal("src/Only/Deep", group.Name);
@@ -60,9 +60,38 @@ public sealed class CoverageTreeTests
     }
 
     [Fact]
-    public void Build_ByUncovered_OrdersGroupsAndFilesByMissedLines()
+    public void Build_ByCoverage_OrdersLeastCoveredFirst()
     {
-        var root = CoverageTreeBuilder.Build(Files, CoverageGrouping.Module, byUncovered: true);
+        var root = CoverageTreeBuilder.Build(Files, CoverageGrouping.Module, CoverageSort.Coverage);
+
+        Assert.Equal(["Lib", "App", "(unknown)"], root.Groups.Select(g => g.Name));
+        Assert.Equal(["src/Lib/Io/C.cs", "src/Lib/Core/B.cs", "src/Lib/Core/A.cs"], root.Groups[0].Files.Select(f => f.RelativePath));
+    }
+
+    [Fact]
+    public void Build_ByCoverageDescending_OrdersMostCoveredFirst()
+    {
+        var root = CoverageTreeBuilder.Build(Files, CoverageGrouping.Module, CoverageSort.Coverage, descending: true);
+
+        Assert.Equal(["(unknown)", "App", "Lib"], root.Groups.Select(g => g.Name));
+        Assert.Equal(["src/Lib/Core/A.cs", "src/Lib/Core/B.cs", "src/Lib/Io/C.cs"], root.Groups[2].Files.Select(f => f.RelativePath));
+    }
+
+    [Fact]
+    public void Build_ByCoverage_BreaksTiesByMoreUncoveredLines()
+    {
+        var root = CoverageTreeBuilder.Build(
+            [File("Small.cs", "M", 1, 2), File("Big.cs", "M", 50, 100), File("Empty.cs", "M", 0, 0)],
+            CoverageGrouping.Flat,
+            CoverageSort.Coverage);
+
+        Assert.Equal(["Big.cs", "Small.cs", "Empty.cs"], root.Files.Select(f => f.RelativePath));
+    }
+
+    [Fact]
+    public void Build_ByNameDescending_ReversesNames()
+    {
+        var root = CoverageTreeBuilder.Build(Files, CoverageGrouping.Module, CoverageSort.Name, descending: true);
 
         Assert.Equal(["Lib", "App", "(unknown)"], root.Groups.Select(g => g.Name));
         Assert.Equal(["src/Lib/Io/C.cs", "src/Lib/Core/B.cs", "src/Lib/Core/A.cs"], root.Groups[0].Files.Select(f => f.RelativePath));
@@ -71,7 +100,7 @@ public sealed class CoverageTreeTests
     [Fact]
     public void Build_Flat_ListsEveryFileAtTheRoot()
     {
-        var root = CoverageTreeBuilder.Build(Files, CoverageGrouping.Flat, byUncovered: false);
+        var root = CoverageTreeBuilder.Build(Files, CoverageGrouping.Flat);
 
         Assert.Empty(root.Groups);
         Assert.Equal(5, root.Files.Count);

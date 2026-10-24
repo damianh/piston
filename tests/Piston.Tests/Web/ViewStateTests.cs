@@ -89,4 +89,19 @@ public sealed class ViewStateTests
 
         Assert.Equal(expected, view.CoverageSplitPercent);
     }
+
+    [Fact]
+    public void SortCoverageByReversesTheActiveColumnAndStartsANewOneAscending()
+    {
+        var view = new ViewState();
+
+        view.SortCoverageBy(CoverageSort.Coverage);
+        Assert.Equal((CoverageSort.Coverage, false), (view.CoverageSort, view.CoverageSortDescending));
+
+        view.SortCoverageBy(CoverageSort.Coverage);
+        Assert.Equal((CoverageSort.Coverage, true), (view.CoverageSort, view.CoverageSortDescending));
+
+        view.SortCoverageBy(CoverageSort.Name);
+        Assert.Equal((CoverageSort.Name, false), (view.CoverageSort, view.CoverageSortDescending));
+    }
 }

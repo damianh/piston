@@ -2,12 +2,10 @@
 // See LICENSE in the project root for license information.
 
 using System.Reflection;
-using System.Text;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Piston.Engine;
-using Piston.Engine.Coverage;
 using Piston.Engine.Execution;
 using Piston.Hosting.Configuration;
 using Piston.Hosting.Protocol;
@@ -205,22 +203,6 @@ public sealed class DaemonHost : IAsyncDisposable
             // End the session when the server stops; otherwise shutdown waits for the dashboard to disconnect.
             using var session = CancellationTokenSource.CreateLinkedTokenSource(ct, stopping);
             await router.AddWebSocketSessionAsync(webSocket, session.Token).ConfigureAwait(false);
-        });
-
-        // Coverage report downloads: /api/coverage/lcov and /api/coverage/cobertura.
-        _ = _webApp.MapGet("/api/coverage/{format}", (string format) =>
-        {
-            if (!CoverageExporter.TryParseFormat(format, out var exportFormat))
-            {
-                return Results.NotFound();
-            }
-
-            return CoverageExporter.Export(engine, exportFormat) is { } export
-                ? Results.File(
-                    Encoding.UTF8.GetBytes(export.Content),
-                    CoverageExporter.ContentType(exportFormat),
-                    CoverageExporter.FileName(exportFormat))
-                : Results.Problem("Coverage is disabled.", statusCode: StatusCodes.Status409Conflict);
         });
 
         // Fallback to index.html for Blazor SPA client-side routing

@@ -50,6 +50,19 @@ public sealed class ViewState
     // ── Coverage tab ──
     public CoverageGrouping CoverageGrouping { get; set; } = CoverageGrouping.Module;
 
+    public CoverageSort CoverageSort { get; private set; } = CoverageSort.Name;
+    public bool CoverageSortDescending { get; private set; }
+
+    /// <summary>
+    /// Sorts the coverage list by <paramref name="sort"/>, reversing the direction when it is already the sort.
+    /// A new column starts ascending: names A to Z, or the least covered first.
+    /// </summary>
+    public void SortCoverageBy(CoverageSort sort)
+    {
+        CoverageSortDescending = sort == CoverageSort && !CoverageSortDescending;
+        CoverageSort = sort;
+    }
+
     /// <summary>Coverage groups the user collapsed, keyed by grouping and <see cref="CoverageGroup.Key"/>.</summary>
     public HashSet<string> CollapsedCoverageGroups { get; } = new(StringComparer.Ordinal);
 

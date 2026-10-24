@@ -50,10 +50,6 @@ public static class CoverageExporter
     public static string FileName(CoverageExportFormat format) =>
         format == CoverageExportFormat.Lcov ? "lcov.info" : "cobertura.xml";
 
-    /// <summary>The MIME type for <paramref name="format"/>.</summary>
-    public static string ContentType(CoverageExportFormat format) =>
-        format == CoverageExportFormat.Lcov ? "text/plain; charset=utf-8" : "application/xml; charset=utf-8";
-
     /// <summary>Exports <paramref name="engine"/>'s coverage report, or returns null when coverage is disabled.</summary>
     public static CoverageExport? Export(IEngine engine, CoverageExportFormat format)
     {

@@ -59,14 +59,28 @@ public sealed class CoverageGroup
     }
 }
 
+/// <summary>The column the coverage file list is ordered by.</summary>
+public enum CoverageSort
+{
+    /// <summary>By group name and file path.</summary>
+    Name,
+
+    /// <summary>By line coverage; ascending puts the least covered first.</summary>
+    Coverage,
+}
+
 public static class CoverageTreeBuilder
 {
     /// <summary>
-    /// Groups <paramref name="files"/> under a root. Groups and files are ordered by name, or most uncovered
-    /// lines first when <paramref name="byUncovered"/> is set. In a folder tree, a directory whose only content
-    /// is one subdirectory is merged with it (<c>src/Lib/Core</c>).
+    /// Groups <paramref name="files"/> under a root, ordering groups and files by <paramref name="sort"/>.
+    /// Coverage ties put more uncovered lines first, then fall back to name. In a folder tree, a directory whose
+    /// only content is one subdirectory is merged with it (<c>src/Lib/Core</c>).
     /// </summary>
-    public static CoverageGroup Build(IEnumerable<CoverageFileSummaryDto> files, CoverageGrouping grouping, bool byUncovered)
+    public static CoverageGroup Build(
+        IEnumerable<CoverageFileSummaryDto> files,
+        CoverageGrouping grouping,
+        CoverageSort sort = CoverageSort.Name,
+        bool descending = false)
     {
         var root = new CoverageGroup("", "");
         switch (grouping)
@@ -111,7 +125,7 @@ public static class CoverageTreeBuilder
         }
 
         root.Total();
-        Sort(root, byUncovered);
+        Sort(root, sort, descending);
         return root;
     }
 
@@ -132,26 +146,35 @@ public static class CoverageTreeBuilder
         }
     }
 
-    private static void Sort(CoverageGroup group, bool byUncovered)
+    private static void Sort(CoverageGroup group, CoverageSort sort, bool descending)
     {
-        if (byUncovered)
+        var direction = descending ? -1 : 1;
+        if (sort == CoverageSort.Coverage)
         {
-            group.Groups.Sort((a, b) => b.LinesUncovered != a.LinesUncovered
-                ? b.LinesUncovered.CompareTo(a.LinesUncovered)
-                : StringComparer.Ordinal.Compare(a.Name, b.Name));
-            group.Files.Sort((a, b) => (b.LinesTotal - b.LinesCovered) != (a.LinesTotal - a.LinesCovered)
-                ? (b.LinesTotal - b.LinesCovered).CompareTo(a.LinesTotal - a.LinesCovered)
-                : StringComparer.Ordinal.Compare(a.RelativePath, b.RelativePath));
+            group.Groups.Sort((a, b) => ByCoverage(a.LinesCovered, a.LinesTotal, b.LinesCovered, b.LinesTotal, direction)
+                is var c and not 0 ? c : StringComparer.Ordinal.Compare(a.Name, b.Name));
+            group.Files.Sort((a, b) => ByCoverage(a.LinesCovered, a.LinesTotal, b.LinesCovered, b.LinesTotal, direction)
+                is var c and not 0 ? c : StringComparer.Ordinal.Compare(a.RelativePath, b.RelativePath));
         }
         else
         {
-            group.Groups.Sort((a, b) => StringComparer.Ordinal.Compare(a.Name, b.Name));
-            group.Files.Sort((a, b) => StringComparer.Ordinal.Compare(a.RelativePath, b.RelativePath));
+            group.Groups.Sort((a, b) => direction * StringComparer.Ordinal.Compare(a.Name, b.Name));
+            group.Files.Sort((a, b) => direction * StringComparer.Ordinal.Compare(a.RelativePath, b.RelativePath));
         }
 
         foreach (var child in group.Groups)
         {
-            Sort(child, byUncovered);
+            Sort(child, sort, descending);
         }
+    }
+
+    // A file with no coverable lines counts as fully covered.
+    private static int ByCoverage(int aCovered, int aTotal, int bCovered, int bTotal, int direction)
+    {
+        var aRatio = aTotal == 0 ? 1d : (double)aCovered / aTotal;
+        var bRatio = bTotal == 0 ? 1d : (double)bCovered / bTotal;
+        return aRatio != bRatio
+            ? direction * aRatio.CompareTo(bRatio)
+            : direction * (bTotal - bCovered).CompareTo(aTotal - aCovered);
     }
 }

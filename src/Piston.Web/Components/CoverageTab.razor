@@ -15,7 +15,7 @@
     }
     else
     {
-        <!-- Totals, filter and downloads -->
+        <!-- Totals, layout and filter -->
         <div class="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1.5 shrink-0 bg-gray-900 border-b border-gray-800 select-none">
             @if (_summary is { } s)
             {
@@ -62,18 +62,6 @@
                     </button>
                 </div>
             }
-            <div class="flex items-center gap-0.5" role="group" aria-label="Sort files">
-                @foreach (var (sort, label) in new[] { (CoverageSort.Path, "Path"), (CoverageSort.Uncovered, "Most uncovered") })
-                {
-                    var on = sort == _sort;
-                    <button class="px-2 py-0.5 rounded @(on ? "bg-gray-800 ring-1 ring-inset ring-gray-700 text-gray-100" : "text-gray-400 hover:text-gray-100 hover:bg-gray-800/50")"
-                            aria-pressed="@(on ? "true" : "false")" @onclick="() => _sort = sort">@label</button>
-                }
-            </div>
-            <span class="text-gray-500">Export
-                <a class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300" href="api/coverage/lcov" download>lcov</a>
-                <a class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300" href="api/coverage/cobertura" download>cobertura</a>
-            </span>
             @{
                 var dockLabel = View.CoverageDetailPosition == DetailPosition.Right ? "Dock source at bottom" : "Dock source on right";
             }
@@ -96,7 +84,7 @@
         <div class="@(_isBottom ? "flex flex-col" : "flex") flex-1 min-h-0 overflow-hidden"
              data-orientation="@(_isBottom ? "bottom" : "right")" @ref="_splitContainer">
             <!-- File list -->
-            <div class="flex flex-col min-w-0 min-h-0 overflow-y-auto py-1 @(_isBottom ? "border-b" : "border-r") border-gray-800"
+            <div class="flex flex-col min-w-0 min-h-0 overflow-y-auto pb-1 @(_isBottom ? "border-b" : "border-r") border-gray-800"
                  style="flex: 0 0 @SplitPercentCss%" aria-label="Measured files">
                 @if (_summary is null)
                 {
@@ -108,6 +96,11 @@
                 }
                 else
                 {
+                    <div class="sticky top-0 z-10 flex items-center gap-2 pr-3 py-1 mb-0.5 shrink-0 bg-gray-950 border-b border-gray-800 text-gray-500 select-none"
+                         style="@Indent(0)">
+                        @SortHeader(CoverageSort.Name, "Name", "flex-1 min-w-0 justify-start")
+                        @SortHeader(CoverageSort.Coverage, "Coverage", "w-[7.5rem] shrink-0 justify-end")
+                    </div>
                     @RenderGroup(BuildTree(), -1)
                 }
             </div>
@@ -184,15 +177,12 @@
 </div>
 
 @code {
-    private enum CoverageSort { Path, Uncovered }
-
     private bool _coverageEnabled;
     private DateTimeOffset? _lastRunTime;
     private DateTimeOffset? _lastChangeTime;
     private CoverageSummaryDto? _summary;
     private int _staleCount;
     private string? _filter;
-    private CoverageSort _sort = CoverageSort.Path;
     private string? _selectedPath;
     private FileCoverageDto? _file;
     private Dictionary<int, CoverageLineDto> _lines = [];
@@ -402,7 +392,8 @@
     private CoverageGroup BuildTree() => CoverageTreeBuilder.Build(
         _summary!.Files.Where(f => !Filtering || f.RelativePath.Contains(_filter!.Trim(), StringComparison.OrdinalIgnoreCase)),
         View.CoverageGrouping,
-        _sort == CoverageSort.Uncovered);
+        View.CoverageSort,
+        View.CoverageSortDescending);
 
     private string ExpansionKey(CoverageGroup group) => $"{View.CoverageGrouping}:{group.Key}";
 
@@ -437,6 +428,25 @@
     }
 
     private static string Indent(int depth) => $"padding-left: {12 + (Math.Max(depth, 0) * 14)}px";
+
+    private RenderFragment SortHeader(CoverageSort sort, string label, string classes) =>
+        @<text>
+            @{
+                var active = View.CoverageSort == sort;
+                var descending = active && View.CoverageSortDescending;
+                var order = sort == CoverageSort.Name
+                    ? (descending ? "Z to A" : "A to Z")
+                    : (descending ? "most covered first" : "least covered first");
+                var hint = active ? $"Sorted {order}. Click to reverse." : $"Sort {order}";
+            }
+            <button type="button"
+                    class="@classes flex items-center gap-1 rounded text-[10px] font-semibold hover:text-gray-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 @(active ? "text-gray-300" : "")"
+                    title="@hint" aria-label="@($"{label}: {hint}")"
+                    @onclick="() => View.SortCoverageBy(sort)">
+                @label
+                <span class="w-2 text-center" aria-hidden="true">@(active ? (descending ? "▾" : "▴") : "")</span>
+            </button>
+        </text>;
 
     // The root (depth -1) is not drawn; its groups and files start at depth 0.
     private RenderFragment RenderGroup(CoverageGroup group, int depth) =>
