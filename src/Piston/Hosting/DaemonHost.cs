@@ -177,10 +177,10 @@ public sealed class DaemonHost : IAsyncDisposable
 
         _webApp = webBuilder.Build();
         _webApp.Urls.Add(WebUrl);
+        _ = _webApp.UseWebSockets();
         _ = _webApp.UseRequestGuard(
             securityHeaders: true,
             ContentSecurityPolicy.Build(ContentSecurityPolicy.ReadIndex(_webApp.Environment.WebRootFileProvider)));
-        _ = _webApp.UseWebSockets();
 
         // Serve Blazor WASM framework files (handles content negotiation for .br/.gz compressed
         // assets) and static files. UseBlazorFrameworkFiles must come before UseStaticFiles.

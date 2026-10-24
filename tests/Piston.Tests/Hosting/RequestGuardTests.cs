@@ -88,6 +88,38 @@ public sealed class RequestGuardTests
     }
 
     [Fact]
+    public async Task CrossSiteWebSocketWithoutOrigin_IsRefusedBeforeTheHandshake()
+    {
+        var (app, address) = await StartAppAsync();
+        await using var _ = app;
+        var uri = new Uri(address.Replace("http://", "ws://", StringComparison.Ordinal) + "/ws");
+
+        using var socket = new ClientWebSocket();
+        socket.Options.SetRequestHeader("Sec-Fetch-Site", "cross-site");
+        var ex = await Assert.ThrowsAsync<WebSocketException>(() => socket.ConnectAsync(uri, _ct));
+        Assert.Contains("403", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("same-site")]
+    public async Task WebSocketWithoutOrigin_IsAllowedUnlessCrossSite(string? fetchSite)
+    {
+        var (app, address) = await StartAppAsync();
+        await using var _ = app;
+        var uri = new Uri(address.Replace("http://", "ws://", StringComparison.Ordinal) + "/ws");
+
+        using var socket = new ClientWebSocket();
+        if (fetchSite is not null)
+        {
+            socket.Options.SetRequestHeader("Sec-Fetch-Site", fetchSite);
+        }
+
+        await socket.ConnectAsync(uri, _ct);
+        await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, null, _ct);
+    }
+
+    [Fact]
     public async Task ForeignHostHeader_IsRejectedAndSecurityHeadersAreSet()
     {
         var (app, address) = await StartAppAsync();
@@ -123,8 +155,8 @@ public sealed class RequestGuardTests
         var builder = WebApplication.CreateSlimBuilder();
         _ = builder.WebHost.UseUrls("http://127.0.0.1:0");
         var app = builder.Build();
-        _ = app.UseRequestGuard(securityHeaders: true);
         _ = app.UseWebSockets();
+        _ = app.UseRequestGuard(securityHeaders: true);
         _ = app.MapGet("/", () => "ok");
         _ = app.Map("/ws", async context =>
         {

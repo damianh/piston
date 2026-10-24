@@ -33,7 +33,8 @@ internal static class RequestGuard
 
     /// <summary>
     /// Adds the guard, and the dashboard's response headers when <paramref name="securityHeaders"/> is set,
-    /// including <paramref name="contentSecurityPolicy"/> when given.
+    /// including <paramref name="contentSecurityPolicy"/> when given. Register WebSocket middleware first
+    /// so the guard can identify WebSocket handshakes.
     /// </summary>
     public static IApplicationBuilder UseRequestGuard(
         this IApplicationBuilder app, bool securityHeaders, string? contentSecurityPolicy = null)
