@@ -1,0 +1,104 @@
+@using Piston.Protocol.Dtos
+@using Piston.Web.Models
+@inject EngineClientService Client
+
+<div class="bg-gray-900 border border-gray-800 rounded overflow-hidden">
+    <div class="flex items-center gap-3 px-3 py-1.5 border-b border-gray-800">
+        <span class="text-gray-300 font-mono break-all flex-1 min-w-0" title="@FilePath">@DisplayPath:@Line</span>
+        @if (_source?.Lines is { Count: > ContextLines * 2 + 1 })
+        {
+            <button type="button" class="text-gray-500 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none shrink-0"
+                    @onclick="() => _wholeFile = !_wholeFile">@(_wholeFile ? "Show less" : "Whole file")</button>
+        }
+        <a class="text-gray-500 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none shrink-0"
+           href="@EditorUrl" title="Open the file at this line in VS Code">Open in editor</a>
+    </div>
+    @if (_source is null)
+    {
+        <div class="text-gray-600 italic px-3 py-2">Loading…</div>
+    }
+    else if (_source.Lines is not { } lines)
+    {
+        <div class="text-gray-600 italic px-3 py-2">@(_source.Unavailable ?? "Source unavailable.")</div>
+    }
+    else
+    {
+        var (first, last) = Window(lines.Count);
+        <div class="overflow-auto font-mono text-[12px] leading-5 py-1 @(_wholeFile ? "max-h-96" : "")">
+            @for (var i = first; i <= last; i++)
+            {
+                var number = i + 1;
+                var failing = number == Line;
+                <div class="flex @(failing ? "bg-red-900/40" : "")" data-failing="@(failing ? "true" : null)">
+                    <span class="w-1 shrink-0 @(failing ? "bg-red-500" : "")" aria-hidden="true"></span>
+                    <span class="w-12 pr-2 text-right select-none shrink-0 tabular-nums @(failing ? "text-red-300" : "text-gray-600")">@number</span>
+                    <span class="whitespace-pre text-gray-300 pr-4">@foreach (var token in _tokens![i])
+                    {
+                        <span class="@TokenClass(token.Kind)">@token.Text</span>
+                    }</span>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private const int ContextLines = 8;
+
+    /// <summary>The source file, as a stack frame names it.</summary>
+    [Parameter, EditorRequired] public string FilePath { get; set; } = "";
+
+    /// <summary>The 1-based line to highlight.</summary>
+    [Parameter, EditorRequired] public int Line { get; set; }
+
+    /// <summary>The watched solution's directory, for showing <see cref="FilePath"/> relative to it.</summary>
+    [Parameter] public string? SolutionDirectory { get; set; }
+
+    private SourceFileDto? _source;
+    private List<List<SourceToken>>? _tokens;
+    private string? _loadedPath;
+    private bool _wholeFile;
+
+    private string DisplayPath =>
+        StackTraceParser.IsInSolution(FilePath, SolutionDirectory)
+            ? FilePath[(SolutionDirectory!.TrimEnd('/', '\\').Length + 1)..]
+            : FilePath;
+
+    private string EditorUrl => $"vscode://file/{Uri.EscapeDataString(FilePath.TrimStart('/')).Replace("%2F", "/", StringComparison.Ordinal).Replace("%5C", "/", StringComparison.Ordinal).Replace("%3A", ":", StringComparison.Ordinal)}:{Line}";
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (FilePath == _loadedPath)
+        {
+            return;
+        }
+
+        _loadedPath = FilePath;
+        _source = null;
+        _tokens = null;
+        _wholeFile = false;
+        var source = await Client.GetSourceAsync(FilePath) ?? new SourceFileDto(FilePath, null, "The daemon is unreachable.");
+        if (_loadedPath != FilePath)
+        {
+            return;
+        }
+
+        _tokens = source.Lines is { } lines ? CSharpHighlighter.Highlight(lines) : null;
+        _source = source;
+    }
+
+    // The lines to show, as 0-based indexes: the whole file, or the failing line with some context around it.
+    private (int First, int Last) Window(int count) =>
+        _wholeFile
+            ? (0, count - 1)
+            : (Math.Clamp(Line - 1 - ContextLines, 0, Math.Max(0, count - 1)), Math.Clamp(Line - 1 + ContextLines, 0, count - 1));
+
+    private static string TokenClass(SourceTokenKind kind) => kind switch
+    {
+        SourceTokenKind.Keyword => "text-red-300",
+        SourceTokenKind.String => "text-sky-400",
+        SourceTokenKind.Comment => "text-gray-500 italic",
+        SourceTokenKind.Number => "text-blue-400",
+        _ => "",
+    };
+}

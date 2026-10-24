@@ -45,6 +45,45 @@ public interface IEngine : IDisposable
     // State queries
     PistonState State { get; }
 
+    /// <summary>Returns the solution-wide coverage report, or null when coverage is disabled.</summary>
+    Coverage.CoverageReportSnapshot? GetCoverageReport() => null;
+
+    /// <summary>
+    /// Returns the coverage of one source file (absolute, or relative to the solution directory), or null
+    /// when coverage is disabled or the file was not measured.
+    /// </summary>
+    Coverage.FileCoverageSnapshot? GetFileCoverage(string filePath) => null;
+
+    /// <summary>
+    /// Returns the tests recorded as executing one source file (absolute, or relative to the solution directory), with
+    /// how precisely each was measured. Null when coverage is disabled or unsupported.
+    /// </summary>
+    IReadOnlyList<Coverage.CoveringTest>? GetCoveringTests(string filePath) => null;
+
+    /// <summary>
+    /// Returns what a run triggered by changes to <paramref name="filePaths"/> (absolute, or relative to the solution
+    /// directory) would build and test, without running anything or changing any state. Null when unsupported.
+    /// </summary>
+    Models.ImpactAnalysisResult? PlanAffected(IReadOnlyList<string> filePaths) => null;
+
+    /// <summary>
+    /// Recorded results of a test in this worktree's run history, matched by fully-qualified name. Null when
+    /// history is off or unsupported.
+    /// </summary>
+    IReadOnlyList<Models.TestHistory>? GetTestHistory(string test, string? project = null) => null;
+
+    /// <summary>Tests that passed and failed on the same source within their recorded history; null when history is off.</summary>
+    IReadOnlyList<Models.TestHistory>? GetFlakyTests() => null;
+
+    /// <summary>How each test whose latest recorded result is a failure relates to its history; null when history is off.</summary>
+    IReadOnlyList<Models.FailureClassification>? GetLatestFailures() => null;
+
+    /// <summary>Summaries of the runs kept in the run history, newest first; null when history is off.</summary>
+    IReadOnlyList<Models.StoredRunSummary>? GetStoredRuns() => null;
+
+    /// <summary>A run kept in the run history with its per-test results; null when unknown or history is off.</summary>
+    Models.StoredRun? GetStoredRun(string runId) => null;
+
     // Configuration
     void SetFilter(string? filter);
     void ClearResults();

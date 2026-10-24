@@ -10,6 +10,9 @@ public sealed class FileWatcherService : IFileWatcherService
     private readonly TimeSpan _debounceInterval;
     private readonly TimeProvider _timeProvider;
     private readonly List<FileSystemWatcher> _watchers = [];
+    private readonly Dictionary<string, FileSystemWatcher> _directoryWatchers = new(
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    private readonly Lock _watcherLock = new();
     private string? _solutionDirectory;
     private ITimer? _debounceTimer;
     private long _debounceGeneration;
@@ -60,7 +63,7 @@ public sealed class FileWatcherService : IFileWatcherService
         Stop();
 
         _solutionDirectory = Path.GetFullPath(solutionDirectory);
-        AddWatcher(_solutionDirectory, includeSubdirectories: true);
+        AddDirectoryWatchers(_solutionDirectory);
 
         for (var directory = Directory.GetParent(_solutionDirectory);
              directory is not null;
@@ -72,13 +75,19 @@ public sealed class FileWatcherService : IFileWatcherService
 
     public void Stop()
     {
-        foreach (var watcher in _watchers)
+        FileSystemWatcher[] watchers;
+        lock (_watcherLock)
+        {
+            _solutionDirectory = null;
+            watchers = _watchers.ToArray();
+            _watchers.Clear();
+            _directoryWatchers.Clear();
+        }
+
+        foreach (var watcher in watchers)
         {
             watcher.Dispose();
         }
-
-        _watchers.Clear();
-        _solutionDirectory = null;
 
         lock (_lock)
         {
@@ -92,6 +101,18 @@ public sealed class FileWatcherService : IFileWatcherService
 
     private void OnFileSystemEvent(object sender, FileSystemEventArgs e)
     {
+        if (e.ChangeType == WatcherChangeTypes.Created && Directory.Exists(e.FullPath))
+        {
+            AddDirectoryWatchers(e.FullPath);
+        }
+
+        // Windows reports directory timestamp changes when a build creates bin/obj entries beneath a project.
+        // The fingerprint contains files, not directory metadata; their own events cover real source changes.
+        if (e.ChangeType == WatcherChangeTypes.Changed && Directory.Exists(e.FullPath))
+        {
+            return;
+        }
+
         if (!IsFingerprintInput(e.FullPath))
         {
             return;
@@ -102,6 +123,12 @@ public sealed class FileWatcherService : IFileWatcherService
 
     private void OnRenamed(object sender, RenamedEventArgs e)
     {
+        RemoveDirectoryWatchers(e.OldFullPath);
+        if (Directory.Exists(e.FullPath))
+        {
+            AddDirectoryWatchers(e.FullPath);
+        }
+
         if (!IsFingerprintInput(e.FullPath) && !IsFingerprintInput(e.OldFullPath))
         {
             return;
@@ -113,11 +140,22 @@ public sealed class FileWatcherService : IFileWatcherService
 
     private void AddWatcher(string directory, bool includeSubdirectories, IEnumerable<string>? filters = null)
     {
+        var watcher = CreateWatcher(directory, includeSubdirectories, filters);
+        lock (_watcherLock)
+        {
+            _watchers.Add(watcher);
+            watcher.EnableRaisingEvents = true;
+        }
+    }
+
+    private FileSystemWatcher CreateWatcher(string directory, bool includeSubdirectories, IEnumerable<string>? filters)
+    {
         var watcher = new FileSystemWatcher(directory)
         {
             Filter = "*",
             IncludeSubdirectories = includeSubdirectories,
             NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.DirectoryName,
+            InternalBufferSize = 64 * 1024,
         };
 
         if (filters is not null)
@@ -134,8 +172,90 @@ public sealed class FileWatcherService : IFileWatcherService
         watcher.Deleted += OnFileSystemEvent;
         watcher.Renamed += OnRenamed;
         watcher.Error += OnWatcherError;
-        _watchers.Add(watcher);
-        watcher.EnableRaisingEvents = true;
+        return watcher;
+    }
+
+    private void AddDirectoryWatchers(string directory)
+    {
+        if (_solutionDirectory is not { } root)
+        {
+            return;
+        }
+
+        var pending = new Stack<string>();
+        pending.Push(Path.GetFullPath(directory));
+        while (pending.TryPop(out var current))
+        {
+            if (!Directory.Exists(current) || !SourceFingerprinter.CoversPath(root, current))
+            {
+                continue;
+            }
+
+            lock (_watcherLock)
+            {
+                if (!string.Equals(_solutionDirectory, root,
+                        OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                if (!_directoryWatchers.ContainsKey(current))
+                {
+                    var watcher = CreateWatcher(current, includeSubdirectories: false, filters: null);
+                    _directoryWatchers.Add(current, watcher);
+                    _watchers.Add(watcher);
+                    watcher.EnableRaisingEvents = true;
+                }
+            }
+
+            try
+            {
+                foreach (var child in Directory.EnumerateDirectories(current))
+                {
+                    pending.Push(child);
+                }
+            }
+            catch (DirectoryNotFoundException)
+            {
+            }
+        }
+    }
+
+    private void RemoveDirectoryWatchers(string directory)
+    {
+        var path = Path.GetFullPath(directory);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        List<FileSystemWatcher> removed = [];
+        lock (_watcherLock)
+        {
+            foreach (var watched in _directoryWatchers.Keys
+                         .Where(candidate => IsUnderDirectory(path, candidate, comparison))
+                         .ToArray())
+            {
+                var watcher = _directoryWatchers[watched];
+                _ = _directoryWatchers.Remove(watched);
+                _ = _watchers.Remove(watcher);
+                removed.Add(watcher);
+            }
+        }
+
+        foreach (var watcher in removed)
+        {
+            watcher.Dispose();
+        }
+    }
+
+    private static bool IsUnderDirectory(string directory, string candidate, StringComparison comparison)
+    {
+        if (string.Equals(directory, candidate, comparison))
+        {
+            return true;
+        }
+
+        var relative = Path.GetRelativePath(directory, candidate);
+        return !Path.IsPathRooted(relative)
+            && relative != ".."
+            && !relative.StartsWith(".." + Path.DirectorySeparatorChar, comparison);
     }
 
     private bool IsFingerprintInput(string fullPath)
@@ -182,6 +302,7 @@ public sealed class FileWatcherService : IFileWatcherService
             }
 
             _monitoringError = $"Source monitoring failed: {error.GetType().Name}: {error.Message}. Restart the daemon before verifying.";
+            DiagnosticLog.Instance?.Write("FileWatcher", _monitoringError);
             ScheduleDebounce(new FileChangeEvent(root, WatcherChangeTypes.All, _timeProvider.GetUtcNow()));
         }
     }

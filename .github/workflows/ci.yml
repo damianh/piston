@@ -35,6 +35,36 @@ jobs:
         run: dotnet build Piston.slnx -c Release
       - name: Test
         run: dotnet test Piston.slnx -c Release --no-build
+      - name: Test dashboard scripts
+        run: node --test eng/status.test.mjs
+
+  smoke:
+    name: Smoke test samples (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
+      - name: Pack the tool
+        run: dotnet pack src/Piston/Piston.csproj -c Release -o artifacts
+      - name: Install the packed tool
+        run: dotnet tool install Piston --tool-path .tools --source artifacts
+      - name: Run the samples through Piston
+        # samples/Samples.slnx: MSTest, NUnit, xUnit v3 and TUnit on Microsoft.Testing.Platform, 3 tests each
+        # (1 passing, 1 deliberately failing, 1 skipped). The daemon builds, discovers and runs them; the startup
+        # run's counts must match exactly.
+        shell: bash
+        run: >-
+          node eng/smoke-test.mjs
+          --tool ${{ runner.os == 'Windows' && '.tools/piston.exe' || '.tools/piston' }}
+          --total 12 --failed 4 --skipped 4 --projects 4
+          -- samples/Samples.slnx
 
   check-formatting:
     name: Check formatting

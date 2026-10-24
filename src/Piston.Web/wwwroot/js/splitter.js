@@ -1,5 +1,5 @@
-// Drag-to-resize for the Tests tab split view. The drag updates the first pane's flex-basis
-// directly so it stays smooth while snapshots re-render the tree; the final value is reported
+// Drag-to-resize for dashboard split views. The drag updates the first pane's flex-basis
+// directly so it stays smooth while the view re-renders; the final value is reported
 // back to .NET on release.
 window.pistonSplitter = {
     attach(container, dotnetRef, min, max) {

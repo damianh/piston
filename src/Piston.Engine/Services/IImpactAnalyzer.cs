@@ -9,6 +9,12 @@ public interface IImpactAnalyzer
 {
     Task InitializeAsync(string solutionPath, CancellationToken ct);
     ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes);
+
+    /// <summary>
+    /// What <see cref="Analyze"/> would select for <paramref name="changes"/>, without marking coverage stale or
+    /// impact units dirty.
+    /// </summary>
+    ImpactAnalysisResult Preview(IReadOnlyList<FileChangeEvent> changes) => Analyze(changes);
     ImpactAnalysisResult AnalyzeFullRun();
     void InvalidateGraph();
     IReadOnlyList<string> GetAllTestProjectPaths();
@@ -20,6 +26,9 @@ public interface IImpactAnalyzer
     /// names only one of its outputs.
     /// </summary>
     bool IsMultiTargeted(string projectPath) => false;
+
+    /// <summary>How a test project runs tests, or <see langword="null"/> when the graph is unavailable.</summary>
+    Impact.TestProjectFacts? GetTestProjectFacts(string projectPath) => null;
 
     /// <summary>
     /// Projects a build of <paramref name="buildTargets"/> compiles: the targets and their references,
@@ -41,4 +50,10 @@ public interface IImpactAnalyzer
         testProjects = GetAllTestProjectPaths().ToArray();
         return issue;
     }
+
+    /// <summary>
+    /// Reloads the graph when it was evaluated before a project's packages were restored (a fresh clone's first
+    /// build restores them). Returns whether it reloaded.
+    /// </summary>
+    bool RefreshGraphIfEvaluatedBeforeRestore() => false;
 }

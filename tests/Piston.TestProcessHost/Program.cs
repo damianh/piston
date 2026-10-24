@@ -54,6 +54,11 @@ public static class Program
 
         if (args[0] == "--server")
         {
+            if (Environment.GetEnvironmentVariable("PISTON_WARM_HOST") == "1")
+            {
+                return await FakeMtpServer.RunAsync(int.Parse(args[^1], System.Globalization.CultureInfo.InvariantCulture));
+            }
+
             Console.Error.WriteLine("Test host failed before connecting.");
             return 1;
         }

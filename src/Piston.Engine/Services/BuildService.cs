@@ -2,13 +2,20 @@
 // See LICENSE in the project root for license information.
 
 using System.Diagnostics;
-using Piston.Engine.Impact;
 using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
 
 public sealed class BuildService : IBuildService
 {
+    private readonly MtpWarmHostPool? _warmHosts;
+
+    public BuildService()
+    {
+    }
+
+    internal BuildService(MtpWarmHostPool? warmHosts) => _warmHosts = warmHosts;
+
     public Task<BuildResult> BuildAsync(string solutionPath, CancellationToken ct) =>
         BuildAsync(solutionPath, null, null, ct);
 
@@ -24,6 +31,11 @@ public sealed class BuildService : IBuildService
         Action<string>? onProjectBuilt,
         CancellationToken ct)
     {
+        if (_warmHosts is not null)
+        {
+            await _warmHosts.RetireBeforeBuildAsync().ConfigureAwait(false);
+        }
+
         if (projectPaths is null || projectPaths.Count == 0)
         {
             // Absolute, since the build starts in the solution's directory: a relative path with a
@@ -127,7 +139,7 @@ public sealed class BuildService : IBuildService
         // Reused MSBuild nodes can retain the redirected pipes after dotnet exits,
         // leaving WaitForExitAsync waiting indefinitely for output EOF.
         psi.Environment["MSBUILDDISABLENODEREUSE"] = "1";
-        MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
+        _ = ChildProcessEnvironment.Prepare(psi);
 
         using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
 

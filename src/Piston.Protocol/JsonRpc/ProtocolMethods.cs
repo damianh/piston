@@ -30,6 +30,30 @@ public static class ProtocolMethods
     /// <summary>Request per-file coverage data for the given source file.</summary>
     public const string CoverageGetForFile = "coverage/getForFile";
 
+    /// <summary>Request the solution-wide coverage report: totals and every measured file.</summary>
+    public const string CoverageGetSummary = "coverage/getSummary";
+
+    /// <summary>Request the tests the impact map records as executing a source file.</summary>
+    public const string CoverageGetCoveringTests = "coverage/getCoveringTests";
+
+    /// <summary>Export the coverage report as LCOV or Cobertura text.</summary>
+    public const string CoverageExport = "coverage/export";
+
+    /// <summary>Request the text of a source file in the watched solution.</summary>
+    public const string SourceGet = "source/get";
+
+    /// <summary>Request the runs kept in the run history, newest first.</summary>
+    public const string HistoryGetRuns = "history/getRuns";
+
+    /// <summary>Request one stored run with its per-test results.</summary>
+    public const string HistoryGetRun = "history/getRun";
+
+    /// <summary>Request the failure kind of each failing test and the flaky tests.</summary>
+    public const string HistoryGetTestMarks = "history/getTestMarks";
+
+    /// <summary>Request the recorded results of a test.</summary>
+    public const string HistoryGetTestHistory = "history/getTestHistory";
+
     // Notifications (server → client, no response)
 
     /// <summary>Full state snapshot — sent on connect and after every state change.</summary>

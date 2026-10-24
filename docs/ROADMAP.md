@@ -247,6 +247,12 @@ real-agent experiments.
   suspected flaky, or unknown. Missing baseline evidence is not proof a failure
   is new.
 
+  Status: per-worktree run history is implemented in the daemon, before the hub
+  split. It is stored outside checkouts under a per-user directory grouped by
+  repository identity, and classifies failures against the worktree's own
+  earlier runs (flaky = passed and failed on the same source fingerprint). A
+  declared merge-base baseline in a Piston-managed worktree is still open.
+
 Source content alone cannot prove freshness or flakiness. Include SDK/runtime,
 target framework, build configuration, relevant inputs/environment, and selected
 tests; reject or mark results stale if inputs change during execution. Identical
@@ -320,6 +326,68 @@ runner identity, platform support, and overhead. Proposed backfill goal: at most
 twice the comparable workload cost, with no observed attribution bleed in the
 serial validation fixtures. Cross-process service coverage is not an initial
 acceptance requirement.
+
+### Spike results
+
+Measured on `tests/Piston.Tests` (33 classes, 239 methods, 314 test cases;
+Linux, 16 cores, Microsoft.Testing.Extensions.CodeCoverage and
+`dotnet-coverage` 18.12):
+
+| Approach | Wall time | vs. one coverage run | Attribution |
+|----------|-----------|----------------------|-------------|
+| One run, no coverage | 4.9 s | 0.5× | none |
+| One run with `--coverage` | 9.1 s | 1× | run (shared) |
+| One `dotnet test --coverage` process per class, serial | 112 s | 12× | class, no bleed |
+| One process per test method, serial (25 sampled, extrapolated) | ~725 s | ~80× | test, no bleed |
+| Per-class processes, 4 or 8 concurrent | ~95 s | — | invalid: reports came back empty (line rate 0) and some tests failed |
+| `dotnet-coverage` server session, `snapshot --reset` at boundaries seen in the runner's live output | 11 s | 1.2× | unusable: see below |
+
+- A `dotnet-coverage snapshot --reset` costs about 200 ms and resets cleanly,
+  but the test host does not wait for it. With serial execution
+  (`-parallelMode none`) and boundaries taken from the verbose reporter, only
+  18 snapshots landed for 33 classes (8 spanned several classes), and
+  single-class snapshots had about 4× extra lines and missed 44% of the lines
+  from isolated runs. Per-test boundaries were worse (28 snapshots for 240
+  tests). Accurate snapshots need a blocking in-process hook. The MTP coverage
+  extension exposes no per-test hook (Labcoat reached the same conclusion), and
+  MTP server mode allows only one request per process, so Piston cannot request
+  one class at a time from a warm host.
+- Class-level sets over-select about 4× compared with isolated per-test runs on
+  the sample (mean 225 lines per test; 869 per class), and missed no line.
+  Run-level sets over-select about 350×.
+- Tests that drive child processes (stdio smoke tests) record only the in-process
+  lines; cross-process coverage stays out of scope.
+
+The original implementation used **class** granularity by default because a
+complete per-test backfill measured about 80× one coverage run. Following the
+user's choice, the default is now **test** granularity: it measures one test
+method per process while idle. It remains cancellable, incremental (only tests
+whose recorded files changed, or that have no map entry, are re-measured) and
+never concurrent with another coverage run of the same test app. Users can
+choose `"class"` for a faster, coarser map or `"off"` to disable backfill. The
+blocking in-process hook remains deferred because it would require changes to
+the user's test project and framework-specific integration.
+
+### Status
+
+Implemented:
+
+- An impact map of `run` units recorded by every coverage run and `test` (or,
+  with `impactBackfill: "class"`, `class`) units measured by the idle backfill, each
+  with executed line spans and a content snapshot. Aggregate line coverage is
+  stored separately and labelled as aggregate.
+- Changed-line selection (Tier 3) diffing changed files against the snapshots,
+  with per-test reasons, conservative fallback to project selection, and a
+  `plan_affected_tests` preview. C# syntax tokens are compared so ordinary
+  comments and whitespace do not trigger tests or invalidate measurements.
+  Spans merged after an edit are remapped with a line diff; class and test units
+  of an edited file are treated as outdated until remeasured.
+- Dashboard: a covering-tests panel per file and per line with evidence
+  granularity and outdated markers, drill-down to the test, "Why it ran" in test
+  details, backfill progress and the last run's scope in the status bar.
+
+Not yet done: branch-level attribution, the passing/failing/uncovered verdict per
+changed line, a coverage-aware diff view, and method-level identity.
 
 ### Implementation
 

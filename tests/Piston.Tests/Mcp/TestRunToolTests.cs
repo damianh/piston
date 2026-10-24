@@ -47,6 +47,33 @@ public sealed class TestRunToolTests
         };
 
     [Fact]
+    public void OutcomeChangesPreserveProjectIdentityInMcpAndProtocolJson()
+    {
+        var run = Run("outcomes", 1) with
+        {
+            FixedTests = [new("A.Tests", "Shared.Test"), new("B.Tests", "Shared.Test")],
+            NewlyFailingTests = [new("C.Tests", "Shared.Test")],
+        };
+        var engine = new StubEngine();
+        engine.State.RecentRuns = [run];
+        var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
+
+        using var mcp = JsonDocument.Parse(tools.GetTestRun(run.RunId));
+        var fixedTests = mcp.RootElement.GetProperty("fixedTests");
+        Assert.Equal(2, fixedTests.GetArrayLength());
+        Assert.Equal("A.Tests", fixedTests[0].GetProperty("project").GetString());
+        Assert.Equal("B.Tests", fixedTests[1].GetProperty("project").GetString());
+        Assert.Equal("Shared.Test", fixedTests[1].GetProperty("key").GetString());
+        Assert.Equal("C.Tests", mcp.RootElement.GetProperty("newlyFailingTests")[0].GetProperty("project").GetString());
+
+        var dto = run.ToDto();
+        var json = JsonSerializer.Serialize(dto, PistonJsonContext.Default.TestRunDto);
+        var restored = JsonSerializer.Deserialize(json, PistonJsonContext.Default.TestRunDto)!;
+        Assert.Equal([new("A.Tests", "Shared.Test"), new("B.Tests", "Shared.Test")], restored.FixedTests!);
+        Assert.Equal([new("C.Tests", "Shared.Test")], restored.NewlyFailingTests!);
+    }
+
+    [Fact]
     public async Task RunTestsReportsTheRequestedRunsProvenance()
     {
         var engine = new StubEngine { NextRun = Run("run-1", 2) };
@@ -178,6 +205,48 @@ public sealed class TestRunToolTests
         Assert.Equal([diagnostic], dto.Build.Errors);
         Assert.Equal(12, dto.Build.DurationMs);
         Assert.Null(Run("no-build", 3).ToDto().Build);
+    }
+
+    [Fact]
+    public void SelectionExplanationAndReasonsRoundTripThroughTheProtocolAndMcp()
+    {
+        var reason = new TestSelectionReason("/w/src/A.cs", "4", "3-5", "class", "/w/T/T.csproj");
+        var baseRun = Run("selective", 4, scope: TestRunScope.Selective);
+        var run = baseRun with
+        {
+            Context = baseRun.Context! with
+            {
+                SelectionExplanation = "Selected by changed lines.",
+                SelectionReasons = new Dictionary<string, IReadOnlyList<TestSelectionReason>> { ["Ns.A.First"] = [reason] },
+            },
+        };
+
+        var json = JsonSerializer.Serialize(run.ToDto(), JsonRpcSerializer.Options);
+        var dto = JsonSerializer.Deserialize<TestRunDto>(json, JsonRpcSerializer.Options)!;
+
+        Assert.Equal("Selected by changed lines.", dto.SelectionExplanation);
+        var mapped = Assert.Single(Assert.Single(dto.SelectionReasons!).Value);
+        Assert.Equal(("/w/src/A.cs", "4", "3-5", "class"), (mapped.FilePath, mapped.ChangedLines, mapped.ExecutedLines, mapped.Granularity));
+        Assert.Null(Run("full", 5).ToDto().SelectionReasons);
+
+        var engine = new StubEngine();
+        engine.State.RecentRuns = [run, Run("full", 5)];
+        var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
+        using var document = JsonDocument.Parse(tools.GetTestRun("selective"));
+        var context = document.RootElement.GetProperty("context");
+        Assert.Equal("Selected by changed lines.", context.GetProperty("selectionExplanation").GetString());
+        var reasons = context.GetProperty("selectionReasons").GetProperty("Ns.A.First");
+        Assert.Equal(1, reasons.GetArrayLength());
+        Assert.Equal(reason.FilePath, reasons[0].GetProperty("filePath").GetString());
+        Assert.Equal(reason.ChangedLines, reasons[0].GetProperty("changedLines").GetString());
+        Assert.Equal(reason.ExecutedLines, reasons[0].GetProperty("executedLines").GetString());
+        Assert.Equal(reason.Granularity, reasons[0].GetProperty("granularity").GetString());
+        Assert.Equal(reason.ProjectPath, reasons[0].GetProperty("projectPath").GetString());
+
+        using var fullDocument = JsonDocument.Parse(tools.GetTestRun("full"));
+        var fullContext = fullDocument.RootElement.GetProperty("context");
+        Assert.Equal(JsonValueKind.Null, fullContext.GetProperty("selectionExplanation").ValueKind);
+        Assert.Equal(JsonValueKind.Null, fullContext.GetProperty("selectionReasons").ValueKind);
     }
 
     [Fact]

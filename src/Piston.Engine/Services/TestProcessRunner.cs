@@ -4,7 +4,6 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.RegularExpressions;
-using Piston.Engine.Impact;
 using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
@@ -161,7 +160,10 @@ internal static class TestProcessRunner
             };
             // Reused MSBuild nodes can retain the redirected pipes after dotnet exits.
             psi.Environment["MSBUILDDISABLENODEREUSE"] = "1";
-            MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
+            if (ChildProcessEnvironment.Describe(ChildProcessEnvironment.Prepare(psi)) is { } environmentNote)
+            {
+                log.Write("VSTestRunner", environmentNote);
+            }
             if (liveEvents is not null)
             {
                 psi.Environment[LiveTestEventListener.PortVariable] = liveEvents.Port.ToString(CultureInfo.InvariantCulture);
@@ -298,7 +300,7 @@ internal static class TestProcessRunner
             }
 
             log.Complete();
-            return new ProjectTestResult(projectPath, log.AttachTo(suites), runnerError, coverageReportPaths, Crashed: false);
+            return new ProjectTestResult(projectPath, log.AttachTo(suites), runnerError, coverageReportPaths, Crashed: false) { Log = log };
         }
         finally
         {

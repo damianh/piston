@@ -3,6 +3,9 @@
 
 namespace Piston.Engine.Models;
 
+/// <summary>A test result key scoped to the project suite that produced it.</summary>
+public sealed record TestOutcomeReference(string Project, string Key);
+
 /// <summary>What caused a test run to be requested.</summary>
 public enum TestRunTrigger
 {
@@ -90,6 +93,10 @@ public sealed record SourceFingerprint(string Algorithm, string Value, int FileC
 /// <param name="OperatingSystem">Host operating system description.</param>
 /// <param name="WorkingDirectory">Working directory of the build process and SDK version probe.</param>
 /// <param name="TestWorkingDirectories">Working directory per test target: solution directory for MTP, project directory for VSTest.</param>
+/// <param name="SelectionExplanation">One sentence saying why the run has this scope.</param>
+/// <param name="SelectionReasons">
+/// Why each test was selected, when the impact map narrowed the run to tests by changed lines.
+/// </param>
 public sealed record TestRunContext(
     string SolutionPath,
     IReadOnlyList<string>? TestProjects,
@@ -103,7 +110,9 @@ public sealed record TestRunContext(
     string Runtime,
     string OperatingSystem,
     string WorkingDirectory,
-    IReadOnlyDictionary<string, string>? TestWorkingDirectories = null);
+    IReadOnlyDictionary<string, string>? TestWorkingDirectories = null,
+    string? SelectionExplanation = null,
+    IReadOnlyDictionary<string, IReadOnlyList<TestSelectionReason>>? SelectionReasons = null);
 
 /// <summary>Machine-wide admission state of a run.</summary>
 public enum TestRunAdmissionState
@@ -148,7 +157,17 @@ public sealed record TestRunAdmission(
     DateTimeOffset? AdmittedAt);
 
 /// <summary>Outcome of one selected test project within a run.</summary>
-public sealed record TestRunProjectOutcome(string ProjectPath, ProjectRunStatus Status, int TestCount);
+/// <param name="ProjectPath">The test project.</param>
+/// <param name="Status">How its run ended.</param>
+/// <param name="TestCount">The tests it reported.</param>
+/// <param name="NoTestsReason">Why an unfiltered run of the project reported no tests, when it reported none.</param>
+/// <param name="TimedOut">The test that ran longer than the test timeout, when the project's run timed out.</param>
+public sealed record TestRunProjectOutcome(
+    string ProjectPath,
+    ProjectRunStatus Status,
+    int TestCount,
+    string? NoTestsReason = null,
+    TestTimeout? TimedOut = null);
 
 /// <summary>
 /// Provenance and results of exactly one test run. Unlike the aggregate
@@ -208,6 +227,27 @@ public sealed record TestRunRecord
 
     /// <summary>Fully-qualified names reported more than once by this run.</summary>
     public IReadOnlyList<string> DuplicateTestIds { get; init; } = [];
+
+    /// <summary>Tests that ran longer than the hang threshold during this run.</summary>
+    public IReadOnlyList<string> PossiblyHangingTests { get; init; } = [];
+
+    /// <summary>The files whose change triggered this run; empty unless it was triggered by a file change.</summary>
+    public IReadOnlyList<string> ChangedFiles { get; init; } = [];
+
+    /// <summary>Project-scoped result keys of tests that failed before this run and passed in it.</summary>
+    public IReadOnlyList<TestOutcomeReference> FixedTests { get; init; } = [];
+
+    /// <summary>
+    /// Result keys of tests that failed in this run but had not failed before it (including new tests);
+    /// empty when there were no earlier results to compare with.
+    /// </summary>
+    public IReadOnlyList<TestOutcomeReference> NewlyFailingTests { get; init; } = [];
+
+    /// <summary>
+    /// How each failed test relates to the worktree's run history (new, pre-existing, flaky or unknown);
+    /// empty when history is off or nothing failed.
+    /// </summary>
+    public IReadOnlyList<FailureClassification> FailureClassifications { get; init; } = [];
 
     public string? RunnerError { get; init; }
 

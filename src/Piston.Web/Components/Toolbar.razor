@@ -32,6 +32,17 @@
                 aria-pressed="@(ShowNotRun ? "true" : "false")" @onclick="OnToggleNotRun">◌</button>
     </div>
 
+    <!-- History filters: only when the daemon keeps run history -->
+    @if (HistoryEnabled)
+    {
+        <div class="flex items-center gap-0.5" role="group" aria-label="Show tests by history">
+            <button class="@HistoryToggleClass(OnlyNewFailures, "text-red-400")" title="Show only new failures: tests whose previous result passed"
+                    aria-pressed="@(OnlyNewFailures ? "true" : "false")" @onclick="OnToggleNewFailures">new</button>
+            <button class="@HistoryToggleClass(OnlyFlaky, "text-yellow-400")" title="Show only flaky tests: passed and failed on the same source"
+                    aria-pressed="@(OnlyFlaky ? "true" : "false")" @onclick="OnToggleFlaky">flaky</button>
+        </div>
+    }
+
     <!-- Grouping mode -->
     <div class="relative ml-2">
         <select class="appearance-none bg-gray-800 border border-gray-700 rounded pl-2 pr-6 py-0.5 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
@@ -64,11 +75,29 @@
         }
     </div>
 
+    <!-- Re-run every failed test -->
+    <div class="ml-auto flex items-center gap-2">
+        @if (RunFailedError is not null)
+        {
+            <span class="text-red-400 max-w-64 truncate" role="alert" title="@RunFailedError">@RunFailedError</span>
+        }
+        <button type="button"
+                class="flex items-center gap-1.5 px-2 py-1 rounded bg-gray-800 text-gray-200 transition-colors hover:bg-gray-700 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-800"
+                disabled="@(FailedCount == 0 || !CanRun)"
+                title="@(FailedCount == 0 ? "No failed tests" : !CanRun ? "Piston is busy; wait for the current run to finish" : "Build and run every failed test")"
+                @onclick="OnRunFailed">
+            <svg class="w-3 h-3 text-red-400" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                <path d="M4.5 2.8v10.4a.6.6 0 0 0 .9.5l8.3-5.2a.6.6 0 0 0 0-1L5.4 2.3a.6.6 0 0 0-.9.5z" />
+            </svg>
+            <span>Run failed@(FailedCount > 0 ? $" ({FailedCount:N0})" : "")</span>
+        </button>
+    </div>
+
     <!-- Detail panel dock position; the icon previews the layout the click switches to -->
     @{
         var dockLabel = DetailPosition == DetailPosition.Right ? "Dock details at bottom" : "Dock details on right";
     }
-    <button class="ml-auto p-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+    <button class="p-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
             title="@dockLabel" aria-label="@dockLabel" @onclick="OnToggleDetailPosition">
         <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" />
@@ -102,6 +131,15 @@
     [Parameter] public EventCallback OnTogglePassed { get; set; }
     [Parameter] public EventCallback OnToggleSkipped { get; set; }
     [Parameter] public EventCallback OnToggleNotRun { get; set; }
+    [Parameter] public bool HistoryEnabled { get; set; }
+    [Parameter] public bool OnlyNewFailures { get; set; }
+    [Parameter] public bool OnlyFlaky { get; set; }
+    [Parameter] public EventCallback OnToggleNewFailures { get; set; }
+    [Parameter] public EventCallback OnToggleFlaky { get; set; }
+    [Parameter] public int FailedCount { get; set; }
+    [Parameter] public bool CanRun { get; set; }
+    [Parameter] public EventCallback OnRunFailed { get; set; }
+    [Parameter] public string? RunFailedError { get; set; }
 
     private System.Timers.Timer? _debounceTimer;
 
@@ -109,6 +147,10 @@
     private static string ToggleClass(bool on, string onColor) =>
         "w-6 py-0.5 rounded text-center " +
         // On: a raised surface in the status colour; off: flat and muted. Icons keep >= 3.8:1 in both themes.
+        (on ? $"bg-gray-800 ring-1 ring-inset ring-gray-700 {onColor} hover:ring-gray-500" : "text-gray-500 hover:text-gray-300 hover:bg-gray-800/50");
+
+    private static string HistoryToggleClass(bool on, string onColor) =>
+        "px-1.5 py-0.5 rounded " +
         (on ? $"bg-gray-800 ring-1 ring-inset ring-gray-700 {onColor} hover:ring-gray-500" : "text-gray-500 hover:text-gray-300 hover:bg-gray-800/50");
 
     private Task HandleGroupingChange(ChangeEventArgs e) =>

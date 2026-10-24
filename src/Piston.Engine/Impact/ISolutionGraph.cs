@@ -19,5 +19,14 @@ internal interface ISolutionGraph
 
     /// <summary>Whether the project builds more than one target framework.</summary>
     bool IsMultiTargeted(string projectPath) => false;
+
+    /// <summary>How a test project runs tests, or <see langword="null"/> when it is not a known test project.</summary>
+    TestProjectFacts? GetTestProjectFacts(string projectPath) => null;
     string? VerificationCoverageIssue => "Build-input coverage is unavailable.";
+
+    /// <summary>
+    /// Whether a project was evaluated before NuGet restore wrote its assets, so properties its packages set
+    /// (e.g. <c>IsTestingPlatformApplication</c> from xUnit v3 or TUnit) are missing until the graph is reloaded.
+    /// </summary>
+    bool EvaluatedBeforeRestore => false;
 }

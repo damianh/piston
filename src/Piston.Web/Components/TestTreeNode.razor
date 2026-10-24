@@ -1,92 +1,120 @@
 @using Piston.Web.Models
 @using Piston.Protocol.Dtos
+@inject ViewState View
 
 @{
     var indent = Depth * 16;
     var isTest = Node.Kind == TestNodeKind.Test;
     var isSelected = isTest
-        ? Node.Test?.Key == SelectedKey
+        ? Node.Test?.Key == SelectedKey && (SelectedProject is null || Node.Project == SelectedProject)
         : Node.ExpansionKey is { } key && key == SelectedNodeKey;
     var isPinned = isTest && Node.Test is not null && PinnedFqns.Contains(Node.Test.FullyQualifiedName);
+    NodeCounts? counts = isTest ? null : Node.Counts();
 }
 
-<div>
-    <!-- Node row: a click shows the node's details; the chevron or a double-click expands or collapses it -->
-    <div class="flex items-center gap-1 px-2 py-0.5 cursor-pointer hover:bg-gray-800 @(isSelected ? "bg-gray-700" : "") @(Node.IsStale ? "opacity-50" : "")"
-         style="padding-left: @(indent + 8)px"
-         title="@(isTest ? null : "Show details · double-click to expand or collapse")"
-         @onclick="HandleClick"
-         @ondblclick="HandleDoubleClick">
+<!-- Node row: a click shows the node's details; the chevron or a double-click expands or collapses it -->
+<div class="relative flex items-center gap-1 px-2 h-5 cursor-pointer hover:bg-gray-800 @(isSelected ? "bg-gray-700" : "") @(Node.IsStale ? "opacity-50" : "")"
+     style="padding-left: @(indent + 8)px"
+     data-selected="@(isSelected ? "true" : null)"
+     title="@(isTest ? null : "Show details · double-click to expand or collapse")"
+     @onclick="HandleClick"
+     @ondblclick="HandleDoubleClick">
 
-        @if (Node.Children.Count > 0)
-        {
-            <button type="button"
-                    class="text-gray-600 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none w-3 text-center text-xs select-none"
-                    aria-label="@(Node.IsExpanded ? "Collapse" : "Expand") @Node.Label"
-                    aria-expanded="@(Node.IsExpanded ? "true" : "false")"
-                    @onclick="ToggleExpanded"
-                    @onclick:stopPropagation="true"
-                    @ondblclick:stopPropagation="true">@(Node.IsExpanded ? "▾" : "▸")</button>
-        }
-        else
-        {
-            <span class="w-3"></span>
-        }
-
-        <!-- Status icon -->
-        <span class="@StatusColor(Node) w-4 text-center">@StatusIcon(Node)</span>
-
-        <!-- Structural icon: project / framework / namespace / class -->
-        @if (Node.Structure is not (NodeStructure.Status or NodeStructure.Pinned))
-        {
-            <NodeIcon Structure="@Node.Structure" />
-        }
-
-        <!-- Label -->
-        <span class="flex-1 truncate text-xs @(Node.Kind == TestNodeKind.Test ? "text-gray-200" : "text-gray-300 font-medium")"
-              title="@(Node.Test?.FullyQualifiedName)">
-            @if (isPinned)
-            {
-                <span class="text-yellow-400 mr-1">★</span>
-            }
-            @Node.Label
-        </span>
-
-        <FrameworkBadge Framework="@Node.Framework" />
-
-        <!-- Duration for test nodes -->
-        @if (Node.Kind == TestNodeKind.Test && Node.Test?.DurationMs > 0 && Node.Test.Status != TestStatusDto.Running)
-        {
-            <span class="text-yellow-600 text-xs ml-1 tabular-nums">@FormatDuration(Node.Test.DurationMs)</span>
-        }
-
-        <!-- Pin button (visible on hover for test nodes) -->
-        @if (Node.Kind == TestNodeKind.Test && Node.Test is not null)
-        {
-            <button class="text-gray-700 hover:text-yellow-400 ml-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
-                    title="@(isPinned ? "Unpin" : "Pin")"
-                    @onclick:stopPropagation="true"
-                    @onclick="() => OnTogglePin.InvokeAsync(Node.Test.FullyQualifiedName)">
-                @(isPinned ? "★" : "☆")
-            </button>
-        }
-    </div>
-
-    <!-- Children -->
-    @if (Node.IsExpanded && Node.Children.Count > 0)
+    @if (Node.Children.Count > 0)
     {
-        @foreach (var child in Node.Children)
+        <button type="button"
+                class="shrink-0 text-gray-600 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none w-3 text-center text-xs select-none"
+                aria-label="@(Node.IsExpanded ? "Collapse" : "Expand") @Node.Label"
+                aria-expanded="@(Node.IsExpanded ? "true" : "false")"
+                @onclick="ToggleExpanded"
+                @onclick:stopPropagation="true"
+                @ondblclick:stopPropagation="true">@(Node.IsExpanded ? "▾" : "▸")</button>
+    }
+    else
+    {
+        <span class="w-3 shrink-0"></span>
+    }
+
+    <!-- Status icon -->
+    <span class="@StatusColor(Node) w-4 shrink-0 text-center">@StatusIcon(Node)</span>
+
+    <!-- Structural icon: project / framework / namespace / class -->
+    @if (Node.Structure is not (NodeStructure.Status or NodeStructure.Pinned))
+    {
+        <NodeIcon Structure="@Node.Structure" />
+    }
+
+    <!-- Label: sized to its text so the counts sit just after it; truncates when the row is too narrow -->
+    <span class="min-w-0 truncate text-xs @(Node.Kind == TestNodeKind.Test ? "text-gray-200" : "text-gray-300 font-medium")"
+          title="@(Node.Test?.FullyQualifiedName)">
+        @if (isPinned)
         {
-            <TestTreeNode Node="child"
-                          Depth="@(Depth + 1)"
-                          SelectedKey="@SelectedKey"
-                          SelectedNodeKey="@SelectedNodeKey"
-                          PinnedFqns="@PinnedFqns"
-                          OnSelectTest="@OnSelectTest"
-                          OnSelectNode="@OnSelectNode"
-                          OnTogglePin="@OnTogglePin"
-                          OnExpansionChanged="@OnExpansionChanged" />
+            <span class="text-yellow-400 mr-1">★</span>
         }
+        @Node.Label
+    </span>
+
+    <FrameworkBadge Framework="@Node.Framework" />
+
+    @if (isTest && Node.Test is { } marked)
+    {
+        @if (TestTreeBuilder.IsNewFailure(marked, Node.Project, View))
+        {
+            <span class="shrink-0 px-1 rounded text-[10px] bg-red-500/15 text-red-400" title="New failure: its previous result passed">new</span>
+        }
+        @if (TestTreeBuilder.IsFlaky(marked, Node.Project, View))
+        {
+            <span class="shrink-0 px-1 rounded text-[10px] bg-yellow-500/15 text-yellow-400" title="Flaky: passed and failed on the same source">flaky</span>
+        }
+    }
+
+    <!-- Result counts for group nodes: total, passed, failed (status rows already count in their label) -->
+    @if (counts is { Total: > 0 } c && Node.Structure != NodeStructure.Status)
+    {
+        <span class="flex shrink-0 items-center gap-1.5 ml-2 text-xs tabular-nums" title="@c.Description">
+            <span class="sr-only">@c.Description</span>
+            <span class="text-gray-500" aria-hidden="true">@c.Total.ToString("N0")</span>
+            @if (c.Passed > 0)
+            {
+                <span class="text-green-400" aria-hidden="true">✓@c.Passed.ToString("N0")</span>
+            }
+            @if (c.Failed > 0)
+            {
+                <span class="text-red-400" aria-hidden="true">✗@c.Failed.ToString("N0")</span>
+            }
+        </span>
+    }
+
+    <span class="flex-1"></span>
+
+    <!-- Duration column: a test's own, or the summed test time under a group -->
+    <span class="w-14 shrink-0 text-right text-yellow-600 text-xs tabular-nums">
+        @if (Node.Kind == TestNodeKind.Test && Node.Test is { } test && TestNode.HasDuration(test))
+        {
+            @TestNode.FormatDuration(test.DurationMs)
+        }
+        else if (counts is { } d && d.Passed + d.Failed > 0)
+        {
+            <span title="@d.DurationDescription">
+                <span class="sr-only">@d.DurationDescription</span>
+                <span aria-hidden="true">@TestNode.FormatDuration(d.DurationMs)</span>
+            </span>
+        }
+    </span>
+
+    <!-- Pin button (visible on hover for test nodes); group rows keep its width so the duration column lines up -->
+    @if (Node.Kind == TestNodeKind.Test && Node.Test is not null)
+    {
+        <button class="w-4 shrink-0 text-center text-gray-700 hover:text-yellow-400 ml-1 text-xs opacity-0 group-hover:opacity-100 transition-opacity"
+                title="@(isPinned ? "Unpin" : "Pin")"
+                @onclick:stopPropagation="true"
+                @onclick="() => OnTogglePin.InvokeAsync(Node.Test.FullyQualifiedName)">
+            @(isPinned ? "★" : "☆")
+        </button>
+    }
+    else
+    {
+        <span class="w-4 shrink-0 ml-1" aria-hidden="true"></span>
     }
 </div>
 
@@ -94,6 +122,7 @@
     [Parameter] public required TestNode Node { get; set; }
     [Parameter] public int Depth { get; set; }
     [Parameter] public string? SelectedKey { get; set; }
+    [Parameter] public string? SelectedProject { get; set; }
 
     /// <summary>The expansion key of the selected non-test node.</summary>
     [Parameter] public string? SelectedNodeKey { get; set; }
@@ -194,7 +223,4 @@
         foreach (var test in FlattenTests(child))
             yield return test;
     }
-
-    private static string FormatDuration(double ms) =>
-        ms < 1000 ? $"{(int)ms}ms" : $"{ms / 1000.0:F1}s";
 }

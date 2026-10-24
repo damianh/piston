@@ -178,6 +178,9 @@ public sealed class DaemonHost : IAsyncDisposable
         _webApp = webBuilder.Build();
         _webApp.Urls.Add(WebUrl);
         _ = _webApp.UseWebSockets();
+        _ = _webApp.UseRequestGuard(
+            securityHeaders: true,
+            ContentSecurityPolicy.Build(ContentSecurityPolicy.ReadIndex(_webApp.Environment.WebRootFileProvider)));
 
         // Serve Blazor WASM framework files (handles content negotiation for .br/.gz compressed
         // assets) and static files. UseBlazorFrameworkFiles must come before UseStaticFiles.
@@ -187,6 +190,7 @@ public sealed class DaemonHost : IAsyncDisposable
         _ = _webApp.UseRouting();
 
         var router = _router;
+        var stopping = _webApp.Lifetime.ApplicationStopping;
         _ = _webApp.Map("/ws", async context =>
         {
             if (!context.WebSockets.IsWebSocketRequest)
@@ -196,7 +200,9 @@ public sealed class DaemonHost : IAsyncDisposable
             }
 
             var webSocket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
-            await router.AddWebSocketSessionAsync(webSocket, ct).ConfigureAwait(false);
+            // End the session when the server stops; otherwise shutdown waits for the dashboard to disconnect.
+            using var session = CancellationTokenSource.CreateLinkedTokenSource(ct, stopping);
+            await router.AddWebSocketSessionAsync(webSocket, session.Token).ConfigureAwait(false);
         });
 
         // Fallback to index.html for Blazor SPA client-side routing
@@ -212,6 +218,7 @@ public sealed class DaemonHost : IAsyncDisposable
             _ = mcpBuilder.Services.AddSingleton<IEngine>(engine);
             _ = mcpBuilder.Services.AddPistonMcp(mcpCallTracker);
             _mcpApp = mcpBuilder.Build();
+            _ = _mcpApp.UseRequestGuard(securityHeaders: false);
             _ = _mcpApp.MapMcp();
             _mcpApp.Urls.Add($"http://localhost:{_options.McpPort}");
 

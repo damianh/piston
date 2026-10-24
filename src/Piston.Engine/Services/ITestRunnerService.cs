@@ -9,7 +9,11 @@ namespace Piston.Engine.Services;
 public sealed record TestRunResult(
     IReadOnlyList<TestSuite> Suites,
     string? RunnerError,
-    IReadOnlyList<string> CoverageReportPaths);
+    IReadOnlyList<string> CoverageReportPaths)
+{
+    /// <summary>Each project's own result, when the run tracked projects separately.</summary>
+    public IReadOnlyList<ProjectTestResult> Projects { get; init; } = [];
+}
 
 /// <summary>Per-project callbacks raised while a test run is in flight. All members are optional.</summary>
 public sealed record TestRunCallbacks

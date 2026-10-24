@@ -1,0 +1,298 @@
+@inject EngineClientService Client
+@implements IDisposable
+
+<div class="flex flex-col h-full overflow-hidden text-xs">
+    @if (_runs is { Enabled: false })
+    {
+        <div class="p-6 text-gray-400 max-w-xl leading-relaxed">
+            <div class="text-gray-200 font-semibold mb-2">Run history is off</div>
+            Set <code class="font-mono text-gray-200">"history": true</code> in <code class="font-mono text-gray-200">.piston.json</code>
+            to keep each run's per-test results and compare runs.
+        </div>
+    }
+    else
+    {
+        <div class="flex flex-1 min-h-0 overflow-hidden">
+            <!-- Run list -->
+            <div class="flex flex-col min-h-0 overflow-y-auto border-r border-gray-800 py-1" style="flex: 0 0 40%" aria-label="Past runs">
+                @if (_runs is null)
+                {
+                    <div class="text-gray-600 italic px-4 py-4">Loading…</div>
+                }
+                else if (_runs.Runs.Count == 0)
+                {
+                    <div class="text-gray-600 italic px-4 py-4">No runs recorded yet.</div>
+                }
+                else
+                {
+                    @foreach (var run in _runs.Runs)
+                    {
+                        var selected = run.RunId == _selectedId;
+                        <button class="flex items-center gap-2 px-3 py-1 text-left @(selected ? "bg-gray-800 text-gray-100" : "text-gray-300 hover:bg-gray-800/50")"
+                                aria-pressed="@(selected ? "true" : "false")" @onclick="() => SelectRunAsync(run.RunId)">
+                            <span class="w-2 h-2 rounded-full shrink-0 @StatusDot(run)" title="@run.Status"></span>
+                            <span class="tabular-nums text-gray-400 shrink-0" title="@run.RequestedAt.ToLocalTime().ToString("u")">@FormatTime(run.RequestedAt)</span>
+                            <span class="truncate">@Describe(run)</span>
+                            <span class="flex-1"></span>
+                            <span class="tabular-nums shrink-0">
+                                <span class="text-green-500">@run.Passed</span>
+                                @if (run.Failed > 0)
+                                {
+                                    <span class="text-red-400 ml-1">@run.Failed</span>
+                                }
+                                @if (run.Skipped > 0)
+                                {
+                                    <span class="text-gray-500 ml-1">@run.Skipped</span>
+                                }
+                            </span>
+                        </button>
+                    }
+                }
+            </div>
+
+            <!-- Selected run -->
+            <div class="flex flex-col flex-1 min-h-0 overflow-y-auto" aria-label="Run details">
+                @if (_run is null)
+                {
+                    <div class="text-gray-600 italic px-4 py-4">@(_selectedId is null ? "Select a run." : "Loading…")</div>
+                }
+                else
+                {
+                    var summary = _run.Summary;
+                    <div class="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1.5 shrink-0 bg-gray-900 border-b border-gray-800">
+                        <span class="text-gray-100 font-semibold">@Describe(summary)</span>
+                        <span class="text-gray-400">@summary.Status</span>
+                        @if (summary.CompletedAt is { } completed)
+                        {
+                            <span class="text-gray-400 tabular-nums">@TestNode.FormatDuration((completed - summary.RequestedAt).TotalMilliseconds)</span>
+                        }
+                        <span class="text-gray-500" title="Whether the results matched the source when the run finished">@summary.Freshness</span>
+                        @if (summary.Source is { } source)
+                        {
+                            <span class="text-gray-500 font-mono" title="Source fingerprint @source">@Short(source)</span>
+                        }
+                        <div class="flex-1"></div>
+                        <label class="flex items-center gap-1 text-gray-400">Compare with
+                            <span class="relative">
+                                <select class="appearance-none bg-gray-800 border border-gray-700 rounded pl-2 pr-6 py-0.5 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
+                                        aria-label="Compare with run" value="@(_baselineId ?? "")" @onchange="ChangeBaselineAsync">
+                                    <option value="">(none)</option>
+                                    @foreach (var other in Earlier())
+                                    {
+                                        <option value="@other.RunId">@FormatTime(other.RequestedAt) · @Describe(other)</option>
+                                    }
+                                </select>
+                                <svg class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-gray-400"
+                                     viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                                    <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                                </svg>
+                            </span>
+                        </label>
+                    </div>
+
+                    @if (_comparison is { } comparison)
+                    {
+                        <div class="px-4 py-2 border-b border-gray-800">
+                            @if (comparison.IsEmpty)
+                            {
+                                <div class="text-gray-500 italic">No differences from the compared run.</div>
+                            }
+                            @RenderSection("New failures", "text-red-400", comparison.NewFailures, false)
+                            @RenderSection("Fixed", "text-green-500", comparison.Fixed, false)
+                            @RenderSection("Newly slow", "text-yellow-500", comparison.NewlySlow, true)
+                            @RenderSection("Still failing", "text-red-300", comparison.StillFailing, false)
+                            @RenderSection("Added", "text-gray-300", comparison.Added, false)
+                            @if (summary.IsFullScope)
+                            {
+                                @RenderSection("Not run", "text-gray-500", comparison.Missing, false)
+                            }
+                        </div>
+                    }
+
+                    <div class="py-1">
+                        @if (_run.Results.Count == 0)
+                        {
+                            <div class="text-gray-600 italic px-4 py-2">This run produced no results.</div>
+                        }
+                        @foreach (var result in _run.Results.OrderBy(r => StatusOrder(r.Status)).ThenBy(r => r.Project, StringComparer.Ordinal).ThenBy(r => r.Test, StringComparer.Ordinal))
+                        {
+                            <div class="px-4 py-0.5">
+                                <div class="flex items-center gap-2">
+                                    <span class="w-14 shrink-0 @StatusText(result.Status)">@result.Status</span>
+                                    <button class="truncate text-left text-gray-200 hover:underline" title="@result.Project :: @result.Test"
+                                            @onclick="() => OnOpenTest.InvokeAsync(new TestReference(result.Project, result.Test))">@result.Test</button>
+                                    <span class="flex-1"></span>
+                                    <span class="text-yellow-600 tabular-nums shrink-0">@TestNode.FormatDuration(result.DurationMs)</span>
+                                </div>
+                                @if (result.ErrorMessage is { Length: > 0 } error)
+                                {
+                                    <pre class="ml-16 mt-0.5 mb-1 whitespace-pre-wrap text-red-300/90 font-mono max-h-24 overflow-y-auto">@error</pre>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private StoredRunsDto? _runs;
+    private string? _selectedId;
+    private StoredRunDto? _run;
+    private string? _baselineId;
+    private RunComparison? _comparison;
+    private DateTimeOffset? _lastRunTime;
+
+    /// <summary>Opens a test, by project and result key, in the Tests tab.</summary>
+    [Parameter] public EventCallback<TestReference> OnOpenTest { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Client.StateChanged += OnStateChanged;
+        _lastRunTime = Client.CurrentSnapshot?.LastRunTime;
+        await RefreshAsync();
+    }
+
+    private void OnStateChanged(StateSnapshotNotification snapshot)
+    {
+        if (snapshot.LastRunTime != _lastRunTime)
+        {
+            _lastRunTime = snapshot.LastRunTime;
+            _ = InvokeAsync(RefreshAsync);
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        _runs = await Client.GetStoredRunsAsync();
+        var latest = _runs?.Runs.FirstOrDefault();
+        // Follow the newest run unless the user picked an older one.
+        if (latest is not null && (_selectedId is null || _selectedId == PreviousLatest))
+        {
+            await SelectRunAsync(latest.RunId);
+        }
+
+        PreviousLatest = latest?.RunId;
+        StateHasChanged();
+    }
+
+    private string? PreviousLatest { get; set; }
+
+    private async Task SelectRunAsync(string runId)
+    {
+        _selectedId = runId;
+        _run = null;
+        _comparison = null;
+        _baselineId = Earlier().FirstOrDefault()?.RunId;
+        var run = await Client.GetStoredRunAsync(runId);
+        if (_selectedId != runId)
+        {
+            return;
+        }
+
+        _run = run;
+        await CompareAsync();
+    }
+
+    private async Task ChangeBaselineAsync(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString();
+        _baselineId = string.IsNullOrEmpty(value) ? null : value;
+        await CompareAsync();
+    }
+
+    private async Task CompareAsync()
+    {
+        _comparison = null;
+        if (_run is null || _baselineId is null)
+        {
+            return;
+        }
+
+        var baselineId = _baselineId;
+        var baseline = await Client.GetStoredRunAsync(baselineId);
+        if (baseline is not null && _baselineId == baselineId && _run is not null)
+        {
+            _comparison = RunComparison.Compare(baseline, _run);
+        }
+    }
+
+    private IEnumerable<StoredRunSummaryDto> Earlier()
+    {
+        if (_runs is null || _selectedId is null)
+        {
+            return [];
+        }
+
+        return _runs.Runs.SkipWhile(r => r.RunId != _selectedId).Skip(1);
+    }
+
+    private RenderFragment RenderSection(string title, string color, IReadOnlyList<RunComparisonEntry> entries, bool showDelta) => __builder =>
+    {
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        <div class="mt-1 mb-2">
+            <div class="font-semibold @color">@title <span class="tabular-nums text-gray-500 font-normal">@entries.Count</span></div>
+            @foreach (var entry in entries)
+            {
+                <div class="flex items-center gap-2 pl-3">
+                    <button class="truncate text-left text-gray-300 hover:underline" title="@entry.Project :: @entry.Test"
+                            @onclick="() => OnOpenTest.InvokeAsync(new TestReference(entry.Project, entry.Test))">@entry.Test</button>
+                    <span class="flex-1"></span>
+                    @if (showDelta && entry.Before is { } before && entry.After is { } after)
+                    {
+                        <span class="tabular-nums text-yellow-600 shrink-0">@TestNode.FormatDuration(before.DurationMs) → @TestNode.FormatDuration(after.DurationMs)</span>
+                    }
+                </div>
+            }
+        </div>
+    };
+
+    private static string Describe(StoredRunSummaryDto run)
+    {
+        var trigger = run.Trigger switch
+        {
+            "FileChange" => "File change",
+            "Forced" => "Manual",
+            _ => run.Trigger,
+        };
+        var scope = run.IsFullScope ? "all tests" : run.Scope == "Selective" ? "affected tests" : "selected tests";
+        return $"{trigger} · {scope}";
+    }
+
+    private static string FormatTime(DateTimeOffset time)
+    {
+        var local = time.ToLocalTime();
+        return local.Date == DateTime.Today ? local.ToString("HH:mm:ss") : local.ToString("MMM d HH:mm");
+    }
+
+    private static string Short(string source) => source.Length > 8 ? source[..8] : source;
+
+    private static string StatusDot(StoredRunSummaryDto run) => run switch
+    {
+        { Failed: > 0 } => "bg-red-500",
+        { Status: "Completed" } => "bg-green-500",
+        _ => "bg-yellow-500",
+    };
+
+    private static int StatusOrder(string status) => status switch
+    {
+        "Failed" => 0,
+        "Passed" => 2,
+        _ => 1,
+    };
+
+    private static string StatusText(string status) => status switch
+    {
+        "Failed" => "text-red-400",
+        "Passed" => "text-green-500",
+        _ => "text-gray-500",
+    };
+
+    public void Dispose() => Client.StateChanged -= OnStateChanged;
+}

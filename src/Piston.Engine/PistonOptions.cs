@@ -24,6 +24,19 @@ public enum TestExecutionMode
     InProcess,
 }
 
+/// <summary>How finely the idle-time impact backfill measures which tests execute which lines.</summary>
+public enum ImpactBackfillMode
+{
+    /// <summary>No backfill: tests are attributed to lines per test project.</summary>
+    Off,
+
+    /// <summary>Measure each test class separately when idle.</summary>
+    Class,
+
+    /// <summary>Measure each test method separately when idle; precise but slow.</summary>
+    Test,
+}
+
 /// <summary>
 /// Resolved runtime options — merged from CLI args, .piston.json, and defaults.
 /// Passed into services at startup.
@@ -47,6 +60,24 @@ public sealed class PistonOptions
     /// <c>--collect "XPlat Code Coverage"</c> (coverlet). Default is false (opt-in).
     /// </summary>
     public bool CoverageEnabled { get; init; } = false;
+
+    /// <summary>
+    /// When coverage is enabled, measures each test class (or test) separately while the engine is idle so a
+    /// change runs only the tests that executed the changed lines. Default is <see cref="ImpactBackfillMode.Test"/>.
+    /// </summary>
+    public ImpactBackfillMode ImpactBackfill { get; init; } = ImpactBackfillMode.Test;
+
+    /// <summary>
+    /// How long a test runs before it is reported as possibly hanging (a warning only). Null turns the
+    /// warning off. Default is 60 seconds.
+    /// </summary>
+    public TimeSpan? HangThreshold { get; init; } = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// Per-test limit: a test that runs longer fails as timed out and its project's run is cancelled
+    /// (other projects go on). Null (the default) turns it off.
+    /// </summary>
+    public TimeSpan? TestTimeout { get; init; }
 
     /// <summary>
     /// Maximum number of concurrent <c>dotnet test</c> processes.
@@ -76,6 +107,24 @@ public sealed class PistonOptions
     /// Null uses <c>PISTON_EXECUTION_DIRECTORY</c> or the per-user default.
     /// </summary>
     public string? ExecutionCoordinationDirectory { get; init; }
+
+    /// <summary>
+    /// Keeps per-test run history outside the checkout and classifies failures as new, pre-existing or flaky.
+    /// Default is true.
+    /// </summary>
+    public bool HistoryEnabled { get; init; } = true;
+
+    /// <summary>
+    /// Keeps each Microsoft.Testing.Platform test app running in server mode between runs, so later
+    /// discoveries and runs skip host start-up. A host is replaced when its build output changes.
+    /// Coverage runs always use a fresh process. Default is false.
+    /// </summary>
+    public bool WarmTestHosts { get; init; }
+
+    /// <summary>
+    /// Absolute base directory of the run history. Null uses <c>PISTON_HISTORY_DIRECTORY</c> or the per-user default.
+    /// </summary>
+    public string? HistoryDirectory { get; init; }
 
     /// <summary>
     /// Recorded in the worktree ownership details so tools can tell a <c>piston mcp</c> session from a daemon.

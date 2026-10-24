@@ -108,6 +108,57 @@ public sealed class TestToolsTests
     }
 
     [Fact]
+    public void GetTestHistoryListsRunsNewestFirstAsRecorded()
+    {
+        var at = new DateTimeOffset(2025, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        var engine = new StubEngine
+        {
+            Histories =
+            [
+                new("A.Tests", "A.Tests.One [net10.0]",
+                [
+                    new("run-1", at, TestStatus.Passed, 12.4, "abcdef0123456789"),
+                    new("run-2", at.AddMinutes(1), TestStatus.Failed, 3, null),
+                ], Flaky: false),
+            ],
+        };
+
+        var text = new TestTools(engine, NullRecorder).GetTestHistory("A.Tests.One", " A.Tests ");
+
+        Assert.Equal("A.Tests", engine.LastHistoryProject);
+        Assert.StartsWith("A.Tests :: A.Tests.One [net10.0]", text, StringComparison.Ordinal);
+        var passed = text.IndexOf("2025-03-04 05:06:07Z Passed        12ms run run-1 (abcdef012345)", StringComparison.Ordinal);
+        var failed = text.IndexOf("2025-03-04 05:07:07Z Failed         3ms run run-2 (unknown source)", StringComparison.Ordinal);
+        Assert.True(failed > 0 && passed > failed, text);
+    }
+
+    [Fact]
+    public void GetTestHistoryWithoutATestListsFlakyTests()
+    {
+        var engine = new StubEngine
+        {
+            Histories =
+            [
+                new("A.Tests", "A.Tests.Steady", [], Flaky: false),
+                new("A.Tests", "A.Tests.Wobbly", [], Flaky: true),
+            ],
+        };
+
+        var text = new TestTools(engine, NullRecorder).GetTestHistory();
+
+        Assert.Equal("A.Tests :: A.Tests.Wobbly (flaky)", text);
+    }
+
+    [Fact]
+    public void GetTestHistoryExplainsWhenHistoryIsOffOrEmpty()
+    {
+        Assert.Contains("history is off", new TestTools(new StubEngine(), NullRecorder).GetTestHistory("A.B"), StringComparison.OrdinalIgnoreCase);
+        var engine = new StubEngine { Histories = [] };
+        Assert.Equal("No history is recorded for 'A.B'.", new TestTools(engine, NullRecorder).GetTestHistory("A.B"));
+        Assert.Equal("No flaky tests are recorded.", new TestTools(engine, NullRecorder).GetTestHistory(""));
+    }
+
+    [Fact]
     public void GetTestResultsReturnsFormattedOutput()
     {
         var engine = new StubEngine();

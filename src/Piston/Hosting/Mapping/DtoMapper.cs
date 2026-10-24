@@ -2,7 +2,9 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine;
+using Piston.Engine.Coverage;
 using Piston.Engine.Models;
+using Piston.Hosting.Services;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
@@ -68,6 +70,7 @@ public static class DtoMapper
         ProjectRunStatus.Completed => ProjectRunStatusDto.Completed,
         ProjectRunStatus.Failed => ProjectRunStatusDto.Failed,
         ProjectRunStatus.Crashed => ProjectRunStatusDto.Crashed,
+        ProjectRunStatus.TimedOut => ProjectRunStatusDto.TimedOut,
         _ => ProjectRunStatusDto.Pending,
     };
 
@@ -223,6 +226,30 @@ public static class DtoMapper
     public static SourceFingerprintDto ToDto(this SourceFingerprint fingerprint) =>
         new(fingerprint.Algorithm, fingerprint.Value, fingerprint.FileCount);
 
+    public static StoredRunSummaryDto ToDto(this StoredRunSummary run) => new(
+        run.RunId, run.Trigger.ToString(), run.Status.ToString(), run.Scope?.ToString(), run.IsFullScope, run.Freshness.ToString(),
+        run.RequestedAt, run.CompletedAt, run.Source, run.Passed, run.Failed, run.Skipped);
+
+    public static StoredRunDto ToDto(this StoredRun run) => new(
+        run.Summary.ToDto(),
+        [.. run.Results.Select(r => new StoredTestResultDto(r.Project, r.Test, r.Status.ToString(), r.DurationMs, r.ErrorMessage, r.StackTrace))]);
+
+    public static TestHistoryDto ToDto(this TestHistory history) => new(
+        history.Project, history.Test, history.Flaky,
+        [.. history.Runs.Select(e => new TestHistoryEntryDto(e.RunId, e.At, e.Status.ToString(), e.DurationMs, e.Source))]);
+
+    /// <summary>One mark per test that is failing now or flaky.</summary>
+    public static List<TestMarkDto> ToMarks(IReadOnlyList<FailureClassification> failures, IReadOnlyList<TestHistory> flaky)
+    {
+        var flakyKeys = flaky.Select(f => (f.Project, f.Test)).ToHashSet();
+        var marks = failures
+            .Select(f => new TestMarkDto(f.Project, f.Test, f.Kind.ToString(), f.Evidence, flakyKeys.Contains((f.Project, f.Test))))
+            .ToList();
+        var failing = failures.Select(f => (f.Project, f.Test)).ToHashSet();
+        marks.AddRange(flaky.Where(f => !failing.Contains((f.Project, f.Test))).Select(f => new TestMarkDto(f.Project, f.Test, null, null, Flaky: true)));
+        return marks;
+    }
+
     public static TestRunDto ToDto(this TestRunRecord run)
     {
         var tests = run.Tests.ToList();
@@ -253,8 +280,27 @@ public static class DtoMapper
             Skipped: tests.Count(t => t.Status == TestStatus.Skipped),
             DuplicateTestCount: run.DuplicateTestIds.Count,
             Admission: run.Admission?.ToDto(),
-            Build: run.Build?.ToDto());
+            Build: run.Build?.ToDto(),
+            SelectionExplanation: run.Context?.SelectionExplanation,
+            SelectionReasons: run.Context?.SelectionReasons?.ToDictionary(
+                kv => kv.Key,
+                kv => (IReadOnlyList<TestSelectionReasonDto>)[.. kv.Value.Select(r => r.ToDto())],
+                StringComparer.Ordinal),
+            ChangedFiles: run.ChangedFiles,
+            FixedTests: [.. run.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
+            NewlyFailingTests: [.. run.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))]);
     }
+
+    public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
+        new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath);
+
+    public static CoveringTestsDto ToCoveringTestsDto(string filePath, IReadOnlyList<CoveringTest>? tests) =>
+        new(filePath, [.. (tests ?? []).Select(t => new CoveringTestDto(
+            t.TestFqn,
+            t.ProjectPath,
+            t.Granularity,
+            [.. t.ExecutedLines.Select(r => new LineRangeDto(r.Start, r.End))],
+            t.IsCurrent))]);
 
     public static TestRunAdmissionDto ToDto(this TestRunAdmission admission) =>
         new(
@@ -312,6 +358,57 @@ public static class DtoMapper
             ActiveRun: state.CurrentRun?.ToDto(),
             TotalBuildProjects: state.TotalBuildProjects,
             CompletedBuildProjects: state.CompletedBuildProjects,
-            LastBuiltProject: state.LastBuiltProject
+            LastBuiltProject: state.LastBuiltProject,
+            ImpactBackfill: state.ImpactBackfill is { } backfill
+                ? new ImpactBackfillDto(backfill.Granularity, backfill.Completed, backfill.Total, backfill.CurrentUnit, backfill.ProjectPath)
+                : null,
+            LongestRunningTest: state.LongestRunningTest is { } running
+                ? new RunningTestDto(running.Name, running.ProjectPath, running.StartedAt, running.PossiblyHanging)
+                : null
         );
+
+    public static CoverageSummaryDto ToCoverageSummaryDto(CoverageReportSnapshot? report, string? solutionDirectory) =>
+        report is null
+            ? new CoverageSummaryDto(false, null, 0, 0, 0, 0, [])
+            : new CoverageSummaryDto(
+                Enabled: true,
+                GeneratedAt: report.GeneratedAt,
+                LinesTotal: report.LinesTotal,
+                LinesCovered: report.LinesCovered,
+                BranchesTotal: report.BranchesTotal,
+                BranchesCovered: report.BranchesCovered,
+                Files: [.. report.Files.Select(f => f.ToDto(solutionDirectory))]);
+
+    public static CoverageFileSummaryDto ToDto(this CoverageFileSummary file, string? solutionDirectory) => new(
+        FilePath: file.FilePath,
+        RelativePath: solutionDirectory is null
+            ? file.FilePath
+            : Path.GetRelativePath(solutionDirectory, file.FilePath).Replace('\\', '/'),
+        Module: file.Module,
+        LinesTotal: file.LinesTotal,
+        LinesCovered: file.LinesCovered,
+        BranchesTotal: file.BranchesTotal,
+        BranchesCovered: file.BranchesCovered,
+        IsStale: file.IsStale,
+        IsPartial: file.IsPartial,
+        UpdatedAt: file.UpdatedAt);
+
+    public static CoverageLineDto ToDto(this LineCoverage line) => new(
+        line.LineNumber,
+        line.HitCount,
+        line.HitCount == 0 ? "uncovered"
+            : line.BranchesTotal > 0 && line.BranchesCovered < line.BranchesTotal ? "partial"
+            : "covered",
+        line.BranchesCovered,
+        line.BranchesTotal);
+
+    public static FileCoverageDto ToFileCoverageDto(
+        string requestedPath, FileCoverageSnapshot? coverage, string? solutionDirectory, bool includeSource) =>
+        coverage is null
+            ? new FileCoverageDto(requestedPath, [])
+            : new FileCoverageDto(
+                coverage.File.FilePath,
+                [.. coverage.Lines.Select(l => l.ToDto())],
+                coverage.File.ToDto(solutionDirectory),
+                includeSource ? SourceFileReader.Read(coverage.File.FilePath, solutionDirectory).Lines : null);
 }

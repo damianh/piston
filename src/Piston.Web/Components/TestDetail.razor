@@ -1,5 +1,6 @@
 @using Piston.Protocol.Dtos
 @using Piston.Protocol.Messages
+@using Piston.Web.Models
 @inject IJSRuntime JS
 
 @if (Test is null)
@@ -57,11 +58,30 @@ else
             {
                 <div class="text-gray-500 mt-1">Framework: <span class="font-mono">@framework</span></div>
             }
-            @if (Test.DurationMs > 0)
+            @if (TestNode.HasDuration(Test))
             {
                 <div class="text-gray-500 mt-1">Duration: @FormatDuration(Test.DurationMs)</div>
             }
         </div>
+
+        <HistoryStrip TestKey="@Test.Key" Project="@Project" />
+
+        <!-- Why the last run selected it -->
+        @if (SelectionReasons is { Count: > 0 } reasons)
+        {
+            <div>
+                <div class="text-gray-400 font-semibold mb-1">Why it ran</div>
+                <ul class="flex flex-col gap-1">
+                    @foreach (var reason in reasons)
+                    {
+                        <li class="flex items-start gap-2">
+                            <GranularityBadge Granularity="@reason.Granularity" />
+                            <span class="text-gray-300 break-all" title="@reason.FilePath">@DescribeReason(reason)</span>
+                        </li>
+                    }
+                </ul>
+            </div>
+        }
 
         <!-- Error message -->
         @if (!string.IsNullOrEmpty(Test.ErrorMessage))
@@ -72,12 +92,56 @@ else
             </div>
         }
 
-        <!-- Stack trace -->
-        @if (!string.IsNullOrEmpty(Test.StackTrace))
+        <!-- Expected vs actual, with the differing part highlighted -->
+        @if (AssertionDiff.Parse(Test.ErrorMessage) is { } diff)
+        {
+            var (prefix, expectedMiddle, actualMiddle, suffix) = diff.Split();
+            <div>
+                <div class="text-gray-400 font-semibold mb-1">Difference</div>
+                @if (diff.Summary.Length > 0)
+                {
+                    <div class="text-gray-500 mb-1 whitespace-pre-wrap">@diff.Summary</div>
+                }
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <div>
+                        <div class="text-gray-500 mb-0.5">Expected</div>
+                        <pre class="bg-gray-900 border border-gray-800 rounded p-2 text-gray-300 text-xs overflow-x-auto whitespace-pre-wrap break-all">@prefix<mark class="bg-green-900/60 text-green-300 rounded-sm">@expectedMiddle</mark>@suffix</pre>
+                    </div>
+                    <div>
+                        <div class="text-gray-500 mb-0.5">Actual</div>
+                        <pre class="bg-gray-900 border border-gray-800 rounded p-2 text-gray-300 text-xs overflow-x-auto whitespace-pre-wrap break-all">@prefix<mark class="bg-red-900/60 text-red-300 rounded-sm">@actualMiddle</mark>@suffix</pre>
+                    </div>
+                </div>
+            </div>
+        }
+
+        <!-- Stack trace, with the source of the selected frame: by default the failing line of the solution's code -->
+        @if (Frames.Count > 0)
         {
             <div>
                 <div class="text-gray-400 font-semibold mb-1">Stack Trace</div>
-                <pre class="bg-gray-900 border border-gray-800 rounded p-3 text-gray-400 text-xs overflow-x-auto whitespace-pre-wrap break-all">@Test.StackTrace</pre>
+                @if (_sourceFrame is { } shown)
+                {
+                    <div class="mb-2">
+                        <SourceExcerpt FilePath="@(shown.FilePath!)" Line="@(shown.Line!.Value)" SolutionDirectory="@SolutionDirectory" />
+                    </div>
+                }
+                <div class="bg-gray-900 border border-gray-800 rounded p-3 text-gray-400 text-xs font-mono overflow-x-auto whitespace-pre-wrap break-all">
+                    @foreach (var frame in Frames)
+                    {
+                        @if (frame.HasSource && StackTraceParser.IsInSolution(frame.FilePath!, SolutionDirectory))
+                        {
+                            var current = frame == _sourceFrame;
+                            <button type="button" class="block w-full text-left whitespace-pre-wrap break-all rounded-sm focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 @(current ? "text-gray-200 bg-gray-800" : "text-gray-300 hover:text-gray-100 hover:bg-gray-800")"
+                                    title="Show this line of source" aria-pressed="@(current ? "true" : "false")"
+                                    @onclick="() => _sourceFrame = frame">@frame.Text</button>
+                        }
+                        else
+                        {
+                            <span class="block">@frame.Text</span>
+                        }
+                    }
+                </div>
             </div>
         }
 
@@ -115,6 +179,47 @@ else
     /// <summary>False while a run is in progress or the daemon is unreachable.</summary>
     [Parameter] public bool CanRun { get; set; }
 
+    /// <summary>Why the last run selected the test, when the impact map narrowed it by changed lines.</summary>
+    [Parameter] public IReadOnlyList<TestSelectionReasonDto>? SelectionReasons { get; set; }
+
+    /// <summary>The watched solution, for showing changed files relative to it.</summary>
+    [Parameter] public string? SolutionPath { get; set; }
+
+    private string DescribeReason(TestSelectionReasonDto reason)
+    {
+        var file = Path.GetDirectoryName(SolutionPath) is { Length: > 0 } root
+            ? Path.GetRelativePath(root, reason.FilePath)
+            : Path.GetFileName(reason.FilePath);
+        var who = GranularityBadge.Executor(reason.Granularity);
+        return reason.ExecutedLines is { } executed
+            ? $"{file}: {Lines(reason.ChangedLines)} changed, overlapping {Lines(executed)} that {who} executed"
+            : $"{file}: {Lines(reason.ChangedLines)} changed outside every line {who} executed, so every test that executed the file ran";
+    }
+
+    private static string Lines(string range) => range.Contains('-', StringComparison.Ordinal) ? $"lines {range}" : $"line {range}";
+
+    private string? _framesFor;
+    private IReadOnlyList<StackFrameLine> _frames = [];
+    private StackFrameLine? _sourceFrame;
+
+    private string? SolutionDirectory =>
+        SolutionPath is { } path && path.LastIndexOfAny(['/', '\\']) is var slash and > 0 ? path[..slash] : null;
+
+    private IReadOnlyList<StackFrameLine> Frames => _frames;
+
+    protected override void OnParametersSet()
+    {
+        var trace = Test?.StackTrace;
+        if (trace == _framesFor)
+        {
+            return;
+        }
+
+        _framesFor = trace;
+        _frames = StackTraceParser.Parse(trace);
+        _sourceFrame = StackTraceParser.FirstInSolution(_frames, SolutionDirectory);
+    }
+
     private RunTestsCommand? RunCommand =>
         Test is null || Project is null
             ? null
@@ -144,6 +249,5 @@ else
         }
     }
 
-    private static string FormatDuration(double ms) =>
-        ms < 1000 ? $"{(int)ms}ms" : $"{ms / 1000.0:F1}s";
+    private static string FormatDuration(double ms) => TestNode.FormatDuration(ms);
 }
