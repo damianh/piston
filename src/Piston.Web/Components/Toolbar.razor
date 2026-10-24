@@ -35,7 +35,7 @@
     <!-- History filters: only when the daemon keeps run history -->
     @if (HistoryEnabled)
     {
-        <div class="flex items-center gap-0.5 border-l border-gray-700 pl-2" role="group" aria-label="Filter tests by history; either filter can match">
+        <div class="flex items-center gap-0.5" role="group" aria-label="Filter tests by history; either filter can match">
             <button type="button" class="@ToggleClass(OnlyNewFailures, "text-red-400")"
                     title="Show new failures: failing now, passed previously. If both history filters are on, show tests matching either."
                     aria-label="Show new failures" aria-pressed="@(OnlyNewFailures ? "true" : "false")"
