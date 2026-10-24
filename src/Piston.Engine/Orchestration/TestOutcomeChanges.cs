@@ -37,6 +37,7 @@ internal static class TestOutcomeChanges
 
         var fixedTests = new HashSet<TestOutcomeReference>();
         var newlyFailing = new HashSet<TestOutcomeReference>();
+        var currentlyFailing = new HashSet<TestOutcomeReference>();
         foreach (var suite in current)
         {
             foreach (var test in suite.Tests)
@@ -48,15 +49,19 @@ internal static class TestOutcomeChanges
                 {
                     _ = fixedTests.Add(new(suite.Name, test.ResultKey));
                 }
-                else if (test.Status == TestStatus.Failed && failedBefore != true)
+                else if (test.Status == TestStatus.Failed)
                 {
-                    _ = newlyFailing.Add(new(suite.Name, test.ResultKey));
+                    _ = currentlyFailing.Add(new(suite.Name, test.ResultKey));
+                    if (failedBefore != true)
+                    {
+                        _ = newlyFailing.Add(new(suite.Name, test.ResultKey));
+                    }
                 }
             }
         }
 
-        // A test that passed under one framework and failed under another is not fixed.
-        fixedTests.ExceptWith(newlyFailing);
+        // Conflicting results for one project and result key are never a fix.
+        fixedTests.ExceptWith(currentlyFailing);
         return (
             [.. fixedTests.OrderBy(t => t.Project, StringComparer.Ordinal).ThenBy(t => t.Key, StringComparer.Ordinal)],
             [.. newlyFailing.OrderBy(t => t.Project, StringComparer.Ordinal).ThenBy(t => t.Key, StringComparer.Ordinal)]);

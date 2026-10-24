@@ -14,6 +14,7 @@ public sealed class NamedPipeClientTransport : IProtocolTransport
     private readonly string _pipeName;
     private readonly string _serverName;
     private NamedPipeClientStream? _pipe;
+    private BufferedStream? _reader;
 
     public NamedPipeClientTransport(string pipeName, string serverName = ".")
     {
@@ -36,6 +37,8 @@ public sealed class NamedPipeClientTransport : IProtocolTransport
         await _pipe.ConnectAsync(TimeSpan.FromSeconds(5), CancellationToken.None)
             .WaitAsync(ct)
             .ConfigureAwait(false);
+        // Keep read-ahead across frames without buffering or serializing concurrent writes.
+        _reader = new BufferedStream(_pipe, 16 * 1024);
     }
 
     public Task SendAsync(ReadOnlyMemory<byte> message, CancellationToken ct)
@@ -47,7 +50,7 @@ public sealed class NamedPipeClientTransport : IProtocolTransport
     public async Task<ReadOnlyMemory<byte>> ReceiveAsync(CancellationToken ct)
     {
         EnsureConnected();
-        var message = await MessageFramer.ReadMessageAsync(_pipe!, ct).ConfigureAwait(false);
+        var message = await MessageFramer.ReadMessageAsync(_reader!, ct).ConfigureAwait(false);
         if (message is null)
         {
             throw new IOException("Named pipe was closed by the remote end.");
@@ -58,6 +61,7 @@ public sealed class NamedPipeClientTransport : IProtocolTransport
 
     public ValueTask DisposeAsync()
     {
+        _reader?.Dispose();
         _pipe?.Dispose();
         return ValueTask.CompletedTask;
     }

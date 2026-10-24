@@ -128,4 +128,22 @@ public sealed class TestOutcomeChangesTests
         Assert.Equal([new("Tests", "A.Became"), new("Tests", "A.Multi [net8.0]")], fixedTests);
         Assert.Equal([new("Tests", "A.Multi [net10.0]")], newlyFailing);
     }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData(null, true)]
+    [InlineData("net10.0", false)]
+    [InlineData("net10.0", true)]
+    public void ConflictingCurrentResultsDoNotReportAPreviousFailureAsFixed(string? framework, bool failureFirst)
+    {
+        var previous = Suites(Test("A.StillFailing", TestStatus.Failed, framework));
+        var passed = Test("A.StillFailing", TestStatus.Passed, framework);
+        var failed = Test("A.StillFailing", TestStatus.Failed, framework);
+        var current = failureFirst ? Suites(failed, passed) : Suites(passed, failed);
+
+        var (fixedTests, newlyFailing) = TestOutcomeChanges.Compare(previous, current);
+
+        Assert.Empty(fixedTests);
+        Assert.Empty(newlyFailing);
+    }
 }
