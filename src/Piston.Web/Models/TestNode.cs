@@ -14,6 +14,7 @@ public sealed class TestNode
     public required TestNodeKind Kind { get; init; }
     public TestResultDto? Test { get; init; }
     public TestSuiteDto? Suite { get; init; }
+    public string? Project { get; init; }
     public string? GroupKey { get; init; }
 
     /// <summary>Stable identity used to remember this node's expansion across tree rebuilds.</summary>
@@ -53,6 +54,45 @@ public sealed class TestNode
         }
     }
 
+    /// <summary>
+    /// How many of the tests under this node there are, how many passed and failed, and their summed duration
+    /// (excluding running tests, whose duration is not final).
+    /// </summary>
+    public NodeCounts Counts()
+    {
+        int total = 0, passed = 0, failed = 0;
+        double durationMs = 0;
+        foreach (var test in Tests())
+        {
+            total++;
+            if (test.Status != TestStatusDto.Running && test.DurationMs > 0)
+            {
+                durationMs += test.DurationMs;
+            }
+
+            if (test.Status == TestStatusDto.Passed)
+            {
+                passed++;
+            }
+            else if (test.Status == TestStatusDto.Failed)
+            {
+                failed++;
+            }
+        }
+
+        return new(total, passed, failed, durationMs);
+    }
+
+    /// <summary>
+    /// True when <paramref name="test"/> finished, so its duration was measured. Runners report a test that took under a
+    /// millisecond as 0 ms.
+    /// </summary>
+    public static bool HasDuration(TestResultDto test) => test.Status is TestStatusDto.Passed or TestStatusDto.Failed;
+
+    /// <summary>Formats a duration compactly, e.g. <c>&lt;1ms</c>, <c>85ms</c>, <c>2.4s</c> or <c>3m 12s</c>.</summary>
+    public static string FormatDuration(double ms) =>
+        ms < 1 ? "<1ms" : ms < 1000 ? $"{(int)ms}ms" : ms < 60_000 ? $"{ms / 1000.0:F1}s" : $"{(int)(ms / 60_000)}m {(int)(ms % 60_000 / 1000)}s";
+
     /// <summary>The node with <paramref name="expansionKey"/> in <paramref name="nodes"/> or their descendants.</summary>
     public static TestNode? Find(IEnumerable<TestNode> nodes, string expansionKey)
     {
@@ -73,11 +113,28 @@ public sealed class TestNode
     }
 }
 
+/// <summary>Result counts and summed duration for the tests under a tree node.</summary>
+public readonly record struct NodeCounts(int Total, int Passed, int Failed, double DurationMs = 0)
+{
+    /// <summary>A description for screen readers and tooltips, e.g. <c>12 tests: 10 passed, 2 failed</c>.</summary>
+    public string Description =>
+        $"{Total:N0} {(Total == 1 ? "test" : "tests")}: {Passed:N0} passed, {Failed:N0} failed";
+
+    /// <summary>A description of <see cref="DurationMs"/>, e.g. <c>2.4s total test time</c>.</summary>
+    public string DurationDescription => $"{TestNode.FormatDuration(DurationMs)} total test time";
+}
+
 public enum TestNodeKind
 {
     Suite,
     Group,
     Test,
+}
+
+public enum TestSort
+{
+    Name,
+    Duration,
 }
 
 public enum NodeStructure

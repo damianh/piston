@@ -2,6 +2,8 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Coverage;
+using Piston.Engine.Impact;
+using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
 using Xunit;
 
@@ -10,6 +12,44 @@ namespace Piston.Engine.Tests.Orchestration;
 public sealed class OrchestratorCoverageTests
 {
     private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
+
+    [Fact]
+    public void RunImpactUnits_ReplacesOnlyProjectsWhoseTestsAllRanCleanly()
+    {
+        static ProjectTestResult Project(string path, string? error = null, bool crashed = false) => new(
+            path,
+            [new TestSuite("S", [Test($"{path}.T1"), Test($"{path}.T2"), Test($"{path}.T1")], DateTimeOffset.UtcNow, TimeSpan.Zero)],
+            error,
+            [$"{path}.xml"],
+            crashed);
+
+        var units = PistonOrchestrator.RunImpactUnits(
+            [Project("A"), Project("B", error: "boom"), Project("C", crashed: true)], "/repo/s.slnx", [], [], filter: null);
+
+        Assert.Equal(["A", "B", "C"], units.Select(u => u.ProjectPath));
+        Assert.Equal([false, true, true], units.Select(u => u.Merge));
+        Assert.All(units, u => Assert.Equal("run", u.UnitKey));
+        Assert.Equal(["A.T1", "A.T2"], units[0].TestFqns);
+        Assert.Equal(["A.xml"], units[0].ReportPaths);
+    }
+
+    [Fact]
+    public void RunImpactUnits_FilteredRunMerges_AndWithoutProjectsUsesTheSolution()
+    {
+        var filtered = PistonOrchestrator.RunImpactUnits(
+            [new ProjectTestResult("A", [], null, [], false), new ProjectTestResult("B", [], null, [], Crashed: true)],
+            "/repo/s.slnx", [], [], filter: "FullyQualifiedName=X");
+        var solution = PistonOrchestrator.RunImpactUnits([], "/repo/s.slnx", ["r.xml"], ["T"], filter: null);
+
+        Assert.All(filtered, u => Assert.True(u.Merge));
+        Assert.Equal([true, false], filtered.Select(u => u.MethodsComplete));
+        var unit = Assert.Single(solution);
+        Assert.Equal("/repo/s.slnx", unit.ProjectPath);
+        Assert.Equal(["r.xml"], unit.ReportPaths);
+        Assert.Equal(["T"], unit.TestFqns);
+    }
+
+    private static TestResult Test(string fqn) => new(fqn, fqn, TestStatus.Passed, TimeSpan.Zero, null, null, null, null);
 
     [Fact]
     public void CoverageResultsDirectory_FindsThePistonTempDirectoryAtAnyDepth()
@@ -73,13 +113,51 @@ public sealed class OrchestratorCoverageTests
         }
     }
 
+    [Fact]
+    public async Task GetFileCoverage_FlagsFilesEditedSinceMeasurementAsStale()
+    {
+        var root = Directory.CreateTempSubdirectory("piston-coverage-query-").FullName;
+        try
+        {
+            var file = Path.Combine(root, "Code.cs");
+            await File.WriteAllTextAsync(file, "class C {}", _ct);
+            using var store = new SqliteCoverageStore();
+            await store.InitializeAsync(root);
+            await store.StoreReportAsync(store.CreateRunId(), [
+                new CoverageReportFile(
+                    new FileCoverage(file, [new LineCoverage(1, 2), new LineCoverage(2, 0)], "Lib"),
+                    CoverageReportFile.ComputeContentHash(file)),
+            ], isFullRun: true);
+            using var orchestrator = new PistonOrchestrator(
+                new StubFileWatcherService(), new StubBuildService(),
+                new StubTestRunnerService([], TimeSpan.Zero), new StubImpactAnalyzer([]),
+                new PistonState(), store, new CoverageProcessor(new CoberturaParser()), true);
+
+            var fresh = orchestrator.GetFileCoverage(file)!;
+            Assert.False(fresh.File.IsStale);
+            Assert.Equal([new LineCoverage(1, 2), new LineCoverage(2, 0)], fresh.Lines);
+            var report = orchestrator.GetCoverageReport()!;
+            Assert.Equal((2, 1), (report.LinesTotal, report.LinesCovered));
+            Assert.Null(orchestrator.GetFileCoverage(Path.Combine(root, "Other.cs")));
+
+            await File.WriteAllTextAsync(file, "class C { int x; }", _ct);
+
+            Assert.True(orchestrator.GetFileCoverage(file)!.File.IsStale);
+            Assert.True(Assert.Single(orchestrator.GetCoverageReport()!.Files).IsStale);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private sealed class PausingCoverageProcessor(string file) : ICoverageProcessor
     {
         public TaskCompletionSource Committed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public async Task ProcessCoverageAsync(
-            long runId, IReadOnlyList<string> paths, IReadOnlyList<string> testFqns, ICoverageStore store)
+            long runId, IReadOnlyList<string> paths, IReadOnlyList<string> testFqns, ICoverageStore store, bool isFullRun, string? sourceRoot, CoverageImpactOptions? impact)
         {
             await store.StoreCoverageAsync(runId,
                 new Dictionary<string, IReadOnlyList<TestLineCoverage>>
@@ -89,5 +167,8 @@ public sealed class OrchestratorCoverageTests
             _ = Committed.TrySetResult();
             await Release.Task;
         }
+
+        public Task RecordImpactAsync(long runId, CoverageImpactOptions impact, IImpactMapStore store, string? sourceRoot) =>
+            Task.CompletedTask;
     }
 }

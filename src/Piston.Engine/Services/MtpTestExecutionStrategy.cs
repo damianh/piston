@@ -22,15 +22,18 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
     private readonly Func<string, string?> _getMtpOutputPath;
     private readonly Func<string, bool> _isMultiTargeted;
     private readonly string _solutionDirectory;
+    private readonly MtpWarmHostPool? _warmHosts;
 
     public MtpTestExecutionStrategy(
         Func<string, string?> getMtpOutputPath,
         string solutionDirectory,
-        Func<string, bool>? isMultiTargeted = null)
+        Func<string, bool>? isMultiTargeted = null,
+        MtpWarmHostPool? warmHosts = null)
     {
         _getMtpOutputPath = getMtpOutputPath;
         _solutionDirectory = solutionDirectory;
         _isMultiTargeted = isMultiTargeted ?? (_ => false);
+        _warmHosts = warmHosts;
     }
 
     /// <summary>
@@ -57,7 +60,8 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
             request.Filter,
             onProgress,
             ct,
-            CoverageFor(request));
+            CoverageFor(request),
+            _warmHosts);
 
     private MtpCoverage CoverageFor(ProjectTestRequest request)
     {
@@ -85,7 +89,7 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
         string? filter,
         Action<IReadOnlyList<TestResult>>? onPartial,
         CancellationToken ct) =>
-        MtpTestProcessRunner.DiscoverAsync(projectPath, ServerAppPath(projectPath), _solutionDirectory, filter, onPartial, ct);
+        MtpTestProcessRunner.DiscoverAsync(projectPath, ServerAppPath(projectPath), _solutionDirectory, filter, onPartial, ct, _warmHosts);
 }
 
 /// <summary>Whether, and why not, an MTP test run collects code coverage.</summary>

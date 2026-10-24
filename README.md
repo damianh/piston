@@ -13,7 +13,7 @@ deleted. The hub/worker split and later UI/canvas decisions remain deferred.
 ## Requirements
 
 - .NET 10 SDK
-- A `.sln`, `.slnx`, or `.slnf` solution with compatible test projects (for example xUnit, NUnit, or MSTest)
+- A `.sln`, `.slnx`, or `.slnf` solution with compatible test projects (for example xUnit v2/v3, NUnit, MSTest or TUnit; [`samples/`](samples/README.md) has one of each on Microsoft.Testing.Platform)
 - The SDK and test adapters/extensions required by the target solution; MTP projects need the appropriate `global.json` test-runner configuration
 
 ## Delivery
@@ -62,11 +62,16 @@ piston mcp [<solution>] [--debounce <ms>] [--filter <pattern>] [--coverage] [--p
 # Manage a running daemon / inspect worktree owners
 piston stop [<solution>] [--force]
 piston status [<solution>] [--all]
+
+# Export the running daemon's coverage report (stdout unless -o is given)
+piston coverage-export [<solution>] [--format lcov|cobertura] [-o <file>]
 ```
 
 `piston status --all` lists every live worktree owner (PID, `mcp` or `daemon`, solution, worktree) and stale ownership records. If a worktree's owner cannot be reached over the daemon pipe (for example a `piston mcp` process, or a daemon whose worktree was deleted), `piston stop` prints the owner's PID, solution and worktree and exits 1; `piston stop --force` sends SIGTERM and kills the process if it has not exited.
 
 `piston status` prints the daemon's PID, solution, phase, web and MCP URLs, and its latest and active run. `piston stop` asks the daemon to shut down, then waits for its process to exit. It exits 0 only once the process has exited, so the ports are free; with no daemon running it prints `No daemon running` and also exits 0. Startup failures exit with code 1 and an `error:` message: a worktree that already has a daemon, or an occupied `--mcp-port`/`--web-port`. Endpoints bind after worktree ownership is taken and before the startup run, so a port conflict starts no build or test run.
+
+`piston coverage-export` asks the running daemon for its coverage report and writes it as LCOV (default) or Cobertura XML, for editors, CI or ReportGenerator. Files changed since they were measured are left out. Large exports are transferred in bounded chunks from one snapshot, so they can exceed the pipe's per-message size limit without mixing measurements from different runs. It exits 1 when no daemon is running or coverage is disabled.
 
 `<solution>` is a path to a `.sln`, `.slnx`, or `.slnf` file. An explicit argument wins; otherwise Piston uses the `solution` field in the current directory's `.piston.json`, resolved relative to that file. Without a configured path, exactly one solution must exist in the current directory; multiple candidates require an explicit or configured path. A missing or invalid configured solution is an error, not a discovery fallback.
 
@@ -99,9 +104,19 @@ piston daemon --coverage --mcp-port 5300
 
 ## Web dashboard
 
-The daemon serves a Blazor WebAssembly dashboard (default `http://localhost:5199`) connected over WebSocket. It shows test results, build errors, engine activity, and MCP tool-call history. The Roslyn diagnostic view has been removed.
+The daemon serves a Blazor WebAssembly dashboard (default `http://localhost:5199`) connected over WebSocket. It shows test results, build errors, engine activity, and MCP tool-call history. The Roslyn diagnostic view has been removed. The dashboard and the HTTP MCP endpoint accept only local host names and refuse cross-origin WebSocket and POST requests from web pages; see [SECURITY.md](SECURITY.md).
 
-Clicking any node in the tree shows its details; double-click or the chevron expands or collapses it. A test's details show its captured output (what the test wrote, e.g. via xUnit's `TestContext.Current.TestOutputHelper`) and link to its project. A project, framework, namespace, class, status or pinned node shows its result counts, failures, slowest tests and (for status and pinned groups) the projects they come from. Every details pane has a **Run** button that builds the affected projects and runs just those tests; it is disabled while another run is in progress. The build is skipped (status `Skipped`) when the last successful build covered those projects, its run finished `Current`, and since then the source fingerprint is unchanged, the watcher has seen no change and the test outputs still exist. A run selects tests by name, so a framework node or a multi-targeted test runs on every framework its project targets, and a theory runs all of its cases. Projects are named by file name, so test projects sharing one (e.g. `One/Tests.csproj` and `Two/Tests.csproj`) show as a single node and run together. A project's details also show the run log of its latest run, one process covering all of its target frameworks: the runner Piston chose (VSTest, MTP server or MTP `dotnet test`), the command line, fallbacks, the process's console output and its exit code. Each log keeps the first 1,500 and last 500 lines of a run.
+A strip under the Tests toolbar describes the latest run: what triggered it (`Calc.cs saved`, `run all`, …), its build time, which tests it ran, and the tests it fixed or newly broke (click to select the first), with the run's elapsed time. Clicking any node in the tree shows its details; double-click or the chevron expands or collapses it. A test's details show its captured output (what the test wrote, e.g. via xUnit's `TestContext.Current.TestOutputHelper`) and link to its project. A failed test's stack trace lists its frames; frames in files under the solution directory are clickable and show a syntax-highlighted excerpt of the source around that line (the first such frame is shown by default), with a whole-file toggle and an **Open in editor** link (`vscode://`). The daemon serves only files inside the solution directory. A project, framework, namespace, class, status or pinned node shows its result counts, failures, slowest tests and (for status and pinned groups) the projects they come from. Every details pane has a **Run** button that builds the affected projects and runs just those tests; it is disabled while another run is in progress. The build is skipped (status `Skipped`) when the last successful build covered those projects, its run finished `Current`, and since then the source fingerprint is unchanged, the watcher has seen no change and the test outputs still exist. A run selects tests by name, so a framework node or a multi-targeted test runs on every framework its project targets, and a theory runs all of its cases. Projects are named by file name, so test projects sharing one (e.g. `One/Tests.csproj` and `Two/Tests.csproj`) show as a single node and run together. A project's details also show the run log of its latest run, one process covering all of its target frameworks: the runner Piston chose (VSTest, MTP server or MTP `dotnet test`), the command line, fallbacks, the process's console output and its exit code. Each log keeps the first 1,500 and last 500 lines of a run.
+
+Project, framework, namespace, class and pinned rows show how many tests they contain, with how many passed (✓) and failed (✗), and every group row shows its tests' summed duration. **Run failed** in the toolbar re-runs every failed test. Click the **Name** or **Duration** column header to sort the tree; click again to reverse direction. Duration starts slowest first and orders groups by summed test time. Pinned tests stay at the top, and status groups keep failures first. When a failure message has an expected and an actual value (xUnit, NUnit, MSTest or Shouldly), the test's details show them side by side with the difference highlighted. With [run history](#run-history-and-failure-classification), a test's details show its recorded results as squares (oldest first) with a duration sparkline and, when it is failing, whether the failure is new, pre-existing or flaky and why; tree rows mark new failures and flaky tests, and the toolbar's **new** and **flaky** toggles show only those tests. The browser tab's title and favicon show the run state (busy, passed or failed), so a background tab still tells you how the last run went, and screen readers announce when a run starts and finishes.
+
+The **Coverage** tab (when the daemon runs with coverage enabled) shows line and branch totals, the measured files grouped by module, folder or as a flat list (filterable; click the *Name* or *Coverage* column header to sort, again to reverse) and the selected file's source with each line's hit count: covered lines green, partly covered branches yellow, uncovered lines red. A file is marked *stale* when it changed since it was measured and *partial* when only a selective run measured it. The line marks are aggregate coverage of the tests that ran. Below the source, a panel lists the tests the impact map records as executing the selected file, each with a badge for how precisely that was measured (`test`, `class` or `run`, see [Coverage and impact selection](#coverage-and-impact-selection)) and an *outdated* marker when the file or the measurement changed since; click a line number to narrow the list to that line, and click a test to open it in the **Tests** tab. After a selective run by changed lines, a test's details say why it ran, and the status bar shows the last run's scope. To export the report as LCOV or Cobertura, use `piston coverage-export` or the `export_coverage` MCP tool.
+
+C# source in the coverage detail pane uses the same theme-aware syntax highlighting as test source excerpts: keywords, strings, comments and numbers are colored without changing the coverage backgrounds or line selection. Other file types are shown as plain text.
+
+The **Runs** tab lists the runs kept in the [run history](#run-history-and-failure-classification), newest first, with each run's trigger, scope and passed, failed and skipped counts. Selecting a run shows its per-test results, failures first with their messages, and compares it with an earlier run (the previous one by default): new failures, fixed tests, tests that passed in both but became at least twice as slow and 100 ms slower, tests still failing, added tests and, for a run of all tests, tests that did not run. Click a test to open it in the **Tests** tab.
+
+Keyboard shortcuts (press `?` in the dashboard for the list): `R` runs the selection, `[` and `]` move to the previous or next failure, `1`–`4` show or hide failed, passed, skipped and not-run tests, `G` cycles the grouping, `E` expands or collapses all, and `S` sorts by duration (press again to reverse).
 
 Dashboard styles are bundled locally; no CDN access is needed. After changing
 Tailwind classes in dashboard components, regenerate the checked-in stylesheet:
@@ -140,8 +155,14 @@ To set up a coding agent, follow [docs/agent-usage.md](docs/agent-usage.md). It 
 | `verify` | Get current full verification (optional `expectedSolution` guard; the reply names the `Solution:`). Reuses the latest run if it is a current, full-scope, unfiltered result for the present source fingerprint; otherwise awaits an active full run or forces one, retrying at most twice when the source changes mid-run, then reporting `Stale`. Returns a compact verdict (`Passed`, `TestsFailed`, `BuildFailed`, `Incomplete`, `Stale`, `Cancelled`, `Faulted`, `TimedOut`, `NotFullScope`) with run ID, fingerprint, counts, capped failing tests / build errors and queue info. Only `Passed` is proof. |
 | `run_tests` | Request a full build + test run; returns a textual summary plus a `Run:` line with the run ID, status, scope, freshness and source fingerprint. |
 | `get_test_run` | Read one run's solution path, provenance, build diagnostics and per-test results as JSON (`piston.test-run/v1`): `runId` = an ID, `latest` (default) or `active`. |
+| `get_test_history` | Recorded results of one test (`test`, optional `project`) across runs in this worktree, newest first, with run ID, time, status, duration and source fingerprint. Empty `test` lists flaky tests. See [Run history and failure classification](#run-history-and-failure-classification). |
 | `get_test_results` | Read current accumulated test results (may combine several runs; each suite shows its run ID). |
 | `set_test_filter` | Apply a test name filter. |
+| `get_coverage` | Line and branch coverage as JSON (`piston.coverage/v1`). Without `file`: solution and per-module totals plus the files with the most uncovered lines (`maxFiles`, default 50). With `file`: its totals and its uncovered and partly covered line ranges. Requires coverage. |
+| `get_changed_line_coverage` | Coverage of the changed lines (see [git bases](#git-bases)), as JSON (`piston.changed-line-coverage/v1`). Files changed since they were last measured are reported as stale with no line verdicts. Requires coverage. |
+| `export_coverage` | Write the coverage report as LCOV or Cobertura (`format`) to `outputPath`, which must be inside the solution directory (default `.piston/coverage/lcov.info` or `cobertura.xml`). Requires coverage. |
+| `plan_affected_tests` | Preview what Piston would build and run for `files` (or git changes, see [git bases](#git-bases)) without running anything, as JSON (`piston.affected-plan/v1`): `scope` (`full`, `projects`, `tests` or `none`), an `explanation`, the projects, any `warnings`, and with coverage the selected tests with the changed lines that selected each and the granularity of that evidence (`run`, `class` or `test`). |
+| `run_affected_tests` | Run that plan and wait for it: the same JSON plus `run` (ID, status and counts; null when nothing is affected). For example, `base: "branch"` runs the tests affected by everything since the branch left `main`. |
 | `clear_results` | Clear current test suites, last-run timestamp, coverage state, and persisted coverage in the current solution directory. A running test run may publish new results afterwards. |
 
 These are the retained test tools. `LoadWorkspace`, `GetDiagnostics`,
@@ -160,13 +181,16 @@ Every run, including startup and file-change runs, gets a record in the
 `piston.test-run/v1` JSON format that `get_test_run` returns. The record holds:
 
 - a unique `runId` and a sequence number;
-- the trigger (`Startup`, `Forced` or `FileChange`);
+- the trigger (`Startup`, `Forced`, `FileChange` or `Targeted`) and, for a file-change run, the `changedFiles` that triggered it;
 - the status: `Completed`, `Incomplete`, `BuildFailed`, `Cancelled` or `Faulted` (`Queued` or `Running` while active);
 - for runs that went through machine-wide admission, an `admission` object (see below);
 - the scope (`Full` or `Selective`), `isFiltered` and the effective filter;
 - the run context: solution, test projects, build targets, configuration, SDK, runtime and OS;
 - run-local `build` output (status, raw MSBuild errors/warnings including diagnostic IDs and locations, duration), or null if the build did not return. A targeted run that reused the last build reports status `Skipped`;
+- `fixedTests` (failed before the run, passed in it) and `newlyFailingTests` (failed in the run but not before it, including new tests; empty for the daemon's first run). Each entry carries a `project` suite name and a result `key`, so identically named tests in different projects remain distinct;
 - per-project outcomes, duplicate test IDs, and every test's fully qualified name and status. A multi-targeted project reports each test once per framework, with a `targetFramework` field (e.g. `net8.0`); test names in failure lists then carry the framework, as in `Ns.Class.Method [net8.0]`.
+
+When a project reports no tests, its outcome carries a `noTestsReason` and the run's status reason repeats it. Piston checks the project file first (an MTP project without `<OutputType>Exe</OutputType>`, no known test framework, a VSTest project missing `Microsoft.NET.Test.Sdk` or its framework adapter), then the runner output ("No test is available", exit code 8, testhost crashes), and otherwise points at `.piston/diagnostics.log`.
 
 The source fingerprint (`piston-source-v2`) is a SHA-256 over every file under the solution directory except `bin`, `obj`, `TestResults`, `.git`, `.vs`, `.idea`, `.piston` and `node_modules`. It also covers the nearest ancestor `global.json`, `Directory.Build.*`, `Directory.Packages.props` and `NuGet.config`. Paths and contents are length-prefixed (unsigned 64-bit big-endian byte lengths), so embedded NUL bytes cannot collide with file boundaries. Capture is attempted before and after every started run, including cancellation and faults; unavailable fingerprints are reported as `Unknown`. Queued requests cancelled before starting have no fingerprints. A run is `Stale` if the fingerprint changed or the file watcher saw a change during the run; a watcher change also cancels the run.
 
@@ -211,9 +235,26 @@ Limits: this is admission control by reservation. Piston does not cap the actual
 
 ## Coverage and impact selection
 
-Project ownership and transitive dependencies determine affected test projects. The optional Tier 3 path adds a file-based test-FQN filter when usable coverage exists. It is **not verified per-test/changed-line selection**: `CoverageProcessor` unions covered lines across reports and attributes them to every test returned in that run. The analyzer queries whole files, not changed line ranges.
+Project ownership and transitive dependencies determine affected test projects (Tier 2). With coverage enabled, Tier 3 narrows the run to the tests whose recorded execution touches the **changed lines**:
 
-Coverage associations persist in `.piston/piston.db`; test-result history and the project graph do not. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, running it through `dotnet test` rather than server mode (so without live per-test progress); without it, the project runs without coverage and its run log says why. Fine-grained attribution and selection correctness are future experiments.
+- Each coverage run records an *impact map*: per test project, the line spans each source file executed, and a snapshot of the file's content. A full, cleanly passing run replaces the project's `run` unit; other runs add to it.
+- On a change, Piston diffs the new content against the snapshot and selects the tests of every unit whose executed spans overlap the changed lines. A change outside every executed span (for example a new member) selects every test that executed the file.
+- `run` evidence attributes the whole project's execution to all its tests, so it over-selects. While the daemon is idle, the **impact backfill** runs each test method on its own with coverage and records a `test` unit by default (`impactBackfill`: `"class"` for faster but coarser measurements, or `"off"`). Per-test runs are expensive (about 80× one coverage run in the measured sample), so backfill is incremental, cancellable, and only runs while idle. Current finer evidence overrides coarser evidence; an edit makes test units of the changed file outdated, so the `run` unit decides until they are remeasured. Ordinary comments and whitespace edits do not invalidate these measurements or run tests. The status bar shows the backfill's progress, and a new run cancels it.
+- Tier 3 abstains, and tests are selected by project, when a test file changed (it may add tests no recording knows), when a changed file has no recording, or when more than 100 tests are selected. Otherwise, a file-level fallback selects the tests whose coverage includes the changed files.
+
+Selection by lines is a heuristic, not a proof: code reached through reflection, static state, configuration or data files can affect a test without appearing in its executed lines, and a forced or full run remains the authority. `plan_affected_tests` previews a selection with the changed lines and evidence granularity behind each test.
+
+Coverage persists in `.piston/piston.db`: the merged line and branch report (what the dashboard, `get_coverage` and the exports read), the file-level test associations and the impact map used for selection. Test-result history and the project graph do not persist. Only files under the solution directory are recorded, so code a test loads from elsewhere (such as fixture projects built in a temp directory) does not count. A full, unfiltered run replaces the report; a selective run adds hits to unchanged files and marks new or changed files it measured as partial. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, running it through `dotnet test` rather than server mode (so without live per-test progress); without it, the project runs without coverage and its run log says why.
+
+### Git bases
+
+The git-based tools take `base` and `baseRef`:
+
+| `base` | Changes |
+| --- | --- |
+| `working` (default) | Staged, unstaged and untracked changes against `HEAD`. |
+| `branch` (default when `baseRef` is set) | Everything since the branch left `baseRef`, uncommitted and untracked changes included. Without `baseRef`, the base is `origin/HEAD`, else the first of `origin/main`, `origin/master`, `main` and `master` that exists. Without a merge base (a shallow clone), Piston compares with `baseRef` directly and warns. |
+| `range` | `baseRef` is `A..B` (A against B), `A...B` (the merge base of A and B against B) or one commit (its own changes). An empty side means `HEAD`. |
 
 ### Selective builds
 
@@ -255,6 +296,11 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `debounceMs` | `int` | File-change debounce interval in milliseconds. |
 | `testFilter` | `string` | Default filter passed to the selected test runner. |
 | `coverageEnabled` | `bool` | Request coverage collection (see `--coverage`). |
+| `impactBackfill` | `string` | With coverage, how finely to measure the impact map while idle: `"test"` (default), `"class"` or `"off"`. Per-test backfill is expensive; see [Coverage and impact selection](#coverage-and-impact-selection). |
+| `hangThreshold` | `string` | How long a test runs before it is reported as possibly hanging (default `60s`). See [Slow and hanging tests](#slow-and-hanging-tests). |
+| `testTimeout` | `string` | Per-test limit; off by default. See [Slow and hanging tests](#slow-and-hanging-tests). |
+| `history` | `bool` | Keep per-test run history and classify failures (default `true`). See [Run history and failure classification](#run-history-and-failure-classification). |
+| `warmTestHosts` | `bool` | Keep MTP test apps running between runs to skip host start-up (default `false`). See [Warm test hosts](#warm-test-hosts). |
 | `parallelism` | `int` | Max concurrent test processes. `0` = auto: half the logical processor count, at least one. |
 | `processRecycleAfter` | `int` | Runs after which a pool slot logs a recycling warning (default 50). |
 | `pipeName` | `string` | Override the named pipe name. |
@@ -262,6 +308,57 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `mcpPort` | `int` | Port for the daemon's MCP server (default 5200). |
 | `testExecutionMode` | `string` | `"Auto"` and `"Process"` currently both route between MTP and VSTest. `"InProcess"` is not implemented and throws at startup. |
 | `execution.memoryMb` | `int` | Memory in MiB each run reserves from the machine execution budget (see [Worktree ownership and machine execution budget](#worktree-ownership-and-machine-execution-budget)). Must be positive; required when the budget sets `memoryMb`. A reservation, not a cap. |
+
+### Slow and hanging tests
+
+While tests run, the status bar shows the test that has been running longest and its elapsed time, and
+`get_test_results` reports it as `Longest running:`. After `hangThreshold` the test is marked **possibly hanging**,
+a warning goes to `.piston/diagnostics.log` once, and the run's `possiblyHangingTests` (in `get_test_run`) lists it.
+
+`testTimeout` is a per-test limit. When a test runs longer, Piston cancels that project's test process (other projects
+go on). The test fails with "Timed out after 30 s: the test ran longer than the test timeout (30 s).", the project's
+other unfinished tests are `NotRun`, its finished tests keep their results, and the project's outcome is `TimedOut`
+with `timedOutTest`. The run ends `Incomplete`, and its status reason names the test.
+
+Durations are seconds (`90`) or a number with a unit (`500ms`, `30s`, `5m`, `1.5h`); `0` or `"off"` turns the setting
+off. Tests are timed from when the runner reports them started, so only runners that report running tests (MTP server
+mode and VSTest with Piston's live collector) can time them; elsewhere neither setting applies.
+
+### Run history and failure classification
+
+Piston records every finished run's per-test outcomes in a history file outside the checkout, so deleting a worktree
+or running `clear_results` keeps it. The file is
+`<base>/<repository>-<hash>/<worktree>-<hash>/<solution>.history.json`, where `<base>` is `PISTON_HISTORY_DIRECTORY`
+(an absolute path outside the worktree) or `Piston/history` under the per-user local application data folder
+(`~/.local/share` on Linux, `%LOCALAPPDATA%` on Windows). Worktrees of one repository share the repository folder and
+keep separate files, because branches differ. It keeps the last 20 results of each test, the last 50 runs with their
+per-test results and errors, and drops tests not run for 30 days. Only the daemon that owns the worktree writes it.
+
+Each failed test in a run is classified against that worktree's earlier results:
+
+- **new**: the test's previous recorded result was a pass;
+- **pre-existing**: it was already failing (the evidence names the first failing run and the last pass, if any);
+- **flaky**: within its recorded window it both passed and failed on the same source fingerprint. Only `Current`
+  runs carry a fingerprint, so an edit-break-fix loop is not mistaken for flakiness;
+- **unknown**: there is no earlier pass or fail. Missing history is not proof that a failure is new.
+
+`verify` lists failures with their class, new ones first, after a `Failure history:` count line.
+`get_test_run` includes `failureClassifications` (project, test, kind, evidence), and `get_test_history` shows the
+evidence. The dashboard's **Runs** tab browses and compares the kept runs, and the **Tests** tab marks and filters new failures and flaky tests. Set `"history": false` to turn this off.
+
+### Warm test hosts
+
+With `"warmTestHosts": true`, Piston keeps each Microsoft.Testing.Platform test app running in server mode after a
+discovery or run, and sends later requests for that app over the same connection, so they skip process start-up and
+initialization. Before any build, Piston stops its retained hosts and waits for them to exit, releasing loaded DLLs
+so MSBuild can overwrite output on Windows. No-build requests can keep reusing a host. A host is also replaced
+when anything in its app's output directory changes, when it exits,
+and after a failed, timed-out or cancelled request; cancelling kills it. A host serves one request at a time, so a
+second concurrent request for the same app gets its own process, and a reused host that fails before reporting any
+test is retried once in a new process. Coverage runs still go through `dotnet test` in a fresh process. Warm hosts
+get the environment variable `PISTON_WARM_HOST=1`, so a test suite can tell when process-wide state may outlive a
+run; state that a fresh process would reset (statics, environment changes) carries over between runs, which is why
+this is off by default. Hosts are asked to exit when the daemon stops.
 
 ### User settings
 
@@ -286,6 +383,24 @@ invalid values fall back to defaults. Unknown keys are preserved on write.
 | Field | Type | Description |
 |---|---|---|
 | `dashboard.detailPane` | `string` | Where the test details pane docks when a dashboard opens: `"right"` (default) or `"bottom"`. |
+
+### Child process environment
+
+Builds, test discovery and test hosts get the daemon's environment except for
+variables that describe how the daemon itself was started, so that a test sees what `dotnet test`
+in a terminal would:
+
+- listen addresses: `ASPNETCORE_URLS`, `ASPNETCORE_HTTP(S)_PORTS`, `ASPNETCORE_HTTPS_PORT`, `DOTNET_URLS`, `DOTNET_HTTP(S)_PORTS`;
+- `dotnet watch` and hot reload: `DOTNET_WATCH*`, `DOTNET_HOTRELOAD_*`, `DOTNET_MODIFIABLE_ASSEMBLIES`, and the hot reload entry of `DOTNET_STARTUP_HOOKS` (other hooks are kept);
+- launch profiles and IDE debug sessions: `DOTNET_LAUNCH_PROFILE`, `DEBUG_SESSION_*`;
+- an Aspire AppHost run: `ASPIRE_*`, `DCP_*`, `DOTNET_DASHBOARD_*` and `DOTNET_RESOURCE_SERVICE_*`. Aspire user settings such as `ASPIRE_CONTAINER_RUNTIME` are kept.
+
+A test run's log lists the variables it did not inherit. To keep some, set
+`PISTON_TEST_ENV_PASSTHROUGH` on the daemon to names or `PREFIX*` patterns separated
+by `;` or `,` (for example `ASPNETCORE_URLS;ASPIRE_DASHBOARD_*`).
+
+Child processes also get `DiffEngine_Disabled=true` unless it is already set, so snapshot
+tests (Verify) do not open a diff tool for every failure while Piston runs in the background.
 
 ## Building from source
 
@@ -319,6 +434,20 @@ outlive their parent. Setup
 commands and engine builds disable MSBuild node reuse in their child environment
 to prevent persistent nodes retaining redirected output pipes after `dotnet` exits.
 
+### Framework smoke test
+
+[`samples/Samples.slnx`](samples/README.md) holds an MSTest, NUnit, xUnit v3 and TUnit project, each with one passing,
+one deliberately failing and one skipped test. CI packs the tool, installs it and runs
+`node eng/smoke-test.mjs`, which starts `piston daemon` on the samples, waits for the startup run and checks its
+counts (12 tests: 4 passed, 4 failed, 4 skipped) on Linux, Windows and macOS. To run it locally (with no other Piston
+process owning this worktree):
+
+```sh
+dotnet build Piston.slnx -c Release
+node eng/smoke-test.mjs --tool src/Piston/bin/Release/net10.0/Piston.dll \
+  --total 12 --failed 4 --skipped 4 --projects 4 -- samples/Samples.slnx
+```
+
 ### Dogfooding Piston on itself
 
 Run the daemon from a Release build of this repo against `Piston.slnx`:
@@ -342,7 +471,7 @@ The repo pins [roslynk](https://www.nuget.org/packages/roslynk) as a local .NET 
 
 ## Proposed direction
 
-Fine-grained coverage, Copilot canvas/harness integrations, and a per-user hub
+Copilot canvas/harness integrations and a per-user hub
 with isolated worktree workers remain deferred. The separate `measurements/`
 harness does not establish a measured Piston improvement; a matched comparison
 campaign remains future work. Aspire is one possible generic integration-test example, not a

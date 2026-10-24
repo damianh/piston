@@ -1,6 +1,7 @@
 @inject EngineClientService Client
 @inject NavigationManager Nav
 @inject ViewState ViewState
+@inject IJSRuntime JS
 @implements IDisposable
 
 <ConnectionOverlay IsConnected="@Client.IsConnected" IsConnecting="@Client.IsConnecting" />
@@ -13,14 +14,24 @@
     </div>
 </div>
 
+<ShortcutsDialog IsOpen="@_shortcutsOpen" OnClose="CloseShortcuts" />
+
+<!-- Announces when a run starts and finishes, for screen readers -->
+<div class="sr-only" role="status" aria-live="polite" aria-atomic="true">@_announcement</div>
+
 @code {
     private ElementReference _rootElement;
     private KeyboardEventArgs? _lastKeyDown;
+    private bool _shortcutsOpen;
+    private string? _announcement;
+    private StateSnapshotNotification? _previousSnapshot;
+    private string? _shownTitle;
 
     protected override async Task OnInitializedAsync()
     {
         Client.ConnectionStateChanged += OnConnectionStateChanged;
         Client.SettingsChanged += OnSettingsChanged;
+        Client.StateChanged += OnStateChanged;
 
         var wsUrl = BuildWsUrl();
         await Client.StartAsync(wsUrl);
@@ -33,7 +44,47 @@
         return $"{scheme}://{baseUri.Host}:{baseUri.Port}/ws";
     }
 
-    private void OnConnectionStateChanged() => InvokeAsync(StateHasChanged);
+    private void OnConnectionStateChanged() => InvokeAsync(async () =>
+    {
+        await ShowStatusAsync();
+        StateHasChanged();
+    });
+
+    private void OnStateChanged(StateSnapshotNotification snapshot) => InvokeAsync(async () =>
+    {
+        if (DashboardStatus.Announcement(_previousSnapshot, snapshot) is { } announcement)
+        {
+            _announcement = announcement;
+            StateHasChanged();
+        }
+
+        _previousSnapshot = snapshot;
+        await ShowStatusAsync();
+    });
+
+    // The tab title and favicon show the run state while the dashboard is in a background tab.
+    private async Task ShowStatusAsync()
+    {
+        var snapshot = Client.CurrentSnapshot;
+        var title = DashboardStatus.Title(snapshot, Client.IsConnected);
+        var icon = DashboardStatus.Icon(snapshot, Client.IsConnected);
+        if ($"{title}|{icon}" == _shownTitle)
+        {
+            return;
+        }
+
+        _shownTitle = $"{title}|{icon}";
+        try
+        {
+            await JS.InvokeVoidAsync("pistonStatus.set", title, icon);
+        }
+        catch (JSException)
+        {
+            // Cosmetic only; never let it break the dashboard.
+        }
+    }
+
+    private void CloseShortcuts() => _shortcutsOpen = false;
 
     private void OnSettingsChanged() => InvokeAsync(() =>
     {
@@ -43,6 +94,12 @@
 
     private void HandleKeyDown(KeyboardEventArgs e)
     {
+        if (e.Key == "?")
+        {
+            _shortcutsOpen = true;
+            return;
+        }
+
         _lastKeyDown = e;
         StateHasChanged();
     }
@@ -51,5 +108,6 @@
     {
         Client.ConnectionStateChanged -= OnConnectionStateChanged;
         Client.SettingsChanged -= OnSettingsChanged;
+        Client.StateChanged -= OnStateChanged;
     }
 }

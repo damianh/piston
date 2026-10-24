@@ -4,6 +4,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Piston.Engine;
+using Piston.Engine.Coverage;
 using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
 using Piston.Hosting.Services;
@@ -25,8 +26,15 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
     private DaemonControl? _daemonControl;
     private ActivityHistory? _activityHistory;
     private UserSettingsStore? _userSettings;
+    private (string Id, CoverageExportDto Export, int Offset)? _pendingCoverageExport;
+
+    // Even JSON's worst-case six-byte character escaping stays well below the 4 MiB pipe frame limit.
+    internal const int CoverageExportChunkChars = 64 * 1024;
 
     public EngineCommandDispatcher(IEngine engine) => _engine = engine;
+
+    private string? SolutionDirectory =>
+        _engine.State.SolutionPath is { } solutionPath ? Path.GetDirectoryName(Path.GetFullPath(solutionPath)) : null;
 
     /// <summary>Delay before a requested shutdown starts, so the reply reaches the client first.</summary>
     internal static TimeSpan ShutdownReplyGrace { get; set; } = TimeSpan.FromMilliseconds(100);
@@ -83,7 +91,83 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<GetFileCoverageCommand>(@params);
                     var filePath = cmd?.FilePath ?? string.Empty;
-                    var result = new FileCoverageDto(filePath, Array.Empty<CoverageLineDto>());
+                    var coverage = string.IsNullOrWhiteSpace(filePath) ? null : _engine.GetFileCoverage(filePath);
+                    var result = DtoMapper.ToFileCoverageDto(
+                        filePath, coverage, SolutionDirectory, cmd?.IncludeSource ?? false);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.CoverageGetCoveringTests:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<GetCoveringTestsCommand>(@params);
+                    var filePath = cmd?.FilePath ?? string.Empty;
+                    var tests = string.IsNullOrWhiteSpace(filePath) ? null : _engine.GetCoveringTests(filePath);
+                    var result = DtoMapper.ToCoveringTestsDto(filePath, tests);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.SourceGet:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<GetSourceCommand>(@params);
+                    var result = SourceFileReader.Read(cmd?.FilePath, SolutionDirectory);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.HistoryGetRuns:
+                {
+                    var runs = _engine.GetStoredRuns();
+                    var result = new StoredRunsDto(runs is not null, runs?.Select(DtoMapper.ToDto).ToList() ?? []);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.HistoryGetRun:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<GetStoredRunCommand>(@params);
+                    var run = string.IsNullOrWhiteSpace(cmd?.RunId) ? null : _engine.GetStoredRun(cmd.RunId);
+                    return run is null
+                        ? null
+                        : JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(run.ToDto(), JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.HistoryGetTestMarks:
+                {
+                    var failures = _engine.GetLatestFailures();
+                    var flaky = _engine.GetFlakyTests();
+                    var result = new TestMarksDto(failures is not null || flaky is not null, DtoMapper.ToMarks(failures ?? [], flaky ?? []));
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.HistoryGetTestHistory:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<GetTestHistoryCommand>(@params);
+                    // An empty name matches no test, but still reports whether history is on.
+                    var histories = _engine.GetTestHistory(cmd?.Test ?? "", cmd?.Project);
+                    var result = new TestHistoriesDto(histories is not null, histories?.Select(DtoMapper.ToDto).ToList() ?? []);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.CoverageGetSummary:
+                {
+                    var result = DtoMapper.ToCoverageSummaryDto(_engine.GetCoverageReport(), SolutionDirectory);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.CoverageExport:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<ExportCoverageCommand>(@params);
+                    if (cmd is null || !CoverageExporter.TryParseFormat(cmd.Format, out var format))
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "format must be 'lcov' or 'cobertura'.");
+                    }
+
+                    var result = ExportCoverageChunk(cmd, format);
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
                 }
@@ -207,6 +291,53 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                     JsonRpcErrorCodes.MethodNotFound,
                     $"Method not found: {method}");
         }
+    }
+
+    private CoverageExportDto ExportCoverageChunk(ExportCoverageCommand command, CoverageExportFormat format)
+    {
+        CoverageExportDto snapshot;
+        var id = command.ExportId;
+        if (id is null)
+        {
+            if (command.Offset != 0)
+            {
+                throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "A new export must start at offset zero.");
+            }
+
+            _pendingCoverageExport = null;
+            var export = CoverageExporter.Export(_engine, format)
+                ?? throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, "Coverage is disabled.");
+            snapshot = new CoverageExportDto(
+                format.ToString().ToLowerInvariant(), CoverageExporter.FileName(format),
+                export.Content, export.FileCount, export.StaleFilesSkipped);
+        }
+        else if (_pendingCoverageExport is { } pending
+            && pending.Id == id && pending.Offset == command.Offset
+            && pending.Export.Format == format.ToString().ToLowerInvariant())
+        {
+            snapshot = pending.Export;
+        }
+        else
+        {
+            throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "Unknown export or invalid continuation offset or format.");
+        }
+
+        var next = (int)Math.Min((long)command.Offset + CoverageExportChunkChars, snapshot.Content.Length);
+        if (next < snapshot.Content.Length && char.IsHighSurrogate(snapshot.Content[next - 1]))
+        {
+            next--;
+        }
+
+        var content = snapshot.Content[command.Offset..next];
+        if (next < snapshot.Content.Length)
+        {
+            id ??= Guid.NewGuid().ToString("N");
+            _pendingCoverageExport = (id, snapshot, next);
+            return snapshot with { Content = content, ExportId = id, NextOffset = next };
+        }
+
+        _pendingCoverageExport = null;
+        return snapshot with { Content = content, ExportId = id };
     }
 
     private DaemonControl RequireDaemonControl(string method) =>

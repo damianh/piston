@@ -3,6 +3,7 @@
 
 using Piston.Engine.Coverage;
 using Piston.Engine.Execution;
+using Piston.Engine.History;
 using Piston.Engine.Impact;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
@@ -21,7 +22,11 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     private readonly string _solutionDirectory;
     private readonly MachineExecutionCoordinator _executionCoordinator;
     private readonly string? _ownerHost;
+    private readonly bool _historyEnabled;
+    private readonly MtpWarmHostPool? _warmHosts;
+    private readonly string? _historyDirectory;
     private WorktreeOwnership? _ownership;
+    private RunHistoryStore? _history;
 
     public PistonEngine(PistonOptions options)
         : this(options, NullActivityEventSink.Instance)
@@ -32,6 +37,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     {
         _activitySink = activitySink;
         _ownerHost = options.OwnerHost;
+        _historyEnabled = options.HistoryEnabled;
+        _historyDirectory = options.HistoryDirectory;
 
         // Register MSBuild before any Microsoft.Build.* types are loaded.
         // This must happen before MsBuildSolutionGraph (or any class referencing MSBuild) is JIT-compiled.
@@ -55,7 +62,6 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         };
 
         var fileWatcher = new FileWatcherService(options.DebounceInterval);
-        var buildService = new BuildService();
         var trxParser = new TrxResultParser();
 
         ICoverageProcessor? coverageProcessor = null;
@@ -73,10 +79,13 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             _coverageStore);
 
         var vsTestStrategy = new ProcessTestExecutionStrategy(trxParser);
+        _warmHosts = options.WarmTestHosts ? new MtpWarmHostPool() : null;
+        var buildService = new BuildService(_warmHosts);
         var mtpStrategy = new MtpTestExecutionStrategy(
             projectPath => impactAnalyzer.GetMtpOutputPath(projectPath),
             solutionDir,
-            impactAnalyzer.IsMultiTargeted);
+            impactAnalyzer.IsMultiTargeted,
+            _warmHosts);
 
         ITestExecutionStrategy strategy = options.TestExecutionMode switch
         {
@@ -84,6 +93,11 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
                 throw new NotSupportedException("InProcess test execution mode is not yet implemented."),
             _ => new CompositeTestExecutionStrategy(mtpStrategy, vsTestStrategy),
         };
+
+        if (options.TestTimeout is { } testTimeout)
+        {
+            strategy = new TimeoutTestExecutionStrategy(strategy, testTimeout);
+        }
 
         var effectivePoolSize = options.ProcessPoolSize > 0
             ? options.ProcessPoolSize
@@ -113,6 +127,13 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             _executionCoordinator);
 
         var sdkVersions = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<string?>>(StringComparer.Ordinal);
+        _orchestrator.BackfillGranularity = options.ImpactBackfill switch
+        {
+            ImpactBackfillMode.Class => Impact.ImpactGranularity.Class,
+            ImpactBackfillMode.Test => Impact.ImpactGranularity.Test,
+            _ => null,
+        };
+        _orchestrator.HangThreshold = options.HangThreshold;
         _orchestrator.SdkVersionProvider = dir => sdkVersions.GetOrAdd(dir, d => new Lazy<string?>(() => ProbeSdkVersion(d))).Value;
     }
 
@@ -188,6 +209,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             $"budget: {budget.CpuSlots} CPU slot(s), memory {budget.MemoryMb?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "not budgeted"} ({budget.Source}); " +
             $"reservation: {_executionCoordinator.Reservation.CpuSlots} CPU slot(s), memory {_executionCoordinator.Reservation.MemoryMb?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}");
 
+        OpenHistory(solutionPath);
+
         try
         {
             if (beforeRunsStart is not null)
@@ -200,6 +223,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         catch
         {
             await _orchestrator.DisposeAsync().ConfigureAwait(false);
+            CloseHistory();
             _ownership.Dispose();
             _ownership = null;
             throw;
@@ -207,6 +231,46 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
         _activitySink.Emit(new SolutionLoadedActivityEvent(solutionPath, 0));
     }
+
+    // Only the worktree owner writes history; a failure to open it leaves the engine without history.
+    private void OpenHistory(string solutionPath)
+    {
+        if (!_historyEnabled)
+        {
+            return;
+        }
+
+        try
+        {
+            _history = RunHistoryStore.Open(
+                _historyDirectory ?? HistoryLocation.DefaultBaseDirectory(),
+                solutionPath,
+                message => _diagnosticLog.Write("History", message));
+            _orchestrator.RunHistory = _history;
+            _diagnosticLog.Write("History", $"Run history: {_history.Location.FilePath}{(_history.ReadOnly ? " (read-only)" : "")}");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or ExecutionCoordinationException)
+        {
+            _diagnosticLog.Write("History", $"Run history is off: {ex.Message}");
+        }
+    }
+
+    private void CloseHistory()
+    {
+        _orchestrator.RunHistory = null;
+        _history?.Dispose();
+        _history = null;
+    }
+
+    public IReadOnlyList<TestHistory>? GetTestHistory(string test, string? project = null) => _history?.GetTestHistory(test, project);
+
+    public IReadOnlyList<TestHistory>? GetFlakyTests() => _history?.GetFlakyTests();
+
+    public IReadOnlyList<FailureClassification>? GetLatestFailures() => _history?.GetLatestFailures();
+
+    public IReadOnlyList<StoredRunSummary>? GetStoredRuns() => _history?.GetRuns();
+
+    public StoredRun? GetStoredRun(string runId) => _history?.GetRun(runId);
 
     public Task ForceRunAsync() => _orchestrator.ForceRunAsync();
 
@@ -236,11 +300,40 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
     public void ClearResults() => _orchestrator.ClearResults(_solutionDirectory);
 
+    public CoverageReportSnapshot? GetCoverageReport() => _orchestrator.GetCoverageReport();
+
+    public FileCoverageSnapshot? GetFileCoverage(string filePath) =>
+        _orchestrator.GetFileCoverage(Path.GetFullPath(filePath, _solutionDirectory));
+
+    public IReadOnlyList<CoveringTest>? GetCoveringTests(string filePath) =>
+        _orchestrator.GetCoveringTests(Path.GetFullPath(filePath, _solutionDirectory));
+
+    public ImpactAnalysisResult PlanAffected(IReadOnlyList<string> filePaths)
+    {
+        // Mirror the watcher: changes under bin, obj and other excluded directories trigger nothing.
+        var watched = filePaths
+            .Select(p => Path.GetFullPath(p, _solutionDirectory))
+            .Where(p => !File.Exists(p) || SourceFingerprinter.CoversPath(_solutionDirectory, p))
+            .ToList();
+        return watched.Count > 0
+            ? _orchestrator.PlanAffected(watched)
+            : new ImpactAnalysisResult([], [], RequiresGraphRebuild: false, IsFullRun: false)
+            {
+                Explanation = "No watched file changed, so nothing would run.",
+            };
+    }
+
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 
     public async ValueTask DisposeAsync()
     {
         await _orchestrator.DisposeAsync().ConfigureAwait(false);
+        if (_warmHosts is not null)
+        {
+            await _warmHosts.DisposeAsync().ConfigureAwait(false);
+        }
+
+        CloseHistory();
         _coverageStore?.Dispose();
         _pool.Dispose();
         // Released after the orchestrator so no run executes without ownership.

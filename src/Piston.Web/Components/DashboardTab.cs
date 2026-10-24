@@ -7,4 +7,6 @@ public enum DashboardTab
 {
     Activity,
     Tests,
+    Coverage,
+    Runs,
 }

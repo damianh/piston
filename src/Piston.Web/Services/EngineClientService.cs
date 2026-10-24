@@ -357,6 +357,63 @@ public sealed class EngineClientService : IAsyncDisposable
         return result?.Deserialize<RunLogResponse>(JsonRpcSerializer.Options)?.Log;
     }
 
+    /// <summary>The solution-wide coverage report, or <see langword="null"/> when the daemon is unreachable.</summary>
+    public async Task<CoverageSummaryDto?> GetCoverageSummaryAsync()
+    {
+        var result = await SendRequestAsync(ProtocolMethods.CoverageGetSummary).ConfigureAwait(false);
+        return result?.Deserialize<CoverageSummaryDto>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>One file's line coverage, with its source text when <paramref name="includeSource"/> is set.</summary>
+    public async Task<FileCoverageDto?> GetFileCoverageAsync(string filePath, bool includeSource)
+    {
+        var result = await SendRequestAsync(ProtocolMethods.CoverageGetForFile, new GetFileCoverageCommand(filePath, includeSource))
+            .ConfigureAwait(false);
+        return result?.Deserialize<FileCoverageDto>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>A source file of the watched solution, e.g. one a stack frame names; null when the daemon is unreachable.</summary>
+    public async Task<SourceFileDto?> GetSourceAsync(string filePath)
+    {
+        var result = await SendRequestAsync(ProtocolMethods.SourceGet, new GetSourceCommand(filePath)).ConfigureAwait(false);
+        return result?.Deserialize<SourceFileDto>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>The runs kept in the run history, newest first; null when the daemon is unreachable.</summary>
+    public async Task<StoredRunsDto?> GetStoredRunsAsync()
+    {
+        var result = await SendRequestAsync(ProtocolMethods.HistoryGetRuns).ConfigureAwait(false);
+        return result?.Deserialize<StoredRunsDto>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>One stored run with its per-test results; null when it is not kept or the daemon is unreachable.</summary>
+    public async Task<StoredRunDto?> GetStoredRunAsync(string runId)
+    {
+        var result = await SendRequestAsync(ProtocolMethods.HistoryGetRun, new GetStoredRunCommand(runId)).ConfigureAwait(false);
+        return result?.Deserialize<StoredRunDto>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>Failure kinds of failing tests and the flaky tests; null when the daemon is unreachable.</summary>
+    public async Task<TestMarksDto?> GetTestMarksAsync()
+    {
+        var result = await SendRequestAsync(ProtocolMethods.HistoryGetTestMarks).ConfigureAwait(false);
+        return result?.Deserialize<TestMarksDto>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>Recorded results of a test; null when the daemon is unreachable.</summary>
+    public async Task<TestHistoriesDto?> GetTestHistoryAsync(string test, string? project)
+    {
+        var result = await SendRequestAsync(ProtocolMethods.HistoryGetTestHistory, new GetTestHistoryCommand(test, project)).ConfigureAwait(false);
+        return result?.Deserialize<TestHistoriesDto>(JsonRpcSerializer.Options);
+    }
+
+    public async Task<CoveringTestsDto?> GetCoveringTestsAsync(string filePath)
+    {
+        var result = await SendRequestAsync(ProtocolMethods.CoverageGetCoveringTests, new GetCoveringTestsCommand(filePath))
+            .ConfigureAwait(false);
+        return result?.Deserialize<CoveringTestsDto>(JsonRpcSerializer.Options);
+    }
+
     /// <summary>
     /// Merges the daemon's retained activity history into the local log so events that
     /// happened before this page connected (e.g. agent MCP calls) appear in the timeline.

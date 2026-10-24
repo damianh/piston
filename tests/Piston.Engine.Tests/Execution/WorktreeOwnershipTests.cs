@@ -139,6 +139,77 @@ public sealed class WorktreeOwnershipTests : IDisposable
     }
 
     [Fact]
+    public void ExistingPathSpelling_PreservesCaseDistinctEntries()
+    {
+        var upper = CreateWorktree("Case");
+        var lower = CreateWorktree("case");
+        var directories = Directory.GetDirectories(_root);
+        var canonicalRoot = WorktreeIdentity.GetExistingPathSpelling(_root);
+
+        Assert.Equal(Path.Combine(canonicalRoot, Path.GetFileName(directories.Single(d => string.Equals(d, upper, StringComparison.OrdinalIgnoreCase)
+            && (!directories.Contains(upper) || d == upper)))), WorktreeIdentity.GetExistingPathSpelling(upper));
+        Assert.Equal(Path.Combine(canonicalRoot, Path.GetFileName(directories.Single(d => string.Equals(d, lower, StringComparison.OrdinalIgnoreCase)
+            && (!directories.Contains(lower) || d == lower)))), WorktreeIdentity.GetExistingPathSpelling(lower));
+    }
+
+    [Fact]
+    public void Identity_MacTraverseOnlyAncestor_DoesNotRequireDirectoryListing()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            return;
+        }
+
+        var parent = Path.Combine(_root, "traverse-only");
+        var worktree = CreateWorktree(Path.Combine("traverse-only", "Repo"));
+        var solution = CreateSolution(worktree);
+        var expected = WorktreeIdentity.FromSolutionPath(solution);
+        var canonicalSolution = WorktreeIdentity.CanonicalizePath(solution);
+        var missing = Path.Combine(worktree, "missing", "New.slnx");
+        var canonicalMissing = WorktreeIdentity.CanonicalizePath(missing);
+        var mode = File.GetUnixFileMode(parent);
+        try
+        {
+            File.SetUnixFileMode(parent, UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
+            _ = Assert.Throws<UnauthorizedAccessException>(() => Directory.GetFileSystemEntries(parent));
+
+            Assert.Equal(expected, WorktreeIdentity.FromSolutionPath(solution));
+            Assert.Equal(canonicalSolution, WorktreeIdentity.CanonicalizePath(solution));
+            Assert.Equal(canonicalMissing, WorktreeIdentity.CanonicalizePath(missing));
+            using var owner = WorktreeOwnership.Acquire(_directory, solution);
+            Assert.Equal(expected, owner.Worktree);
+        }
+        finally
+        {
+            File.SetUnixFileMode(parent, mode);
+        }
+    }
+
+    [Fact]
+    public void Identity_UnicodeSpelling_FollowsFileSystemEquivalence()
+    {
+        var composed = CreateWorktree("caf\u00e9");
+        var decomposed = Path.Combine(_root, "cafe\u0301");
+        var solution = CreateSolution(composed);
+
+        if (Directory.Exists(decomposed))
+        {
+            Assert.Equal(WorktreeIdentity.GetExistingPathSpelling(composed), WorktreeIdentity.GetExistingPathSpelling(decomposed));
+            Assert.Equal(WorktreeIdentity.CanonicalizePath(solution),
+                WorktreeIdentity.CanonicalizePath(Path.Combine(decomposed, "App.slnx")));
+            Assert.Equal(WorktreeIdentity.FromSolutionPath(solution),
+                WorktreeIdentity.FromSolutionPath(Path.Combine(decomposed, "App.slnx")));
+        }
+        else
+        {
+            _ = CreateWorktree("cafe\u0301");
+            var otherSolution = CreateSolution(decomposed);
+            Assert.NotEqual(WorktreeIdentity.GetExistingPathSpelling(composed), WorktreeIdentity.GetExistingPathSpelling(decomposed));
+            Assert.NotEqual(WorktreeIdentity.FromSolutionPath(solution).Key, WorktreeIdentity.FromSolutionPath(otherSolution).Key);
+        }
+    }
+
+    [Fact]
     public void Acquire_RefusesSecondOwnerOfSameWorktree_EvenForAnotherSolution()
     {
         var worktree = CreateWorktree("wt");

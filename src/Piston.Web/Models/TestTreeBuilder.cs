@@ -75,7 +75,41 @@ public static class TestTreeBuilder
                 break;
         }
 
+        SortNodes(roots, viewState, preserveOrder: viewState.Grouping == GroupingMode.ByStatus);
         return roots;
+    }
+
+    private static void SortNodes(List<TestNode> nodes, ViewState viewState, bool preserveOrder = false)
+    {
+        foreach (var node in nodes)
+        {
+            SortNodes(node.Children, viewState);
+        }
+
+        if (preserveOrder || nodes.Count < 2)
+        {
+            return;
+        }
+
+        var entries = nodes.Select(n => (Node: n, Duration: viewState.TestSort == TestSort.Duration ? n.Counts().DurationMs : 0));
+        var ordered = entries.OrderBy(x => x.Node.Structure == NodeStructure.Pinned ? 0 : 1);
+        if (viewState.TestSort == TestSort.Duration)
+        {
+            ordered = viewState.TestSortDescending
+                ? ordered.ThenByDescending(x => x.Duration)
+                : ordered.ThenBy(x => x.Duration);
+        }
+
+        var byName = Comparer<TestNode>.Create((a, b) =>
+            a.Structure == NodeStructure.Framework && b.Structure == NodeStructure.Framework
+                ? FrameworkComparer.Instance.Compare(a.Label, b.Label)
+                : StringComparer.Ordinal.Compare(a.Label, b.Label));
+        ordered = viewState.TestSort == TestSort.Name && viewState.TestSortDescending
+            ? ordered.ThenByDescending(x => x.Node, byName)
+            : ordered.ThenBy(x => x.Node, byName);
+        var sorted = ordered.Select(x => x.Node).ToList();
+        nodes.Clear();
+        nodes.AddRange(sorted);
     }
 
     /// <summary>
@@ -112,7 +146,7 @@ public static class TestTreeBuilder
         foreach (var parts in suites.GroupBy(s => s.Name, StringComparer.Ordinal))
         {
             var suite = Combine([.. parts]);
-            var visibleTests = GetVisibleTests(suite.Tests, matcher, viewState);
+            var visibleTests = GetVisibleTests(suite.Tests, suite.Name, matcher, viewState);
             if (visibleTests.Count == 0)
             {
                 continue;
@@ -146,7 +180,7 @@ public static class TestTreeBuilder
 
             if (byFramework.Count == 0)
             {
-                AddNamespaceTree(suiteNode.Children, visibleTests, isStale, suite.Name, viewState);
+                AddNamespaceTree(suiteNode.Children, visibleTests, isStale, suite.Name, suite.Name, viewState);
             }
             else
             {
@@ -161,13 +195,13 @@ public static class TestTreeBuilder
                         ExpansionKey = $"tfm:{scope}",
                         IsExpanded = viewState.IsNodeExpanded($"tfm:{scope}"),
                     };
-                    AddNamespaceTree(frameworkNode.Children, [.. frameworkGroup], isStale, scope, viewState);
+                    AddNamespaceTree(frameworkNode.Children, [.. frameworkGroup], isStale, scope, suite.Name, viewState);
                     suiteNode.Children.Add(frameworkNode);
                 }
 
                 // Tests discovered but not yet run have no framework until their results arrive.
                 AddNamespaceTree(
-                    suiteNode.Children, [.. visibleTests.Where(t => t.TargetFramework is null)], isStale, suite.Name, viewState);
+                    suiteNode.Children, [.. visibleTests.Where(t => t.TargetFramework is null)], isStale, suite.Name, suite.Name, viewState);
             }
 
             roots.Add(suiteNode);
@@ -185,6 +219,7 @@ public static class TestTreeBuilder
         IReadOnlyList<TestResultDto> tests,
         Func<TestResultDto, bool> isStale,
         string scope,
+        string project,
         ViewState viewState)
     {
         var byNamespace = tests
@@ -205,11 +240,11 @@ public static class TestTreeBuilder
                     // Dot-less names (e.g. a custom DisplayName) have no class to group under.
                     if (classTests.All(t => t.FullyQualifiedName == classKey))
                     {
-                        AddTestLeaves(parent, classTests, isStale);
+                        AddTestLeaves(parent, classTests, isStale, project);
                         continue;
                     }
 
-                    parent.Add(ClassNode(classKey, classTests, isStale, scope, viewState));
+                    parent.Add(ClassNode(classKey, classTests, isStale, scope, project, viewState));
                 }
             }
             else
@@ -225,7 +260,7 @@ public static class TestTreeBuilder
 
                 foreach (var (classKey, classTests) in classGroups)
                 {
-                    nsNode.Children.Add(ClassNode(classKey, classTests, isStale, scope, viewState));
+                    nsNode.Children.Add(ClassNode(classKey, classTests, isStale, scope, project, viewState));
                 }
 
                 parent.Add(nsNode);
@@ -238,6 +273,7 @@ public static class TestTreeBuilder
         List<TestResultDto> classTests,
         Func<TestResultDto, bool> isStale,
         string scope,
+        string project,
         ViewState viewState)
     {
         var classNode = new TestNode
@@ -248,7 +284,7 @@ public static class TestTreeBuilder
             ExpansionKey = $"class:{scope}|{classKey}",
             IsExpanded = viewState.IsNodeExpanded($"class:{scope}|{classKey}"),
         };
-        AddTestLeaves(classNode.Children, classTests, isStale);
+        AddTestLeaves(classNode.Children, classTests, isStale, project);
         return classNode;
     }
 
@@ -298,6 +334,7 @@ public static class TestTreeBuilder
         var allTests = suites
             .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
             .Where(x => matcher is null || matcher(x.Test.FullyQualifiedName))
+            .Where(x => IsHistoryVisible(x.Test, x.Suite.Name, viewState))
             .ToList();
 
         if (allTests.Count == 0)
@@ -337,8 +374,7 @@ public static class TestTreeBuilder
                 IsExpanded = viewState.IsNodeExpanded($"status:{label}"),
             };
 
-            foreach (var (suite, test) in grouped
-                .OrderBy(x => ClassMethodLabel(x.Test.FullyQualifiedName), StringComparer.Ordinal)
+            foreach (var (suite, test) in OrderTests(grouped, x => x.Test, ClassMethodLabel)
                 .ThenBy(x => x.Test.TargetFramework, FrameworkComparer.Instance))
             {
                 var isStale = IsStale(suite, lastFileChangeTime);
@@ -347,6 +383,7 @@ public static class TestTreeBuilder
                     Label = ClassMethodLabel(test.FullyQualifiedName),
                     Kind = TestNodeKind.Test,
                     Test = test,
+                    Project = suite.Name,
                     IsStale = isStale,
                     Framework = test.TargetFramework,
                 });
@@ -368,18 +405,18 @@ public static class TestTreeBuilder
         var allTests = suites
             .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
             .Where(x => matcher is null || matcher(x.Test.FullyQualifiedName))
-            .Where(x => IsStatusVisible(x.Test.Status, viewState))
-            .OrderBy(x => ClassMethodLabel(x.Test.FullyQualifiedName), StringComparer.Ordinal)
+            .Where(x => IsStatusVisible(x.Test.Status, viewState) && IsHistoryVisible(x.Test, x.Suite.Name, viewState));
+        var ordered = OrderTests(allTests, x => x.Test, ClassMethodLabel)
             .ThenBy(x => x.Test.TargetFramework, FrameworkComparer.Instance)
             .ToList();
 
-        if (allTests.Count == 0)
+        if (ordered.Count == 0)
         {
             roots.Add(new TestNode { Label = "No tests match current filters", Kind = TestNodeKind.Group, GroupKey = "" });
             return;
         }
 
-        foreach (var (suite, test) in allTests)
+        foreach (var (suite, test) in ordered)
         {
             var isStale = IsStale(suite, lastFileChangeTime);
             roots.Add(new TestNode
@@ -387,6 +424,7 @@ public static class TestTreeBuilder
                 Label = ClassMethodLabel(test.FullyQualifiedName),
                 Kind = TestNodeKind.Test,
                 Test = test,
+                Project = suite.Name,
                 IsStale = isStale,
                 Framework = test.TargetFramework,
             });
@@ -433,6 +471,7 @@ public static class TestTreeBuilder
                 Label = ClassMethodLabel(test.FullyQualifiedName),
                 Kind = TestNodeKind.Test,
                 Test = test,
+                Project = suite.Name,
                 IsStale = isStale,
                 Framework = test.TargetFramework,
             });
@@ -441,18 +480,24 @@ public static class TestTreeBuilder
         roots.Add(pinnedRoot);
     }
 
+    private static IOrderedEnumerable<T> OrderTests<T>(
+        IEnumerable<T> items, Func<T, TestResultDto> test, Func<string, string> label) =>
+        items.OrderBy(x => label(test(x).FullyQualifiedName), StringComparer.Ordinal);
+
     private static void AddTestLeaves(
         List<TestNode> parent,
         IEnumerable<TestResultDto> tests,
-        Func<TestResultDto, bool> isStale)
+        Func<TestResultDto, bool> isStale,
+        string project)
     {
-        foreach (var test in tests.OrderBy(t => MethodLabel(t.FullyQualifiedName), StringComparer.Ordinal))
+        foreach (var test in OrderTests(tests, t => t, MethodLabel))
         {
             parent.Add(new TestNode
             {
                 Label = MethodLabel(test.FullyQualifiedName),
                 Kind = TestNodeKind.Test,
                 Test = test,
+                Project = project,
                 IsStale = isStale(test),
             });
         }
@@ -460,6 +505,7 @@ public static class TestTreeBuilder
 
     private static IReadOnlyList<TestResultDto> GetVisibleTests(
         IReadOnlyList<TestResultDto> tests,
+        string project,
         Func<string, bool>? matcher,
         ViewState viewState)
     {
@@ -469,9 +515,24 @@ public static class TestTreeBuilder
             filtered = filtered.Where(t => matcher(t.FullyQualifiedName));
         }
 
-        filtered = filtered.Where(t => IsStatusVisible(t.Status, viewState));
+        filtered = filtered.Where(t => IsStatusVisible(t.Status, viewState) && IsHistoryVisible(t, project, viewState));
         return filtered.ToList();
     }
+
+    /// <summary>True when the test is a new failure, for <see cref="ViewState.OnlyNewFailures"/>.</summary>
+    public static bool IsNewFailure(TestResultDto test, string? project, ViewState viewState) =>
+        test.Status == TestStatusDto.Failed
+        && viewState.GetTestMark(project, test.Key)?.FailureKind == "New";
+
+    /// <summary>True when the run history marks the test flaky.</summary>
+    public static bool IsFlaky(TestResultDto test, string? project, ViewState viewState) =>
+        viewState.GetTestMark(project, test.Key)?.Flaky == true;
+
+    // With both history filters on, a test passes either.
+    private static bool IsHistoryVisible(TestResultDto test, string project, ViewState viewState) =>
+        !(viewState.OnlyNewFailures || viewState.OnlyFlaky)
+        || (viewState.OnlyNewFailures && IsNewFailure(test, project, viewState))
+        || (viewState.OnlyFlaky && IsFlaky(test, project, viewState));
 
     private static bool IsStatusVisible(TestStatusDto status, ViewState viewState) =>
         status switch

@@ -153,7 +153,41 @@ public sealed class FileWatcherDebounceTests
     }
 
     [Fact]
-    public async Task ExcludedPaths_DoNotFireEvent()
+    public async Task NestedDirectoriesCreatedAfterStart_AreWatched()
+    {
+        using var sut = new FileWatcherService(TimeSpan.FromMilliseconds(50));
+        var dir = Directory.CreateTempSubdirectory("piston-test-");
+        try
+        {
+            sut.Start(dir.FullName);
+            var sourceDirectory = Directory.CreateDirectory(Path.Combine(dir.FullName, "Project", "Sources"));
+            var sourcePath = Path.Combine(sourceDirectory.FullName, "Source.cs");
+            await Task.Delay(100, _ct);
+            var received = new TaskCompletionSource<FileChangeBatch>(TaskCreationOptions.RunContinuationsAsynchronously);
+            sut.FileChanged += batch =>
+            {
+                if (batch.Changes.Any(change => change.FilePath == sourcePath))
+                {
+                    _ = received.TrySetResult(batch);
+                }
+            };
+
+            await File.WriteAllTextAsync(sourcePath, "// source", _ct);
+
+            var batch = await received.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            Assert.Contains(batch.Changes, change => change.FilePath == sourcePath);
+        }
+        finally
+        {
+            sut.Stop();
+            dir.Delete(recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ExcludedPaths_DoNotFireEvent(bool nestedProject)
     {
         var debounce = TimeSpan.FromMilliseconds(50);
         using var sut = new FileWatcherService(debounce);
@@ -164,17 +198,64 @@ public sealed class FileWatcherDebounceTests
         var dir = Directory.CreateTempSubdirectory("piston-test-");
         try
         {
+            var outputParent = nestedProject ? Directory.CreateDirectory(Path.Combine(dir.FullName, "Project")).FullName : dir.FullName;
             sut.Start(dir.FullName);
 
             foreach (var excluded in new[] { "bin", "obj", "TestResults", ".git", ".vs", ".idea", ".piston", "node_modules" })
             {
-                var excludedDir = Directory.CreateDirectory(Path.Combine(dir.FullName, excluded));
+                var excludedDir = Directory.CreateDirectory(Path.Combine(outputParent, excluded));
                 await File.WriteAllTextAsync(Path.Combine(excludedDir.FullName, "output.cs"), "// generated", _ct);
             }
 
             await Task.Delay(debounce + TimeSpan.FromMilliseconds(100), _ct);
 
             Assert.Empty(fired);
+        }
+        finally
+        {
+            sut.Stop();
+            dir.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task BuildOutputBurst_DoesNotLoseSourceMonitoring()
+    {
+        using var sut = new FileWatcherService(TimeSpan.FromMilliseconds(50));
+        var fired = new ConcurrentQueue<FileChangeBatch>();
+        sut.FileChanged += fired.Enqueue;
+        var dir = Directory.CreateTempSubdirectory("piston-watcher-burst-");
+        try
+        {
+            var projects = new[] { "First.Tests", "Second.Tests" }
+                .Select(name => Directory.CreateDirectory(Path.Combine(dir.FullName, name)).FullName).ToArray();
+            sut.Start(dir.FullName);
+            foreach (var project in projects)
+            {
+                foreach (var excluded in new[] { "bin", "obj" })
+                {
+                    var output = Directory.CreateDirectory(Path.Combine(project, excluded, "Debug", "net10.0")).FullName;
+                    for (var i = 0; i < 400; i++)
+                    {
+                        await File.WriteAllTextAsync(Path.Combine(output, $"Generated.Build.Output.{i:D4}.cs"), "// generated", _ct);
+                    }
+                }
+            }
+
+            var source = Path.Combine(projects[0], "Source.cs");
+            var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            sut.FileChanged += batch =>
+            {
+                if (batch.Changes.Any(change => change.FilePath == source))
+                {
+                    _ = received.TrySetResult();
+                }
+            };
+            await File.WriteAllTextAsync(source, "// source", _ct);
+            await received.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+            Assert.Null(sut.MonitoringError);
+            Assert.All(fired.SelectMany(batch => batch.Changes), change => Assert.Equal(source, change.FilePath));
         }
         finally
         {
@@ -205,6 +286,33 @@ public sealed class FileWatcherDebounceTests
             var changes = fired.SelectMany(batch => batch.Changes).Select(change => Path.GetFileName(change.FilePath)).ToArray();
             Assert.Contains("readme.txt", changes);
             Assert.Contains("data.json", changes);
+        }
+        finally
+        {
+            sut.Stop();
+            dir.Delete(recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData("App.sln")]
+    [InlineData("App.slnx")]
+    [InlineData("App.slnf")]
+    [InlineData("Directory.Build.props")]
+    [InlineData("Directory.Packages.props")]
+    public async Task SolutionAndBuildFiles_AreWatched(string fileName)
+    {
+        using var sut = new FileWatcherService(TimeSpan.FromMilliseconds(50));
+        var received = new TaskCompletionSource<FileChangeBatch>(TaskCreationOptions.RunContinuationsAsynchronously);
+        sut.FileChanged += batch => received.TrySetResult(batch);
+        var dir = Directory.CreateTempSubdirectory("piston-test-");
+        try
+        {
+            sut.Start(dir.FullName);
+            var filePath = Path.Combine(dir.FullName, fileName);
+            await File.WriteAllTextAsync(filePath, "<Solution />", _ct);
+            var batch = await received.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            Assert.Contains(batch.Changes, change => change.FilePath == filePath);
         }
         finally
         {

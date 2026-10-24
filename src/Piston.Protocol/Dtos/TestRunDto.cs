@@ -3,6 +3,9 @@
 
 namespace Piston.Protocol.Dtos;
 
+/// <summary>A test result key scoped to the project suite that produced it.</summary>
+public sealed record TestOutcomeReferenceDto(string Project, string Key);
+
 /// <summary>Source-input fingerprint captured for a run (see <c>piston-source-v2</c>).</summary>
 public sealed record SourceFingerprintDto(string Algorithm, string Value, int FileCount);
 
@@ -30,6 +33,10 @@ public sealed record TestRunAdmissionDto(
 /// Provenance metadata for a single test run. Enum-like fields are strings so new values can be
 /// added without breaking older clients. Per-test results are available through the MCP
 /// <c>GetTestRun</c> tool; suites in snapshots carry <see cref="TestSuiteDto.RunId"/>.
+/// <see cref="SelectionExplanation"/> says why the run has its scope; <see cref="SelectionReasons"/> says why each
+/// test was selected when the impact map narrowed the run by changed lines. <see cref="ChangedFiles"/> are the files
+/// whose change triggered the run; <see cref="FixedTests"/> and <see cref="NewlyFailingTests"/> are the project-scoped result keys of
+/// tests whose outcome the run changed from failed to passed, and to failed from passed or no result.
 /// </summary>
 public sealed record TestRunDto(
     string RunId,
@@ -58,5 +65,10 @@ public sealed record TestRunDto(
     int Skipped,
     int DuplicateTestCount,
     TestRunAdmissionDto? Admission = null,
-    BuildResultDto? Build = null
+    BuildResultDto? Build = null,
+    string? SelectionExplanation = null,
+    IReadOnlyDictionary<string, IReadOnlyList<TestSelectionReasonDto>>? SelectionReasons = null,
+    IReadOnlyList<string>? ChangedFiles = null,
+    IReadOnlyList<TestOutcomeReferenceDto>? FixedTests = null,
+    IReadOnlyList<TestOutcomeReferenceDto>? NewlyFailingTests = null
 );

@@ -1,0 +1,92 @@
+@* What started the latest run and what it changed: trigger → build → scope → outcome, with the run's time. *@
+
+@if (Run is { } run)
+{
+    var summary = WatchStrip.Summarize(run, SolutionDirectory);
+    var active = Snapshot?.ActiveRun is not null;
+    <div class="flex items-center gap-1.5 px-3 h-6 shrink-0 whitespace-nowrap overflow-hidden border-b border-gray-800 text-xs text-gray-500"
+         data-testid="watch-strip">
+        <span class="shrink-0 @(active ? "text-cyan-400" : "")" title="@(active ? "Running now" : "Last run")">@(active ? "⟳" : "◷")</span>
+        <span class="min-w-0 truncate text-gray-300" title="@(summary.TriggerDetail ?? run.Trigger)">@summary.Trigger</span>
+
+        @if (summary.Build is { } build)
+        {
+            <span class="shrink-0" aria-hidden="true">→</span>
+            <span class="shrink-0 @(summary.BuildFailed ? "text-red-400" : "")">@build</span>
+        }
+
+        @if (summary.Scope is { } scope)
+        {
+            <span class="shrink-0" aria-hidden="true">→</span>
+            <span class="min-w-0 truncate" title="@(run.SelectionExplanation ?? "Which tests the run ran")">@scope</span>
+        }
+
+        @if (active)
+        {
+            <span class="shrink-0" aria-hidden="true">→</span>
+            <span class="shrink-0 text-cyan-400">@(Snapshot!.Phase == PistonPhaseDto.Building ? "building…" : Snapshot.Phase == PistonPhaseDto.Testing ? "testing…" : "starting…")</span>
+        }
+        else if (!summary.BuildFailed)
+        {
+            var fixedTests = run.FixedTests ?? [];
+            var newlyFailing = run.NewlyFailingTests ?? [];
+            <span class="shrink-0" aria-hidden="true">→</span>
+            @if (fixedTests.Count > 0)
+            {
+                <button class="shrink-0 text-green-400 hover:underline" data-testid="watch-strip-fixed"
+                        title="@TestList("Fixed", fixedTests)" @onclick="() => OnRevealTest.InvokeAsync(fixedTests[0])">
+                    ✓ @fixedTests.Count fixed
+                </button>
+            }
+            @if (newlyFailing.Count > 0)
+            {
+                <button class="shrink-0 text-red-400 hover:underline" data-testid="watch-strip-newly-failing"
+                        title="@TestList("Newly failing", newlyFailing)" @onclick="() => OnRevealTest.InvokeAsync(newlyFailing[0])">
+                    ✗ @newlyFailing.Count newly failing
+                </button>
+            }
+            @if (WatchStrip.ShowOutcomeSummary(run))
+            {
+                @if (run.Status is "Cancelled" or "Faulted" or "Incomplete")
+                {
+                    <span class="min-w-0 truncate text-yellow-400" title="@run.StatusReason">@run.Status.ToLowerInvariant()</span>
+                }
+                else if (run.Failed > 0)
+                {
+                    <span class="shrink-0 text-red-400" title="No test changed outcome">@run.Failed still failing</span>
+                }
+                else if (run.TotalTests > 0)
+                {
+                    <span class="shrink-0 @(run.Passed == run.TotalTests ? "text-green-400" : "")">@WatchStrip.PassedSkippedLabel(run)</span>
+                }
+                else
+                {
+                    <span class="shrink-0">no tests ran</span>
+                }
+            }
+        }
+
+        @if (!active && summary.Duration is { } duration)
+        {
+            <span class="ml-auto shrink-0 pl-2 tabular-nums" title="Time from the run starting to finishing, including its build">@duration</span>
+        }
+    </div>
+}
+
+@code {
+    [Parameter] public StateSnapshotNotification? Snapshot { get; set; }
+
+    /// <summary>Selects a test by its project-scoped result key.</summary>
+    [Parameter] public EventCallback<TestOutcomeReferenceDto> OnRevealTest { get; set; }
+
+    private TestRunDto? Run => Snapshot?.ActiveRun ?? Snapshot?.LastRun;
+
+    private string? SolutionDirectory => Snapshot?.SolutionPath is { } path && path.LastIndexOfAny(['/', '\\']) is > 0 and var i
+        ? path[..i]
+        : null;
+
+    private static string TestList(string heading, IReadOnlyList<TestOutcomeReferenceDto> keys) =>
+        $"{heading} (click to show the first):{Environment.NewLine}" +
+        string.Join(Environment.NewLine, keys.Take(20).Select(t => $"{t.Project}: {WatchStrip.ShortTestName(t.Key)}")) +
+        (keys.Count > 20 ? $"{Environment.NewLine}… and {keys.Count - 20} more" : "");
+}

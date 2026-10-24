@@ -2,7 +2,6 @@
 // See LICENSE in the project root for license information.
 
 using System.Diagnostics;
-using Piston.Engine.Impact;
 using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
@@ -42,7 +41,7 @@ internal static class TestListProcess
         // Reused MSBuild nodes can retain the redirected pipes after dotnet exits,
         // leaving WaitForExitAsync waiting indefinitely for output EOF.
         psi.Environment["MSBUILDDISABLENODEREUSE"] = "1";
-        MsBuildLocatorGuard.RestoreOriginalEnvironment(psi);
+        _ = ChildProcessEnvironment.Prepare(psi);
         // The parsers match the English CLI headers.
         psi.Environment["DOTNET_CLI_UI_LANGUAGE"] = "en";
 

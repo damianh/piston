@@ -84,7 +84,7 @@ internal static class TestSelectionFilter
         return (paren < 0 ? fullyQualifiedName : fullyQualifiedName[..paren]).Trim();
     }
 
-    private static string Escape(string value)
+    internal static string Escape(string value)
     {
         var builder = new StringBuilder(value.Length);
         foreach (var ch in value)

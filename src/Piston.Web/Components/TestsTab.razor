@@ -22,14 +22,32 @@
              OnTogglePassed="() => ToggleStatus(s => s.ShowPassed = !s.ShowPassed)"
              OnToggleSkipped="() => ToggleStatus(s => s.ShowSkipped = !s.ShowSkipped)"
              OnToggleNotRun="() => ToggleStatus(s => s.ShowNotRun = !s.ShowNotRun)"
+             HistoryEnabled="@_historyEnabled"
+             OnlyNewFailures="@_viewState.OnlyNewFailures"
+             OnlyFlaky="@_viewState.OnlyFlaky"
+             OnToggleNewFailures="() => ToggleStatus(s => s.OnlyNewFailures = !s.OnlyNewFailures)"
+             OnToggleFlaky="() => ToggleStatus(s => s.OnlyFlaky = !s.OnlyFlaky)"
+             FailedCount="@_runFailedCount"
+             CanRun="@CanRun"
+             OnRunFailed="RunFailedAsync"
+             RunFailedError="@_runError"
              OnFilterChanged="SetFilter" />
+
+    <WatchStripBar Snapshot="@_snapshot" OnRevealTest="RevealTestByKey" />
 
     <!-- Main content area: test tree, resizable splitter, detail panel (docked right or bottom) -->
     <div class="@(_isBottom ? "flex flex-col" : "flex") flex-1 min-h-0 overflow-hidden"
          data-orientation="@(_isBottom ? "bottom" : "right")" @ref="_splitContainer">
         <div class="flex flex-col min-w-0 min-h-0 overflow-hidden" style="flex: 0 0 @(_splitPercentCss)%">
-            <TestTree Nodes="@_treeNodes"
+            <div class="flex items-center gap-1 px-2 py-1 shrink-0 bg-gray-950 border-b border-gray-800 text-gray-500 select-none">
+                @SortHeader(TestSort.Name, "Name", "flex-1 min-w-0 justify-start")
+                @SortHeader(TestSort.Duration, "Duration", "w-14 shrink-0 justify-end")
+                <span class="w-4 shrink-0 ml-1" aria-hidden="true"></span>
+            </div>
+            <TestTree @ref="_tree"
+                      Nodes="@_treeNodes"
                       SelectedKey="@_viewState.SelectedTestKey"
+                      SelectedProject="@_viewState.SelectedTestProject"
                       SelectedNodeKey="@_viewState.SelectedNodeKey"
                       PinnedFqns="@_viewState.PinnedTestFqns"
                       OnSelectTest="SelectTest"
@@ -73,6 +91,8 @@
                             Test="@_selectedTest"
                             Project="@ProjectOf(_selectedTest)"
                             CanRun="@CanRun"
+                            SelectionReasons="@SelectionReasonsOf(_selectedTest)"
+                            SolutionPath="@_snapshot?.SolutionPath"
                             OnShowProject="SelectProject" />
             }
         </div>
@@ -119,6 +139,41 @@
             _snapshot = current;
             RebuildTree();
         }
+
+        _marksRunTime = Client.CurrentSnapshot?.LastRunTime;
+        _ = LoadMarksAsync();
+    }
+
+    private bool _historyEnabled;
+    private DateTimeOffset? _marksRunTime;
+
+    // Failure kinds change only when a run finishes.
+    private async Task LoadMarksAsync()
+    {
+        if (await Client.GetTestMarksAsync() is not { } marks)
+        {
+            return;
+        }
+
+        _historyEnabled = marks.Enabled;
+        var byKey = new Dictionary<(string Project, string Test), TestMarkDto>();
+        foreach (var mark in marks.Tests)
+        {
+            byKey[(mark.Project, mark.Test)] = mark;
+        }
+
+        _viewState.TestMarks = byKey;
+        if (!_historyEnabled)
+        {
+            _viewState.OnlyNewFailures = false;
+            _viewState.OnlyFlaky = false;
+        }
+
+        await InvokeAsync(() =>
+        {
+            RebuildTree();
+            StateHasChanged();
+        });
     }
 
     protected override void OnParametersSet()
@@ -132,6 +187,12 @@
 
     private void OnStateChanged(StateSnapshotNotification snapshot)
     {
+        if (snapshot.LastRunTime != _marksRunTime)
+        {
+            _marksRunTime = snapshot.LastRunTime;
+            _ = LoadMarksAsync();
+        }
+
         _snapshot = snapshot;
         RebuildTree();
         InvokeAsync(StateHasChanged);
@@ -147,6 +208,7 @@
             _treeNodes = [];
             _displayedSuites = [];
             _failureCount = 0;
+            _runFailedCount = 0;
             _nodeDetail = null;
             return;
         }
@@ -162,6 +224,8 @@
             _snapshot.LastFileChangeTime,
             TestTreeBuilder.IsDiscovering(_snapshot));
 
+        _runFailedCount = DashboardStatus.FailedCount(_snapshot.Suites);
+
         _failureCount = _displayedSuites
             .SelectMany(s => s.Tests)
             .Count(t => t.Status == TestStatusDto.Failed);
@@ -169,17 +233,89 @@
         if (_viewState.SelectedTestKey is not null)
         {
             // A live result gains its framework when final results arrive, so fall back to the name.
-            var tests = _displayedSuites.SelectMany(s => s.Tests).ToList();
-            _selectedTest = tests.FirstOrDefault(t => t.Key == _viewState.SelectedTestKey)
-                ?? tests.FirstOrDefault(t => t.FullyQualifiedName == _viewState.SelectedTestKey
-                    || _viewState.SelectedTestKey.StartsWith(t.FullyQualifiedName + " [", StringComparison.Ordinal));
+            _selectedTest = _viewState.FindSelectedTest(_displayedSuites);
             if (_selectedTest is not null)
             {
                 _viewState.SelectedTestKey = _selectedTest.Key;
+                _viewState.SelectedTestProject = ProjectOf(_selectedTest);
+                if (_viewState.RevealSelectedTest)
+                {
+                    _viewState.RevealSelectedTest = false;
+                    _scrollToSelected = ExpandAncestors(_treeNodes, _selectedTest.Key, _viewState.SelectedTestProject);
+                }
             }
         }
 
         UpdateNodeDetail();
+    }
+
+    private int _runFailedCount;
+    private string? _runError;
+    private bool _runStarting;
+
+    private void SortTestsBy(TestSort sort)
+    {
+        _viewState.SortTestsBy(sort);
+        RebuildTree();
+    }
+
+    private RenderFragment SortHeader(TestSort sort, string label, string classes) =>
+        @<text>
+            @{
+                var active = _viewState.TestSort == sort;
+                var descending = active ? _viewState.TestSortDescending : sort == TestSort.Duration;
+                var order = sort == TestSort.Name
+                    ? (descending ? "Z to A" : "A to Z")
+                    : (descending ? "slowest first" : "fastest first");
+                var hint = active ? $"Sorted {order}. Click to reverse." : $"Sort {order}";
+            }
+            <button type="button"
+                    class="@classes flex items-center gap-1 rounded text-[10px] font-semibold hover:text-gray-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 @(active ? "text-gray-300" : "")"
+                    title="@hint" aria-label="@($"{label}: {hint}")"
+                    @onclick="() => SortTestsBy(sort)">
+                @label
+                <span class="w-2 text-center" aria-hidden="true">@(active ? (descending ? "▾" : "▴") : "")</span>
+            </button>
+        </text>;
+
+    private Task RunFailedAsync() =>
+        _snapshot is not null && DashboardStatus.RunFailed(_snapshot.Suites) is { } command
+            ? RunAsync(command)
+            : Task.CompletedTask;
+
+    // Runs whatever the details pane shows: a group's tests, or the selected test.
+    private Task RunSelectionAsync()
+    {
+        var command = _nodeDetail is not null
+            ? _nodeDetail.Run
+            : _selectedTest is not null && ProjectOf(_selectedTest) is { } project
+                ? new RunTestsCommand([project], [_selectedTest.FullyQualifiedName])
+                : null;
+        return command is null ? Task.CompletedTask : RunAsync(command);
+    }
+
+    private async Task RunAsync(RunTestsCommand command)
+    {
+        if (_runStarting || !CanRun)
+        {
+            return;
+        }
+
+        _runStarting = true;
+        _runError = null;
+        try
+        {
+            _runError = await Client.RunTestsAsync(command);
+        }
+        catch (Exception ex)
+        {
+            _runError = ex.Message;
+        }
+        finally
+        {
+            _runStarting = false;
+            StateHasChanged();
+        }
     }
 
     // A targeted run is refused while another is in progress.
@@ -192,15 +328,36 @@
             : null;
 
     private string? ProjectOf(TestResultDto? test) =>
-        test is null ? null : _displayedSuites.FirstOrDefault(s => s.Tests.Any(t => t.Key == test.Key))?.Name;
+        test is null ? null : _displayedSuites.FirstOrDefault(s => s.Tests.Any(t => ReferenceEquals(t, test)))?.Name;
+
+    // Why the last run selected the test, when the impact map narrowed it by changed lines.
+    private IReadOnlyList<TestSelectionReasonDto>? SelectionReasonsOf(TestResultDto? test) =>
+        test is null ? null : _snapshot?.LastRun?.SelectionReasons?.GetValueOrDefault(test.FullyQualifiedName);
 
     private void SelectTest(TestResultDto test)
     {
         _viewState.SelectedNodeKey = null;
         _nodeDetail = null;
         _viewState.SelectedTestKey = test.Key;
+        _viewState.SelectedTestProject = ProjectOf(test);
         _selectedTest = test;
         StateHasChanged();
+    }
+
+    /// <summary>Selects <paramref name="test"/>, expanding its ancestors and scrolling it into view.</summary>
+    private void RevealTest(TestResultDto test)
+    {
+        _scrollToSelected = ExpandAncestors(_treeNodes, test.Key, ProjectOf(test));
+        SelectTest(test);
+    }
+
+    private void RevealTestByKey(TestOutcomeReferenceDto reference)
+    {
+        if (_snapshot?.Suites.Where(s => s.Name == reference.Project)
+            .SelectMany(s => s.Tests).FirstOrDefault(t => t.Key == reference.Key) is { } test)
+        {
+            RevealTest(test);
+        }
     }
 
     private void SelectProject(string project) => SelectNode($"suite:{project}");
@@ -208,6 +365,7 @@
     private void SelectNode(string key)
     {
         _viewState.SelectedTestKey = null;
+        _viewState.SelectedTestProject = null;
         _selectedTest = null;
         _viewState.SelectedNodeKey = key;
         UpdateNodeDetail();
@@ -291,7 +449,7 @@
         var failures = GetFailedTests();
         if (failures.Count == 0) return;
         _viewState.CurrentFailureIndex = (_viewState.CurrentFailureIndex - 1 + failures.Count) % failures.Count;
-        SelectTest(failures[_viewState.CurrentFailureIndex]);
+        RevealTest(failures[_viewState.CurrentFailureIndex]);
     }
 
     private void NavigateNextFailure()
@@ -300,7 +458,7 @@
         var failures = GetFailedTests();
         if (failures.Count == 0) return;
         _viewState.CurrentFailureIndex = (_viewState.CurrentFailureIndex + 1) % failures.Count;
-        SelectTest(failures[_viewState.CurrentFailureIndex]);
+        RevealTest(failures[_viewState.CurrentFailureIndex]);
     }
 
     private List<TestResultDto> GetFailedTests() =>
@@ -321,6 +479,8 @@
             case "4": ToggleStatus(s => s.ShowNotRun  = !s.ShowNotRun);  break;
             case "[": NavigatePrevFailure(); break;
             case "]": NavigateNextFailure(); break;
+            case "S": SortTestsBy(TestSort.Duration); break;
+            case "R": _ = RunSelectionAsync(); break;
         }
     }
 
@@ -332,8 +492,45 @@
     private string _splitPercentCss =>
         _viewState.SplitPercent.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
 
+    private bool _scrollToSelected;
+    private TestTree? _tree;
+
+    /// <summary>Expands every collapsed ancestor of the test with <paramref name="key"/>; false when it is not in the tree.</summary>
+    private bool ExpandAncestors(IEnumerable<TestNode> nodes, string key, string? project)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.Test?.Key == key && (project is null || node.Project == project))
+            {
+                return true;
+            }
+
+            if (ExpandAncestors(node.Children, key, project))
+            {
+                if (!node.IsExpanded && node.ExpansionKey is { } expansionKey)
+                {
+                    node.IsExpanded = true;
+                    _viewState.NodeExpansion[expansionKey] = true;
+                }
+
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (_scrollToSelected)
+        {
+            _scrollToSelected = false;
+            if (_tree is not null)
+            {
+                await _tree.RevealSelectedAsync();
+            }
+        }
+
         if (!firstRender)
             return;
 

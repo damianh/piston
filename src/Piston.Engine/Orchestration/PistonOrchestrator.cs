@@ -3,13 +3,14 @@
 
 using Piston.Engine.Coverage;
 using Piston.Engine.Execution;
+using Piston.Engine.Impact;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
 using Piston.Engine.Verification;
 
 namespace Piston.Engine.Orchestration;
 
-public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
+public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 {
     private readonly IFileWatcherService _fileWatcher;
     private readonly IBuildService _buildService;
@@ -201,6 +202,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 {
                     _stopping = _disposed;
                     _cts?.Cancel();
+                    CancelBackfill();
                 }
 
                 // A pipeline holds the run lock until it finishes, so holding it here means no run
@@ -265,6 +267,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         _state.LastBuild = null;
         _state.LastBuildDuration = null;
         _buildBaseline = null;
+        _backfillFailed.Clear();
         _state.LastTestDuration = null;
         _state.LastTestRunnerError = null;
         _state.TotalExpectedTests = 0;
@@ -559,6 +562,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
     internal void ClearResults(string solutionDirectory)
     {
+        lock (_lifecycleLock)
+        {
+            CancelBackfill();
+        }
+
         _coverageLock.Wait();
         try
         {
@@ -575,8 +583,136 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         _state.NotifyChanged();
     }
 
+    /// <summary>What a run triggered by changes to <paramref name="filePaths"/> would select, without changing state.</summary>
+    internal ImpactAnalysisResult PlanAffected(IReadOnlyList<string> filePaths) =>
+        _impactAnalyzer.Preview([.. filePaths.Select(p => new FileChangeEvent(
+            p, File.Exists(p) ? WatcherChangeTypes.Changed : WatcherChangeTypes.Deleted, DateTimeOffset.UtcNow))]);
+
+    /// <summary>Returns the coverage report, or null when coverage is disabled.</summary>
+    internal CoverageReportSnapshot? GetCoverageReport()
+    {
+        if (_coverageStore is null)
+        {
+            return null;
+        }
+
+        IReadOnlyList<CoverageFileSummary> files;
+        _coverageLock.Wait();
+        try
+        {
+            files = _coverageStore.GetReportFiles();
+        }
+        finally
+        {
+            _ = _coverageLock.Release();
+        }
+
+        return new CoverageReportSnapshot([.. files.Select(WithCurrentStaleness)]);
+    }
+
+    /// <summary>
+    /// Returns the coverage of <paramref name="filePath"/>, or null when coverage is disabled or the file
+    /// was not measured.
+    /// </summary>
+    internal FileCoverageSnapshot? GetFileCoverage(string filePath)
+    {
+        if (_coverageStore is null)
+        {
+            return null;
+        }
+
+        CoverageFileSummary? file;
+        IReadOnlyList<LineCoverage> lines;
+        _coverageLock.Wait();
+        try
+        {
+            file = _coverageStore.GetReportFile(filePath);
+            lines = file is null ? [] : _coverageStore.GetReportLines(filePath);
+        }
+        finally
+        {
+            _ = _coverageLock.Release();
+        }
+
+        return file is null ? null : new FileCoverageSnapshot(WithCurrentStaleness(file), lines);
+    }
+
+    /// <summary>
+    /// Returns the tests the impact map credits with executing <paramref name="filePath"/>, or null when coverage is
+    /// disabled.
+    /// </summary>
+    internal IReadOnlyList<CoveringTest>? GetCoveringTests(string filePath)
+    {
+        if (_coverageStore is not IImpactMapStore store)
+        {
+            return null;
+        }
+
+        IReadOnlyList<ImpactExecutor> executors;
+        _coverageLock.Wait();
+        try
+        {
+            executors = store.GetTestsExecuting(filePath);
+        }
+        finally
+        {
+            _ = _coverageLock.Release();
+        }
+
+        if (executors.Count == 0)
+        {
+            return [];
+        }
+
+        return [.. executors.Select(e => new CoveringTest(
+            e.TestFqn,
+            e.ProjectPath,
+            e.Granularity.ToString().ToLowerInvariant(),
+            [.. e.Spans.Select(s => new CoveredLineRange(s.Start, s.End))],
+            e.IsUnitCurrent && e.IsContentCurrent))];
+    }
+
+    /// <summary>
+    /// One run-granularity impact unit per test project. A project's unit is replaced only when all its tests ran
+    /// cleanly; otherwise the run adds to what is stored.
+    /// </summary>
+    internal static IReadOnlyList<CoverageRunUnit> RunImpactUnits(
+        IReadOnlyList<ProjectTestResult> projects,
+        string solutionPath,
+        IReadOnlyList<string> reportPaths,
+        IReadOnlyList<string> testFqns,
+        string? filter)
+    {
+        var filtered = !string.IsNullOrWhiteSpace(filter);
+        if (projects.Count == 0)
+        {
+            return [new CoverageRunUnit(solutionPath, RunUnitKey, reportPaths, testFqns, Merge: true)];
+        }
+
+        return [.. projects.Select(p => new CoverageRunUnit(
+            p.ProjectPath,
+            RunUnitKey,
+            p.CoverageReportPaths,
+            [.. p.Suites.SelectMany(s => s.Tests).Select(t => t.FullyQualifiedName).Distinct(StringComparer.Ordinal)],
+            Merge: filtered || p.Crashed || p.RunnerError is not null,
+            MethodsComplete: filtered && !p.Crashed && p.RunnerError is null))];
+    }
+
+    private const string RunUnitKey = "run";
+
+    /// <summary>Flags a file stale when its content no longer matches what was measured, e.g. after edits while stopped.</summary>
+    private static CoverageFileSummary WithCurrentStaleness(CoverageFileSummary file) =>
+        file.IsStale || file.ContentHash is null
+            || string.Equals(file.ContentHash, CoverageReportFile.ComputeContentHash(file.FilePath), StringComparison.Ordinal)
+            ? file
+            : file with { IsStale = true };
+
     internal async Task ProcessCoverageAsync(
-        long runId, IReadOnlyList<string> reportPaths, IReadOnlyList<string> testFqns)
+        long runId,
+        IReadOnlyList<string> reportPaths,
+        IReadOnlyList<string> testFqns,
+        bool isFullRun = false,
+        CoverageImpactOptions? impact = null)
     {
         var processor = _coverageProcessor
             ?? throw new InvalidOperationException("Coverage processing is not enabled.");
@@ -585,7 +721,8 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         await _coverageLock.WaitAsync().ConfigureAwait(false);
         try
         {
-            await processor.ProcessCoverageAsync(runId, reportPaths, testFqns, store)
+            var solutionDir = _solutionPath is null ? null : Path.GetDirectoryName(_solutionPath);
+            await processor.ProcessCoverageAsync(runId, reportPaths, testFqns, store, isFullRun, solutionDir, impact)
                 .ConfigureAwait(false);
             _state.HasCoverageData = true;
         }
@@ -602,6 +739,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         lock (_lifecycleLock)
         {
             _cts?.Cancel();
+            CancelBackfill();
         }
 
         _state.Phase = PistonPhase.Idle;
@@ -613,6 +751,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         if (_solutionPath is null)
         {
             return;
+        }
+
+        foreach (var change in batch.Changes)
+        {
+            DiagnosticLog.Instance?.Write("FileWatcher", $"{change.ChangeType}: {change.FilePath}");
         }
 
         _ = Interlocked.Increment(ref _fileChangeGeneration);
@@ -648,6 +791,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 _pipelinesDrained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             }
 
+            CancelBackfill();
             cts = new CancellationTokenSource();
             var oldCts = _cts;
             _cts = cts;
@@ -676,6 +820,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 if (--_activePipelines == 0)
                 {
                     _pipelinesDrained!.SetResult();
+                    ScheduleBackfill();
                 }
             }
         }
@@ -684,7 +829,10 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     private async Task<TestRunRecord> RunPipelineAsync(
         string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, SelectedRun? selection, CancellationTokenSource newCts)
     {
-        var run = CreateRunRecord(trigger);
+        var run = CreateRunRecord(trigger) with
+        {
+            ChangedFiles = batch is null ? [] : [.. batch.Changes.Select(c => c.FilePath).Distinct(StringComparer.Ordinal)],
+        };
 
         // Serialize: only one pipeline runs at a time
         try
@@ -840,6 +988,15 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 testTargets = impactResult.AffectedTestProjectPaths;
             }
 
+            Dictionary<string, string> TestWorkingDirectories(IReadOnlyList<string>? targets) =>
+                (targets ?? [Path.GetFullPath(solutionPath)])
+                    .ToDictionary(
+                        path => path,
+                        path => _impactAnalyzer.GetMtpOutputPath(path) is not null
+                            ? solutionDir
+                            : TestProcessRunner.WorkingDirectoryFor(path) ?? Environment.CurrentDirectory,
+                        StringComparer.Ordinal);
+
             // Build the effective test filter:
             //   - A selected run runs exactly its selection, ignoring the user's TestFilter
             //   - If Tier 3 produced FQNs, build a dotnet-test filter expression
@@ -858,22 +1015,16 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                     BuildTargets: buildTargets?.ToList(),
                     UserFilter: string.IsNullOrWhiteSpace(userFilter) ? null : userFilter,
                     EffectiveFilter: string.IsNullOrWhiteSpace(effectiveFilter) ? null : effectiveFilter,
-                    CoverageSelectedTestCount: impactResult.AffectedTestFqns is { Count: > 0 and <= 100 } selected
-                        ? selected.Count
-                        : null,
+                    CoverageSelectedTestCount: impactResult.NarrowsToTests ? impactResult.AffectedTestFqns!.Count : null,
                     CoverageEnabled: _coverageEnabled,
                     BuildConfiguration: "Debug",
                     SdkVersion: SafeSdkVersion(solutionDir),
                     Runtime: System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription,
                     OperatingSystem: System.Runtime.InteropServices.RuntimeInformation.OSDescription,
                     WorkingDirectory: solutionDir,
-                    TestWorkingDirectories: (testTargets ?? [Path.GetFullPath(solutionPath)])
-                        .ToDictionary(
-                            path => path,
-                            path => _impactAnalyzer.GetMtpOutputPath(path) is not null
-                                ? solutionDir
-                                : TestProcessRunner.WorkingDirectoryFor(path) ?? Environment.CurrentDirectory,
-                            StringComparer.Ordinal)),
+                    TestWorkingDirectories: TestWorkingDirectories(testTargets),
+                    SelectionExplanation: selection is not null ? "The tests were chosen explicitly." : impactResult.RunExplanation,
+                    SelectionReasons: selection is null && impactResult.NarrowsToTests ? impactResult.SelectionReasons : null),
             };
             if (run.IsFullScope)
             {
@@ -983,6 +1134,24 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                         $"Build failed with {buildResult.Errors.Count} error(s).", computeAfter: true);
                 }
 
+                // The build restored packages the graph was evaluated without (a fresh clone): reload it, so test
+                // projects recognized only through package properties (xUnit v3, TUnit) are found and run.
+                if (_impactAnalyzer.RefreshGraphIfEvaluatedBeforeRestore() && impactResult.IsFullRun)
+                {
+                    var allTestProjects = _impactAnalyzer.GetAllTestProjectPaths();
+                    testTargets = allTestProjects.Count > 0 ? allTestProjects : null;
+                    log?.Write("Orchestrator", $"Graph reloaded after restore: {testTargets?.Count ?? 0} test project(s)");
+                    run = run with
+                    {
+                        Context = run.Context! with
+                        {
+                            TestProjects = testTargets?.ToList(),
+                            TestWorkingDirectories = TestWorkingDirectories(testTargets),
+                        },
+                    };
+                    PublishActiveRun(run);
+                }
+
                 // Outputs become reusable once the run finishes with stable sources (see Finish).
                 if (run.SourceBefore is { } builtFrom && Interlocked.Read(ref _fileChangeGeneration) == changeGenerationAtStart)
                 {
@@ -1012,7 +1181,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             // Update coverage impact detail for TUI
             if (impactResult.AffectedTestFqns is { Count: > 0 } fqns)
             {
-                _state.CoverageImpactDetail = $"Tier 3: {fqns.Count} test(s) (coverage)";
+                _state.CoverageImpactDetail = impactResult.SelectionReasons is { } reasons
+                    ? $"Tier 3: {fqns.Count} test(s) (changed lines, {string.Join("/", reasons.Values.SelectMany(r => r).Select(r => r.Granularity).Distinct().Order(StringComparer.Ordinal))}-level)"
+                    : $"Tier 3: {fqns.Count} test(s) (coverage)";
             }
             else
             {
@@ -1065,6 +1236,54 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             _state.NotifyChanged();
 
             var testStart = DateTimeOffset.UtcNow;
+
+            // Times running tests from live progress, for the longest-running test and the hang warning.
+            var runningClock = new RunningTestClock(RunningTestTime);
+            var possiblyHanging = new List<string>();
+
+            void CheckRunningTests()
+            {
+                RunningTest? longest = null;
+                List<(string ProjectPath, string Test, TimeSpan Elapsed)> newlyHanging = [];
+                lock (liveResultsLock)
+                {
+                    if (testPhaseOver)
+                    {
+                        return;
+                    }
+
+                    var running = runningClock.Running();
+                    foreach (var (projectPath, test, _, elapsed) in running)
+                    {
+                        if (HangThreshold is { } threshold && elapsed >= threshold && !possiblyHanging.Contains(test))
+                        {
+                            possiblyHanging.Add(test);
+                            newlyHanging.Add((projectPath, test, elapsed));
+                        }
+                    }
+
+                    if (running is [var first, ..])
+                    {
+                        longest = new RunningTest(first.Test, first.ProjectPath, first.StartedAt, possiblyHanging.Contains(first.Test));
+                    }
+                }
+
+                foreach (var (projectPath, test, elapsed) in newlyHanging)
+                {
+                    var message = $"{test} ({Path.GetFileNameWithoutExtension(projectPath)}) has been running for {Durations.Format(elapsed)} and may be hanging";
+                    log?.Write("Orchestrator", message);
+                    DiagnosticLog.Instance?.Write("Orchestrator", message);
+                }
+
+                if (longest != _state.LongestRunningTest)
+                {
+                    _state.LongestRunningTest = longest;
+                    _state.NotifyChanged();
+                }
+            }
+
+            using var runningWatch = RunningTestTime.CreateTimer(
+                _ => CheckRunningTests(), null, RunningTestCheckInterval, RunningTestCheckInterval);
 
             // Frequent updates (live progress, streamed discovery) recompose the overlay at most every
             // ProgressNotifyInterval; the trailing invocation guarantees the latest state is shown.
@@ -1122,13 +1341,20 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             });
 
             void OnProjectProgress(string projectPath, IReadOnlyList<TestSuite> liveSuites) =>
-                UpdateOverlay(() => liveByProject[projectPath] = liveSuites, throttle: true);
+                UpdateOverlay(() =>
+                {
+                    liveByProject[projectPath] = liveSuites;
+                    runningClock.Observe(projectPath, liveSuites);
+                }, throttle: true);
 
             void OnProjectCompleted(Models.ProjectTestResult result) => UpdateOverlay(() =>
             {
                 _state.CompletedTestProjects++;
+                runningClock.Clear(result.ProjectPath);
 
-                var projectStatus = result.Crashed
+                var projectStatus = result.TimedOut is not null
+                    ? Models.ProjectRunStatus.TimedOut
+                    : result.Crashed
                     ? Models.ProjectRunStatus.Crashed
                     : result.RunnerError is not null && result.Suites.Count == 0
                         ? Models.ProjectRunStatus.Failed
@@ -1139,8 +1365,17 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                     projectStatuses[result.ProjectPath] = projectStatus;
                 }
 
+                var testCount = result.Suites.Sum(s => s.Tests.Count);
+                string? noTestsReason = null;
+                if (testCount == 0 && !filtered && !result.Crashed && result.TimedOut is null)
+                {
+                    noTestsReason = NoTestsDiagnosis.Diagnose(_impactAnalyzer.GetTestProjectFacts(result.ProjectPath), result.Log);
+                    DiagnosticLog.Instance?.Write("Orchestrator",
+                        $"{Path.GetFileNameWithoutExtension(result.ProjectPath)} reported no tests: {noTestsReason}");
+                }
+
                 projectOutcomes[result.ProjectPath] = new TestRunProjectOutcome(
-                    result.ProjectPath, projectStatus, result.Suites.Sum(s => s.Tests.Count));
+                    result.ProjectPath, projectStatus, testCount, noTestsReason, result.TimedOut);
 
                 if (result.Suites.Count > 0)
                 {
@@ -1190,6 +1425,12 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                     testPhaseOver = true;
                 }
 
+                if (_state.LongestRunningTest is not null)
+                {
+                    _state.LongestRunningTest = null;
+                    _state.NotifyChanged();
+                }
+
                 await discoveryCts.CancelAsync().ConfigureAwait(false);
                 try
                 {
@@ -1208,6 +1449,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
             IReadOnlyList<TestSuite> newSuites;
             IReadOnlyList<string> coverageReportPaths;
+            IReadOnlyList<ProjectTestResult> projectResults;
             string? runnerError;
             try
             {
@@ -1225,6 +1467,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                     ct).ConfigureAwait(false);
                 newSuites = result.Suites.Select(s => s with { RunId = run.RunId }).ToList();
                 coverageReportPaths = result.CoverageReportPaths;
+                projectResults = result.Projects;
                 runnerError = result.RunnerError;
                 _state.LastTestRunnerError = result.RunnerError;
 
@@ -1263,7 +1506,16 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
 
                 try
                 {
-                    await ProcessCoverageAsync(runId, coverageReportPaths, testFqns).ConfigureAwait(false);
+                    // Only an unfiltered run of every test project, with none crashing, measures the whole solution.
+                    var isFullCoverageRun = impactResult.IsFullRun
+                        && string.IsNullOrWhiteSpace(effectiveFilter)
+                        && runnerError is null;
+                    var impact = new CoverageImpactOptions(
+                        RunImpactUnits(projectResults, solutionPath, coverageReportPaths, testFqns, effectiveFilter),
+                        ImpactGranularity.Run,
+                        (run.StartedAt ?? DateTimeOffset.UtcNow).UtcDateTime);
+                    await ProcessCoverageAsync(runId, coverageReportPaths, testFqns, isFullCoverageRun, impact)
+                        .ConfigureAwait(false);
                 }
                 catch
                 {
@@ -1279,6 +1531,8 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             {
                 CleanUpCoverageResultsDirs(coverageReportPaths);
             }
+
+            var (fixedTests, newlyFailingTests) = TestOutcomeChanges.Compare(_state.TestSuites, newSuites);
 
             // Merge selective results with preserved results from untouched test projects
             _state.TestSuites = impactResult.IsFullRun
@@ -1307,9 +1561,11 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             }
 
             List<TestRunProjectOutcome> outcomes;
+            List<string> hangingTests;
             lock (liveResultsLock)
             {
                 outcomes = projectOutcomes.Values.ToList();
+                hangingTests = [.. possiblyHanging];
             }
 
             var duplicates = newSuites
@@ -1325,6 +1581,9 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
                 Suites = newSuites,
                 Projects = outcomes,
                 DuplicateTestIds = duplicates,
+                PossiblyHangingTests = hangingTests,
+                FixedTests = fixedTests,
+                NewlyFailingTests = newlyFailingTests,
                 RunnerError = runnerError,
             };
 
@@ -1474,6 +1733,22 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             FreshnessReason = freshnessReason,
         };
 
+        if (RunHistory is { } history)
+        {
+            try
+            {
+                var failures = history.Record(finished);
+                if (failures.Count > 0)
+                {
+                    finished = finished with { FailureClassifications = failures };
+                }
+            }
+            catch (Exception ex)
+            {
+                DiagnosticLog.Instance?.Write("History", $"Cannot record run {finished.RunId}: {ex.Message}");
+            }
+        }
+
         lock (_runRecordsLock)
         {
             if (_state.CurrentRun?.RunId == finished.RunId)
@@ -1510,8 +1785,13 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         // A filter can legitimately select no tests in a project; filtered runs are never full scope anyway.
         var problems = outcomes
             .Where(o => o.Status != Models.ProjectRunStatus.Completed || (o.TestCount == 0 && !filtered))
-            .Select(o => $"{Path.GetFileNameWithoutExtension(o.ProjectPath)}: " +
-                (o.Status == Models.ProjectRunStatus.Completed ? "no test results" : o.Status.ToString()))
+            .Select(o => $"{Path.GetFileNameWithoutExtension(o.ProjectPath)}: " + o.Status switch
+            {
+                Models.ProjectRunStatus.Completed => "no test results" + (o.NoTestsReason is null ? "" : $" ({o.NoTestsReason})"),
+                Models.ProjectRunStatus.TimedOut when o.TimedOut is { } timeout =>
+                    $"timed out ({timeout.Test} ran longer than the test timeout of {Durations.Format(timeout.Limit)})",
+                _ => o.Status.ToString(),
+            })
             .ToList();
 
         if (solutionTarget && suites.Count == 0 && !filtered)
@@ -1562,7 +1842,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
         if (impactResult.AffectedTestFqns is { Count: > 0 } fqns)
         {
             // Limit to 100 FQNs to avoid command-line length issues; fall back to Tier 2 if over limit
-            if (fqns.Count <= 100)
+            if (fqns.Count <= ImpactAnalysisResult.MaxFilteredTests)
             {
                 tier3Filter = string.Join("|",
                     fqns.Select(f => $"FullyQualifiedName={f}"));
@@ -1682,6 +1962,7 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
     }
 
     private static readonly TimeSpan ProgressNotifyInterval = TimeSpan.FromMilliseconds(250);
+
 
     /// <summary>
     /// Builds the live test overlay shown while tests run. Starts from the last known results for the
@@ -1901,16 +2182,18 @@ public sealed class PistonOrchestrator : IPistonOrchestrator, IAsyncDisposable
             _disposed = true;
             _stopping = true;
             _cts?.Cancel();
-            _disposeTask = DisposeCoreAsync(_activePipelines == 0 ? Task.CompletedTask : _pipelinesDrained!.Task);
+            CancelBackfill();
+            _disposeTask = DisposeCoreAsync(_activePipelines == 0 ? Task.CompletedTask : _pipelinesDrained!.Task, _backfillTask);
             return new ValueTask(_disposeTask);
         }
     }
 
-    private async Task DisposeCoreAsync(Task drained)
+    private async Task DisposeCoreAsync(Task drained, Task backfill)
     {
         _fileWatcher.FileChanged -= OnFileChanged;
         _fileWatcher.Dispose();
         await drained.ConfigureAwait(false);
+        await backfill.ConfigureAwait(false);
         if (_graphInitTask is { } graphInit)
         {
             await graphInit.ConfigureAwait(false);

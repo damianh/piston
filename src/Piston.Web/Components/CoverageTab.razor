@@ -1,0 +1,642 @@
+@inject EngineClientService Client
+@inject IJSRuntime JS
+@inject ViewState View
+@implements IAsyncDisposable
+
+<div class="flex flex-col h-full overflow-hidden text-xs">
+    @if (!_coverageEnabled)
+    {
+        <div class="p-6 text-gray-400 max-w-xl leading-relaxed">
+            <div class="text-gray-200 font-semibold mb-2">Coverage is off</div>
+            Start the daemon with <code class="font-mono text-gray-200">--coverage</code>, or set
+            <code class="font-mono text-gray-200">"coverageEnabled": true</code> in <code class="font-mono text-gray-200">.piston.json</code>,
+            to collect line and branch coverage on every run.
+        </div>
+    }
+    else
+    {
+        <div class="flex items-center gap-2 px-4 py-1.5 shrink-0 bg-gray-900 border-b border-gray-800 select-none">
+            @if (View.CoverageGrouping != CoverageGrouping.Flat)
+            {
+                <div class="flex items-center gap-1">
+                    <button type="button" class="w-6 h-6 shrink-0 flex items-center justify-center bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+                            title="Expand all" aria-label="Expand all" @onclick="ExpandAll">
+                        ⊞
+                    </button>
+                    <button type="button" class="w-6 h-6 shrink-0 flex items-center justify-center bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+                            title="Collapse all" aria-label="Collapse all" @onclick="CollapseAll">
+                        ⊟
+                    </button>
+                </div>
+            }
+            <div class="relative">
+                <select class="appearance-none bg-gray-800 border border-gray-700 rounded h-6 pl-2 pr-6 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
+                        title="Group files by" aria-label="Group files by"
+                        value="@View.CoverageGrouping" @onchange="ChangeGrouping">
+                    <option value="@CoverageGrouping.Folder">Project tree</option>
+                    <option value="@CoverageGrouping.Module">By module</option>
+                    <option value="@CoverageGrouping.Flat">Flat list</option>
+                </select>
+                <svg class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-gray-400"
+                     viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                    <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
+            </div>
+            <input type="search" placeholder="Filter files" aria-label="Filter files"
+                   class="bg-gray-800 border border-gray-700 rounded h-6 px-2 text-gray-200 text-xs w-48 min-w-0 focus:outline-none focus:border-blue-500"
+                   value="@_filter" @oninput="e => _filter = e.Value?.ToString()" />
+            @{
+                var dockLabel = View.CoverageDetailPosition == DetailPosition.Right ? "Dock source at bottom" : "Dock source on right";
+            }
+            <button type="button" class="ml-auto w-6 h-6 shrink-0 flex items-center justify-center bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+                    title="@dockLabel" aria-label="@dockLabel" @onclick="ToggleDetailPosition">
+                <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" />
+                    @if (View.CoverageDetailPosition == DetailPosition.Right)
+                    {
+                        <rect x="2" y="8.5" width="12" height="4.5" rx="1" fill="currentColor" />
+                    }
+                    else
+                    {
+                        <rect x="8.5" y="3" width="5.5" height="10" rx="1" fill="currentColor" />
+                    }
+                </svg>
+            </button>
+        </div>
+
+        <!-- Coverage totals -->
+        <div class="flex items-center gap-x-4 px-4 h-6 shrink-0 whitespace-nowrap overflow-hidden border-b border-gray-800 text-gray-500 select-none"
+             data-testid="coverage-summary">
+            @if (_summary is { } s)
+            {
+                <span class="text-gray-400">Lines <span class="text-gray-100 font-semibold tabular-nums">@Percent(s.LinesCovered, s.LinesTotal)</span>
+                    <span class="tabular-nums">(@s.LinesCovered.ToString("N0")/@s.LinesTotal.ToString("N0"))</span></span>
+                <span class="text-gray-400">Branches <span class="text-gray-100 font-semibold tabular-nums">@Percent(s.BranchesCovered, s.BranchesTotal)</span>
+                    <span class="tabular-nums">(@s.BranchesCovered.ToString("N0")/@s.BranchesTotal.ToString("N0"))</span></span>
+                <span class="text-gray-400"><span class="tabular-nums">@s.Files.Count.ToString("N0")</span> files</span>
+                @if (_staleCount > 0)
+                {
+                    <span class="text-yellow-400" title="Files changed since they were measured; their line data is out of date until the next run covers them">
+                        <span class="tabular-nums">@_staleCount</span> stale
+                    </span>
+                }
+            }
+            <span class="text-gray-500" title="Line marks merge every test that ran. Select a file to see which tests executed it, and how precisely each was measured.">aggregate line marks</span>
+        </div>
+
+        <div class="@(_isBottom ? "flex flex-col" : "flex") flex-1 min-h-0 overflow-hidden"
+             data-orientation="@(_isBottom ? "bottom" : "right")" @ref="_splitContainer">
+            <!-- File list -->
+            <div class="flex flex-col min-w-0 min-h-0 overflow-y-auto pb-1 @(_isBottom ? "border-b" : "border-r") border-gray-800"
+                 style="flex: 0 0 @SplitPercentCss%" aria-label="Measured files">
+                @if (_summary is null)
+                {
+                    <div class="text-gray-600 italic px-4 py-4">Loading…</div>
+                }
+                else if (_summary.Files.Count == 0)
+                {
+                    <div class="text-gray-600 italic px-4 py-4">No coverage yet. It is collected on the next test run.</div>
+                }
+                else
+                {
+                    <div class="sticky top-0 z-10 flex items-center gap-2 pr-3 py-1 mb-0.5 shrink-0 bg-gray-950 border-b border-gray-800 text-gray-500 select-none"
+                         style="@Indent(0)">
+                        @SortHeader(CoverageSort.Name, "Name", "flex-1 min-w-0 justify-start")
+                        @SortHeader(CoverageSort.Coverage, "Coverage", "w-[7.5rem] shrink-0 justify-end")
+                    </div>
+                    @RenderGroup(BuildTree(), -1)
+                }
+            </div>
+
+            <div data-splitter
+                 role="separator"
+                 tabindex="0"
+                 aria-label="Resize coverage files and source"
+                 aria-orientation="@(_isBottom ? "horizontal" : "vertical")"
+                 aria-valuemin="@ViewState.MinSplitPercent"
+                 aria-valuemax="@ViewState.MaxSplitPercent"
+                 aria-valuenow="@Math.Round(View.CoverageSplitPercent)"
+                 title="Drag to resize · double-click to reset"
+                 class="@(_isBottom
+                     ? "h-px w-full cursor-row-resize before:-top-1 before:-bottom-1 before:inset-x-0"
+                     : "w-px h-full cursor-col-resize before:-left-1 before:-right-1 before:inset-y-0") relative z-10 shrink-0 bg-gray-800 transition-colors hover:bg-blue-500 focus-visible:bg-blue-500 focus:outline-none data-[dragging]:bg-blue-500 before:absolute before:content-['']"
+                 @ondblclick="ResetSplit"
+                 @onkeydown="HandleSplitterKeyDown"
+                 @onkeydown:stopPropagation="true"></div>
+
+            <!-- Source with line coverage -->
+            <div class="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+                @if (_file is null)
+                {
+                    <div class="text-gray-600 italic px-4 py-4">@(_selectedPath is null ? "Select a file to see its line coverage." : "Loading…")</div>
+                }
+                else
+                {
+                    var sum = _file.Summary;
+                    <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5 shrink-0 border-b border-gray-800">
+                        <span class="text-gray-200 font-semibold break-all">@(sum?.RelativePath ?? _file.FilePath)</span>
+                        @if (sum is not null)
+                        {
+                            <span class="text-gray-400">Lines <span class="text-gray-100 tabular-nums">@Percent(sum.LinesCovered, sum.LinesTotal)</span></span>
+                            <span class="text-gray-400">Branches <span class="text-gray-100 tabular-nums">@Percent(sum.BranchesCovered, sum.BranchesTotal)</span></span>
+                            @if (sum.Module is { } m)
+                            {
+                                <span class="text-gray-500">@m</span>
+                            }
+                            @if (sum.IsStale)
+                            {
+                                <span class="text-yellow-400">Changed since it was measured: line marks may be out of place until the next run.</span>
+                            }
+                        }
+                    </div>
+                    <div class="flex-1 min-h-0 overflow-auto font-mono text-[12px] leading-5 py-1">
+                        @if (_file.Source is { } source)
+                        {
+                            for (var i = 0; i < source.Count; i++)
+                            {
+                                var number = i + 1;
+                                var line = _lines.GetValueOrDefault(number);
+                                var picked = number == _selectedLine;
+                                <div class="flex @LineTint(line) @(picked ? "ring-1 ring-inset ring-blue-500/70" : "")" title="@LineTitle(line)">
+                                    <span class="w-1 shrink-0 @GutterColor(line)" aria-hidden="true"></span>
+                                    <button type="button" class="w-12 pr-2 text-right select-none shrink-0 tabular-nums @(picked ? "text-blue-300" : "text-gray-500 hover:text-gray-200")"
+                                            title="Show the tests that executed line @number" aria-pressed="@(picked ? "true" : "false")"
+                                            @onclick="() => PickLine(number)">@number</button>
+                                    <span class="w-10 pr-2 text-right text-gray-500 select-none shrink-0 tabular-nums">@HitText(line)</span>
+                                    <span class="whitespace-pre text-gray-200 pr-4">@if (_sourceTokens is { } tokens)
+                                    {
+                                        @foreach (var token in tokens[i])
+                                        {
+                                            <span class="@CSharpHighlighter.TokenClass(token.Kind)">@token.Text</span>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        @source[i]
+                                    }</span>
+                                </div>
+                            }
+                        }
+                        else
+                        {
+                            <div class="text-gray-600 italic px-4 py-2">Source unavailable (file missing or too large).</div>
+                        }
+                    </div>
+                    @RenderCoveringTests()
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    private bool _coverageEnabled;
+    private DateTimeOffset? _lastRunTime;
+    private DateTimeOffset? _lastChangeTime;
+    private CoverageSummaryDto? _summary;
+    private int _staleCount;
+    private string? _filter;
+    private string? _selectedPath;
+    private FileCoverageDto? _file;
+    private List<List<SourceToken>>? _sourceTokens;
+    private Dictionary<int, CoverageLineDto> _lines = [];
+    private CoveringTestsDto? _covering;
+    private int? _selectedLine;
+    private bool _backfilling;
+    private ElementReference _splitContainer;
+    private DotNetObjectReference<CoverageTab>? _selfRef;
+    private bool _splitterAttached;
+
+    private bool _isBottom => View.CoverageDetailPosition == DetailPosition.Bottom;
+    private string SplitPercentCss =>
+        View.CoverageSplitPercent.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>Opens a test, by fully-qualified name, in the Tests tab.</summary>
+    [Parameter] public EventCallback<TestReference> OnOpenTest { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Client.StateChanged += OnStateChanged;
+        if (Client.CurrentSnapshot is { } snapshot)
+        {
+            Capture(snapshot);
+        }
+
+        await RefreshAsync();
+    }
+
+    private void Capture(StateSnapshotNotification snapshot)
+    {
+        _coverageEnabled = snapshot.CoverageEnabled;
+        _lastRunTime = snapshot.LastRunTime;
+        _lastChangeTime = snapshot.LastFileChangeTime;
+        _backfilling = snapshot.ImpactBackfill is not null;
+    }
+
+    private void OnStateChanged(StateSnapshotNotification snapshot)
+    {
+        // Reload after a run finishes (new data) or a file changes (staleness).
+        // A finished backfill pass refines which tests executed the selected file.
+        var changed = snapshot.CoverageEnabled != _coverageEnabled
+            || snapshot.LastRunTime != _lastRunTime
+            || snapshot.LastFileChangeTime != _lastChangeTime
+            || (_backfilling && snapshot.ImpactBackfill is null);
+        Capture(snapshot);
+        if (changed)
+        {
+            _ = InvokeAsync(RefreshAsync);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _selfRef = DotNetObjectReference.Create(this);
+        }
+
+        if (_coverageEnabled && !_splitterAttached)
+        {
+            await JS.InvokeVoidAsync("pistonSplitter.attach", _splitContainer, _selfRef,
+                ViewState.MinSplitPercent, ViewState.MaxSplitPercent);
+            _splitterAttached = true;
+        }
+        else if (!_coverageEnabled && _splitterAttached)
+        {
+            await JS.InvokeVoidAsync("pistonSplitter.detach", _splitContainer);
+            _splitterAttached = false;
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        if (!_coverageEnabled)
+        {
+            StateHasChanged();
+            return;
+        }
+
+        if (await Client.GetCoverageSummaryAsync() is { } summary)
+        {
+            _summary = summary;
+            _staleCount = summary.Files.Count(f => f.IsStale);
+        }
+
+        if (_selectedPath is not null)
+        {
+            await LoadFileAsync(_selectedPath);
+        }
+
+        StateHasChanged();
+    }
+
+    private async Task SelectFileAsync(string path)
+    {
+        _selectedPath = path;
+        _file = null;
+        _lines = [];
+        _covering = null;
+        _selectedLine = null;
+        await LoadFileAsync(path);
+    }
+
+    private async Task LoadFileAsync(string path)
+    {
+        var fileTask = Client.GetFileCoverageAsync(path, includeSource: true);
+        var coveringTask = Client.GetCoveringTestsAsync(path);
+        var file = await fileTask;
+        var covering = await coveringTask;
+        if (_selectedPath != path)
+        {
+            return;
+        }
+
+        _file = file;
+        _sourceTokens = file?.Source is { } source && path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            ? CSharpHighlighter.Highlight(source)
+            : null;
+        _lines = file?.Lines.ToDictionary(l => l.LineNumber) ?? [];
+        _covering = covering;
+    }
+
+    private void PickLine(int number) => _selectedLine = _selectedLine == number ? null : number;
+
+    private static readonly string[] Granularities = ["test", "class", "run"];
+
+    private static int Rank(string granularity) => Array.IndexOf(Granularities, granularity) is var i and >= 0 ? i : Granularities.Length;
+
+    private static string ShortTestName(string fqn)
+    {
+        var paren = fqn.IndexOf('(', StringComparison.Ordinal);
+        var head = paren < 0 ? fqn : fqn[..paren];
+        var parts = head.Split('.');
+        return string.Join('.', parts.TakeLast(2)) + (paren < 0 ? "" : fqn[paren..]);
+    }
+
+    private RenderFragment RenderCoveringTests() =>
+        @<text>
+            @{
+                var all = _covering?.Tests ?? [];
+                var shown = _selectedLine is { } pickedLine
+                    ? all.Where(t => t.ExecutedLines.Any(r => r.Start <= pickedLine && pickedLine <= r.End)).ToList()
+                    : all.ToList();
+                shown = [.. shown.OrderBy(t => Rank(t.Granularity)).ThenBy(t => t.TestFqn, StringComparer.Ordinal)];
+                var counts = shown.GroupBy(t => t.Granularity).ToDictionary(g => g.Key, g => g.Count());
+            }
+            <section class="flex flex-col shrink-0 max-h-[40%] min-h-0 border-t border-gray-800" aria-label="Tests that executed this file">
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5 shrink-0 select-none">
+                    <span class="text-gray-200 font-semibold">
+                        @(_selectedLine is { } line ? $"Tests that executed line {line}" : "Tests that executed this file")
+                    </span>
+                    @if (_covering is not null)
+                    {
+                        <span class="text-gray-400 tabular-nums">@shown.Count</span>
+                        @foreach (var granularity in Granularities.Where(counts.ContainsKey))
+                        {
+                            <span class="flex items-center gap-1 text-gray-500 tabular-nums">
+                                <GranularityBadge Granularity="@granularity" />@counts[granularity]
+                            </span>
+                        }
+                    }
+                    @if (_selectedLine is not null)
+                    {
+                        <button type="button" class="text-gray-400 underline decoration-gray-600 underline-offset-2 hover:text-gray-100"
+                                @onclick="() => _selectedLine = null">whole file</button>
+                    }
+                    else if (all.Count > 0)
+                    {
+                        <span class="text-gray-500">Click a line number to narrow to one line.</span>
+                    }
+                </div>
+                <div class="flex-1 min-h-0 overflow-y-auto pb-1">
+                    @if (_covering is null)
+                    {
+                        <div class="text-gray-600 italic px-4 py-1">Loading…</div>
+                    }
+                    else if (all.Count == 0)
+                    {
+                        <div class="text-gray-600 italic px-4 py-1">
+                            No test is recorded as executing this file yet. Each coverage run records what its tests executed,
+                            and while idle Piston measures each test class on its own.
+                        </div>
+                    }
+                    else if (shown.Count == 0)
+                    {
+                        <div class="text-gray-600 italic px-4 py-1">No recorded test executed this line.</div>
+                    }
+                    else
+                    {
+                        foreach (var test in shown)
+                        {
+                            <button type="button" class="flex items-center gap-2 w-full px-4 py-0.5 text-left text-gray-300 hover:bg-gray-800/50"
+                                    title="@test.TestFqn" @onclick="() => OnOpenTest.InvokeAsync(TestReference.FromProjectPath(test.ProjectPath, test.TestFqn))">
+                                <GranularityBadge Granularity="@test.Granularity" />
+                                <span class="min-w-0 truncate">@ShortTestName(test.TestFqn)</span>
+                                <span class="shrink-0 text-gray-500">@Path.GetFileNameWithoutExtension(test.ProjectPath)</span>
+                                @if (!test.IsCurrent)
+                                {
+                                    <span class="shrink-0 text-yellow-400" title="The file or the test's code changed since this was measured; the line ranges may be out of place">outdated</span>
+                                }
+                            </button>
+                        }
+                    }
+                </div>
+            </section>
+        </text>;
+
+    private bool Filtering => !string.IsNullOrWhiteSpace(_filter);
+
+    private CoverageGroup BuildTree() => CoverageTreeBuilder.Build(
+        _summary!.Files.Where(f => !Filtering || f.RelativePath.Contains(_filter!.Trim(), StringComparison.OrdinalIgnoreCase)),
+        View.CoverageGrouping,
+        View.CoverageSort,
+        View.CoverageSortDescending);
+
+    private string ExpansionKey(CoverageGroup group) => $"{View.CoverageGrouping}:{group.Key}";
+
+    // A filter shows every match, so groups open while it is set.
+    private bool IsExpanded(CoverageGroup group) =>
+        Filtering || !View.CollapsedCoverageGroups.Contains(ExpansionKey(group));
+
+    private void Toggle(CoverageGroup group)
+    {
+        var key = ExpansionKey(group);
+        if (!View.CollapsedCoverageGroups.Remove(key))
+        {
+            _ = View.CollapsedCoverageGroups.Add(key);
+        }
+    }
+
+    private static IEnumerable<CoverageGroup> Descendants(CoverageGroup group) =>
+        group.Groups.SelectMany(g => Descendants(g).Prepend(g));
+
+    private void ExpandAll() =>
+        View.CollapsedCoverageGroups.ExceptWith(Descendants(BuildTree()).Select(ExpansionKey));
+
+    private void CollapseAll() =>
+        View.CollapsedCoverageGroups.UnionWith(Descendants(BuildTree()).Select(ExpansionKey));
+
+    private void ChangeGrouping(ChangeEventArgs e)
+    {
+        if (Enum.TryParse<CoverageGrouping>(e.Value?.ToString(), out var grouping))
+        {
+            View.CoverageGrouping = grouping;
+        }
+    }
+
+    private static string Indent(int depth) => $"padding-left: {12 + (Math.Max(depth, 0) * 14)}px";
+
+    private RenderFragment SortHeader(CoverageSort sort, string label, string classes) =>
+        @<text>
+            @{
+                var active = View.CoverageSort == sort;
+                var descending = active && View.CoverageSortDescending;
+                var order = sort == CoverageSort.Name
+                    ? (descending ? "Z to A" : "A to Z")
+                    : (descending ? "most covered first" : "least covered first");
+                var hint = active ? $"Sorted {order}. Click to reverse." : $"Sort {order}";
+            }
+            <button type="button"
+                    class="@classes flex items-center gap-1 rounded text-[10px] font-semibold hover:text-gray-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 @(active ? "text-gray-300" : "")"
+                    title="@hint" aria-label="@($"{label}: {hint}")"
+                    @onclick="() => View.SortCoverageBy(sort)">
+                @label
+                <span class="w-2 text-center" aria-hidden="true">@(active ? (descending ? "▾" : "▴") : "")</span>
+            </button>
+        </text>;
+
+    // The root (depth -1) is not drawn; its groups and files start at depth 0.
+    private RenderFragment RenderGroup(CoverageGroup group, int depth) =>
+        @<text>
+            @if (depth >= 0)
+            {
+                var expanded = IsExpanded(group);
+                <button type="button" class="flex items-center gap-2 w-full pr-3 py-0.5 text-left text-gray-300 hover:bg-gray-800/50"
+                        style="@Indent(depth)" title="@group.Key" aria-expanded="@(expanded ? "true" : "false")"
+                        @onclick="() => Toggle(group)">
+                    <span class="w-3 shrink-0 text-center text-gray-500 select-none" aria-hidden="true">@(expanded ? "▾" : "▸")</span>
+                    <span class="flex-1 min-w-0 truncate">
+                        <span class="font-semibold">@group.Name</span>
+                        <span class="ml-1 text-gray-500 tabular-nums" title="Files">@group.FileCount</span>
+                    </span>
+                    <span class="w-16 h-1.5 rounded-sm bg-red-400/40 overflow-hidden shrink-0" aria-hidden="true">
+                        <span class="block h-full bg-green-400" style="width: @(Ratio(group.LinesCovered, group.LinesTotal))%"></span>
+                    </span>
+                    <span class="w-12 text-right tabular-nums shrink-0 @PercentColor(group.LinesCovered, group.LinesTotal)"
+                          title="@group.LinesCovered.ToString("N0")/@group.LinesTotal.ToString("N0") lines">@Percent(group.LinesCovered, group.LinesTotal)</span>
+                </button>
+            }
+            @if (depth < 0 || IsExpanded(group))
+            {
+                foreach (var child in group.Groups)
+                {
+                    @RenderGroup(child, depth + 1)
+                }
+
+                foreach (var file in group.Files)
+                {
+                    @RenderFile(file, depth + 1)
+                }
+            }
+        </text>;
+
+    private RenderFragment RenderFile(CoverageFileSummaryDto file, int depth) =>
+        @<text>
+            @{
+                var selected = file.FilePath == _selectedPath;
+                var (dir, name) = SplitPath(file.RelativePath);
+                var grouped = View.CoverageGrouping != CoverageGrouping.Flat;
+            }
+            <button type="button" aria-current="@(selected ? "true" : null)"
+                    class="flex items-center gap-2 w-full pr-3 py-0.5 text-left @(selected ? "bg-gray-800 text-gray-100" : "text-gray-300 hover:bg-gray-800/50")"
+                    style="@Indent(depth)" title="@file.RelativePath" @onclick="() => SelectFileAsync(file.FilePath)">
+                @if (grouped)
+                {
+                    <span class="w-3 shrink-0" aria-hidden="true"></span>
+                }
+                <span class="flex-1 min-w-0 truncate">
+                    <span>@name</span>
+                    @if (View.CoverageGrouping != CoverageGrouping.Folder)
+                    {
+                        <span class="ml-1 text-gray-500">@dir</span>
+                    }
+                </span>
+                @if (file.IsStale)
+                {
+                    <span class="text-yellow-400 shrink-0" title="Changed since it was measured">stale</span>
+                }
+                else if (file.IsPartial)
+                {
+                    <span class="text-gray-500 shrink-0" title="Measured by a selective run, not a full run of every test">partial</span>
+                }
+                <span class="w-16 h-1.5 rounded-sm bg-red-400/40 overflow-hidden shrink-0" aria-hidden="true">
+                    <span class="block h-full bg-green-400" style="width: @(Ratio(file.LinesCovered, file.LinesTotal))%"></span>
+                </span>
+                <span class="w-12 text-right tabular-nums shrink-0 @PercentColor(file.LinesCovered, file.LinesTotal)">@Percent(file.LinesCovered, file.LinesTotal)</span>
+            </button>
+        </text>;
+
+    private static double Ratio(int covered, int total) =>
+        total == 0 ? 100 : Math.Round(100.0 * covered / total, 1);
+
+    private static string Percent(int covered, int total) =>
+        total == 0 ? "–" : $"{Math.Floor(1000.0 * covered / total) / 10:0.0}%";
+
+    private static string PercentColor(int covered, int total) => total == 0
+        ? "text-gray-500"
+        : ((double)covered / total) switch
+        {
+            >= 0.8 => "text-green-400",
+            >= 0.5 => "text-yellow-400",
+            _ => "text-red-400",
+        };
+
+    private static string LineTint(CoverageLineDto? line) => line?.Status switch
+    {
+        "covered" => "bg-green-400/10",
+        "partial" => "bg-yellow-400/15",
+        "uncovered" => "bg-red-400/15",
+        _ => "",
+    };
+
+    private static string GutterColor(CoverageLineDto? line) => line?.Status switch
+    {
+        "covered" => "bg-green-400",
+        "partial" => "bg-yellow-400",
+        "uncovered" => "bg-red-400",
+        _ => "",
+    };
+
+    private static string HitText(CoverageLineDto? line) => line switch
+    {
+        null => "",
+        { HitCount: 0 } => "0",
+        { HitCount: > 999 } => "999+",
+        _ => $"{line.HitCount}×",
+    };
+
+    private static string? LineTitle(CoverageLineDto? line) => line switch
+    {
+        null => null,
+        { BranchesTotal: > 0 } => $"{line.HitCount} hit(s) · {line.BranchesCovered}/{line.BranchesTotal} branches",
+        _ => $"{line.HitCount} hit(s)",
+    };
+
+    [JSInvokable]
+    public void SetSplit(double percent)
+    {
+        View.CoverageSplitPercent = percent;
+        StateHasChanged();
+    }
+
+    private void ResetSplit() => View.ResetCoverageSplit();
+
+    private void ToggleDetailPosition()
+    {
+        View.CoverageDetailPosition = _isBottom ? DetailPosition.Right : DetailPosition.Bottom;
+    }
+
+    private void HandleSplitterKeyDown(KeyboardEventArgs e)
+    {
+        var step = e.ShiftKey ? 1 : 5;
+        var delta = (e.Key, _isBottom) switch
+        {
+            ("ArrowLeft", false) or ("ArrowUp", true) => -step,
+            ("ArrowRight", false) or ("ArrowDown", true) => step,
+            _ => 0,
+        };
+
+        if (e.Key == "Home")
+            View.CoverageSplitPercent = ViewState.MinSplitPercent;
+        else if (e.Key == "End")
+            View.CoverageSplitPercent = ViewState.MaxSplitPercent;
+        else if (e.Key == "Enter")
+            View.ResetCoverageSplit();
+        else if (delta != 0)
+            View.CoverageSplitPercent += delta;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Client.StateChanged -= OnStateChanged;
+
+        if (_splitterAttached)
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("pistonSplitter.detach", _splitContainer);
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+        }
+
+        _selfRef?.Dispose();
+    }
+
+    private static (string Directory, string Name) SplitPath(string path)
+    {
+        var slash = path.LastIndexOfAny(['/', '\\']);
+        return slash < 0 ? ("", path) : (path[..slash], path[(slash + 1)..]);
+    }
+}

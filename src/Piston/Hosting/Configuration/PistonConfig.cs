@@ -25,6 +25,36 @@ public sealed class PistonConfig
     public bool? CoverageEnabled { get; set; }
 
     /// <summary>
+    /// With coverage enabled, how finely to measure which tests execute which lines while idle:
+    /// "test" (default), "class" or "off". Per-test backfill is precise but expensive.
+    /// </summary>
+    public string? ImpactBackfill { get; set; }
+
+    /// <summary>
+    /// How long a test runs before it is reported as possibly hanging: seconds (<c>90</c>) or a number with a
+    /// unit (<c>500ms</c>, <c>30s</c>, <c>5m</c>, <c>1.5h</c>); <c>0</c> or <c>off</c> turns it off. Default 60 s.
+    /// </summary>
+    public string? HangThreshold { get; set; }
+
+    /// <summary>
+    /// Per-test limit, in the same format as <see cref="HangThreshold"/>: a test that runs longer fails as timed
+    /// out and its project's run is cancelled. Off by default.
+    /// </summary>
+    public string? TestTimeout { get; set; }
+
+    /// <summary>
+    /// Keep per-test run history outside the checkout and classify failures as new, pre-existing or flaky.
+    /// Default true.
+    /// </summary>
+    public bool? History { get; set; }
+
+    /// <summary>
+    /// Keep Microsoft.Testing.Platform test apps running in server mode between runs, so later runs skip
+    /// host start-up. Default false.
+    /// </summary>
+    public bool? WarmTestHosts { get; set; }
+
+    /// <summary>
     /// Maximum number of concurrent <c>dotnet test</c> processes.
     /// 0 means auto-detect. Corresponds to the <c>--parallelism</c> CLI flag.
     /// </summary>

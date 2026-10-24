@@ -133,6 +133,54 @@ public sealed class MtpServerSessionTests
         Assert.Null(error);
     }
 
+    [Fact]
+    public async Task Connection_ServesSeveralRequestsAfterOneInitialize()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port, _ct);
+        using var server = await listener.AcceptTcpClientAsync(_ct);
+
+        var hostTask = Task.Run(async () =>
+        {
+            var host = server.GetStream();
+            await InitializeAsync(host, _ct);
+            var ids = new List<int>();
+            for (var i = 0; i < 2; i++)
+            {
+                using var request = await ReadAsync(host, _ct);
+                var id = request.RootElement.GetProperty("id").GetInt32();
+                ids.Add(id);
+                await WriteAsync(host, $$$"""{"jsonrpc":"2.0","method":"testing/testUpdates/tests","params":{"changes":[{"node":{"uid":"t{{{id}}}"}}]}}""", _ct);
+                await WriteAsync(host, $$$"""{"jsonrpc":"2.0","id":{{{id}}},"result":{}}""", _ct);
+            }
+
+            return ids;
+        }, _ct);
+
+        using var connection = new MtpServerSession.Connection(client.GetStream());
+        var uids = new List<string?>();
+        Assert.Equal(MtpServerSession.Outcome.Completed, (await connection.InitializeAsync(Generous.Initialize, _ct)).Outcome);
+        var first = await connection.RequestAsync(MtpServerSession.DiscoverMethod, null, n => uids.Add(n[0].GetProperty("uid").GetString()), Generous, _ct);
+        var second = await connection.RequestAsync(MtpServerSession.RunMethod, null, n => uids.Add(n[0].GetProperty("uid").GetString()), Generous, _ct);
+
+        Assert.Equal((MtpServerSession.Outcome.Completed, (string?)null), first);
+        Assert.Equal((MtpServerSession.Outcome.Completed, (string?)null), second);
+        Assert.True(connection.ReportedNodes);
+        Assert.Equal([2, 3], await hostTask.WaitAsync(TimeSpan.FromSeconds(20), _ct));
+        Assert.Equal(["t2", "t3"], uids);
+    }
+
+    [Fact]
+    public void CreateStartInfo_DoesNotMarkColdHostsWarm()
+    {
+        // Even when this test itself runs in a warm host.
+        var psi = MtpServerSession.CreateStartInfo("/sln/bin/Tests.dll", "/sln", 1234);
+
+        Assert.False(psi.Environment.ContainsKey(MtpServerSession.WarmHostVariable));
+    }
+
     [Theory]
     [InlineData("/sln/bin/Tests.dll", "dotnet")]
     [InlineData("/sln/bin/Tests", "/sln/bin/Tests")]

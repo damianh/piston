@@ -70,6 +70,9 @@ public static class TestRunJson
                     ["projectPath"] = p.ProjectPath,
                     ["status"] = p.Status.ToString(),
                     ["testCount"] = p.TestCount,
+                    ["noTestsReason"] = p.NoTestsReason,
+                    ["timedOutTest"] = p.TimedOut?.Test,
+                    ["testTimeoutMs"] = p.TimedOut is { } timeout ? Math.Round(timeout.Limit.TotalMilliseconds, 3) : null,
                 })
                 .ToArray()),
             ["runnerError"] = run.RunnerError,
@@ -83,9 +86,25 @@ public static class TestRunJson
                 ["other"] = tests.Count(t => t.Status is not (TestStatus.Passed or TestStatus.Failed or TestStatus.Skipped)),
             },
             ["duplicateTestIds"] = new JsonArray(run.DuplicateTestIds.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
+            ["failureClassifications"] = new JsonArray(run.FailureClassifications
+                .Select(c => (JsonNode)new JsonObject
+                {
+                    ["project"] = c.Project,
+                    ["test"] = c.Test,
+                    ["kind"] = c.Kind.ToString(),
+                    ["evidence"] = c.Evidence,
+                })
+                .ToArray()),
+            ["possiblyHangingTests"] = new JsonArray(run.PossiblyHangingTests.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
+            ["changedFiles"] = Strings(run.ChangedFiles),
+            ["fixedTests"] = OutcomeReferences(run.FixedTests),
+            ["newlyFailingTests"] = OutcomeReferences(run.NewlyFailingTests),
             ["tests"] = testArray,
         };
     }
+
+    private static JsonArray OutcomeReferences(IReadOnlyList<TestOutcomeReference> tests) =>
+        new(tests.Select(t => (JsonNode)new JsonObject { ["project"] = t.Project, ["key"] = t.Key }).ToArray());
 
     private static JsonObject? Fingerprint(SourceFingerprint? fp) => fp is null
         ? null
@@ -134,6 +153,17 @@ public static class TestRunJson
             ["testWorkingDirectories"] = c.TestWorkingDirectories is null ? null
                 : new JsonObject(c.TestWorkingDirectories.Select(pair =>
                     new KeyValuePair<string, JsonNode?>(pair.Key, JsonValue.Create(pair.Value)))),
+            ["selectionExplanation"] = c.SelectionExplanation,
+            ["selectionReasons"] = c.SelectionReasons is null ? null
+                : new JsonObject(c.SelectionReasons.Select(pair =>
+                    new KeyValuePair<string, JsonNode?>(pair.Key, new JsonArray(pair.Value.Select(reason => (JsonNode)new JsonObject
+                    {
+                        ["filePath"] = reason.FilePath,
+                        ["changedLines"] = reason.ChangedLines,
+                        ["executedLines"] = reason.ExecutedLines,
+                        ["granularity"] = reason.Granularity,
+                        ["projectPath"] = reason.ProjectPath,
+                    }).ToArray())))),
         };
 
     private static JsonArray? Strings(IReadOnlyList<string>? values) => values is null

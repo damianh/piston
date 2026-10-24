@@ -1,7 +1,7 @@
 @using Piston.Web.Components
 
 <div class="flex self-stretch" role="tablist">
-    @foreach (var tab in new[] { DashboardTab.Tests, DashboardTab.Activity })
+    @foreach (var tab in new[] { DashboardTab.Tests, DashboardTab.Coverage, DashboardTab.Runs, DashboardTab.Activity })
     {
         var tabName = tab.ToString();
         var isActive = tab == ActiveTab;

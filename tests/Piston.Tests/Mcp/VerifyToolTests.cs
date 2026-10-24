@@ -56,6 +56,61 @@ public sealed class VerifyToolTests
     }
 
     [Fact]
+    public async Task TestsFailed_TagsFailuresWithHistoryAndListsNewOnesFirst()
+    {
+        var run = Run(tests: [Test("A.Old", TestStatus.Failed, "old"), Test("A.Unseen", TestStatus.Failed), Test("A.Broke", TestStatus.Failed, "new")]) with
+        {
+            FailureClassifications =
+            [
+                new("T", "A.Old", FailureKind.PreExisting, "failed in 3 runs"),
+                new("T", "A.Unseen", FailureKind.Unknown, "no earlier result"),
+                new("T", "A.Broke", FailureKind.New, "passed in run-6"),
+            ],
+        };
+
+        var text = await VerifyAsync(new(VerificationVerdict.TestsFailed, "3 test(s) failed.", VerificationSource.Forced, 1, run, Source));
+
+        Assert.Contains("Failure history: 1 new, 1 pre-existing, 0 flaky, 1 unknown", text);
+        var broke = text.IndexOf("  - A.Broke [new]: new", StringComparison.Ordinal);
+        var unseen = text.IndexOf("  - A.Unseen [unknown history]", StringComparison.Ordinal);
+        var old = text.IndexOf("  - A.Old [pre-existing]: old", StringComparison.Ordinal);
+        Assert.True(broke >= 0 && unseen > broke && old > unseen, text);
+    }
+
+    [Fact]
+    public async Task TestsFailed_MatchesHistoryByProjectBeforeCappingFailures()
+    {
+        var projects = Enumerable.Range(0, 20).Select(i => $"Old{i}").Append("New").ToList();
+        var run = Run() with
+        {
+            Suites = projects.Select(project => new TestSuite(project,
+                [Test("Shared.Test", TestStatus.Failed)], DateTimeOffset.UnixEpoch, TimeSpan.Zero)).ToList(),
+            FailureClassifications = projects.Select(project => new FailureClassification(project, "Shared.Test",
+                project == "New" ? FailureKind.New : FailureKind.PreExisting, "history")).ToList(),
+        };
+
+        var text = await VerifyAsync(new(VerificationVerdict.TestsFailed, "21 test(s) failed.",
+            VerificationSource.Forced, 1, run, Source));
+
+        Assert.Contains("Failure history: 1 new, 20 pre-existing", text);
+        var newlyFailed = text.IndexOf("  - New :: Shared.Test [new]", StringComparison.Ordinal);
+        var old = text.IndexOf("  - Old0 :: Shared.Test [pre-existing]", StringComparison.Ordinal);
+        Assert.True(newlyFailed >= 0 && old > newlyFailed, text);
+        Assert.DoesNotContain("Old19 ::", text);
+        Assert.Contains("... 1 more", text);
+    }
+
+    [Fact]
+    public async Task TestsFailed_WithoutHistory_HasNoHistoryLine()
+    {
+        var text = await VerifyAsync(new(VerificationVerdict.TestsFailed, "1 test(s) failed.", VerificationSource.Forced, 1,
+            Run(tests: [Test("A.Fail", TestStatus.Failed, "boom")]), Source));
+
+        Assert.DoesNotContain("Failure history", text);
+        Assert.Contains("  - A.Fail: boom", text);
+    }
+
+    [Fact]
     public async Task TestsFailed_ListsCappedFailures()
     {
         var failures = Enumerable.Range(0, 25)
@@ -160,7 +215,7 @@ public sealed class VerifyToolTests
             Projects =
             [
                 new("Failed.csproj", ProjectRunStatus.Failed, 0),
-                new("Empty.csproj", ProjectRunStatus.Completed, 0),
+                new("Empty.csproj", ProjectRunStatus.Completed, 0, "Add Microsoft.NET.Test.Sdk."),
                 new("Crashed.csproj", ProjectRunStatus.Crashed, 0),
                 new("Good.csproj", ProjectRunStatus.Completed, 1),
             ],
@@ -170,7 +225,7 @@ public sealed class VerifyToolTests
 
         Assert.Contains("Projects without complete results (3)", text);
         Assert.Contains("Failed.csproj: Failed", text);
-        Assert.Contains("Empty.csproj: no test results", text);
+        Assert.Contains("Empty.csproj: no test results (Add Microsoft.NET.Test.Sdk.)", text);
         Assert.Contains("Crashed.csproj: Crashed", text);
         Assert.DoesNotContain("Good.csproj", text);
         Assert.Contains("A.Pending: NotRun", text);

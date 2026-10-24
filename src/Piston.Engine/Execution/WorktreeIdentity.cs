@@ -40,7 +40,7 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
                 ?? throw new ExecutionCoordinationException($"Cannot canonicalize path '{path}'.");
         }
 
-        var canonical = GetMacDirectoryPath(ancestor);
+        var canonical = GetExistingPathSpelling(ancestor);
         foreach (var segment in suffix)
         {
             canonical = Path.Combine(canonical, segment);
@@ -75,39 +75,75 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
         var trimmed = Path.TrimEndingDirectorySeparator(path);
         if (OperatingSystem.IsMacOS())
         {
-            return GetMacDirectoryPath(trimmed);
+            return GetExistingPathSpelling(trimmed);
         }
 
         return OperatingSystem.IsWindows() ? trimmed.ToLowerInvariant() : trimmed;
     }
 
-    [SupportedOSPlatform("macos")]
-    private static string GetMacDirectoryPath(string path)
+    internal static string GetExistingPathSpelling(string path)
     {
-        // F_GETPATH returns the actual directory spelling on both case-sensitive and insensitive volumes.
-        var fd = Open(path, 0);
-        if (fd < 0)
+        try
+        {
+            if (OperatingSystem.IsMacOS())
+            {
+                return GetMacPathSpelling(path);
+            }
+
+            var current = Path.GetPathRoot(path)!;
+            foreach (var segment in path[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+            {
+                var matches = Directory.EnumerateFileSystemEntries(current)
+                    .Where(entry => string.Equals(Path.GetFileName(entry), segment, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                current = matches.FirstOrDefault(entry => string.Equals(Path.GetFileName(entry), segment, StringComparison.Ordinal))
+                    ?? (matches.Count == 1 ? matches[0] : throw new IOException($"Cannot resolve the spelling of '{segment}'."));
+            }
+
+            return Path.TrimEndingDirectorySeparator(current);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw new ExecutionCoordinationException(
-                $"Cannot canonicalize worktree '{path}': {new Win32Exception(Marshal.GetLastPInvokeError()).Message}");
+                $"Cannot canonicalize worktree '{path}': {ex.Message}", ex);
         }
-
-        using var handle = new Microsoft.Win32.SafeHandles.SafeFileHandle(new IntPtr(fd), ownsHandle: true);
-        var buffer = new byte[1024];
-        if (GetPath(fd, 50, buffer) < 0)
-        {
-            throw new ExecutionCoordinationException(
-                $"Cannot canonicalize worktree '{path}': {new Win32Exception(Marshal.GetLastPInvokeError()).Message}");
-        }
-
-        return Path.TrimEndingDirectorySeparator(Encoding.UTF8.GetString(buffer, 0, Array.IndexOf(buffer, (byte)0)));
     }
 
-    [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "open", SetLastError = true)]
-    private static extern int Open([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags);
+    [SupportedOSPlatform("macos")]
+    private static string GetMacPathSpelling(string path)
+    {
+        // ATTR_CMN_FULLPATH uses the vnode's stored spelling without listing ancestors.
+        // getattrlist has a fixed ABI, unlike Darwin's variadic fcntl on ARM64.
+        var attributes = new MacAttributeList { BitmapCount = 5, CommonAttributes = 0x08000000 };
+        var buffer = new byte[12 + 1024]; // length, attrreference_t, and MAXPATHLEN bytes.
+        if (GetAttributeList(path, ref attributes, buffer, (nuint)buffer.Length, 0) != 0)
+        {
+            throw new IOException(new Win32Exception(Marshal.GetLastPInvokeError()).Message);
+        }
 
-    [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "fcntl", SetLastError = true)]
-    private static extern int GetPath(int fd, int command, [Out] byte[] buffer);
+        var returnedLength = BitConverter.ToUInt32(buffer, 0);
+        var offset = (long)BitConverter.ToInt32(buffer, 4) + 4;
+        var length = BitConverter.ToUInt32(buffer, 8);
+        if (returnedLength > buffer.Length || offset < 12 || length < 2
+            || offset + length > returnedLength || buffer[(int)(offset + length - 1)] != 0)
+        {
+            throw new IOException("The filesystem returned an invalid canonical path.");
+        }
+
+        return Path.TrimEndingDirectorySeparator(Encoding.UTF8.GetString(buffer, (int)offset, (int)length - 1));
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MacAttributeList
+    {
+        public ushort BitmapCount, Reserved;
+        public uint CommonAttributes, VolumeAttributes, DirectoryAttributes, FileAttributes, ForkAttributes;
+    }
+
+    [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "getattrlist", SetLastError = true)]
+    private static extern int GetAttributeList(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string path, ref MacAttributeList attributes,
+        [Out] byte[] buffer, nuint bufferSize, nuint options);
 
     /// <summary>Resolves symbolic links in every segment of an absolute path.</summary>
     private static string ResolveLinks(string path)

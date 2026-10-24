@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Coverage;
+using Piston.Engine.Impact;
 using Xunit;
 
 namespace Piston.Engine.Tests.Coverage;
@@ -80,6 +81,24 @@ public sealed class CoverageProcessorTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessCoverageAsync_SourceRoot_IgnoresFilesOutsideIt()
+    {
+        var store = new StubCoverageStore();
+        var processor = new CoverageProcessor(new CoberturaParser());
+        var inside = WriteCoberturaXml(SimpleXml("src/Lib/Code.cs", 1, 2));
+        var outside = WriteCoberturaXml(SimpleXml("/tmp/fixture/Fixture.cs", 3));
+
+        await processor.ProcessCoverageAsync(
+            store.CreateRunId(), [inside, outside], ["Lib.Tests.Test1"], store, sourceRoot: "/repo");
+
+        var report = Assert.Single(store.StoredReports);
+        var expectedPath = Path.GetFullPath("/repo/src/Lib/Code.cs");
+        Assert.Equal([expectedPath], report.Files.Select(f => f.Coverage.FilePath));
+        var (_, map) = Assert.Single(store.StoredCoverage);
+        Assert.All(map["Lib.Tests.Test1"], line => Assert.Equal(expectedPath, line.FilePath));
+    }
+
+    [Fact]
     public async Task ProcessCoverageAsync_MultipleReports_UnionOfCoverage()
     {
         var store = new StubCoverageStore();
@@ -101,6 +120,45 @@ public sealed class CoverageProcessorTests : IDisposable
         // Both files should appear
         Assert.Contains(files, f => f.EndsWith("File1.cs", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(files, f => f.EndsWith("File2.cs", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Theory]
+    [InlineData(1, true)]
+    [InlineData(-1, false)]
+    public async Task ProcessCoverageAsync_Impact_RecordsEachUnitsSpansUnlessTheFileChangedSinceTheBuild(
+        int startedOffsetMinutes, bool expectMapped)
+    {
+        var source = Path.Combine(_tempDir, "Code.cs");
+        File.WriteAllText(source, string.Join("\n", Enumerable.Range(1, 10).Select(i => $"line {i}")));
+        var reportA = WriteCoberturaXml(SimpleXml(source, 2, 3));
+        var reportB = WriteCoberturaXml(SimpleXml(source, 8));
+        using var store = new SqliteCoverageStore();
+        await store.InitializeAsync(_tempDir);
+        var impact = new CoverageImpactOptions(
+            [
+                new CoverageRunUnit("/repo/A.Tests.csproj", "run", [reportA], ["A.Test"], Merge: false),
+                new CoverageRunUnit("/repo/B.Tests.csproj", "run", [reportB], ["B.Test"], Merge: false),
+            ],
+            ImpactGranularity.Run,
+            DateTime.UtcNow.AddMinutes(startedOffsetMinutes));
+
+        await new CoverageProcessor(new CoberturaParser()).ProcessCoverageAsync(
+            store.CreateRunId(), [reportA, reportB], ["A.Test", "B.Test"], store, impact: impact);
+
+        _ = Assert.Single(store.GetUnits("/repo/A.Tests.csproj", ImpactGranularity.Run));
+        var edited = File.ReadAllText(source).Replace("line 3", "changed", StringComparison.Ordinal);
+        var selection = store.SelectTests([new ChangedFile(source, edited)]);
+        if (expectMapped)
+        {
+            var (fqn, reasons) = Assert.Single(selection.Tests);
+            Assert.Equal("A.Test", fqn);
+            Assert.Equal(new LineSpan(2, 3), Assert.Single(reasons).ExecutedSpan);
+        }
+        else
+        {
+            Assert.Empty(selection.Tests);
+            Assert.Equal([source], selection.UnmappedFiles);
+        }
     }
 
     [Fact]
@@ -179,5 +237,38 @@ public sealed class CoverageProcessorTests : IDisposable
 
         // Good file coverage is stored
         _ = Assert.Single(store.StoredCoverage);
+    }
+
+    [Fact]
+    public async Task ProcessCoverageAsync_RecordsMergedReportWithContentHash()
+    {
+        var store = new StubCoverageStore();
+        var processor = new CoverageProcessor(new CoberturaParser());
+        var source = Path.Combine(_tempDir, "Code.cs");
+        File.WriteAllText(source, "class C {}");
+        var xml1 = WriteCoberturaXml(SimpleXml(source, 1, 2));
+        var xml2 = WriteCoberturaXml(SimpleXml(source, 2, 3));
+
+        await processor.ProcessCoverageAsync(store.CreateRunId(), [xml1, xml2], [], store, isFullRun: true);
+
+        var (_, files, isFullRun) = Assert.Single(store.StoredReports);
+        Assert.True(isFullRun);
+        var file = Assert.Single(files);
+        Assert.Equal(CoverageReportFile.ComputeContentHash(source), file.ContentHash);
+        Assert.NotNull(file.ContentHash);
+        Assert.Equal("Lib", file.Coverage.Module);
+        Assert.Equal([new LineCoverage(1, 1), new LineCoverage(2, 2), new LineCoverage(3, 1)], file.Coverage.Lines);
+        Assert.Empty(store.StoredCoverage);
+    }
+
+    [Fact]
+    public async Task ProcessCoverageAsync_OnlyMalformedReports_RecordsNoReport()
+    {
+        var store = new StubCoverageStore();
+        var processor = new CoverageProcessor(new CoberturaParser());
+
+        await processor.ProcessCoverageAsync(store.CreateRunId(), [WriteCoberturaXml("<not xml")], ["T"], store, isFullRun: true);
+
+        Assert.Empty(store.StoredReports);
     }
 }

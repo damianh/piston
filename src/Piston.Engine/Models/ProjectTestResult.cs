@@ -8,4 +8,11 @@ public sealed record ProjectTestResult(
     IReadOnlyList<TestSuite> Suites,
     string? RunnerError,
     IReadOnlyList<string> CoverageReportPaths,
-    bool Crashed);
+    bool Crashed)
+{
+    /// <summary>The log of the process that produced the result, when the runner kept one.</summary>
+    public ExecutionLog? Log { get; init; }
+
+    /// <summary>Set when a test ran longer than the test timeout and the project's run was cancelled.</summary>
+    public TestTimeout? TimedOut { get; init; }
+}

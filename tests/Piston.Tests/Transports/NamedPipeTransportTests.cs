@@ -99,7 +99,69 @@ public sealed class NamedPipeTransportTests
         await server.DisposeAsync();
     }
 
+    [Fact]
+    public async Task BufferedReceive_PreservesFollowingFramesWhileClientSends()
+    {
+        var pipeName = UniquePipeName();
+        await using var server = new NamedPipeServerTransport(pipeName);
+        await using var client = new NamedPipeClientTransport(pipeName);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
+
+        var accept = server.AcceptClientAsync(cts.Token);
+        await client.ConnectAsync(cts.Token);
+        var stream = await accept;
+        var first = "\"" + new string('x', 20_000) + "\"";
+        var frames = System.Text.Encoding.UTF8.GetBytes(first + "\n{\"seq\":2}\n{\"seq\":3}\n");
+        var write = stream.WriteAsync(frames, cts.Token).AsTask();
+        var read = client.ReceiveAsync(cts.Token);
+        await Task.WhenAll(write, read);
+        Assert.Equal(first, System.Text.Encoding.UTF8.GetString((await read).Span));
+
+        var ack = System.Text.Encoding.UTF8.GetBytes("{\"ack\":1}");
+        var send = client.SendAsync(ack, cts.Token);
+        var receive = MessageFramer.ReadMessageAsync(stream, cts.Token);
+        await Task.WhenAll(send, receive);
+        Assert.Equal(ack, (await receive)!.Value.ToArray());
+
+        Assert.Equal("{\"seq\":2}", System.Text.Encoding.UTF8.GetString((await client.ReceiveAsync(cts.Token)).Span));
+        Assert.Equal("{\"seq\":3}", System.Text.Encoding.UTF8.GetString((await client.ReceiveAsync(cts.Token)).Span));
+    }
+
     // ── Client disconnects — server read returns null ─────────────────────────
+
+    [Fact]
+    public async Task ServerDisconnects_AfterObservedEof_ClientDisposesAndReconnects()
+    {
+        var pipeName = UniquePipeName();
+        await using var client = new NamedPipeClientTransport(pipeName);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(10));
+
+        await using (var server = new NamedPipeServerTransport(pipeName))
+        {
+            var accept = server.AcceptClientAsync(cts.Token);
+            await client.ConnectAsync(cts.Token);
+            var stream = await accept;
+            var receive = client.ReceiveAsync(cts.Token);
+
+            stream.Dispose();
+            _ = await Assert.ThrowsAsync<IOException>(() => receive);
+            await client.DisposeAsync();
+            await client.DisposeAsync();
+        }
+
+        await using var restartedServer = new NamedPipeServerTransport(pipeName);
+        var reconnect = restartedServer.AcceptClientAsync(cts.Token);
+        await client.ConnectAsync(cts.Token);
+        var reconnectedStream = await reconnect;
+        var message = System.Text.Encoding.UTF8.GetBytes("{\"reconnected\":true}");
+        var write = MessageFramer.WriteMessageAsync(reconnectedStream, message, cts.Token);
+        var read = client.ReceiveAsync(cts.Token);
+        await Task.WhenAll(write, read);
+
+        Assert.Equal(message, (await read).ToArray());
+    }
 
     [Fact]
     public async Task ClientDisconnects_ServerReadReturnsNull()

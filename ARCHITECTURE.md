@@ -61,11 +61,17 @@ Its URL is the root, `http://localhost:5200`, not `/mcp`.
 Implemented protocol operations include stop, force run, set filter, clear
 results, state retrieval, and MCP call-log retrieval. `engine/start` is rejected
 by the headless dispatcher because the solution is configured at launch.
-The file-coverage request currently returns an empty line list; the presence of
-coverage contracts does not establish a working line-coverage client API.
+Coverage requests return the solution's coverage summary, one file's line
+coverage (optionally with its source), and LCOV or Cobertura exports; the daemon
+also serves the exports over HTTP at `/api/coverage/{lcov|cobertura}`.
+`coverage/getCoveringTests` returns the tests the impact map records as executing
+a file, with their evidence granularity and executed line ranges.
+`source/get` returns a source file's lines for the dashboard's stack-trace view;
+it refuses paths that resolve (following symlinks) outside the solution
+directory, files over 1 MB and binary files.
 Clients receive state, test progress, build errors, and activity notifications.
-The dashboard presents current test/build state, activity, and MCP call history;
-there is no diagnostic view.
+The dashboard presents current test/build state, aggregate coverage, activity,
+and MCP call history; there is no diagnostic view.
 
 See [README.md](README.md) for executable commands and the actual configuration
 shape. The protocol's stdio transport is not an MCP stdio server.
@@ -95,10 +101,12 @@ Startup initializes the solution graph and, when coverage is enabled, the SQLite
 coverage store, starts watching, and triggers an initial build/test run. The
 pipeline awaits graph initialization before choosing per-project test targets.
 
-The watcher batches changes to `.cs`, `.csproj`, `.props`, and `.targets`, excluding
-build outputs and other directories such as `.git` and `node_modules`. Although
-the analyzer recognizes solution-file changes, the watcher's filters do not
-currently include `.sln`, `.slnx`, or `.slnf`.
+The watcher batches changes to every source-fingerprint input: any file under the
+solution directory except build outputs and directories such as `.git` and
+`node_modules`, plus the nearest ancestor `global.json`, `Directory.Build.*`,
+`Directory.Packages.props` and `NuGet.config`. Changes to `.sln`, `.slnx`, `.slnf`,
+`.csproj`, `.props` or `.targets` refresh the solution graph; solution, `.props`
+and `.targets` changes trigger a full run.
 
 A new trigger cancels the preceding pipeline, and a semaphore serializes runs.
 Each run then waits for machine-wide admission (see
@@ -127,31 +135,42 @@ fall back to a full run. Project/build-input changes can require graph
 reinitialization. The graph is held in memory; there is no implemented
 `.piston/project-graph.json` cache or persisted graph recovery.
 
-### Coverage-assisted filtering (implemented, coarse)
+### Changed-line selection (implemented)
 
-The existing Tier 3 path attaches test FQNs when all changed C# files have
-non-stale coverage associations. It queries **whole files**, not changed line
-ranges. The store has a line-range query API, but the analyzer does not use it
-and does not calculate changed lines with a git diff.
+With coverage enabled, Tier 3 selects tests from the **impact map**
+(`IImpactMapStore`, implemented by `SqliteCoverageStore`). Each recorded *unit*
+belongs to a test project, has a granularity (`run`, `class` or `test`) and lists
+the tests it measured and, per source file, the line spans those tests executed
+plus a content-addressed snapshot of the file as measured.
 
-The important limitation is attribution: the orchestrator passes all reports
-and all returned test FQNs from a run to `CoverageProcessor`. The processor unions
-the covered lines across those reports and associates **every covered line with
-every supplied test FQN**. Associations can therefore span multiple suites in a
-run. Stored FQNs do not establish that a particular test executed a particular
-line, even though the data is represented as file/line/test rows.
+- **Recording.** After a coverage run, the orchestrator records one `run` unit per
+  test project from that project's reports. A full run in which all the project's
+  tests ran cleanly replaces the unit; other runs merge into it, first remapping
+  earlier spans onto the new content with a line diff.
+- **Backfill.** `run` evidence credits every executed line to every test of the
+  project. When the daemon is idle, `ImpactBackfill` plans class (or test) units
+  that are missing or outdated, and the orchestrator runs each with a name filter
+  and coverage, recording a `class`/`test` unit. A unit is skipped when not every
+  planned test ran. Any new run cancels the backfill; progress is published as
+  `ImpactBackfill` in the state snapshot.
+- **Selection.** `SelectTests` diffs each changed file against each unit's
+  snapshot. A unit whose executed spans overlap the changed lines selects its tests,
+  with a `TestSelectionReason` (changed lines, executed span, granularity); a change
+  outside every span selects every test that executed the file. Current finer
+  evidence about a test overrides coarser evidence. Analyzing a change marks the
+  file's class and test units dirty, so the `run` unit decides until they are
+  remeasured.
+- **Abstaining.** A changed test file, a changed file with no recording, or more
+  than `ImpactAnalysisResult.MaxFilteredTests` (100) selected tests falls back to
+  project selection, and the run records why (`SelectionExplanation`). Without an
+  impact-map hit, the older file-level path (`coverage_set_*`) may still narrow by
+  whole files.
 
-This is coarse coverage-assisted selection, not verified fine-grained per-test
-impact detection. If a changed file lacks usable coverage associations, selection
-falls back to project-level tests. The analyzer marks file associations stale
-after reading them; coverage processing refreshes files represented in new data.
-This is not a complete freshness or correctness guarantee across arbitrary edits
-or restarts.
-
-Fine-grained coverage is a future spike: establish trustworthy attribution,
-evaluate changed-line mapping and invalidation, and measure selection correctness
-before claiming per-test precision. This limitation concerns Piston's current
-processing path, not every capability offered by test frameworks or collectors.
+This is a heuristic: code reached by reflection, static state or data files can
+affect a test without appearing in its spans, and a full or forced run remains
+authoritative. Selective runs filter by method, so a merge that completed without
+a crash or runner error also removes recorded cases of the methods it ran that no
+longer exist (theory display names that change between runs).
 
 ## Builds and execution
 
@@ -194,12 +213,34 @@ both use this routing. `InProcess` is accepted as a configuration enum value but
 throws `NotSupportedException` during engine construction. There is no implemented
 in-process MTP execution mode.
 
+With `warmTestHosts`, `MtpWarmHostPool` keeps one MTP server-mode host per
+test app alive: `MtpServerSession.Connection` initializes once and then serves
+any number of `testing/discoverTests` and `testing/runTests` requests, one at a
+time. The pool replaces a host when a fingerprint of its output directory (file
+names, sizes and write times) changes, when it has exited, and after a failed,
+timed-out or cancelled request. A request for a busy host, and a retry after a
+reused host fails before reporting a test, run in a cold process. Coverage runs
+use `dotnet test` and never a warm host. The engine disposes the pool on
+shutdown, sending `exit` before killing.
+
 `TestProcessPool` is a semaphore-based concurrency limiter, not a pool of
 prewarmed, reusable processes. Automatic concurrency is
 `Math.Max(1, Environment.ProcessorCount / 2)`. `processRecycleAfter` logs a debug
 warning after a configured number of runs; it does not recycle persistent hosts.
 There is no per-test or per-class process-isolation option. Test-framework
 parallelism inside each process is separate from Piston's project concurrency.
+
+Slow tests are timed from live progress: a test is timed from the first snapshot
+that reports it `Running`. The orchestrator checks running tests every second,
+publishes the longest one in the state snapshot (`LongestRunningTest`) and, past
+`hangThreshold`, flags it as possibly hanging, logs it once and records it in the
+run's `PossiblyHangingTests`. With `testTimeout` set,
+`TimeoutTestExecutionStrategy` wraps the execution strategy for each project: past
+the limit it cancels a linked token for that project only. The runners kill the
+process and return an empty result, and the decorator rebuilds the result from the
+last live snapshot: the slow test `Failed` with a timed-out message, other
+`Running` tests `NotRun`. The project's outcome is `TimedOut`, which makes the run
+`Incomplete`.
 
 ## Worktree ownership and machine execution budget
 
@@ -277,24 +318,45 @@ CI is configured for Linux and Windows. macOS execution has not been validated.
 ## Coverage and persistence
 
 Coverage is opt-in. The VSTest path requests `XPlat Code Coverage`, so the target
-test project needs a compatible collector (such as `coverlet.collector`). It
-parses Cobertura XML. The current MTP path does not pass coverage arguments or
-return coverage reports, so enabling `--coverage` does not make that backend
-produce coverage data.
+test project needs a compatible collector (such as `coverlet.collector`). The MTP
+path passes `--coverage --coverage-output-format cobertura` when the test app
+references `Microsoft.Testing.Extensions.CodeCoverage`, running it through
+`dotnet test` rather than server mode. Both produce Cobertura XML, which
+`CoverageProcessor` parses and merges across reports, dropping files outside the
+solution directory.
 
 When enabled, `SqliteCoverageStore` creates `<solution-directory>/.piston/piston.db`
-and uses WAL mode. Its implemented tables are:
+and uses WAL mode. Its tables are:
 
 | Table | Stored data |
 |---|---|
-| `coverage_map` | Run ID, test FQN, file path, line number, hit count, stale flag. |
+| `coverage_files` | Per-file line/branch totals, module, content hash, stale and partial flags. |
+| `coverage_lines` | Per-line hits and branch counts: the merged report. |
+| `coverage_sets` | One row per file-level attribution set: run ID and granularity (always `run`). |
+| `coverage_set_tests` | The tests credited with a set. |
+| `coverage_set_lines` | The lines a set covers, with stale flag. |
 | `coverage_summary` | File path, last run ID, last-updated timestamp. |
+| `impact_units` | One row per impact unit: test project, granularity, unit key, run ID, dirty flag. |
+| `impact_unit_tests` | The tests a unit measured. |
+| `impact_unit_files` | Per unit and file: the executed line spans and the snapshot they are numbered against. |
+| `impact_snapshots` | File content by hash, so later edits can be diffed against what was measured. |
 
-Processing replaces old associations for files present in new coverage data.
-Rows reflect the coarse attribution described above; hit counts are association
-values, not independently measured per-test execution counts.
+The report tables answer the dashboard, `get_coverage`, changed-line coverage and
+exports. A full, unfiltered run replaces them. A selective run merges its hits
+into files whose content hash is unchanged, and replaces (and marks partial) files
+that are new or changed. A file whose content no longer matches its hash is
+reported stale.
 
-Clearing results deletes both coverage tables' rows transactionally using a
+The set tables hold coarse file-level attribution: every covered line of a run is credited to every test of that run. Tests that share one
+line list share one set, so a run stores its covered lines once rather than once
+per test. Processing replaces old associations for files present in new coverage
+data and prunes sets left without lines. Hit counts are association values, not
+independently measured per-test execution counts. Databases from older versions
+held a per-test `coverage_map` table; it is dropped on startup and refilled by the
+next coverage run. The store serializes all use of its connection, since the
+orchestrator and the impact analyzer call it from different threads.
+
+Clearing results deletes every coverage table's rows transactionally using a
 separate connection, including when collection is currently disabled. No database
 is created just to clear results. The storage boundary is the solution directory:
 solutions in the same directory share this database and its reset scope; other
@@ -305,8 +367,32 @@ coverage indicator.
 
 The engine keeps test results, timings, and build state in memory. Coverage run
 IDs are seeded from the database, but they do not constitute test-run history.
-There is no implemented durable test-result/failure history, run-metadata table,
-preferences table, or graph cache. Coverage persistence alone is not full
+
+Run history (`RunHistoryStore`) is the durable test-result record. It is a JSON
+file outside the checkout, resolved by `HistoryLocation` as
+`<base>/<repository>-<hash>/<worktree>-<hash>/<solution>.history.json`. The
+repository is the git common directory, so linked worktrees share a folder but not
+a file. `<base>` is `PISTON_HISTORY_DIRECTORY` or `Piston/history` under local
+application data; a location inside the worktree is refused, because its writes
+would change the source fingerprint. The engine opens it after acquiring worktree
+ownership and holds an exclusive `.lock`; a second opener is read-only and never
+saves. `CompleteRun` records every finished run with passed, failed or skipped
+tests, classifies each failure against the earlier entries (`New`,
+`PreExisting`, `Flaky` or `Unknown`) and attaches the result to the
+`TestRunRecord` as `FailureClassifications`. A test is flaky only when it passed
+and failed on the same `SourceAfter` fingerprint, and only `Current` runs record a
+fingerprint. Saves are debounced and atomic (temp file then rename); each test
+keeps 20 entries, the file keeps 50 runs with per-test results and clipped errors,
+and tests unseen for 30 days are pruned. The file stores each project and test
+name once and runs in columns. A history failure is logged and never fails a run.
+`clear_results` does not clear history. The dashboard reads the kept runs with
+`history/getRuns` and `history/getRun`, and compares two runs in the browser
+(`RunComparison`). `history/getTestMarks` gives each test whose latest recorded
+result failed its classification (`GetLatestFailures`) plus the flaky tests, for
+the Tests tab's badges and filters; `history/getTestHistory` gives one test's
+entries for its history strip.
+
+There is no run-metadata table, preferences table, or graph cache. Coverage persistence alone is not full
 controller-state recovery. `.piston.json` is the actual optional configuration
 file; `.piston/config.json` and a user-global configuration hierarchy are not
 implemented. The engine also writes a diagnostic log under `.piston`.
@@ -323,8 +409,8 @@ excluded by a physical file provider.
 
 ## MCP behavior and limitations
 
-The MCP wire names are `run_tests`, `get_test_run`, `get_test_results`,
-`set_test_filter`, and `clear_results` (implemented by the corresponding
+The MCP wire names are `verify`, `run_tests`, `get_test_run`, `get_test_results`,
+`get_test_history`, `set_test_filter`, and `clear_results` (implemented by the corresponding
 PascalCase methods in `TestTools`). They use the same engine state and pipeline
 as other clients; MCP does not bypass builds or provide prewarmed test processes.
 
