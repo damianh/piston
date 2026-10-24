@@ -34,7 +34,7 @@
                     <span class="w-12 pr-2 text-right select-none shrink-0 tabular-nums @(failing ? "text-red-300" : "text-gray-600")">@number</span>
                     <span class="whitespace-pre text-gray-300 pr-4">@foreach (var token in _tokens![i])
                     {
-                        <span class="@TokenClass(token.Kind)">@token.Text</span>
+                        <span class="@CSharpHighlighter.TokenClass(token.Kind)">@token.Text</span>
                     }</span>
                 </div>
             }
@@ -92,13 +92,4 @@
         _wholeFile
             ? (0, count - 1)
             : (Math.Clamp(Line - 1 - ContextLines, 0, Math.Max(0, count - 1)), Math.Clamp(Line - 1 + ContextLines, 0, count - 1));
-
-    private static string TokenClass(SourceTokenKind kind) => kind switch
-    {
-        SourceTokenKind.Keyword => "text-red-300",
-        SourceTokenKind.String => "text-sky-400",
-        SourceTokenKind.Comment => "text-gray-500 italic",
-        SourceTokenKind.Number => "text-blue-400",
-        _ => "",
-    };
 }

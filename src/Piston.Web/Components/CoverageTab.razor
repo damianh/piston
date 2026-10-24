@@ -163,7 +163,17 @@
                                             title="Show the tests that executed line @number" aria-pressed="@(picked ? "true" : "false")"
                                             @onclick="() => PickLine(number)">@number</button>
                                     <span class="w-10 pr-2 text-right text-gray-500 select-none shrink-0 tabular-nums">@HitText(line)</span>
-                                    <span class="whitespace-pre text-gray-200 pr-4">@source[i]</span>
+                                    <span class="whitespace-pre text-gray-200 pr-4">@if (_sourceTokens is { } tokens)
+                                    {
+                                        @foreach (var token in tokens[i])
+                                        {
+                                            <span class="@CSharpHighlighter.TokenClass(token.Kind)">@token.Text</span>
+                                        }
+                                    }
+                                    else
+                                    {
+                                        @source[i]
+                                    }</span>
                                 </div>
                             }
                         }
@@ -188,6 +198,7 @@
     private string? _filter;
     private string? _selectedPath;
     private FileCoverageDto? _file;
+    private List<List<SourceToken>>? _sourceTokens;
     private Dictionary<int, CoverageLineDto> _lines = [];
     private CoveringTestsDto? _covering;
     private int? _selectedLine;
@@ -301,6 +312,9 @@
         }
 
         _file = file;
+        _sourceTokens = file?.Source is { } source && path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            ? CSharpHighlighter.Highlight(source)
+            : null;
         _lines = file?.Lines.ToDictionary(l => l.LineNumber) ?? [];
         _covering = covering;
     }

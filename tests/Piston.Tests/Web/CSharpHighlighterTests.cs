@@ -53,4 +53,25 @@ public sealed class CSharpHighlighterTests
 
         Assert.Equal(line, string.Concat(CSharpHighlighter.Highlight([line])[0].Select(t => t.Text)));
     }
+
+    [Theory]
+    [InlineData(SourceTokenKind.Keyword, "text-red-300")]
+    [InlineData(SourceTokenKind.String, "text-sky-400")]
+    [InlineData(SourceTokenKind.Comment, "text-gray-500 italic")]
+    [InlineData(SourceTokenKind.Number, "text-blue-400")]
+    [InlineData(SourceTokenKind.Plain, "")]
+    public void UsesTheSameThemeAwarePaletteForBothSourceViews(SourceTokenKind kind, string cssClass) =>
+        Assert.Equal(cssClass, CSharpHighlighter.TokenClass(kind));
+
+    [Fact]
+    public void PreservesLineAlignmentAndHtmlLikeSource()
+    {
+        string[] lines = ["/* comment", "", "end */", "var html = \"<script>&</script>\";", "", "return 42;"];
+
+        var tokens = CSharpHighlighter.Highlight(lines);
+
+        Assert.Equal(lines, tokens.Select(line => string.Concat(line.Select(token => token.Text))));
+        Assert.Equal(SourceTokenKind.Comment, Assert.Single(tokens[2]).Kind);
+        Assert.Contains(tokens[3], token => token is { Kind: SourceTokenKind.String, Text: "\"<script>&</script>\"" });
+    }
 }

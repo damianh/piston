@@ -21,6 +21,15 @@ public sealed record SourceToken(string Text, SourceTokenKind Kind);
 /// </summary>
 public static class CSharpHighlighter
 {
+    public static string TokenClass(SourceTokenKind kind) => kind switch
+    {
+        SourceTokenKind.Keyword => "text-red-300",
+        SourceTokenKind.String => "text-sky-400",
+        SourceTokenKind.Comment => "text-gray-500 italic",
+        SourceTokenKind.Number => "text-blue-400",
+        _ => "",
+    };
+
     private static readonly HashSet<string> Keywords =
     [
         "abstract", "as", "async", "await", "base", "bool", "break", "byte", "case", "catch", "char", "checked",
