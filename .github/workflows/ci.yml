@@ -55,6 +55,9 @@ jobs:
         run: dotnet pack src/Piston/Piston.csproj -c Release -o artifacts
       - name: Install the packed tool
         run: dotnet tool install Piston --tool-path .tools --source artifacts
+      - name: Test macOS worktree identity
+        if: runner.os == 'macOS'
+        run: dotnet test --project tests/Piston.Engine.Tests -c Release --filter-class Piston.Engine.Tests.Execution.WorktreeOwnershipTests
       - name: Run the samples through Piston
         # samples/Samples.slnx: MSTest, NUnit, xUnit v3 and TUnit on Microsoft.Testing.Platform, 3 tests each
         # (1 passing, 1 deliberately failing, 1 skipped). The daemon builds, discovers and runs them; the startup

@@ -71,6 +71,18 @@ public sealed class StackTraceParserTests
     [InlineData("C:/work/Repo", "c:/WORK/REPO/Tests.cs")]
     [InlineData(@"\\server\share\Repo", @"\\SERVER\SHARE\repo\Tests.cs")]
     [InlineData("//server/share/Repo", "//SERVER/SHARE/repo/Tests.cs")]
+    [InlineData(@"C:\work\Repo", "c:/WORK/REPO/Tests.cs")]
+    [InlineData("C:/work/Repo", @"c:\WORK\REPO\Tests.cs")]
+    [InlineData(@"\\server\share\Repo", "//SERVER/SHARE/repo/Tests.cs")]
+    [InlineData("//server/share/Repo", @"\\SERVER\SHARE\repo\Tests.cs")]
+    [InlineData(@"C:\work/Repo", @"c:/WORK\REPO/Tests.cs")]
     public void WindowsDaemonPaths_AreCaseInsensitiveOnAnyBrowserHost(string root, string file) =>
         Assert.True(StackTraceParser.IsInSolution(file, root));
+
+    [Theory]
+    [InlineData(@"C:\work\Repo", "C:/work/Repository/Tests.cs")]
+    [InlineData("//server/share/Repo", @"\\server\share\Repository\Tests.cs")]
+    [InlineData("/work/repo", "/work\\repo/Tests.cs")]
+    public void PathMatching_DoesNotAdmitSiblingsOrRewriteUnixSeparators(string root, string file) =>
+        Assert.False(StackTraceParser.IsInSolution(file, root));
 }

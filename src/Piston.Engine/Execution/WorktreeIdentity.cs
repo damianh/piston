@@ -1,6 +1,9 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -82,16 +85,18 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
     {
         try
         {
+            if (OperatingSystem.IsMacOS())
+            {
+                return GetMacPathSpelling(path);
+            }
+
             var current = Path.GetPathRoot(path)!;
             foreach (var segment in path[current.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
             {
-                // macOS treats canonical Unicode spellings as equivalent, including on case-sensitive volumes.
-                var comparableSegment = ComparableSpelling(segment);
                 var matches = Directory.EnumerateFileSystemEntries(current)
-                    .Where(entry => string.Equals(ComparableSpelling(Path.GetFileName(entry)), comparableSegment, StringComparison.OrdinalIgnoreCase))
+                    .Where(entry => string.Equals(Path.GetFileName(entry), segment, StringComparison.OrdinalIgnoreCase))
                     .ToList();
                 current = matches.FirstOrDefault(entry => string.Equals(Path.GetFileName(entry), segment, StringComparison.Ordinal))
-                    ?? matches.FirstOrDefault(entry => string.Equals(ComparableSpelling(Path.GetFileName(entry)), comparableSegment, StringComparison.Ordinal))
                     ?? (matches.Count == 1 ? matches[0] : throw new IOException($"Cannot resolve the spelling of '{segment}'."));
             }
 
@@ -104,8 +109,41 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
         }
     }
 
-    private static string ComparableSpelling(string name) =>
-        OperatingSystem.IsMacOS() ? name.Normalize(NormalizationForm.FormC) : name;
+    [SupportedOSPlatform("macos")]
+    private static string GetMacPathSpelling(string path)
+    {
+        // ATTR_CMN_FULLPATH uses the vnode's stored spelling without listing ancestors.
+        // getattrlist has a fixed ABI, unlike Darwin's variadic fcntl on ARM64.
+        var attributes = new MacAttributeList { BitmapCount = 5, CommonAttributes = 0x08000000 };
+        var buffer = new byte[12 + 1024]; // length, attrreference_t, and MAXPATHLEN bytes.
+        if (GetAttributeList(path, ref attributes, buffer, (nuint)buffer.Length, 0) != 0)
+        {
+            throw new IOException(new Win32Exception(Marshal.GetLastPInvokeError()).Message);
+        }
+
+        var returnedLength = BitConverter.ToUInt32(buffer, 0);
+        var offset = (long)BitConverter.ToInt32(buffer, 4) + 4;
+        var length = BitConverter.ToUInt32(buffer, 8);
+        if (returnedLength > buffer.Length || offset < 12 || length < 2
+            || offset + length > returnedLength || buffer[(int)(offset + length - 1)] != 0)
+        {
+            throw new IOException("The filesystem returned an invalid canonical path.");
+        }
+
+        return Path.TrimEndingDirectorySeparator(Encoding.UTF8.GetString(buffer, (int)offset, (int)length - 1));
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MacAttributeList
+    {
+        public ushort BitmapCount, Reserved;
+        public uint CommonAttributes, VolumeAttributes, DirectoryAttributes, FileAttributes, ForkAttributes;
+    }
+
+    [DllImport("/usr/lib/libSystem.B.dylib", EntryPoint = "getattrlist", SetLastError = true)]
+    private static extern int GetAttributeList(
+        [MarshalAs(UnmanagedType.LPUTF8Str)] string path, ref MacAttributeList attributes,
+        [Out] byte[] buffer, nuint bufferSize, nuint options);
 
     /// <summary>Resolves symbolic links in every segment of an absolute path.</summary>
     private static string ResolveLinks(string path)

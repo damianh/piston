@@ -144,11 +144,45 @@ public sealed class WorktreeOwnershipTests : IDisposable
         var upper = CreateWorktree("Case");
         var lower = CreateWorktree("case");
         var directories = Directory.GetDirectories(_root);
+        var canonicalRoot = WorktreeIdentity.GetExistingPathSpelling(_root);
 
-        Assert.Equal(directories.Single(d => string.Equals(d, upper, StringComparison.OrdinalIgnoreCase)
-            && (!directories.Contains(upper) || d == upper)), WorktreeIdentity.GetExistingPathSpelling(upper));
-        Assert.Equal(directories.Single(d => string.Equals(d, lower, StringComparison.OrdinalIgnoreCase)
-            && (!directories.Contains(lower) || d == lower)), WorktreeIdentity.GetExistingPathSpelling(lower));
+        Assert.Equal(Path.Combine(canonicalRoot, Path.GetFileName(directories.Single(d => string.Equals(d, upper, StringComparison.OrdinalIgnoreCase)
+            && (!directories.Contains(upper) || d == upper)))), WorktreeIdentity.GetExistingPathSpelling(upper));
+        Assert.Equal(Path.Combine(canonicalRoot, Path.GetFileName(directories.Single(d => string.Equals(d, lower, StringComparison.OrdinalIgnoreCase)
+            && (!directories.Contains(lower) || d == lower)))), WorktreeIdentity.GetExistingPathSpelling(lower));
+    }
+
+    [Fact]
+    public void Identity_MacTraverseOnlyAncestor_DoesNotRequireDirectoryListing()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            return;
+        }
+
+        var parent = Path.Combine(_root, "traverse-only");
+        var worktree = CreateWorktree(Path.Combine("traverse-only", "Repo"));
+        var solution = CreateSolution(worktree);
+        var expected = WorktreeIdentity.FromSolutionPath(solution);
+        var canonicalSolution = WorktreeIdentity.CanonicalizePath(solution);
+        var missing = Path.Combine(worktree, "missing", "New.slnx");
+        var canonicalMissing = WorktreeIdentity.CanonicalizePath(missing);
+        var mode = File.GetUnixFileMode(parent);
+        try
+        {
+            File.SetUnixFileMode(parent, UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute);
+            _ = Assert.Throws<UnauthorizedAccessException>(() => Directory.GetFileSystemEntries(parent));
+
+            Assert.Equal(expected, WorktreeIdentity.FromSolutionPath(solution));
+            Assert.Equal(canonicalSolution, WorktreeIdentity.CanonicalizePath(solution));
+            Assert.Equal(canonicalMissing, WorktreeIdentity.CanonicalizePath(missing));
+            using var owner = WorktreeOwnership.Acquire(_directory, solution);
+            Assert.Equal(expected, owner.Worktree);
+        }
+        finally
+        {
+            File.SetUnixFileMode(parent, mode);
+        }
     }
 
     [Fact]

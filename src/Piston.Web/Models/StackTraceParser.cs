@@ -65,6 +65,12 @@ public static partial class StackTraceParser
         var windowsPath = (root.Length >= 2 && char.IsAsciiLetter(root[0]) && root[1] == ':')
             || root.StartsWith(@"\\", StringComparison.Ordinal)
             || root.StartsWith("//", StringComparison.Ordinal);
+        if (windowsPath)
+        {
+            root = root.Replace('\\', '/');
+            filePath = filePath.Replace('\\', '/');
+        }
+
         return filePath.Length > root.Length
             && filePath.StartsWith(root, windowsPath ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
             && filePath[root.Length] is '/' or '\\';
