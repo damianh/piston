@@ -4,6 +4,7 @@
 using Piston.Engine;
 using Piston.Engine.Coverage;
 using Piston.Engine.Models;
+using Piston.Hosting.Services;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
@@ -366,9 +367,6 @@ public static class DtoMapper
                 : null
         );
 
-    /// <summary>Largest source file whose text a coverage response carries, keeping it within message limits.</summary>
-    internal const long MaxCoverageSourceBytes = 1024 * 1024;
-
     public static CoverageSummaryDto ToCoverageSummaryDto(CoverageReportSnapshot? report, string? solutionDirectory) =>
         report is null
             ? new CoverageSummaryDto(false, null, 0, 0, 0, 0, [])
@@ -412,22 +410,5 @@ public static class DtoMapper
                 coverage.File.FilePath,
                 [.. coverage.Lines.Select(l => l.ToDto())],
                 coverage.File.ToDto(solutionDirectory),
-                includeSource ? ReadSource(coverage.File.FilePath) : null);
-
-    private static string[]? ReadSource(string filePath)
-    {
-        try
-        {
-            var info = new FileInfo(filePath);
-            return info.Exists && info.Length <= MaxCoverageSourceBytes ? File.ReadAllLines(filePath) : null;
-        }
-        catch (IOException)
-        {
-            return null;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return null;
-        }
-    }
+                includeSource ? SourceFileReader.Read(coverage.File.FilePath, solutionDirectory).Lines : null);
 }

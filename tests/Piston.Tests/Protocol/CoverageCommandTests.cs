@@ -76,6 +76,66 @@ public sealed class CoverageCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task GetForFile_StaleCoverageForExternalSymlink_DoesNotReturnSource()
+    {
+        var solution = Directory.CreateDirectory(Path.Combine(_root, "repo")).FullName;
+        var path = Path.Combine(solution, "A.cs");
+        var secret = Path.Combine(_root, "secret.txt");
+        await File.WriteAllTextAsync(path, "class A {}", _ct);
+        await File.WriteAllTextAsync(secret, "secret", _ct);
+        var engine = new StubEngine();
+        engine.State.SolutionPath = Path.Combine(solution, "App.slnx");
+        engine.FileCoverage["A.cs"] = new FileCoverageSnapshot(
+            Summary(path, 1, 1, stale: true), [new LineCoverage(1, 1)]);
+        File.Delete(path);
+        try
+        {
+            _ = File.CreateSymbolicLink(path, secret);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Assert.Skip("Creating symbolic links is not permitted here.");
+        }
+
+        var result = await new EngineCommandDispatcher(engine).HandleCommandAsync(
+            ProtocolMethods.CoverageGetForFile,
+            new JsonObject { ["filePath"] = "A.cs", ["includeSource"] = true }, _ct);
+
+        Assert.NotNull(result!["summary"]);
+        _ = Assert.Single(result["lines"]!.AsArray());
+        Assert.Null(result["source"]);
+    }
+
+    [Theory]
+    [InlineData("binary")]
+    [InlineData("oversized")]
+    [InlineData("missing")]
+    public async Task GetForFile_UnavailableSource_PreservesCoverageWithoutSource(string kind)
+    {
+        var path = Path.Combine(_root, "A.cs");
+        if (kind == "binary")
+        {
+            await File.WriteAllBytesAsync(path, [0x4D, 0x5A, 0x00, 0x01], _ct);
+        }
+        else if (kind == "oversized")
+        {
+            await File.WriteAllTextAsync(path, new string('x', 1024 * 1024 + 1), _ct);
+        }
+
+        var engine = new StubEngine();
+        engine.State.SolutionPath = Path.Combine(_root, "App.slnx");
+        engine.FileCoverage["A.cs"] = new FileCoverageSnapshot(Summary(path, 1, 1), [new LineCoverage(1, 1)]);
+
+        var result = await new EngineCommandDispatcher(engine).HandleCommandAsync(
+            ProtocolMethods.CoverageGetForFile,
+            new JsonObject { ["filePath"] = "A.cs", ["includeSource"] = true }, _ct);
+
+        Assert.NotNull(result!["summary"]);
+        _ = Assert.Single(result["lines"]!.AsArray());
+        Assert.Null(result["source"]);
+    }
+
+    [Fact]
     public async Task GetForFile_UnmeasuredFile_ReturnsNoLinesSummaryOrSource()
     {
         var dispatcher = new EngineCommandDispatcher(new StubEngine());
