@@ -2,7 +2,7 @@
 
 <div class="flex items-center gap-2 px-4 py-1.5 shrink-0 bg-gray-900 border-b border-gray-800 text-xs select-none">
     <!-- Reset -->
-    <button class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+    <button class="w-6 h-6 shrink-0 flex items-center justify-center bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
             title="Reset: reload the project graph, clear results and coverage, re-discover and run all tests"
             aria-label="Reset" @onclick="OnReset">
         ⟲
@@ -10,18 +10,18 @@
 
     <!-- Expand/collapse all -->
     <div class="flex items-center gap-1">
-        <button class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+        <button class="w-6 h-6 shrink-0 flex items-center justify-center bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
                 title="Expand all" aria-label="Expand all" @onclick="OnExpandAll">
             ⊞
         </button>
-        <button class="px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+        <button class="w-6 h-6 shrink-0 flex items-center justify-center bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
                 title="Collapse all" aria-label="Collapse all" @onclick="OnCollapseAll">
             ⊟
         </button>
     </div>
 
     <!-- Status visibility toggles -->
-    <div class="flex items-center gap-0.5 ml-2" role="group" aria-label="Show tests by status">
+    <div class="flex items-center gap-1" role="group" aria-label="Show tests by status">
         <button class="@ToggleClass(ShowFailed, "text-red-400")" title="Show failed (1)" aria-label="Show failed"
                 aria-pressed="@(ShowFailed ? "true" : "false")" @onclick="OnToggleFailed">✗</button>
         <button class="@ToggleClass(ShowPassed, "text-green-400")" title="Show passed (2)" aria-label="Show passed"
@@ -35,7 +35,7 @@
     <!-- History filters: only when the daemon keeps run history -->
     @if (HistoryEnabled)
     {
-        <div class="flex items-center gap-0.5" role="group" aria-label="Filter tests by history; either filter can match">
+        <div class="flex items-center gap-1" role="group" aria-label="Filter tests by history; either filter can match">
             <button type="button" class="@ToggleClass(OnlyNewFailures, "text-red-400")"
                     title="Show new failures: failing now, passed previously. If both history filters are on, show tests matching either."
                     aria-label="Show new failures" aria-pressed="@(OnlyNewFailures ? "true" : "false")"
@@ -58,7 +58,7 @@
     }
 
     <!-- Grouping mode -->
-    <div class="relative ml-2">
+    <div class="relative">
         <select class="appearance-none bg-gray-800 border border-gray-700 rounded pl-2 pr-6 py-0.5 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
                 title="Group tests by (G to cycle)" aria-label="Group tests by"
                 value="@Grouping" @onchange="HandleGroupingChange">
@@ -111,7 +111,7 @@
     @{
         var dockLabel = DetailPosition == DetailPosition.Right ? "Dock details at bottom" : "Dock details on right";
     }
-    <button class="p-1 bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+    <button class="w-6 h-6 shrink-0 flex items-center justify-center bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
             title="@dockLabel" aria-label="@dockLabel" @onclick="OnToggleDetailPosition">
         <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none" aria-hidden="true">
             <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" />
@@ -159,7 +159,7 @@
 
     // No colour transition: stalled transitions in embedded webviews left toggles showing their previous state.
     private static string ToggleClass(bool on, string onColor) =>
-        "w-6 h-6 flex items-center justify-center rounded " +
+        "w-6 h-6 shrink-0 flex items-center justify-center rounded " +
         // On: a raised surface in the status colour; off: flat and muted. Icons keep >= 3.8:1 in both themes.
         (on ? $"bg-gray-800 ring-1 ring-inset ring-gray-700 {onColor} hover:ring-gray-500" : "text-gray-500 hover:text-gray-300 hover:bg-gray-800/50");
 
