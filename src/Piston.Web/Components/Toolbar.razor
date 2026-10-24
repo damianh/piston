@@ -35,8 +35,8 @@
     <!-- History filters: only when the daemon keeps run history -->
     @if (HistoryEnabled)
     {
-        <div class="flex items-center gap-0.5 border-l border-gray-700 pl-2 ml-1" role="group" aria-label="Filter tests by history; either filter can match">
-            <button type="button" class="@HistoryToggleClass(OnlyNewFailures, "text-red-400")"
+        <div class="flex items-center gap-0.5 border-l border-gray-700 pl-2" role="group" aria-label="Filter tests by history; either filter can match">
+            <button type="button" class="@ToggleClass(OnlyNewFailures, "text-red-400")"
                     title="Show new failures: failing now, passed previously. If both history filters are on, show tests matching either."
                     aria-label="Show new failures" aria-pressed="@(OnlyNewFailures ? "true" : "false")"
                     @onclick="OnToggleNewFailures">
@@ -44,7 +44,7 @@
                     <path d="M9.1 1.5 3.8 8.4a.6.6 0 0 0 .47.96h3.1l-.5 5.14a.5.5 0 0 0 .9.34l5.3-7a.6.6 0 0 0-.47-.96H9.5l.5-4.95a.5.5 0 0 0-.9-.43Z" />
                 </svg>
             </button>
-            <button type="button" class="@HistoryToggleClass(OnlyFlaky, "text-yellow-400")"
+            <button type="button" class="@ToggleClass(OnlyFlaky, "text-yellow-400")"
                     title="Show flaky tests: both passed and failed on unchanged source. If both history filters are on, show tests matching either."
                     aria-label="Show flaky tests" aria-pressed="@(OnlyFlaky ? "true" : "false")"
                     @onclick="OnToggleFlaky">
@@ -159,12 +159,8 @@
 
     // No colour transition: stalled transitions in embedded webviews left toggles showing their previous state.
     private static string ToggleClass(bool on, string onColor) =>
-        "w-6 py-0.5 rounded text-center " +
-        // On: a raised surface in the status colour; off: flat and muted. Icons keep >= 3.8:1 in both themes.
-        (on ? $"bg-gray-800 ring-1 ring-inset ring-gray-700 {onColor} hover:ring-gray-500" : "text-gray-500 hover:text-gray-300 hover:bg-gray-800/50");
-
-    private static string HistoryToggleClass(bool on, string onColor) =>
         "w-6 h-6 flex items-center justify-center rounded " +
+        // On: a raised surface in the status colour; off: flat and muted. Icons keep >= 3.8:1 in both themes.
         (on ? $"bg-gray-800 ring-1 ring-inset ring-gray-700 {onColor} hover:ring-gray-500" : "text-gray-500 hover:text-gray-300 hover:bg-gray-800/50");
 
     private Task HandleGroupingChange(ChangeEventArgs e) =>
