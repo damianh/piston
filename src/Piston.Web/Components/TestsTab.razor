@@ -27,8 +27,6 @@
              OnlyFlaky="@_viewState.OnlyFlaky"
              OnToggleNewFailures="() => ToggleStatus(s => s.OnlyNewFailures = !s.OnlyNewFailures)"
              OnToggleFlaky="() => ToggleStatus(s => s.OnlyFlaky = !s.OnlyFlaky)"
-             SortByDuration="@_viewState.SortByDuration"
-             OnToggleSort="ToggleSort"
              FailedCount="@_runFailedCount"
              CanRun="@CanRun"
              OnRunFailed="RunFailedAsync"
@@ -41,6 +39,11 @@
     <div class="@(_isBottom ? "flex flex-col" : "flex") flex-1 min-h-0 overflow-hidden"
          data-orientation="@(_isBottom ? "bottom" : "right")" @ref="_splitContainer">
         <div class="flex flex-col min-w-0 min-h-0 overflow-hidden" style="flex: 0 0 @(_splitPercentCss)%">
+            <div class="flex items-center gap-1 px-2 py-1 shrink-0 bg-gray-950 border-b border-gray-800 text-gray-500 select-none">
+                @SortHeader(TestSort.Name, "Name", "flex-1 min-w-0 justify-start")
+                @SortHeader(TestSort.Duration, "Duration", "w-14 shrink-0 justify-end")
+                <span class="w-4 shrink-0 ml-1" aria-hidden="true"></span>
+            </div>
             <TestTree @ref="_tree"
                       Nodes="@_treeNodes"
                       SelectedKey="@_viewState.SelectedTestKey"
@@ -250,11 +253,30 @@
     private string? _runError;
     private bool _runStarting;
 
-    private void ToggleSort()
+    private void SortTestsBy(TestSort sort)
     {
-        _viewState.SortByDuration = !_viewState.SortByDuration;
+        _viewState.SortTestsBy(sort);
         RebuildTree();
     }
+
+    private RenderFragment SortHeader(TestSort sort, string label, string classes) =>
+        @<text>
+            @{
+                var active = _viewState.TestSort == sort;
+                var descending = active ? _viewState.TestSortDescending : sort == TestSort.Duration;
+                var order = sort == TestSort.Name
+                    ? (descending ? "Z to A" : "A to Z")
+                    : (descending ? "slowest first" : "fastest first");
+                var hint = active ? $"Sorted {order}. Click to reverse." : $"Sort {order}";
+            }
+            <button type="button"
+                    class="@classes flex items-center gap-1 rounded text-[10px] font-semibold hover:text-gray-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 @(active ? "text-gray-300" : "")"
+                    title="@hint" aria-label="@($"{label}: {hint}")"
+                    @onclick="() => SortTestsBy(sort)">
+                @label
+                <span class="w-2 text-center" aria-hidden="true">@(active ? (descending ? "▾" : "▴") : "")</span>
+            </button>
+        </text>;
 
     private Task RunFailedAsync() =>
         _snapshot is not null && DashboardStatus.RunFailed(_snapshot.Suites) is { } command
@@ -457,7 +479,7 @@
             case "4": ToggleStatus(s => s.ShowNotRun  = !s.ShowNotRun);  break;
             case "[": NavigatePrevFailure(); break;
             case "]": NavigateNextFailure(); break;
-            case "S": ToggleSort(); break;
+            case "S": SortTestsBy(TestSort.Duration); break;
             case "R": _ = RunSelectionAsync(); break;
         }
     }

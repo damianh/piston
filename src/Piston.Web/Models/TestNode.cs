@@ -131,6 +131,12 @@ public enum TestNodeKind
     Test,
 }
 
+public enum TestSort
+{
+    Name,
+    Duration,
+}
+
 public enum NodeStructure
 {
     None,

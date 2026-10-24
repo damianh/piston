@@ -58,11 +58,6 @@
         </svg>
     </div>
 
-    <!-- Sort order -->
-    <button class="@ToggleClass(SortByDuration, "text-yellow-400")"
-            title="Sort slowest first (S)" aria-label="Sort slowest first"
-            aria-pressed="@(SortByDuration ? "true" : "false")" @onclick="OnToggleSort">⏱</button>
-
     <!-- Filter input -->
     <div class="flex items-center gap-1">
         <input type="text"
@@ -141,8 +136,6 @@
     [Parameter] public bool OnlyFlaky { get; set; }
     [Parameter] public EventCallback OnToggleNewFailures { get; set; }
     [Parameter] public EventCallback OnToggleFlaky { get; set; }
-    [Parameter] public bool SortByDuration { get; set; }
-    [Parameter] public EventCallback OnToggleSort { get; set; }
     [Parameter] public int FailedCount { get; set; }
     [Parameter] public bool CanRun { get; set; }
     [Parameter] public EventCallback OnRunFailed { get; set; }

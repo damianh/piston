@@ -75,7 +75,41 @@ public static class TestTreeBuilder
                 break;
         }
 
+        SortNodes(roots, viewState, preserveOrder: viewState.Grouping == GroupingMode.ByStatus);
         return roots;
+    }
+
+    private static void SortNodes(List<TestNode> nodes, ViewState viewState, bool preserveOrder = false)
+    {
+        foreach (var node in nodes)
+        {
+            SortNodes(node.Children, viewState);
+        }
+
+        if (preserveOrder || nodes.Count < 2)
+        {
+            return;
+        }
+
+        var entries = nodes.Select(n => (Node: n, Duration: viewState.TestSort == TestSort.Duration ? n.Counts().DurationMs : 0));
+        var ordered = entries.OrderBy(x => x.Node.Structure == NodeStructure.Pinned ? 0 : 1);
+        if (viewState.TestSort == TestSort.Duration)
+        {
+            ordered = viewState.TestSortDescending
+                ? ordered.ThenByDescending(x => x.Duration)
+                : ordered.ThenBy(x => x.Duration);
+        }
+
+        var byName = Comparer<TestNode>.Create((a, b) =>
+            a.Structure == NodeStructure.Framework && b.Structure == NodeStructure.Framework
+                ? FrameworkComparer.Instance.Compare(a.Label, b.Label)
+                : StringComparer.Ordinal.Compare(a.Label, b.Label));
+        ordered = viewState.TestSort == TestSort.Name && viewState.TestSortDescending
+            ? ordered.ThenByDescending(x => x.Node, byName)
+            : ordered.ThenBy(x => x.Node, byName);
+        var sorted = ordered.Select(x => x.Node).ToList();
+        nodes.Clear();
+        nodes.AddRange(sorted);
     }
 
     /// <summary>
@@ -206,7 +240,7 @@ public static class TestTreeBuilder
                     // Dot-less names (e.g. a custom DisplayName) have no class to group under.
                     if (classTests.All(t => t.FullyQualifiedName == classKey))
                     {
-                        AddTestLeaves(parent, classTests, isStale, project, viewState);
+                        AddTestLeaves(parent, classTests, isStale, project);
                         continue;
                     }
 
@@ -250,7 +284,7 @@ public static class TestTreeBuilder
             ExpansionKey = $"class:{scope}|{classKey}",
             IsExpanded = viewState.IsNodeExpanded($"class:{scope}|{classKey}"),
         };
-        AddTestLeaves(classNode.Children, classTests, isStale, project, viewState);
+        AddTestLeaves(classNode.Children, classTests, isStale, project);
         return classNode;
     }
 
@@ -340,7 +374,7 @@ public static class TestTreeBuilder
                 IsExpanded = viewState.IsNodeExpanded($"status:{label}"),
             };
 
-            foreach (var (suite, test) in OrderTests(grouped, x => x.Test, ClassMethodLabel, viewState)
+            foreach (var (suite, test) in OrderTests(grouped, x => x.Test, ClassMethodLabel)
                 .ThenBy(x => x.Test.TargetFramework, FrameworkComparer.Instance))
             {
                 var isStale = IsStale(suite, lastFileChangeTime);
@@ -372,7 +406,7 @@ public static class TestTreeBuilder
             .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
             .Where(x => matcher is null || matcher(x.Test.FullyQualifiedName))
             .Where(x => IsStatusVisible(x.Test.Status, viewState) && IsHistoryVisible(x.Test, x.Suite.Name, viewState));
-        var ordered = OrderTests(allTests, x => x.Test, ClassMethodLabel, viewState)
+        var ordered = OrderTests(allTests, x => x.Test, ClassMethodLabel)
             .ThenBy(x => x.Test.TargetFramework, FrameworkComparer.Instance)
             .ToList();
 
@@ -447,20 +481,16 @@ public static class TestTreeBuilder
     }
 
     private static IOrderedEnumerable<T> OrderTests<T>(
-        IEnumerable<T> items, Func<T, TestResultDto> test, Func<string, string> label, ViewState viewState) =>
-        viewState.SortByDuration
-            ? items.OrderByDescending(x => test(x).DurationMs)
-                .ThenBy(x => label(test(x).FullyQualifiedName), StringComparer.Ordinal)
-            : items.OrderBy(x => label(test(x).FullyQualifiedName), StringComparer.Ordinal);
+        IEnumerable<T> items, Func<T, TestResultDto> test, Func<string, string> label) =>
+        items.OrderBy(x => label(test(x).FullyQualifiedName), StringComparer.Ordinal);
 
     private static void AddTestLeaves(
         List<TestNode> parent,
         IEnumerable<TestResultDto> tests,
         Func<TestResultDto, bool> isStale,
-        string project,
-        ViewState viewState)
+        string project)
     {
-        foreach (var test in OrderTests(tests, t => t, MethodLabel, viewState))
+        foreach (var test in OrderTests(tests, t => t, MethodLabel))
         {
             parent.Add(new TestNode
             {
