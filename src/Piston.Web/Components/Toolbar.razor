@@ -59,7 +59,7 @@
 
     <!-- Grouping mode -->
     <div class="relative">
-        <select class="appearance-none bg-gray-800 border border-gray-700 rounded pl-2 pr-6 py-0.5 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
+        <select class="appearance-none bg-gray-800 border border-gray-700 rounded h-6 pl-2 pr-6 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
                 title="Group tests by (G to cycle)" aria-label="Group tests by"
                 value="@Grouping" @onchange="HandleGroupingChange">
             <option value="@GroupingMode.ProjectNamespaceClass">Project tree</option>
@@ -75,7 +75,7 @@
     <!-- Filter input -->
     <div class="flex items-center gap-1">
         <input type="text"
-               class="bg-gray-800 border border-gray-700 rounded px-2 py-0.5 text-gray-200 text-xs w-48 focus:outline-none focus:border-blue-500"
+               class="bg-gray-800 border border-gray-700 rounded h-6 px-2 text-gray-200 text-xs w-48 focus:outline-none focus:border-blue-500"
                placeholder="filter…"
                title="Filter tests by regex or substring"
                aria-label="Filter tests"
@@ -85,7 +85,8 @@
                @onkeydown:stopPropagation="true" />
         @if (!string.IsNullOrEmpty(Filter))
         {
-            <button class="text-gray-600 hover:text-gray-400" @onclick="ClearFilter">✕</button>
+            <button type="button" class="w-6 h-6 shrink-0 flex items-center justify-center rounded text-gray-500 hover:text-gray-300 hover:bg-gray-800 transition-colors"
+                    title="Clear filter" aria-label="Clear filter" @onclick="ClearFilter">✕</button>
         }
     </div>
 
@@ -96,7 +97,7 @@
             <span class="text-red-400 max-w-64 truncate" role="alert" title="@RunFailedError">@RunFailedError</span>
         }
         <button type="button"
-                class="flex items-center gap-1.5 px-2 py-1 rounded bg-gray-800 text-gray-200 transition-colors hover:bg-gray-700 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-800"
+                class="flex items-center gap-1.5 h-6 px-2 rounded bg-gray-800 text-gray-200 transition-colors hover:bg-gray-700 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-800"
                 disabled="@(FailedCount == 0 || !CanRun)"
                 title="@(FailedCount == 0 ? "No failed tests" : !CanRun ? "Piston is busy; wait for the current run to finish" : "Build and run every failed test")"
                 @onclick="OnRunFailed">
