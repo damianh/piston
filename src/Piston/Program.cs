@@ -877,39 +877,32 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
         return 1;
     }
 
-    // Wait briefly for the initial state snapshot that ProtocolRouter sends on connect
-    using var snapshotCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
-    StateSnapshotNotification? snapshot = null;
-    client.StateChanged += _ => snapshot = client.CurrentSnapshot;
-
-    if (client.CurrentSnapshot is not null)
-    {
-        snapshot = client.CurrentSnapshot;
-    }
-    else
-    {
-        try { await Task.Delay(500, snapshotCts.Token); } catch (OperationCanceledException) { }
-        snapshot = client.CurrentSnapshot;
-    }
-
-    if (snapshot is null)
-    {
-        Console.WriteLine("Daemon is running but no state available yet.");
-        Console.WriteLine($"  Pipe: {pipeName}");
-        return 0;
-    }
-
+    var statusTimeout = TimeSpan.FromSeconds(3);
+    using var statusCts = new CancellationTokenSource(statusTimeout);
+    var snapshotTask = StateSnapshotWaiter.WaitForSnapshotAsync(client, statusTimeout);
     DaemonInfoResponse? info = null;
     try
     {
-        info = await client.GetDaemonInfoAsync();
+        info = await client.GetDaemonInfoAsync(statusCts.Token);
     }
     catch (InvalidOperationException)
     {
         // Older daemon without daemon/info.
     }
+    catch (OperationCanceledException)
+    {
+        Console.Error.WriteLine("[piston] Could not retrieve daemon metadata: request timed out.");
+    }
+    catch (IOException ex)
+    {
+        Console.Error.WriteLine($"[piston] Could not retrieve daemon metadata: {ex.Message}");
+    }
 
-    Console.WriteLine($"Daemon running.");
+    var snapshot = await snapshotTask;
+    snapshot ??= client.CurrentSnapshot;
+    Console.WriteLine(snapshot is null
+        ? "Daemon is running but no state available yet."
+        : "Daemon running.");
     Console.WriteLine($"  Solution : {info?.SolutionPath ?? solutionPath}");
     if (info is not null)
     {
@@ -921,6 +914,11 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
     }
 
     Console.WriteLine($"  Pipe     : {pipeName}");
+    if (snapshot is null)
+    {
+        return 0;
+    }
+
     Console.WriteLine($"  Phase    : {snapshot.Phase}");
     Console.WriteLine($"  Tests    : {snapshot.CompletedTests}/{snapshot.TotalExpectedTests}");
     Console.WriteLine($"  Suites   : {snapshot.Suites.Count}");
