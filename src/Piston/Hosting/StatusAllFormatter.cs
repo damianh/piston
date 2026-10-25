@@ -12,7 +12,11 @@ public static class StatusAllFormatter
         var lines = new List<string>();
         var live = overview.Owners.Where(owner => owner.Liveness == OwnershipLiveness.Live).ToList();
         var stale = overview.Owners.Where(owner => owner.Liveness == OwnershipLiveness.Stale).ToList();
-        if (live.Count == 0)
+        if (!overview.OwnersAvailable)
+        {
+            lines.Add("Worktree ownership is unknown.");
+        }
+        else if (live.Count == 0)
         {
             lines.Add("No Piston process owns a worktree.");
         }

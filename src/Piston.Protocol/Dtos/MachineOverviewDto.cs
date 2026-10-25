@@ -10,7 +10,8 @@ public sealed record MachineOverviewDto(
     IReadOnlyList<MachineExecutionEntryDto> Running,
     IReadOnlyList<MachineExecutionEntryDto> Queue,
     string? Error,
-    bool CoordinationAvailable = true);
+    bool CoordinationAvailable = true,
+    bool OwnersAvailable = true);
 
 public sealed record MachineBudgetDto(
     int CpuSlots,

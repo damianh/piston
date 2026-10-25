@@ -22,6 +22,24 @@ public sealed class MachineOverviewCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task MachineGetOverview_UnavailableOwnersPreservesOwnershipError()
+    {
+        var overview = new MachineExecutionOverview(
+            DateTimeOffset.UtcNow, new ExecutionBudget(2, 1024, "/budget.json"),
+            [], [], [], "Could not read worktree ownership", OwnersAvailable: false);
+        var dispatcher = new EngineCommandDispatcher(new StubEngine());
+        dispatcher.SetMachineOverviewProvider(_ => Task.FromResult(overview));
+
+        var response = await dispatcher.HandleCommandAsync(ProtocolMethods.MachineGetOverview, null, _ct);
+        var dto = response!.Deserialize<MachineOverviewDto>(JsonRpcSerializer.Options)!;
+
+        Assert.False(dto.OwnersAvailable);
+        Assert.True(dto.CoordinationAvailable);
+        Assert.Empty(dto.Worktrees);
+        Assert.Equal("Could not read worktree ownership", dto.Error);
+    }
+
+    [Fact]
     public async Task MachineGetOverview_UnavailableScanReturnsUnknownStateAndUsage()
     {
         var owner = new OwnershipRecord(

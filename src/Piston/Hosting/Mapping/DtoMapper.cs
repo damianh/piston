@@ -56,7 +56,8 @@ public static class DtoMapper
             : null;
 
         return new MachineOverviewDto(
-            overview.CapturedAt, budget, worktrees, running, queue, overview.Error, overview.CoordinationAvailable);
+            overview.CapturedAt, budget, worktrees, running, queue, overview.Error,
+            overview.CoordinationAvailable, overview.OwnersAvailable);
     }
 
     private static MachineExecutionEntryDto ToMachineEntryDto(

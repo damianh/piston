@@ -71,6 +71,130 @@ public sealed class MachineExecutionOverviewTests : IDisposable
     }
 
     [Theory]
+    [InlineData("")]
+    [InlineData("queue")]
+    [InlineData("leases")]
+    public async Task ReadAsync_InaccessibleCoordinationDirectoryMarksUsageUnknown(string name)
+    {
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        {
+            return;
+        }
+
+        using var owner = WorktreeOwnership.Acquire(_directory, CreateSolution("running"));
+        using var lease = ExclusiveFileLock.TryAcquire(
+            Path.Combine(_directory.LeasesDirectory, $"00000000000000000001_1_0_{Environment.ProcessId}_run.lease"),
+            FileMode.CreateNew);
+        Assert.NotNull(lease);
+        Assert.Equal(1, (await MachineExecutionOverviewReader.ReadAsync(_directory, _ct)).CpuSlotsInUse);
+        var path = Path.Combine(_directory.StateDirectory, name);
+        var mode = File.GetUnixFileMode(path);
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var overview = await MachineExecutionOverviewReader.ReadAsync(_directory, _ct);
+
+            Assert.False(overview.CoordinationAvailable);
+            Assert.Null(overview.CpuSlotsInUse);
+            Assert.Null(overview.MemoryMbInUse);
+            Assert.Empty(overview.Running);
+            Assert.Contains("Could not read the machine execution queue", overview.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, mode);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReadAsync_InaccessibleOwnershipReportsErrorWithoutDiscardingReservations(bool blockLock)
+    {
+        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
+        {
+            return;
+        }
+
+        using var owner = WorktreeOwnership.Acquire(_directory, CreateSolution("running"));
+        using var lease = ExclusiveFileLock.TryAcquire(
+            Path.Combine(_directory.LeasesDirectory, $"00000000000000000001_1_0_{Environment.ProcessId}_run.lease"),
+            FileMode.CreateNew);
+        Assert.NotNull(lease);
+        var path = blockLock
+            ? Path.Combine(_directory.OwnersDirectory, owner.Worktree.Key + ".lock")
+            : _directory.OwnersDirectory;
+        var mode = File.GetUnixFileMode(path);
+        File.SetUnixFileMode(path, UnixFileMode.None);
+        try
+        {
+            var overview = await MachineExecutionOverviewReader.ReadAsync(_directory, _ct);
+
+            Assert.False(overview.OwnersAvailable);
+            Assert.True(overview.CoordinationAvailable);
+            Assert.Empty(overview.Owners);
+            Assert.Equal(1, overview.CpuSlotsInUse);
+            _ = Assert.Single(overview.Running);
+            Assert.Contains("Could not read worktree ownership", overview.Error, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.SetUnixFileMode(path, mode);
+        }
+    }
+
+    [Theory]
+    [InlineData("owners")]
+    [InlineData("queue")]
+    [InlineData("leases")]
+    public async Task ReadAsync_NonDirectoryCoordinationPathIsAnError(string name)
+    {
+        var path = Path.Combine(_directory.StateDirectory, name);
+        var savedPath = path + ".saved";
+        Directory.Move(path, savedPath);
+        await File.WriteAllTextAsync(path, "", _ct);
+        try
+        {
+            var overview = await MachineExecutionOverviewReader.ReadAsync(_directory, _ct);
+
+            Assert.NotNull(overview.Error);
+            Assert.Equal(name != "owners", overview.OwnersAvailable);
+            Assert.Equal(name == "owners", overview.CoordinationAvailable);
+        }
+        finally
+        {
+            File.Delete(path);
+            Directory.Move(savedPath, path);
+        }
+    }
+
+    [Theory]
+    [InlineData("owners")]
+    [InlineData("queue")]
+    [InlineData("leases")]
+    public async Task ReadAsync_MissingCoordinationSubdirectoriesAreEmpty(string name)
+    {
+        var path = Path.Combine(_directory.StateDirectory, name);
+        var savedPath = path + ".saved";
+        Directory.Move(path, savedPath);
+        try
+        {
+            var overview = await MachineExecutionOverviewReader.ReadAsync(_directory, _ct);
+
+            Assert.Null(overview.Error);
+            Assert.True(overview.OwnersAvailable);
+            Assert.True(overview.CoordinationAvailable);
+            Assert.Empty(overview.Owners);
+            Assert.Empty(overview.Running);
+            Assert.Empty(overview.Queue);
+        }
+        finally
+        {
+            Directory.Move(savedPath, path);
+        }
+    }
+
+    [Theory]
     [InlineData("foreign.lock", true)]
     [InlineData("invalid.lease", false)]
     public async Task ReadAsync_HeldInvalidEntryDiscardsPartialSnapshot(string name, bool inQueue)

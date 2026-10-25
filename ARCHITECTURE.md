@@ -330,6 +330,9 @@ error text rather than silently inventing resource values. A failed coordination
 scan discards partial entries and marks availability false; usage and counts are
 unknown, and live owners are not labelled idle. `piston status --all`
 uses the same reader.
+Ownership scan availability is tracked separately: unreadable owner directories
+or locks produce a visible error and unknown ownership, not an empty-success list.
+Filesystem probes distinguish missing directories from access and I/O failures.
 
 **Test resources** (`MachineResourceCoordinator`, behind the internal
 `ITestResourceGate`) schedule test projects, not runs. `TestResourceInference`

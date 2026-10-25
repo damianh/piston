@@ -10,6 +10,20 @@ namespace Piston.Tests;
 public sealed class StatusAllFormatterTests
 {
     [Fact]
+    public void Format_UnavailableOwnersDoesNotReportNoWorktrees()
+    {
+        var overview = new MachineExecutionOverview(
+            DateTimeOffset.UtcNow, new ExecutionBudget(2, 1024, "/user/budget.json"),
+            [], [], [], "Could not read worktree ownership", OwnersAvailable: false);
+
+        var output = StatusAllFormatter.Format(overview);
+
+        Assert.Contains("Worktree ownership is unknown.", output, StringComparison.Ordinal);
+        Assert.Contains("Overview error: Could not read worktree ownership", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("No Piston process owns a worktree.", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Format_UnavailableScanDoesNotReportIdleOrZeroUsage()
     {
         var now = DateTimeOffset.UtcNow;

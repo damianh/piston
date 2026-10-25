@@ -79,9 +79,13 @@
 
         <section aria-labelledby="worktrees-heading">
             <h2 id="worktrees-heading" class="px-4 py-2 text-gray-200 font-semibold border-b border-gray-800">
-                Owned worktrees <span class="ml-1 text-gray-500 font-normal tabular-nums">@(_overview?.Worktrees.Count ?? 0)</span>
+                Owned worktrees <span class="ml-1 text-gray-500 font-normal tabular-nums">@(_overview is { OwnersAvailable: true } owners ? owners.Worktrees.Count.ToString() : "?")</span>
             </h2>
-            @if (_overview is { Worktrees.Count: 0 })
+            @if (_overview is { OwnersAvailable: false })
+            {
+                <p class="px-4 py-4 text-gray-500 italic">Worktree ownership is unknown. Retrying automatically.</p>
+            }
+            else if (_overview is { Worktrees.Count: 0 })
             {
                 <p class="px-4 py-4 text-gray-500 italic">No worktrees are currently owned by Piston.</p>
             }

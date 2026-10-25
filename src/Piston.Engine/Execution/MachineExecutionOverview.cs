@@ -11,7 +11,8 @@ public sealed record MachineExecutionOverview(
     IReadOnlyList<MachineExecutionEntry> Running,
     IReadOnlyList<MachineExecutionEntry> Queue,
     string? Error,
-    bool CoordinationAvailable = true)
+    bool CoordinationAvailable = true,
+    bool OwnersAvailable = true)
 {
     public int? CpuSlotsInUse => CoordinationAvailable ? Running.Sum(entry => entry.CpuSlots) : null;
     public long? MemoryMbInUse => CoordinationAvailable ? Running.Sum(entry => (long)(entry.MemoryMb ?? 0)) : null;
@@ -39,8 +40,18 @@ public static class MachineExecutionOverviewReader
     {
         ArgumentNullException.ThrowIfNull(directory);
         var capturedAt = DateTimeOffset.UtcNow;
-        var owners = WorktreeOwnership.ListOwners(directory);
         var errors = new List<string>();
+        IReadOnlyList<OwnershipRecord> owners = [];
+        var ownersAvailable = true;
+        try
+        {
+            owners = WorktreeOwnership.ListOwners(directory, reportErrors: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ownersAvailable = false;
+            errors.Add($"Could not read worktree ownership: {ex.Message}");
+        }
 
         ExecutionBudget? budget = null;
         try
@@ -55,9 +66,9 @@ public static class MachineExecutionOverviewReader
         var tickets = new List<ExecutionQueueEntry>();
         var leases = new List<ExecutionQueueEntry>();
         var coordinationAvailable = true;
-        if (Directory.Exists(directory.StateDirectory))
+        try
         {
-            try
+            if (ExecutionCoordinationDirectory.DirectoryExistsOrThrow(directory.StateDirectory))
             {
                 using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 timeout.CancelAfter(LockTimeout);
@@ -67,16 +78,16 @@ public static class MachineExecutionOverviewReader
                 ReadEntries(directory.QueueDirectory, TicketExtension, tickets);
                 ReadEntries(directory.LeasesDirectory, LeaseExtension, leases);
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-            {
-                coordinationAvailable = false;
-                errors.Add("Timed out waiting for the machine admission lock; running and queued work are unknown.");
-            }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ExecutionCoordinationException)
-            {
-                coordinationAvailable = false;
-                errors.Add($"Could not read the machine execution queue: {ex.Message}");
-            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            coordinationAvailable = false;
+            errors.Add("Timed out waiting for the machine admission lock; running and queued work are unknown.");
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ExecutionCoordinationException)
+        {
+            coordinationAvailable = false;
+            errors.Add($"Could not read the machine execution queue: {ex.Message}");
         }
 
         if (!coordinationAvailable)
@@ -103,7 +114,7 @@ public static class MachineExecutionOverviewReader
 
         return new MachineExecutionOverview(
             capturedAt, budget, owners, running, queue,
-            errors.Count == 0 ? null : string.Join(Environment.NewLine, errors), coordinationAvailable);
+            errors.Count == 0 ? null : string.Join(Environment.NewLine, errors), coordinationAvailable, ownersAvailable);
     }
 
     private static MachineExecutionEntry ToOverviewEntry(
@@ -119,12 +130,22 @@ public static class MachineExecutionOverviewReader
 
     private static void ReadEntries(string directory, string extension, ICollection<ExecutionQueueEntry> entries)
     {
-        if (!Directory.Exists(directory))
+        if (!ExecutionCoordinationDirectory.DirectoryExistsOrThrow(directory))
         {
             return;
         }
 
-        foreach (var path in Directory.EnumerateFiles(directory))
+        string[] paths;
+        try
+        {
+            paths = Directory.GetFiles(directory);
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return;
+        }
+
+        foreach (var path in paths)
         {
             var fileName = Path.GetFileName(path);
             FileStream? probe;

@@ -90,14 +90,27 @@ public sealed class WorktreeOwnership : IDisposable
     /// Lists ownership records in <paramref name="directory"/>, probing each lock without blocking.
     /// A probe briefly takes an unheld lock; <see cref="Acquire"/> retries briefly to ride over it.
     /// </summary>
-    public static IReadOnlyList<OwnershipRecord> ListOwners(ExecutionCoordinationDirectory directory)
+    public static IReadOnlyList<OwnershipRecord> ListOwners(ExecutionCoordinationDirectory directory) =>
+        ListOwners(directory, reportErrors: false);
+
+    internal static IReadOnlyList<OwnershipRecord> ListOwners(
+        ExecutionCoordinationDirectory directory, bool reportErrors)
     {
         string[] locks;
         try
         {
+            if (!ExecutionCoordinationDirectory.DirectoryExistsOrThrow(directory.OwnersDirectory))
+            {
+                return [];
+            }
+
             locks = Directory.GetFiles(directory.OwnersDirectory, "*.lock");
         }
-        catch (Exception ex) when (ex is DirectoryNotFoundException or IOException or UnauthorizedAccessException)
+        catch (DirectoryNotFoundException)
+        {
+            return [];
+        }
+        catch (Exception ex) when (!reportErrors && ex is IOException or UnauthorizedAccessException)
         {
             return [];
         }
@@ -107,7 +120,7 @@ public sealed class WorktreeOwnership : IDisposable
         {
             var key = Path.GetFileNameWithoutExtension(lockPath);
             var infoPath = Path.Combine(directory.OwnersDirectory, key + ".json");
-            var liveness = ProbeLock(lockPath);
+            var liveness = ProbeLock(lockPath, reportErrors);
             if (liveness == OwnershipLiveness.None)
             {
                 continue;
@@ -125,7 +138,7 @@ public sealed class WorktreeOwnership : IDisposable
         return records;
     }
 
-    private static OwnershipLiveness ProbeLock(string lockPath)
+    private static OwnershipLiveness ProbeLock(string lockPath, bool reportErrors)
     {
         FileStream? stream;
         try
@@ -136,7 +149,7 @@ public sealed class WorktreeOwnership : IDisposable
         {
             return OwnershipLiveness.None;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (!reportErrors && ex is IOException or UnauthorizedAccessException)
         {
             return OwnershipLiveness.None;
         }
