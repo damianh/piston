@@ -101,9 +101,13 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Structurally_invalid_saved_results_do_not_reach_startup_notifications(bool corruptResourceBlocker)
+    [InlineData("test")]
+    [InlineData("blocker")]
+    [InlineData("empty-solution")]
+    [InlineData("empty-project")]
+    [InlineData("invalid-solution")]
+    [InlineData("invalid-project")]
+    public async Task Structurally_invalid_saved_results_do_not_reach_startup_notifications(string corruption)
     {
         var savedSuite = new TestSuite("A.Tests",
             [new TestResult("A.Tests.Test1", "Test1", TestStatus.Passed, TimeSpan.Zero, null, null, null, null)],
@@ -115,6 +119,9 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
             Sequence = 1,
             Trigger = TestRunTrigger.Startup,
             RequestedAt = DateTimeOffset.UtcNow,
+            Context = new TestRunContext(
+                SolutionPath, [Projects[0]], null, null, null, null, false,
+                "Debug", null, ".NET", "OS", _root),
             Suites = [savedSuite],
             Projects =
             [
@@ -135,19 +142,28 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
 
         var filePath = Path.Combine(_root, ".piston", "App.results.json");
         var json = JsonNode.Parse(File.ReadAllText(filePath))!;
-        if (corruptResourceBlocker)
+        if (corruption == "blocker")
         {
             json["LastRun"]!["Projects"]![0]!["Resources"]!["Wait"]!["BlockedBy"]![0] = null;
         }
-        else
+        else if (corruption == "test")
         {
             json["TestSuites"]![0]!["Tests"]![0] = null;
+        }
+        else if (corruption.EndsWith("solution", StringComparison.Ordinal))
+        {
+            json["LastRun"]!["Context"]!["SolutionPath"] = corruption == "empty-solution" ? "" : "\0";
+        }
+        else
+        {
+            json["LastRun"]!["Context"]!["TestProjects"]![0] = corruption == "empty-project" ? "" : "\0";
         }
         File.WriteAllText(filePath, json.ToJsonString());
         using var store = new SavedResultsStore(SolutionPath, _ => { });
         _orchestrator.ResultsStore = store;
         _state.StateChanged += () =>
         {
+            Assert.False(_state.LastRun?.Restored ?? false);
             foreach (var result in _state.TestSuites.SelectMany(s => s.Tests))
             {
                 _ = result.FullyQualifiedName.Length;

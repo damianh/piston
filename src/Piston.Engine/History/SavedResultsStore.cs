@@ -145,11 +145,33 @@ internal sealed class SavedResultsStore : IDisposable
             && run.FailureClassifications.All(f => f.Flakiness is not { } evidence ||
                 (HasNoNullItems(evidence.Outcomes) && HasNoNullItems(evidence.OtherWorktrees)))
             && (run.Context is not { } context ||
-                ((context.TestProjects is null || HasNoNullItems(context.TestProjects))
+                (ValidContextPaths(context)
                     && (context.BuildTargets is null || HasNoNullItems(context.BuildTargets))
                     && (context.TestWorkingDirectories is null || HasNoNullItems(context.TestWorkingDirectories.Values))
                     && (context.SelectionReasons is null ||
                         context.SelectionReasons.Values.All(reasons => reasons is not null && HasNoNullItems(reasons))))));
+
+    private static bool ValidContextPaths(TestRunContext context)
+    {
+        if (string.IsNullOrWhiteSpace(context.SolutionPath))
+        {
+            return false;
+        }
+
+        var solutionPath = Path.GetFullPath(context.SolutionPath);
+        var solutionDirectory = Path.GetDirectoryName(solutionPath) ?? solutionPath;
+        foreach (var project in context.TestProjects ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(project))
+            {
+                return false;
+            }
+
+            _ = Path.GetRelativePath(solutionDirectory, Path.GetFullPath(project, solutionDirectory));
+        }
+
+        return true;
+    }
 
     private static bool ValidResources(TestProjectResources? resources) =>
         resources is null ||
