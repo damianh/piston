@@ -201,22 +201,23 @@ internal sealed class MtpStdoutParser
     private static string JoinPrefix(
         BoundedTextBuffer stdOut, long stdoutLength, BoundedTextBuffer stdErr, long stderrLength, int limit)
     {
-        StringBuilder result = new(limit);
+        var separatorLength = stdoutLength > 0 && stderrLength > 0 ? Environment.NewLine.Length : 0;
+        StringBuilder result = new((int)Math.Min(stdoutLength + stderrLength + separatorLength, limit));
         var remaining = limit;
         var fromStdOut = (int)Math.Min(stdoutLength, remaining);
-        result.Append(stdOut.GetPrefix(fromStdOut));
+        _ = result.Append(stdOut.GetPrefix(fromStdOut));
         remaining -= fromStdOut;
         if (remaining > 0 && stdoutLength > 0 && stderrLength > 0)
         {
             var separator = Environment.NewLine;
             var count = Math.Min(separator.Length, remaining);
-            result.Append(separator.AsSpan(0, count));
+            _ = result.Append(separator.AsSpan(0, count));
             remaining -= count;
         }
 
         if (remaining > 0)
         {
-            result.Append(stdErr.GetPrefix((int)Math.Min(stderrLength, remaining)));
+            _ = result.Append(stdErr.GetPrefix((int)Math.Min(stderrLength, remaining)));
         }
 
         return result.ToString();
@@ -233,13 +234,13 @@ internal sealed class MtpStdoutParser
         remaining -= separatorLength;
         var fromStdOut = (int)Math.Min(stdoutLength, remaining);
         StringBuilder result = new(fromStdOut + separatorLength + fromStdErr);
-        result.Append(stdOut.GetSuffix(fromStdOut));
+        _ = result.Append(stdOut.GetSuffix(fromStdOut));
         if (separatorLength > 0)
         {
-            result.Append(Environment.NewLine.AsSpan(Environment.NewLine.Length - separatorLength));
+            _ = result.Append(Environment.NewLine.AsSpan(Environment.NewLine.Length - separatorLength));
         }
 
-        result.Append(stdErr.GetSuffix(fromStdErr));
+        _ = result.Append(stdErr.GetSuffix(fromStdErr));
         return result.ToString();
     }
 
@@ -346,9 +347,9 @@ internal sealed class BoundedTextBuffer(int maxLength)
 
     public void Reset()
     {
-        _head.Clear();
+        _ = _head.Clear();
         _tail.Clear();
-        _pendingWhitespace.Clear();
+        _ = _pendingWhitespace.Clear();
         _hasLine = false;
         _totalLength = 0;
         _pendingWhitespaceLength = 0;
@@ -361,7 +362,7 @@ internal sealed class BoundedTextBuffer(int maxLength)
             _totalLength++;
             if (_head.Length < maxLength)
             {
-                _head.Append(character);
+                _ = _head.Append(character);
             }
 
             if (char.IsWhiteSpace(character))
@@ -369,10 +370,10 @@ internal sealed class BoundedTextBuffer(int maxLength)
                 _pendingWhitespaceLength++;
                 if (_pendingWhitespace.Length == maxLength)
                 {
-                    _pendingWhitespace.Remove(0, 1);
+                    _ = _pendingWhitespace.Remove(0, 1);
                 }
 
-                _pendingWhitespace.Append(character);
+                _ = _pendingWhitespace.Append(character);
                 continue;
             }
 
@@ -383,7 +384,7 @@ internal sealed class BoundedTextBuffer(int maxLength)
                     AppendTail(whitespace);
                 }
 
-                _pendingWhitespace.Clear();
+                _ = _pendingWhitespace.Clear();
             }
             _pendingWhitespaceLength = 0;
             AppendTail(character);

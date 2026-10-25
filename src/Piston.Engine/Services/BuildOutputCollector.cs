@@ -114,7 +114,7 @@ internal sealed class BuildOutputCollector
             var status = exitCode == 0 && errors.Count == 0 ? BuildStatus.Succeeded : BuildStatus.Failed;
             if (status == BuildStatus.Failed && errors.Count == 0)
             {
-                errors.Add(RetentionLimits.TruncateHead(
+                errors.Add(RetentionLimits.TruncateHeadTail(
                     DescribeUnrecognizedFailure(exitCode, _tail.ToList()),
                     RetentionLimits.MaxBuildDiagnosticLength)!);
             }

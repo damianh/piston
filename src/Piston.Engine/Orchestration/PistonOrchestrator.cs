@@ -1964,8 +1964,19 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             || rerunAnyFramework.Contains(t.FullyQualifiedName)
             || (t.TargetFramework is null && rerunNames.Contains(t.FullyQualifiedName));
 
+        var updatedLogProjects = newResults
+            .Where(s => s.ExecutionLog is not null)
+            .Select(s => s.ExecutionLog!.ProjectPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         var merged = existing
-            .Select(s => s with { Tests = s.Tests.Where(t => !Rerun(t)).ToList() })
+            .Select(s => s with
+            {
+                Tests = s.Tests.Where(t => !Rerun(t)).ToList(),
+                ExecutionLog = s.ExecutionLog is { } log && updatedLogProjects.Contains(log.ProjectPath)
+                    ? null
+                    : s.ExecutionLog,
+            })
             .Where(s => s.Tests.Count > 0)
             .ToList();
 

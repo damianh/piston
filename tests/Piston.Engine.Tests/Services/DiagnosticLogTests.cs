@@ -17,13 +17,15 @@ public sealed class DiagnosticLogTests
         {
             _ = Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllText(path + ".1", "stale");
-            using var log = new DiagnosticLog(root.FullName, maxFileBytes: 1024);
-            log.Open();
-            Assert.False(File.Exists(path + ".1"));
-
-            for (var i = 0; i < 100; i++)
+            using (var log = new DiagnosticLog(root.FullName, maxFileBytes: 1024))
             {
-                log.Write("Test", $"entry-{i:D3} {new string('x', 80)}");
+                log.Open();
+                Assert.False(File.Exists(path + ".1"));
+
+                for (var i = 0; i < 100; i++)
+                {
+                    log.Write("Test", $"entry-{i:D3} {new string('x', 80)}");
+                }
             }
 
             Assert.True(File.Exists(path + ".1"));

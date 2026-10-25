@@ -354,6 +354,31 @@ public sealed class MtpStdoutParserTests
     }
 
     [Fact]
+    public void ShortOutput_DoesNotAllocateFullRetentionBuffer()
+    {
+        var sut = new MtpStdoutParser();
+        static void Feed(MtpStdoutParser parser)
+        {
+            _ = parser.ProcessLine("passed Ns.Class.Method (1ms)");
+            _ = parser.ProcessLine("  Standard output");
+            _ = parser.ProcessLine("    x");
+        }
+
+        Feed(sut);
+        _ = sut.Flush();
+        const int iterations = 100;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < iterations; i++)
+        {
+            Feed(sut);
+            Assert.Equal("x", sut.Flush()!.Output);
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.InRange(allocated, 0, iterations * 16 * 1024);
+    }
+
+    [Fact]
     public void BoundedTextBuffer_DoesNotRetainTrailingWhitespaceAsErrorText()
     {
         var buffer = new BoundedTextBuffer(16);

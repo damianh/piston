@@ -69,6 +69,24 @@ public sealed class BuildOutputCollectorTests
     }
 
     [Fact]
+    public void NonZeroExitWithVerboseOutput_PreservesTerminalFailureWithinDiagnosticLimit()
+    {
+        var collector = new BuildOutputCollector();
+        for (var i = 0; i < BuildOutputCollector.DefaultMaxTailLines - 1; i++)
+        {
+            collector.AddOutputLine($"Progress {i}: {new string('x', 400)}");
+        }
+        collector.AddOutputLine("Terminal failure: could not write the output file.");
+
+        var error = Assert.Single(collector.ToResult(137, TimeSpan.Zero).Errors);
+
+        Assert.InRange(error.Length, 1, RetentionLimits.MaxBuildDiagnosticLength);
+        Assert.StartsWith("dotnet build exited with code 137", error, StringComparison.Ordinal);
+        Assert.Contains("characters truncated", error, StringComparison.Ordinal);
+        Assert.EndsWith("Terminal failure: could not write the output file.", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NonZeroExitWithoutOutput_SynthesizesErrorWithExitCode()
     {
         var result = new BuildOutputCollector().ToResult(1, TimeSpan.Zero);
