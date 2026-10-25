@@ -11,6 +11,7 @@
 #:package SimpleExec
 
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Text;
 using System.Text.RegularExpressions;
 using ModelContextProtocol.Client;
@@ -40,10 +41,11 @@ Target("test", "Run the solution's tests (Release).", dependsOn: ["build"],
 Target("check-formatting", "Verify the solution is formatted.",
     () => RunAsync("dotnet", ["format", Solution, "--verify-no-changes"]));
 
-Target("pack", $"Pack the tool into {Packages}.", async () =>
+Target("pack", $"Pack the tool into {Packages} and check the package contents.", async () =>
 {
     DeleteDirectory(Packages);
     await RunAsync("dotnet", ["pack", "src/Piston/Piston.csproj", "-c", "Release", "-o", Packages]);
+    CheckPackageContents();
 });
 
 Target("install-tool", $"Install the packed tool into {ToolPath}.", dependsOn: ["pack"], async () =>
@@ -67,7 +69,8 @@ Target("smoke", "Run both smoke tests.", dependsOn: ["smoke-daemon", "smoke-mcp"
 
 Target("default", dependsOn: ["test", "check-formatting"]);
 
-await RunTargetsAndExitAsync(args, messageOnly: ex => ex is SimpleExec.ExitCodeException or SmokeTestException);
+await RunTargetsAndExitAsync(args,
+    messageOnly: ex => ex is SimpleExec.ExitCodeException or SmokeTestException or PackCheckException);
 
 async Task SmokeDaemonAsync()
 {
@@ -265,6 +268,37 @@ static void Append(StringBuilder output, string? line)
 
 static int Number(Match match, int group) => int.Parse(match.Groups[group].Value);
 
+// Piston.Web reaches the tool only as static files under wwwroot/; nothing else from it belongs in the package.
+static void CheckPackageContents()
+{
+    var package = Directory.GetFiles(Packages, "Piston.*.nupkg").Single();
+    using var archive = ZipFile.OpenRead(package);
+    var entries = archive.Entries.Select(e => e.FullName).ToList();
+    var unexpected = entries
+        .Where(e => !e.Contains("/wwwroot/", StringComparison.Ordinal))
+        .Where(e => Path.GetFileName(e) is var name
+            && (name.StartsWith("Piston.Web.", StringComparison.Ordinal)
+                || name is "package.json" or "package-lock.json"))
+        .ToList();
+    var problems = new List<string>();
+    if (unexpected.Count > 0)
+    {
+        problems.Add($"unexpected Piston.Web files: {string.Join(", ", unexpected)}");
+    }
+
+    if (!entries.Any(e => e.EndsWith("/wwwroot/index.html", StringComparison.Ordinal)))
+    {
+        problems.Add("the dashboard (wwwroot/index.html) is missing");
+    }
+
+    if (problems.Count > 0)
+    {
+        throw new PackCheckException($"{Path.GetFileName(package)}: {string.Join("; ", problems)}");
+    }
+
+    Console.WriteLine($"Package contents check passed ({Path.GetFileName(package)}).");
+}
+
 static void DeleteDirectory(string path)
 {
     if (Directory.Exists(path))
@@ -276,3 +310,5 @@ static void DeleteDirectory(string path)
 internal sealed record Counts(int Total, int Passed, int Failed, int Skipped);
 
 internal sealed class SmokeTestException(string message) : Exception(message);
+
+internal sealed class PackCheckException(string message) : Exception(message);
