@@ -225,7 +225,7 @@ Daemons for the same OS user coordinate through a per-user directory: `$PISTON_E
   { "cpuSlots": 8, "memoryMb": 16384 }
   ```
 
-  Without the file, the budget is the logical processor count with no memory limit. When the file exists, `cpuSlots` is required and `memoryMb` is optional. An unreadable file is an error, not a default budget. Unknown properties, non-positive values, or a reservation that could never fit fail explicitly: at daemon startup, or as a `Faulted` run if the file changes while a run waits. If the budget limits memory, every daemon must set `execution.memoryMb`. MCP text also reports configured memory reservations when memory is unbudgeted, explicitly marked `unbudgeted`.
+  Without the file, the budget is the logical processor count with no memory limit. When the file exists, `cpuSlots` is required and `memoryMb` and `containerSlots` (see [Integration-test resources](#integration-test-resources)) are optional. An unreadable file is an error, not a default budget. Unknown properties, non-positive values, or a reservation that could never fit fail explicitly: at daemon startup, or as a `Faulted` run if the file changes while a run waits. If the budget limits memory, every daemon must set `execution.memoryMb`. MCP text also reports configured memory reservations when memory is unbudgeted, explicitly marked `unbudgeted`.
 
   Update `budget.json` by writing the complete JSON to a temporary file in the same directory, then atomically renaming it over `budget.json` (without deleting the old file first). This is recommended over editing in place. Empty/partial JSON and I/O failures are retried up to five times at 20 ms intervals (100 ms total delay); persistent failures still report the existing invalid-budget error. Schema errors and access denial fail immediately.
 - **Visible queueing.** A waiting run is published as the active run with status `Queued` and an `admission` object: `state` (`Queued`/`Admitted`), `queuedAhead`, `queueLength`, `otherAdmittedRuns`, `cpuSlotsInUse`, `memoryMbInUse`, the reservation, the budget and its source, `queuedAt` and `admittedAt`. It appears in `get_test_run` (`active` or by ID), in the `Active Run:` line of `get_test_results`, and in `ActiveRun`/`LastRun` of the protocol state snapshot. A run superseded while queued ends `Cancelled` without starting, and its replacement keeps the queue position. Leases and tickets are released when a run ends, is cancelled or faults, or when the daemon exits or crashes.
@@ -235,6 +235,41 @@ Graceful engine disposal waits for cancelled pipelines to finish and release the
 Test execution and discovery use a launcher that establishes a Unix process group or Windows job before starting the test command. The launcher uses Piston's runtime installation, but resolves the target command in the original Piston process's context, preserving SDK selection. On Windows, test commands remain windowless and inherit the redirected stdout/stderr handles. After the command exits, redirected stdout/stderr get a five-second drain grace period. If descendants keep those streams open, Piston terminates the owned tree, bounds termination cleanup to ten seconds, and records that output was cut off in the run or diagnostic log.
 
 Limits: this is admission control by reservation. Piston does not cap the actual CPU or memory of builds or test processes (no cgroup or job-object resource limits). A hung but live daemon keeps its lease. Child processes orphaned by a crashed daemon are no longer counted. Daemons of different OS users do not share a budget. Solution loading at startup is not admitted. Owner `.lock` files are left in place on purpose. CI runs the full engine suite, including the execution budget tests, on Linux and Windows. On macOS, the smoke job runs `WorktreeOwnershipTests`, plus the packed-tool daemon and MCP `verify` smoke tests on the samples.
+
+### Integration-test resources
+
+Test projects that start containers or bind fixed ports collide when two worktrees run them at the same time. Piston schedules them through the same per-user coordination directory, so such runs queue instead of failing:
+
+- **Inference.** A test project that directly references a container testing package (`Testcontainers`, `Testcontainers.*`, `DotNet.Testcontainers*`, `Aspire.Hosting.Testing`, `Docker.DotNet*`, `Ductus.FluentDocker*`, `Squadron.*`) uses containers. References across all target frameworks are combined, including framework-conditional references. By default it is isolated per repository: only one run of that project at a time across all worktrees of the repository (on this machine, for this user), because such tests often reuse fixed container names, volumes and ports. Projects without container packages run without coordination unless a rule declares resources.
+- **Exclusive resources.** A run holds all of its resources at once, and a project waits, before taking a test-process slot, while another run holds or is queued ahead for any of them. Waiting is first-in, first-out per resource, so nothing starves or deadlocks. Resources are released when the project's test process ends, when the run is cancelled, or when the daemon exits or crashes.
+- **Container slots.** `containerSlots` in `budget.json` caps how many container-using test projects run at once machine-wide (for example `{ "cpuSlots": 8, "containerSlots": 2 }`). Without it, container projects are limited only by their exclusive resources.
+
+Declare or relax resources in `.piston.json` with `testResources`. Every rule whose `projects` glob matches a test project applies, in order:
+
+```json
+{
+  "testResources": [
+    { "projects": "tests/Api.IntegrationTests/*.csproj", "exclusive": ["port:5432", "container:api-postgres"] },
+    { "projects": "**/*.ContainerTests.csproj", "isolation": "none" },
+    { "projects": "Legacy.Tests.csproj", "containers": true, "exclusive": ["resource:shared-sql-database"] }
+  ]
+}
+```
+
+| Property | Description |
+|---|---|
+| `projects` | Required. Glob matched, ignoring case, against the project path relative to the solution directory with `/` separators. `**` matches any number of directories, `*` and `?` stay within one. A pattern without `/` matches the file name in any directory. |
+| `exclusive` | Resources the project's run holds exclusively, shared with any other project (in any worktree) that declares the same key: `port:<1-65535>`, `container:<name>`, or `resource:<any name>`. |
+| `containers` | `true` or `false` overrides package inference: whether the project uses containers (and a container slot). |
+| `isolation` | `"repository"` (default for container projects) runs the project once at a time across the repository's worktrees; `"none"` drops that default when the project's own resources are declared or it is safe to run in parallel. |
+
+Configuration errors (unknown properties, an invalid key such as `port:70000`, an unknown isolation) fail daemon startup. Rules that match no test project are logged to the diagnostic log. Whole-solution runs, which pass the solution to the runner as one target, hold the union of all test projects' resources.
+
+**Visibility.** A waiting project has status `WaitingForResources`. The protocol state snapshot's `ProjectResourceWaits` and the MCP `get_test_results` text list what it needs and which run holds or is queued ahead for it (resource, project, worktree and PID). The dashboard status bar shows the waiting count with the blockers as a tooltip, and the project's tree node a *waiting for resources* badge. Afterwards, `get_test_run` (each project's `resources`: keys, reasons, `wait` with `waitedMs`, `warnings`) and the run's `ProjectResources` in the protocol record what the project held, and `verify` mentions waits of a second or more.
+
+**Conflict hints.** After acquiring its resources, a run probes its declared `port:` keys and warns when a port is already bound by a process outside Piston. When a failed project's output contains a port or container name conflict (`address already in use`, `port is already allocated`, `container name "…" is already in use`, …), the project's `suspectedResourceConflict` (MCP `get_test_run`, `verify`, `get_test_results`) quotes the evidence and suggests declaring the resource in `testResources`.
+
+Limits: only direct package references are inspected. Coordination covers Piston daemons of the same OS user on one machine; tests run outside Piston, or by another user, are only detected by the port probe and the conflict hints. Test discovery is not gated.
 
 ## Coverage and impact selection
 
@@ -311,6 +346,7 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `stdio` | `bool` | Use stdin/stdout JSON-RPC transport. |
 | `mcpPort` | `int` | Port for the daemon's MCP server (default 5200). |
 | `testExecutionMode` | `string` | `"Auto"` and `"Process"` currently both route between MTP and VSTest. `"InProcess"` is not implemented and throws at startup. |
+| `testResources` | `array` | Exclusive resources of test projects and overrides of container inference. See [Integration-test resources](#integration-test-resources). |
 | `execution.memoryMb` | `int` | Memory in MiB each run reserves from the machine execution budget (see [Worktree ownership and machine execution budget](#worktree-ownership-and-machine-execution-budget)). Must be positive; required when the budget sets `memoryMb`. A reservation, not a cap. |
 
 ### Slow and hanging tests
@@ -392,7 +428,8 @@ second concurrent request for the same app gets its own process, and a reused ho
 test is retried once in a new process. Coverage runs still go through `dotnet test` in a fresh process. Warm hosts
 get the environment variable `PISTON_WARM_HOST=1`, so a test suite can tell when process-wide state may outlive a
 run; state that a fresh process would reset (statics, environment changes) carries over between runs, which is why
-this is off by default. Hosts are asked to exit when the daemon stops.
+this is off by default. Projects needing resource coordination always use fresh processes for discovery and execution,
+even with warm hosts enabled, so process-lifetime resources cannot outlive their leases. Hosts are asked to exit when the daemon stops.
 
 ### User settings
 

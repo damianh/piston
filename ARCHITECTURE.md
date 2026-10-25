@@ -316,6 +316,41 @@ unrecognised held entries, IO) fault the run with an explicit reason. Only a mis
 budget file selects the default; unreadable files do not. Build/test cancellation
 waits for the killed runner to exit before the pipeline releases its lease.
 
+**Test resources** (`MachineResourceCoordinator`, behind the internal
+`ITestResourceGate`) schedule test projects, not runs. `TestResourceInference`
+resolves a project's `TestResourceNeeds` from its direct package references
+(`ImpactAnalyzer.GetTestProjectFacts`) and the ordered `testResources` rules:
+container packages imply `UsesContainers` and, unless `isolation` is `none`, the
+key `project:<repo label>-<sha256(repository)[..12]>/<path relative to the
+worktree root>`, which is identical in every worktree of the repository (the
+repository is the git common directory, or the worktree root outside git).
+`TestResourceKey` normalises `port:`, `container:` and `resource:` keys.
+`TestResourceResolver` combines all test projects' needs for a whole-solution
+target. `TestRunnerService` acquires a project's resources before its
+`TestProcessPool` slot, so a waiting project does not occupy a slot, and releases
+them before `OnProjectCompleted`; discovery is not gated.
+
+The coordinator uses `v1/resource-queue/*.ticket`, `v1/resource-leases/*.lease`
+and its own `resources.lock`, so admission's scan never sees resource entries.
+Entries are named `<seq>_<pid>_<guid>` and held open exclusively like admission
+entries. Because held files cannot be read by other processes, each has a
+`<name>.json` sidecar (keys, containers, PID, worktree, project, times) written
+before the entry is created and deleted after it is closed, both under the lock;
+a held entry without a readable sidecar is ignored. On each 100 ms poll it deletes
+unheld entries and orphan sidecars, then grants the ticket when no lease shares a
+key, no earlier ticket shares a key, and, if it needs containers and
+`budget.json` sets `containerSlots`, container leases plus earlier container
+tickets are below the limit. Runs take all resources at once and conflicting
+tickets are ordered by sequence, so there is no deadlock and no starvation.
+Grants create the lease and release the ticket. Blockers (held or queued, with
+PID, worktree and project) are reported through `TestRunCallbacks.OnProjectWaiting`
+into `PistonState.ProjectResourceWaits` and `ProjectRunStatus.WaitingForResources`.
+After the grant, declared `port:` keys are probed by binding a listener; a bound
+port is a warning on `TestProjectResources`, not a failure.
+`ResourceConflictScanner` matches failed projects' runner errors, failure
+messages, output and log against port/container-name conflict signatures and
+records `SuspectedResourceConflict` on the `TestRunProjectOutcome`.
+
 Limits: budgets are admission reservations, not OS resource caps. Liveness
 means "process alive", so a hung daemon keeps its lease. Orphaned children of a
 crashed daemon are not counted. Coordination is per OS user and needs a local
