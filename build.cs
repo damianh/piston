@@ -45,8 +45,14 @@ Target("pack", $"Pack the tool into {Packages} and check the package contents.",
 {
     DeleteDirectory(Packages);
     await RunAsync("dotnet", ["pack", "src/Piston/Piston.csproj", "-c", "Release", "-o", Packages]);
-    CheckPackageContents();
+    CheckPackageContents(Packages);
 });
+
+Target("check-package",
+    $"Check the packed tool's contents in {Packages} (or the folder in PISTON_PACKAGES).",
+    () => CheckPackageContents(Environment.GetEnvironmentVariable("PISTON_PACKAGES") is { Length: > 0 } dir
+        ? dir
+        : Packages));
 
 Target("install-tool", $"Install the packed tool into {ToolPath}.", dependsOn: ["pack"], async () =>
 {
@@ -269,9 +275,9 @@ static void Append(StringBuilder output, string? line)
 static int Number(Match match, int group) => int.Parse(match.Groups[group].Value);
 
 // Piston.Web reaches the tool only as static files under wwwroot/; nothing else from it belongs in the package.
-static void CheckPackageContents()
+static void CheckPackageContents(string directory)
 {
-    var package = Directory.GetFiles(Packages, "Piston.*.nupkg").Single();
+    var package = Directory.GetFiles(directory, "Piston.*.nupkg").Single();
     using var archive = ZipFile.OpenRead(package);
     var entries = archive.Entries.Select(e => e.FullName).ToList();
     var unexpected = entries
