@@ -404,10 +404,76 @@ public static class DtoMapper
             AcquiredAt: wait.AcquiredAt,
             WaitedMs: wait.Waited?.TotalMilliseconds);
 
-    public static SessionTimelineDto ToSessionTimelineDto(this PistonState state) => new(
-        state.SessionStartedAt,
-        state.SolutionPath,
-        [.. state.SessionTimeline.Select(ToDto)]);
+    /// <summary>
+    /// Most bytes one page of the session timeline may take once serialized. Half the named-pipe message limit
+    /// leaves room for the JSON-RPC envelope, and is well under the dashboard's WebSocket limit.
+    /// </summary>
+    internal const long SessionTimelinePageBudget = MessageFramer.DefaultMaxMessageSize / 2;
+
+    /// <summary>
+    /// A page of the session timeline: the runs requested after <paramref name="afterSequence"/>, in request order, up
+    /// to <paramref name="budget"/> serialized bytes.
+    /// </summary>
+    /// <param name="inRunHistory">Whether a run is still kept in the run history, which retains fewer runs than the timeline.</param>
+    public static SessionTimelineDto ToSessionTimelineDto(
+        this PistonState state,
+        long? afterSequence,
+        Func<string, bool> inRunHistory,
+        long budget = SessionTimelinePageBudget)
+    {
+        // Read the entries before the dropped count, so a concurrent trim overstates rather than hides dropped runs.
+        var timeline = state.SessionTimeline;
+        var dropped = state.SessionTimelineDroppedRuns;
+        var entries = new List<SessionTimelineEntryDto>();
+        long size = 0;
+        var hasMore = false;
+        foreach (var entry in timeline.Where(e => afterSequence is null || e.Sequence > afterSequence).OrderBy(e => e.Sequence))
+        {
+            var dto = entry.ToDto() with { InRunHistory = entry.InRunHistory && inRunHistory(entry.RunId) };
+            var bytes = SerializedSize(dto);
+            if (entries.Count > 0 && size + bytes > budget)
+            {
+                hasMore = true;
+                break;
+            }
+
+            if (bytes > budget)
+            {
+                (dto, bytes) = TrimToBudget(dto, budget);
+            }
+
+            entries.Add(dto);
+            size += bytes;
+        }
+
+        return new(state.SessionStartedAt, state.SolutionPath, entries, hasMore, dropped);
+    }
+
+    /// <summary>
+    /// Halves an oversized entry's lists until it fits. The totals are kept, so clients see the lists as truncated.
+    /// </summary>
+    private static (SessionTimelineEntryDto Entry, long Bytes) TrimToBudget(SessionTimelineEntryDto dto, long budget)
+    {
+        var keep = Math.Max(Math.Max(dto.ChangedFiles.Count, dto.NewlyFailingTests.Count), Math.Max(dto.FixedTests.Count, dto.FailureClassifications.Count));
+        var bytes = SerializedSize(dto);
+        while (bytes > budget && keep > 0)
+        {
+            keep /= 2;
+            dto = dto with
+            {
+                ChangedFiles = [.. dto.ChangedFiles.Take(keep)],
+                NewlyFailingTests = [.. dto.NewlyFailingTests.Take(keep)],
+                FixedTests = [.. dto.FixedTests.Take(keep)],
+                FailureClassifications = [.. dto.FailureClassifications.Take(keep)],
+            };
+            bytes = SerializedSize(dto);
+        }
+
+        return (dto, bytes);
+    }
+
+    private static long SerializedSize(SessionTimelineEntryDto dto) =>
+        System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(dto, JsonRpcSerializer.Options).LongLength;
 
     public static SessionTimelineEntryDto ToDto(this SessionTimelineEntry entry) => new(
         entry.RunId,

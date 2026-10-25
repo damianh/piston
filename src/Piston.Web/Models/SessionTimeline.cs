@@ -34,13 +34,30 @@ public sealed record SessionTimelineRun(SessionTimelineEntryDto Entry, int Numbe
     public bool Started => Entry.SourceBefore is not null || Entry.StartedAt is not null;
 }
 
+/// <summary>What the retained timeline establishes about where a failure came from.</summary>
+public enum FailureOrigin
+{
+    /// <summary>A retained run is known to have started the current failing streak.</summary>
+    Run,
+
+    /// <summary>No run of the session changed the test from passing to failing: it failed in the session's first results.</summary>
+    SessionStart,
+
+    /// <summary>
+    /// The retained data cannot say: the introducing run was dropped from the timeline, or a run's capped outcome
+    /// lists may have omitted the test.
+    /// </summary>
+    Unknown,
+}
+
 /// <summary>Where a currently failing test's failure came from.</summary>
-/// <param name="IntroducedBy">The run in which the test started failing in this session; null when it was failing
-/// from the first run that ran it, or the run that introduced it is no longer retained.</param>
+/// <param name="Origin">What the timeline establishes; <paramref name="IntroducedBy"/> is set only for <see cref="FailureOrigin.Run"/>.</param>
+/// <param name="IntroducedBy">The run in which the test started failing in this session.</param>
 /// <param name="Edit">The edit the introducing run was the first to test; null when the run tested unchanged source.</param>
 /// <param name="Classification">How the run history classified the failure, when history is on.</param>
 public sealed record SessionFailureTrace(
     TestReference Test,
+    FailureOrigin Origin,
     SessionTimelineRun? IntroducedBy,
     SessionTimelineEdit? Edit,
     FailureClassificationDto? Classification);
@@ -48,17 +65,25 @@ public sealed record SessionFailureTrace(
 /// <summary>The session's runs, with the edits between them derived from their source fingerprints.</summary>
 public sealed class SessionTimeline
 {
-    private SessionTimeline(IReadOnlyList<SessionTimelineItem> items) => Items = items;
+    private SessionTimeline(IReadOnlyList<SessionTimelineItem> items, int earlierRunsDropped)
+    {
+        Items = items;
+        EarlierRunsDropped = earlierRunsDropped;
+    }
 
     /// <summary>Edits and runs, oldest first.</summary>
     public IReadOnlyList<SessionTimelineItem> Items { get; }
 
     public IEnumerable<SessionTimelineRun> Runs => Items.OfType<SessionTimelineRun>();
 
-    public static SessionTimeline Empty { get; } = new([]);
+    /// <summary>How many of the session's oldest runs are no longer retained.</summary>
+    public int EarlierRunsDropped { get; }
+
+    public static SessionTimeline Empty { get; } = new([], 0);
 
     /// <summary>Orders the entries by request sequence and inserts an edit before each run that tested changed source.</summary>
-    public static SessionTimeline Build(IReadOnlyList<SessionTimelineEntryDto> entries)
+    /// <param name="earlierRunsDropped">How many of the session's oldest runs precede <paramref name="entries"/> but are no longer retained.</param>
+    public static SessionTimeline Build(IReadOnlyList<SessionTimelineEntryDto> entries, int earlierRunsDropped = 0)
     {
         var items = new List<SessionTimelineItem>();
         string? lastSource = null;
@@ -111,12 +136,14 @@ public sealed class SessionTimeline
             items.Add(new SessionTimelineRun(entry, ++number, editedDuring));
         }
 
-        return new SessionTimeline(items);
+        return new SessionTimeline(items, earlierRunsDropped);
     }
 
     /// <summary>
     /// Traces each failing test to the run that started its current failing streak (the last run that newly failed it
-    /// with no later run fixing it) and to the edit that produced the source that run tested.
+    /// with no later run fixing it) and to the edit that produced the source that run tested. Outcome lists are capped,
+    /// so a test missing from a truncated list may still have changed there; when that leaves the streak's start
+    /// uncertain, or it may precede the retained runs, the origin is <see cref="FailureOrigin.Unknown"/>.
     /// </summary>
     public IReadOnlyList<SessionFailureTrace> TraceFailures(IEnumerable<TestReference> failing)
     {
@@ -126,25 +153,55 @@ public sealed class SessionTimeline
             SessionTimelineRun? introducedBy = null;
             FailureClassificationDto? introducedAs = null;
             FailureClassificationDto? latest = null;
+
+            // A listed fix means the current streak started later. An unlisted fix (a truncated fixed list) only
+            // matters if an unlisted new failure (a truncated newly failing list) could follow it.
+            var fixedSinceStreak = false;
+            var possiblyFixedUnlisted = false;
+            var uncertain = false;
             foreach (var run in Runs)
             {
-                var classification = run.Entry.FailureClassifications.FirstOrDefault(c => c.Project == test.Project && c.Test == test.Key);
+                var entry = run.Entry;
+                var classification = entry.FailureClassifications.FirstOrDefault(c => c.Project == test.Project && c.Test == test.Key);
                 latest = classification ?? latest;
-                if (run.Entry.FixedTests.Any(t => Matches(t, test)))
+                if (entry.FixedTests.Any(t => Matches(t, test)))
                 {
                     introducedBy = null;
                     introducedAs = null;
+                    fixedSinceStreak = true;
+                    possiblyFixedUnlisted = false;
+                    uncertain = false;
+                }
+                else if (entry.FixedCount > entry.FixedTests.Count)
+                {
+                    possiblyFixedUnlisted = true;
                 }
 
-                if (run.Entry.NewlyFailingTests.Any(t => Matches(t, test)))
+                if (entry.NewlyFailingTests.Any(t => Matches(t, test)))
                 {
                     introducedBy = run;
                     introducedAs = classification;
+                    fixedSinceStreak = false;
+                    possiblyFixedUnlisted = false;
+                    uncertain = false;
+                }
+                else if (entry.NewlyFailingCount > entry.NewlyFailingTests.Count
+                    && (introducedBy is null || possiblyFixedUnlisted))
+                {
+                    uncertain = true;
                 }
             }
 
+            var origin = introducedBy is not null
+                ? uncertain ? FailureOrigin.Unknown : FailureOrigin.Run
+                : uncertain || fixedSinceStreak || EarlierRunsDropped > 0 ? FailureOrigin.Unknown : FailureOrigin.SessionStart;
+            if (origin != FailureOrigin.Run)
+            {
+                introducedBy = null;
+            }
+
             var edit = introducedBy is null ? null : EditThatProduced(introducedBy);
-            traces.Add(new SessionFailureTrace(test, introducedBy, edit, introducedBy is null ? latest : introducedAs ?? latest));
+            traces.Add(new SessionFailureTrace(test, origin, introducedBy, edit, introducedBy is null ? latest : introducedAs ?? latest));
         }
 
         return traces;

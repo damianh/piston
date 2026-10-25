@@ -139,6 +139,9 @@ public sealed class PistonState
     /// </summary>
     public IReadOnlyList<SessionTimelineEntry> SessionTimeline { get; set; } = [];
 
+    /// <summary>How many of the session's oldest runs have been dropped from <see cref="SessionTimeline"/>.</summary>
+    public int SessionTimelineDroppedRuns { get; set; }
+
     /// <summary>Finds a retained run by ID, including the active run.</summary>
     public TestRunRecord? FindRun(string runId)
     {

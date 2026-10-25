@@ -20,15 +20,17 @@ public sealed class SessionTimelineTests
         string freshness = "Current",
         TestReference[]? newlyFailing = null,
         TestReference[]? fixedTests = null,
-        FailureClassificationDto[]? classifications = null)
+        FailureClassificationDto[]? classifications = null,
+        int unlistedNewlyFailing = 0,
+        int unlistedFixed = 0)
     {
         var at = DateTimeOffset.UnixEpoch.AddMinutes(sequence);
         return new SessionTimelineEntryDto(
             $"r{sequence}", sequence, files is null ? "Forced" : "FileChange", status, null, "Full", true, false, freshness, null,
             at, before is null ? null : at, at.AddSeconds(5), before, after ?? before, false, files ?? [], files?.Length ?? 0,
             "Succeeded", 0, 1, newlyFailing?.Length ?? 0, 0,
-            [.. (newlyFailing ?? []).Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))], newlyFailing?.Length ?? 0,
-            [.. (fixedTests ?? []).Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))], fixedTests?.Length ?? 0,
+            [.. (newlyFailing ?? []).Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))], (newlyFailing?.Length ?? 0) + unlistedNewlyFailing,
+            [.. (fixedTests ?? []).Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))], (fixedTests?.Length ?? 0) + unlistedFixed,
             classifications ?? [], false);
     }
 
@@ -97,6 +99,7 @@ public sealed class SessionTimelineTests
 
         var trace = Assert.Single(timeline.TraceFailures([Broken]));
 
+        Assert.Equal(FailureOrigin.Run, trace.Origin);
         Assert.Equal("r4", trace.IntroducedBy!.Entry.RunId);
         Assert.Equal(["/src/Break.cs"], trace.Edit!.Files);
         Assert.Equal("r3", trace.Edit.NextRunId);
@@ -111,9 +114,67 @@ public sealed class SessionTimelineTests
 
         var trace = Assert.Single(timeline.TraceFailures([Broken]));
 
+        Assert.Equal(FailureOrigin.SessionStart, trace.Origin);
         Assert.Null(trace.IntroducedBy);
         Assert.Null(trace.Edit);
         Assert.Equal(preExisting, trace.Classification);
+    }
+
+    [Fact]
+    public void TraceFailures_WhenEarlierRunsWereDropped_ReportsAnUnknownOrigin()
+    {
+        var timeline = SessionTimeline.Build([Entry(501, "aaa"), Entry(502, "bbb", files: ["/src/A.cs"])], earlierRunsDropped: 500);
+
+        var trace = Assert.Single(timeline.TraceFailures([Broken]));
+
+        Assert.Equal(FailureOrigin.Unknown, trace.Origin);
+        Assert.Null(trace.IntroducedBy);
+    }
+
+    [Fact]
+    public void TraceFailures_WhenATruncatedListMayHoldTheIntroduction_ReportsAnUnknownOrigin()
+    {
+        var timeline = SessionTimeline.Build([Entry(1, "aaa"), Entry(2, "bbb", files: ["/src/A.cs"], unlistedNewlyFailing: 300)]);
+
+        var trace = Assert.Single(timeline.TraceFailures([Broken]));
+
+        Assert.Equal(FailureOrigin.Unknown, trace.Origin);
+    }
+
+    [Fact]
+    public void TraceFailures_WhenTruncatedListsMayHoldALaterFixAndReintroduction_ReportsAnUnknownOrigin()
+    {
+        var timeline = SessionTimeline.Build(
+        [
+            Entry(1, "aaa"),
+            Entry(2, "bbb", files: ["/src/Break.cs"], newlyFailing: [Broken]),
+            Entry(3, "ccc", files: ["/src/MassFix.cs"], unlistedFixed: 300),
+            Entry(4, "ddd", files: ["/src/MassBreak.cs"], unlistedNewlyFailing: 300),
+        ]);
+
+        var trace = Assert.Single(timeline.TraceFailures([Broken]));
+
+        Assert.Equal(FailureOrigin.Unknown, trace.Origin);
+        Assert.Null(trace.IntroducedBy);
+        Assert.Null(trace.Edit);
+    }
+
+    [Fact]
+    public void TraceFailures_WhenOnlyATruncatedFixedListFollows_KeepsTheIntroducingRun()
+    {
+        // The test is still failing, so an unlisted fix would need a later new failure, and none could be unlisted.
+        var timeline = SessionTimeline.Build(
+        [
+            Entry(1, "aaa"),
+            Entry(2, "bbb", files: ["/src/Break.cs"], newlyFailing: [Broken]),
+            Entry(3, "ccc", files: ["/src/MassFix.cs"], unlistedFixed: 300),
+            Entry(4, "ddd", files: ["/src/Other.cs"]),
+        ]);
+
+        var trace = Assert.Single(timeline.TraceFailures([Broken]));
+
+        Assert.Equal(FailureOrigin.Run, trace.Origin);
+        Assert.Equal("r2", trace.IntroducedBy!.Entry.RunId);
     }
 
     [Fact]

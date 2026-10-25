@@ -113,15 +113,22 @@
     {
         _snapshot = snapshot;
         var lastRun = (snapshot.LastRunTime, snapshot.LastRun?.RunId);
-        if (lastRun != _lastRun)
+        var activeRun = (snapshot.ActiveRun?.RunId, snapshot.ActiveRun?.Status);
+        var previousActive = _activeRun.RunId;
+        var lastRunChanged = lastRun != _lastRun;
+        var activeChanged = activeRun != _activeRun;
+        _lastRun = lastRun;
+        _activeRun = activeRun;
+
+        // An active run that ends without becoming the last run (an older run finishing cancelling after a newer one
+        // was recorded) still adds a timeline entry, so its disappearance or replacement refreshes too.
+        if (lastRunChanged || (previousActive is not null && previousActive != activeRun.RunId))
         {
-            _lastRun = lastRun;
             _ = InvokeAsync(RefreshAsync);
         }
-        else if ((snapshot.ActiveRun?.RunId, snapshot.ActiveRun?.Status) != _activeRun)
+        else if (activeChanged)
         {
             // Failing tests only change when a run finishes, which refreshes the timeline anyway.
-            _activeRun = (snapshot.ActiveRun?.RunId, snapshot.ActiveRun?.Status);
             _ = InvokeAsync(StateHasChanged);
         }
     }
@@ -138,7 +145,7 @@
     {
         _dto = await Client.GetSessionTimelineAsync();
         _loaded = true;
-        _timeline = _dto is null ? SessionTimeline.Empty : SessionTimeline.Build(_dto.Entries);
+        _timeline = _dto is null ? SessionTimeline.Empty : SessionTimeline.Build(_dto.Entries, _dto.EarlierRunsDropped);
         Recompute();
         StateHasChanged();
     }
@@ -189,14 +196,14 @@
 
         <div class="px-4 py-2 border-b border-gray-800" aria-label="Currently failing tests">
             <div class="font-semibold text-red-400 mb-1">Currently failing <span class="tabular-nums text-gray-500 font-normal">@_failures.Count</span></div>
-            @foreach (var group in _failures.GroupBy(f => f.IntroducedBy).OrderByDescending(g => g.Key?.Number ?? 0))
+            @foreach (var group in _failures.GroupBy(f => (f.Origin, f.IntroducedBy)).OrderByDescending(g => g.Key.IntroducedBy?.Number ?? 0).ThenBy(g => g.Key.Origin))
             {
-                var key = "failing:" + (group.Key?.Entry.RunId ?? "");
+                var key = "failing:" + group.Key.Origin + ":" + (group.Key.IntroducedBy?.Entry.RunId ?? "");
                 var traces = group.OrderBy(t => t.Test.Key, StringComparer.Ordinal).ToList();
                 var shown = _expanded.Contains(key) ? traces : traces.Take(CollapsedTests).ToList();
                 <div class="mb-1.5">
                     <div class="text-gray-400">
-                        @if (group.Key is { } run)
+                        @if (group.Key.IntroducedBy is { } run)
                         {
                             <span>Since </span>
                             <button class="text-gray-200 hover:underline" title="Show the run in the timeline" @onclick="() => Reveal(RunId(run))">run #@run.Number</button>
@@ -211,9 +218,13 @@
                                 <span>, on unchanged source</span>
                             }
                         }
-                        else
+                        else if (group.Key.Origin == FailureOrigin.SessionStart)
                         {
                             <span title="No run this session recorded the test changing from passing to failing">Failing since the session's first results</span>
+                        }
+                        else
+                        {
+                            <span title="@UnknownOriginReason()">Origin unknown</span>
                         }
                     </div>
                     @foreach (var trace in shown)
@@ -388,6 +399,10 @@
         "Flaky" => "bg-yellow-500/15 text-yellow-400",
         _ => "bg-gray-800 text-gray-300",
     };
+
+    private string UnknownOriginReason() => _timeline.EarlierRunsDropped > 0
+        ? $"The run that introduced the failure may be among the session's {Plural(_timeline.EarlierRunsDropped, "oldest run")} no longer retained, or was omitted from a run's capped list of outcome changes"
+        : "A run's list of outcome changes was capped, so the run that introduced the failure cannot be identified";
 
     private static string RunId(SessionTimelineRun run) => "timeline-run-" + run.Entry.RunId;
 

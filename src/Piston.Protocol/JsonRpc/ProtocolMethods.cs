@@ -54,7 +54,10 @@ public static class ProtocolMethods
     /// <summary>Request the recorded results of a test.</summary>
     public const string HistoryGetTestHistory = "history/getTestHistory";
 
-    /// <summary>Request the session timeline: every terminal run since the engine started, with its edits and outcome changes.</summary>
+    /// <summary>
+    /// Request a page of the session timeline: terminal runs since the engine started, with their edits and outcome
+    /// changes. Pages are bounded in size; request the next with the last entry's sequence while <c>hasMore</c> is set.
+    /// </summary>
     public const string SessionGetTimeline = "session/getTimeline";
 
     // Notifications (server → client, no response)

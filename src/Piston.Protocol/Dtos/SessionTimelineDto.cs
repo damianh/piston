@@ -19,7 +19,7 @@ public sealed record FailureClassificationDto(string Project, string Test, strin
 /// <param name="NewlyFailingTests">Tests that failed in this run but not before it.</param>
 /// <param name="FixedTests">Tests that failed before this run and passed in it.</param>
 /// <param name="FailureClassifications">How the run's failures relate to run history; empty when history is off.</param>
-/// <param name="InRunHistory">True when the run is kept in the run history (the dashboard's Runs tab).</param>
+/// <param name="InRunHistory">True when the run is currently kept in the run history (the dashboard's Runs tab).</param>
 public sealed record SessionTimelineEntryDto(
     string RunId,
     long Sequence,
@@ -51,10 +51,14 @@ public sealed record SessionTimelineEntryDto(
     IReadOnlyList<FailureClassificationDto> FailureClassifications,
     bool InRunHistory);
 
-/// <summary>Every terminal run since the daemon's engine started, oldest first (bounded).</summary>
+/// <summary>A page of the terminal runs since the daemon's engine started, in request order.</summary>
 /// <param name="StartedAt">When the session began.</param>
 /// <param name="SolutionPath">The watched solution.</param>
+/// <param name="HasMore">More entries follow; request them after the last entry's sequence.</param>
+/// <param name="EarlierRunsDropped">How many of the session's oldest runs are no longer retained.</param>
 public sealed record SessionTimelineDto(
     DateTimeOffset StartedAt,
     string? SolutionPath,
-    IReadOnlyList<SessionTimelineEntryDto> Entries);
+    IReadOnlyList<SessionTimelineEntryDto> Entries,
+    bool HasMore = false,
+    int EarlierRunsDropped = 0);
