@@ -148,6 +148,13 @@ public static class HostHelpers
         var hangThreshold = ParseDuration(config.HangThreshold, "hangThreshold", TimeSpan.FromSeconds(60));
         var testTimeout = ParseDuration(config.TestTimeout, "testTimeout", null);
 
+        var retryFailures = config.RetryFailures ?? 0;
+        if (retryFailures is < 0 or > PistonOptions.MaxRetryFailedTests)
+        {
+            throw new InvalidOperationException(
+                $"Invalid 'retryFailures' in .piston.json: expected 0 to {PistonOptions.MaxRetryFailedTests}; got {retryFailures}.");
+        }
+
         var memoryReservationMb = config.Execution?.MemoryMb;
         if (memoryReservationMb is <= 0)
         {
@@ -166,6 +173,7 @@ public static class HostHelpers
             TestTimeout = testTimeout,
             HistoryEnabled = config.History ?? true,
             PersistResults = config.PersistResults ?? true,
+            RetryFailedTests = retryFailures,
             WarmTestHosts = config.WarmTestHosts ?? false,
             ProcessPoolSize = processPoolSize,
             ProcessRecycleAfter = processRecycleAfter,

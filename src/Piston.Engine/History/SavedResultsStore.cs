@@ -124,7 +124,8 @@ internal sealed class SavedResultsStore : IDisposable
     }
 
     private static bool ValidSuites(IReadOnlyList<TestSuite> suites) =>
-        suites.All(s => s is not null && HasNoNullItems(s.Tests));
+        suites.All(s => s is not null && HasNoNullItems(s.Tests)
+            && s.Tests.All(t => HasNoNullItems(t.Attempts)));
 
     private static bool ValidBuild(BuildResult? build) =>
         build is null || (HasNoNullItems(build.Errors) && HasNoNullItems(build.Warnings));
@@ -290,6 +291,11 @@ internal sealed class SavedResultsStore : IDisposable
             Output = ClipText(result.Output, MaxOutputLength),
             ErrorMessage = ClipText(result.ErrorMessage, MaxErrorLength),
             StackTrace = ClipText(result.StackTrace, MaxErrorLength),
+            Attempts = result.Attempts.Select(attempt => attempt with
+            {
+                ErrorMessage = ClipText(attempt.ErrorMessage, MaxErrorLength),
+                StackTrace = ClipText(attempt.StackTrace, MaxErrorLength),
+            }).ToList(),
         };
 
     private static BuildResult? Clip(BuildResult? result) => result is null

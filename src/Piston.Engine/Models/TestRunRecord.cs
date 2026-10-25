@@ -248,9 +248,15 @@ public sealed record TestRunRecord
 
     /// <summary>
     /// How each failed test relates to the worktree's run history (new, pre-existing, flaky or unknown);
-    /// empty when history is off or nothing failed.
+    /// tests that failed and then passed on retry are included as flaky. Empty when history is off or nothing failed.
     /// </summary>
     public IReadOnlyList<FailureClassification> FailureClassifications { get; init; } = [];
+
+    /// <summary>Most retries of each failed test; 0 when retries are off.</summary>
+    public int RetryLimit { get; init; }
+
+    /// <summary>Why failed tests were not retried although retries are on (for example, too many failed).</summary>
+    public string? RetriesSkippedReason { get; init; }
 
     public string? RunnerError { get; init; }
 

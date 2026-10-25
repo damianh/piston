@@ -39,7 +39,7 @@ public sealed class SavedResultsStoreTests : IDisposable
         var expectedSuite = Assert.Single(expected.TestSuites);
         var restoredSuite = Assert.Single(restored.TestSuites);
         Assert.Equal(expectedSuite.Name, restoredSuite.Name);
-        Assert.Equal(Assert.Single(expectedSuite.Tests), Assert.Single(restoredSuite.Tests));
+        Assert.Equivalent(Assert.Single(expectedSuite.Tests), Assert.Single(restoredSuite.Tests), strict: true);
         Assert.Equal(expected.LastRun?.RunId, restored.LastRun?.RunId);
         Assert.Equal(expected.LastBuild!.Status, restored.LastBuild!.Status);
         Assert.Equal(expected.LastBuild.Duration, restored.LastBuild.Duration);
@@ -61,7 +61,7 @@ public sealed class SavedResultsStoreTests : IDisposable
         Assert.False(run.ContainsKey("Tests"));
         _ = Assert.Single(run["Suites"]![0]!["Tests"]!.AsArray());
         using var reader = Open();
-        Assert.Equal(Result, Assert.Single(reader.TryLoad()!.LastRun!.Tests));
+        Assert.Equivalent(Result, Assert.Single(reader.TryLoad()!.LastRun!.Tests), strict: true);
     }
 
     [Theory]
@@ -73,6 +73,8 @@ public sealed class SavedResultsStoreTests : IDisposable
     [InlineData("TestSuites/0/Tests/0", null)]
     [InlineData("TestSuites/0/Tests/0/FullyQualifiedName", null)]
     [InlineData("TestSuites/0/Tests/0/DisplayName", null)]
+    [InlineData("TestSuites/0/Tests/0/Attempts", null)]
+    [InlineData("TestSuites/0/Tests/0/Attempts", "[null]")]
     [InlineData("LastBuild/Errors", null)]
     [InlineData("LastBuild/Warnings", "[null]")]
     [InlineData("LastRun/RunId", null)]
@@ -81,6 +83,7 @@ public sealed class SavedResultsStoreTests : IDisposable
     [InlineData("LastRun/Suites", null)]
     [InlineData("LastRun/Suites/0", null)]
     [InlineData("LastRun/Suites/0/Tests/0", null)]
+    [InlineData("LastRun/Suites/0/Tests/0/Attempts", "[null]")]
     [InlineData("LastRun/Projects", null)]
     [InlineData("LastRun/Projects", "[null]")]
     [InlineData("LastRun/Projects", "[{\"ProjectPath\":null,\"Status\":\"Completed\",\"TestCount\":1}]")]
@@ -164,6 +167,8 @@ public sealed class SavedResultsStoreTests : IDisposable
                             Output = new string('o', 5000),
                             ErrorMessage = new string('e', 9000),
                             StackTrace = new string('s', 9000),
+                            Attempts = [new(TestStatus.Failed, TimeSpan.FromMilliseconds(10),
+                                new string('e', 9000), new string('s', 9000))],
                         },
                     ],
                 },
@@ -187,6 +192,9 @@ public sealed class SavedResultsStoreTests : IDisposable
         Assert.EndsWith("[truncated]", result.Output);
         Assert.EndsWith("[truncated]", result.ErrorMessage);
         Assert.EndsWith("[truncated]", result.StackTrace);
+        var attempt = Assert.Single(result.Attempts);
+        Assert.EndsWith("[truncated]", attempt.ErrorMessage);
+        Assert.EndsWith("[truncated]", attempt.StackTrace);
         Assert.Equal(100, restored.LastBuild!.Errors.Count);
         Assert.EndsWith("[truncated]", restored.LastBuild.Errors[^1]);
         Assert.Equal(12, restored.LastBuild.OmittedErrors);
@@ -286,5 +294,8 @@ public sealed class SavedResultsStoreTests : IDisposable
     private static TestSuite Suite => new("App.Tests", [Result], DateTimeOffset.UnixEpoch, TimeSpan.FromMilliseconds(20));
 
     private static TestResult Result => new(
-        "App.Tests.MathTests.Adds", "Adds", TestStatus.Passed, TimeSpan.FromMilliseconds(20), null, null, null, null);
+        "App.Tests.MathTests.Adds", "Adds", TestStatus.Passed, TimeSpan.FromMilliseconds(20), null, null, null, null)
+    {
+        Attempts = [new(TestStatus.Failed, TimeSpan.FromMilliseconds(10), "first attempt failed", "stack")],
+    };
 }

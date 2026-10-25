@@ -184,11 +184,20 @@ freshness `Unknown`; `verify` forces a new run rather than reusing them.
 
 With `TestsFailed`, a `Failure history:` line counts the failures that are
 `new` (the test passed in its previous recorded run in this worktree),
-`pre-existing`, `flaky` (passed and failed on the same source) or `unknown`
-(no earlier result), and each failed test carries its class, new ones first.
+`pre-existing`, `flaky` (passed and failed on the same source, in this or
+another worktree of the repository, or across retries in one run) or `unknown`
+(no earlier result), and each failed test carries its class, new ones first. A
+flaky tag carries its evidence, such as `[flaky: 3 passed/2 failed on
+0123456789ab, other worktrees: feature-x]`.
 Fix new failures first; they are the ones your change most likely caused.
-`get_test_history("<test>")` shows a test's recorded results. A pre-existing
-or flaky failure is still a failure: it does not make the verdict a pass.
+`get_test_history("<test>")` shows a test's recorded results and the evidence
+behind a flaky label. A pre-existing or flaky failure is still a failure: it
+does not make the verdict a pass.
+
+When the project sets `retryFailures`, failed tests are re-run within the run. A
+test that passes on a retry counts as passed, but `verify` lists it under
+`Passed on retry` with its failure message: mention it when you report the
+result, because it is flaky.
 
 A tool *error* (not a verdict) is also not a pass. Examples: ownership by another
 process, a deleted worktree, a startup failure, or a solution mismatch. On any of
