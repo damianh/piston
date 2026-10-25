@@ -60,7 +60,7 @@ public sealed record RunComparison(
         var index = new Dictionary<(string, string), StoredTestResultDto>();
         foreach (var result in run.Results)
         {
-            index[(result.Project, result.Test)] = result;
+            index[(result.ProjectId ?? result.Project, result.Test)] = result;
         }
 
         return index;

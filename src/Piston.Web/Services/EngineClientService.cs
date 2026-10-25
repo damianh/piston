@@ -350,9 +350,9 @@ public sealed class EngineClientService : IAsyncDisposable
     /// The log of a test project's latest run, or <see langword="null"/> when none was recorded or the
     /// daemon is unreachable.
     /// </summary>
-    public async Task<ExecutionLogDto?> GetRunLogAsync(string project)
+    public async Task<ExecutionLogDto?> GetRunLogAsync(string projectId)
     {
-        var result = await SendRequestAsync(ProtocolMethods.TestsGetRunLog, new GetRunLogCommand(project))
+        var result = await SendRequestAsync(ProtocolMethods.TestsGetRunLog, new GetRunLogCommand(projectId))
             .ConfigureAwait(false);
         return result?.Deserialize<RunLogResponse>(JsonRpcSerializer.Options)?.Log;
     }
@@ -401,9 +401,9 @@ public sealed class EngineClientService : IAsyncDisposable
     }
 
     /// <summary>Recorded results of a test; null when the daemon is unreachable.</summary>
-    public async Task<TestHistoriesDto?> GetTestHistoryAsync(string test, string? project)
+    public async Task<TestHistoriesDto?> GetTestHistoryAsync(string test, string? projectId)
     {
-        var result = await SendRequestAsync(ProtocolMethods.HistoryGetTestHistory, new GetTestHistoryCommand(test, project)).ConfigureAwait(false);
+        var result = await SendRequestAsync(ProtocolMethods.HistoryGetTestHistory, new GetTestHistoryCommand(test, projectId)).ConfigureAwait(false);
         return result?.Deserialize<TestHistoriesDto>(JsonRpcSerializer.Options);
     }
 

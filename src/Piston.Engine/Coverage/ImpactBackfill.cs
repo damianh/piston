@@ -39,7 +39,8 @@ internal static class ImpactBackfill
         IReadOnlyList<TestSuite> suites,
         Func<string, IReadOnlyList<ImpactUnitInfo>> recorded,
         ImpactGranularity granularity,
-        IReadOnlySet<(string Project, string Key)>? skip = null)
+        IReadOnlySet<(string Project, string Key)>? skip = null,
+        string? solutionDirectory = null)
     {
         if (granularity is not (ImpactGranularity.Class or ImpactGranularity.Test))
         {
@@ -53,8 +54,9 @@ internal static class ImpactBackfill
         foreach (var project in testProjects.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
         {
             var suiteName = TestProjectNames.SuiteName(project);
+            var projectId = solutionDirectory is null ? suiteName : TestProjectNames.ProjectId(solutionDirectory, project);
             var tests = suites
-                .Where(s => string.Equals(s.Name, suiteName, StringComparison.Ordinal))
+                .Where(s => string.Equals(s.ProjectId ?? s.Name, projectId, StringComparison.Ordinal))
                 .SelectMany(s => s.Tests)
                 .ToList();
             if (tests.Count == 0)

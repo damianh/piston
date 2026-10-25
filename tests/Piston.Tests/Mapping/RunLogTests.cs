@@ -42,6 +42,23 @@ public sealed class RunLogTests
     }
 
     [Fact]
+    public void FindRunLog_DuplicateNamesAreSelectedByProjectId()
+    {
+        var state = new PistonState
+        {
+            TestSuites =
+            [
+                Suite("Tests", Log("One.Tests.csproj", "first"), "run-1", Test("T.One", null)) with { ProjectId = "One/Tests.csproj" },
+                Suite("Tests", Log("Two.Tests.csproj", "second"), "run-2", Test("T.Two", null)) with { ProjectId = "Two/Tests.csproj" },
+            ],
+        };
+
+        Assert.Equal("first", Assert.Single(state.FindRunLog("One/Tests.csproj")!.Entries).Message);
+        Assert.Equal("second", Assert.Single(state.FindRunLog("Two/Tests.csproj")!.Entries).Message);
+        Assert.Null(state.FindRunLog("Tests"));
+    }
+
+    [Fact]
     public void FindRunLog_AfterASelectiveRun_ReturnsTheLatestSuitesLog()
     {
         // A selective run keeps the project's untouched results in the earlier suite and appends its own.
@@ -83,7 +100,7 @@ public sealed class RunLogTests
         var dispatcher = new EngineCommandDispatcher(engine);
 
         var result = await dispatcher.HandleCommandAsync(
-            ProtocolMethods.TestsGetRunLog, JsonNode.Parse("""{"project":"A.Tests"}"""), _ct);
+            ProtocolMethods.TestsGetRunLog, JsonNode.Parse("""{"projectId":"A.Tests"}"""), _ct);
 
         var log = result!["log"]!;
         Assert.Equal("A.Tests.csproj", log["projectPath"]!.GetValue<string>());
@@ -119,7 +136,7 @@ public sealed class RunLogTests
         var dispatcher = new EngineCommandDispatcher(engine);
 
         var result = await dispatcher.HandleCommandAsync(
-            ProtocolMethods.TestsGetRunLog, JsonNode.Parse("""{"project":"A.Tests"}"""), _ct);
+            ProtocolMethods.TestsGetRunLog, JsonNode.Parse("""{"projectId":"A.Tests"}"""), _ct);
         var message = JsonRpcSerializer.Serialize(new JsonRpcResponse("1", result));
 
         Assert.True(
@@ -147,5 +164,5 @@ public sealed class RunLogTests
         new(fqn, fqn, TestStatus.Passed, TimeSpan.Zero, null, null, null, null) { TargetFramework = tfm };
 
     private static TestSuite Suite(string name, ExecutionLog? log, string? runId, params TestResult[] tests) =>
-        new(name, tests, Now, TimeSpan.Zero) { ExecutionLog = log, RunId = runId };
+        new(name, tests, Now, TimeSpan.Zero) { ExecutionLog = log, RunId = runId, ProjectId = name };
 }

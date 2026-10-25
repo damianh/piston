@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Piston.Engine.Execution;
 using Piston.Engine.Models;
+using Piston.Engine.Services;
 
 namespace Piston.Engine.History;
 
@@ -18,7 +19,7 @@ namespace Piston.Engine.History;
 /// </summary>
 internal sealed class RunHistoryStore : IDisposable
 {
-    public const int FormatVersion = 1;
+    public const int FormatVersion = 2;
 
     /// <summary>Results kept per test, which is also the window flaky detection looks at.</summary>
     public const int MaxEntriesPerTest = 20;
@@ -41,6 +42,7 @@ internal sealed class RunHistoryStore : IDisposable
     private readonly object _gate = new();
     private readonly object _saveGate = new();
     private readonly Dictionary<(string Project, string Test), List<TestHistoryEntry>> _tests = [];
+    private HashSet<string> _knownProjectIds = new(StringComparer.Ordinal);
     private readonly List<StoredRun> _runs = []; // oldest first
     private readonly HashSet<string> _recordedRunIds = new(StringComparer.Ordinal);
     private readonly FileStream? _lock;
@@ -51,6 +53,7 @@ internal sealed class RunHistoryStore : IDisposable
     private readonly Timer _saveTimer;
     private bool _dirty;
     private bool _disposed;
+    private bool _legacyProjects;
 
     private RunHistoryStore(HistoryLocation location, string? solutionPath, FileStream? @lock, Action<string>? log, TimeProvider time)
     {
@@ -112,9 +115,9 @@ internal sealed class RunHistoryStore : IDisposable
     public IReadOnlyList<FailureClassification> Record(TestRunRecord run)
     {
         var results = run.Suites
-            .SelectMany(s => s.Tests.Select(t => (Project: s.Name, Test: t)))
+            .SelectMany(s => s.Tests.Select(t => (Project: s.Name, ProjectId: s.Key, Test: t)))
             .Where(r => r.Test.Status is TestStatus.Passed or TestStatus.Failed or TestStatus.Skipped)
-            .GroupBy(r => (r.Project, r.Test.ResultKey))
+            .GroupBy(r => (r.ProjectId, r.Test.ResultKey))
             .Select(g => g.Last())
             .ToList();
         if (results.Count == 0)
@@ -134,9 +137,9 @@ internal sealed class RunHistoryStore : IDisposable
                 return [];
             }
 
-            foreach (var (project, test) in results)
+            foreach (var (project, projectId, test) in results)
             {
-                var key = (project, test.ResultKey);
+                var key = (projectId, test.ResultKey);
                 var entries = _tests.TryGetValue(key, out var existing) ? existing : _tests[key] = [];
                 var current = test.Attempts
                     .Select((a, i) => new TestHistoryEntry(run.RunId, at, a.Status, Math.Round(a.Duration.TotalMilliseconds, 3), source, i))
@@ -144,7 +147,7 @@ internal sealed class RunHistoryStore : IDisposable
                     .ToList();
                 if (current.Any(e => e.Status == TestStatus.Failed))
                 {
-                    classifications.Add(Classify(project, test.ResultKey, entries, current, siblings.GetValueOrDefault(key) ?? []));
+                    classifications.Add(Classify(project, test.ResultKey, entries, current, siblings.GetValueOrDefault(key) ?? []) with { ProjectId = projectId });
                 }
 
                 entries.AddRange(current);
@@ -163,7 +166,7 @@ internal sealed class RunHistoryStore : IDisposable
                     results.Count(r => r.Test.Status == TestStatus.Skipped),
                     retried.Count,
                     retried.Count(r => r.Test.Status == TestStatus.Passed)),
-                [.. results.Select(r => ToStored(r.Project, r.Test))]));
+                [.. results.Select(r => ToStored(r.Project, r.Test) with { ProjectId = r.ProjectId })]));
             if (_runs.Count > MaxStoredRuns)
             {
                 _runs.RemoveRange(0, _runs.Count - MaxStoredRuns);
@@ -191,20 +194,28 @@ internal sealed class RunHistoryStore : IDisposable
 
     /// <summary>Recorded results of a test, matched by fully-qualified name (with or without target framework).</summary>
     /// <param name="test">Fully-qualified name.</param>
-    /// <param name="project">Test project name; null matches any project.</param>
-    public IReadOnlyList<TestHistory> GetTestHistory(string test, string? project = null)
+    /// <param name="projectId">Solution-relative test project ID; null matches any project.</param>
+    public IReadOnlyList<TestHistory> GetTestHistory(string test, string? projectId = null)
     {
         var siblings = SiblingSnapshot();
         lock (_gate)
         {
+            if (projectId is not null && _knownProjectIds.Count > 0 && !_knownProjectIds.Contains(projectId))
+            {
+                throw new ArgumentException($"'{projectId}' is not a test project ID in this solution.", nameof(projectId));
+            }
+
             return [.. _tests
-                .Where(pair => (project is null || string.Equals(pair.Key.Project, project, StringComparison.OrdinalIgnoreCase))
+                .Where(pair => (projectId is null || string.Equals(pair.Key.Project, projectId, StringComparison.Ordinal))
                     && (string.Equals(pair.Key.Test, test, StringComparison.Ordinal)
                         || pair.Key.Test.StartsWith(test + " [", StringComparison.Ordinal)))
                 .OrderBy(pair => pair.Key.Project, StringComparer.Ordinal)
                 .ThenBy(pair => pair.Key.Test, StringComparer.Ordinal)
-                .Select(pair => new TestHistory(pair.Key.Project, pair.Key.Test, [.. pair.Value],
-                    FindFlakiness(pair.Value, siblings.GetValueOrDefault(pair.Key) ?? [])))];
+                .Select(pair => new TestHistory(ProjectName(pair.Key.Project), pair.Key.Test, [.. pair.Value],
+                    FindFlakiness(pair.Value, siblings.GetValueOrDefault(pair.Key) ?? []))
+                {
+                    ProjectId = pair.Key.Project,
+                })];
         }
     }
 
@@ -217,8 +228,11 @@ internal sealed class RunHistoryStore : IDisposable
             return [.. _tests
                 .OrderBy(pair => pair.Key.Project, StringComparer.Ordinal)
                 .ThenBy(pair => pair.Key.Test, StringComparer.Ordinal)
-                .Select(pair => new TestHistory(pair.Key.Project, pair.Key.Test, [.. pair.Value],
-                    FindFlakiness(pair.Value, siblings.GetValueOrDefault(pair.Key) ?? [])))
+                .Select(pair => new TestHistory(ProjectName(pair.Key.Project), pair.Key.Test, [.. pair.Value],
+                    FindFlakiness(pair.Value, siblings.GetValueOrDefault(pair.Key) ?? []))
+                {
+                    ProjectId = pair.Key.Project,
+                })
                 .Where(h => h.Flaky)];
         }
     }
@@ -245,11 +259,83 @@ internal sealed class RunHistoryStore : IDisposable
                         first--;
                     }
 
-                    failures.Add(Classify(key.Project, key.Test, entries[..first], entries[first..(last + 1)], siblings.GetValueOrDefault(key) ?? []));
+                    failures.Add(Classify(ProjectName(key.Project), key.Test, entries[..first], entries[first..(last + 1)], siblings.GetValueOrDefault(key) ?? []) with { ProjectId = key.Project });
                 }
             }
 
             return failures;
+        }
+    }
+
+    /// <summary>
+    /// Resolves v1 short-name keys once the solution's test projects are available. Ambiguous or removed
+    /// project names cannot safely be assigned and are discarded.
+    /// </summary>
+    public void ResolveLegacyProjects(IReadOnlyList<string> projectPaths, string solutionDirectory)
+    {
+        lock (_gate)
+        {
+            _knownProjectIds = projectPaths
+                .Select(path => TestProjectNames.ProjectId(solutionDirectory, path))
+                .ToHashSet(StringComparer.Ordinal);
+            if (!_legacyProjects)
+            {
+                return;
+            }
+
+            var idsByName = _knownProjectIds
+                .GroupBy(ProjectName, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+
+            string? Resolve(string legacyName) =>
+                idsByName.TryGetValue(legacyName, out var ids) && ids.Count == 1 ? ids[0] : null;
+
+            var migratedTests = new Dictionary<(string Project, string Test), List<TestHistoryEntry>>();
+            var dropped = 0;
+            foreach (var (key, entries) in _tests)
+            {
+                if (Resolve(key.Project) is { } id)
+                {
+                    migratedTests[(id, key.Test)] = entries;
+                }
+                else
+                {
+                    dropped++;
+                }
+            }
+
+            _tests.Clear();
+            foreach (var (key, entries) in migratedTests)
+            {
+                _tests[key] = entries;
+            }
+
+            for (var i = 0; i < _runs.Count; i++)
+            {
+                var run = _runs[i];
+                var results = new List<StoredTestResult>();
+                foreach (var result in run.Results)
+                {
+                    if (Resolve(result.Project) is { } id)
+                    {
+                        results.Add(result with { ProjectId = id });
+                    }
+                    else
+                    {
+                        dropped++;
+                    }
+                }
+
+                _runs[i] = run with { Results = results };
+            }
+
+            _legacyProjects = false;
+            if (dropped > 0)
+            {
+                _log?.Invoke($"Dropped {dropped} legacy run-history result(s) whose project name was ambiguous or no longer exists.");
+            }
+
+            ScheduleSaveLocked();
         }
     }
 
@@ -489,12 +575,13 @@ internal sealed class RunHistoryStore : IDisposable
                 model = JsonSerializer.Deserialize<FileModel>(stream, JsonOptions);
             }
 
-            if (model is null || model.Version != FormatVersion)
+            if (model is null || model.Version is not (1 or FormatVersion))
             {
                 _log?.Invoke($"Ignoring run history {Location.FilePath}: unsupported format version {model?.Version}.");
                 return;
             }
 
+            _legacyProjects = model.Version == 1;
             FromModel(model);
             _log?.Invoke($"Loaded run history for {_tests.Count} test(s) and {_runs.Count} run(s) from {Location.FilePath}.");
         }
@@ -564,7 +651,7 @@ internal sealed class RunHistoryStore : IDisposable
         var runs = _runs.Select(r => new RunModel
         {
             Summary = r.Summary,
-            Projects = [.. r.Results.Select(t => Name(t.Project))],
+            Projects = [.. r.Results.Select(t => Name(t.ProjectId))],
             Tests = [.. r.Results.Select(t => Name(t.Test))],
             Statuses = new string([.. r.Results.Select(t => Code(t.Status))]),
             DurationsMs = [.. r.Results.Select(t => t.DurationMs)],
@@ -616,9 +703,13 @@ internal sealed class RunHistoryStore : IDisposable
             {
                 var error = run.Errors?.GetValueOrDefault(i.ToString(CultureInfo.InvariantCulture));
                 var attempts = run.Attempts?.GetValueOrDefault(i.ToString(CultureInfo.InvariantCulture));
+                var project = names[run.Projects[i]];
                 results.Add(new StoredTestResult(
-                    names[run.Projects[i]], names[run.Tests[i]], Status(run.Statuses[i]), run.DurationsMs[i], error?.Message, error?.StackTrace,
-                    attempts is null ? null : [.. attempts.Select(a => new StoredAttempt(Status(a.Status), a.DurationMs, a.Message))]));
+                    ProjectName(project), names[run.Tests[i]], Status(run.Statuses[i]), run.DurationsMs[i], error?.Message, error?.StackTrace,
+                    attempts is null ? null : [.. attempts.Select(a => new StoredAttempt(Status(a.Status), a.DurationMs, a.Message))])
+                {
+                    ProjectId = project,
+                });
             }
 
             _runs.Add(new StoredRun(run.Summary, results));
@@ -664,6 +755,7 @@ internal sealed class RunHistoryStore : IDisposable
 
         return (model.WorktreePath, tests);
     }
+    private static string ProjectName(string projectId) => Path.GetFileNameWithoutExtension(projectId);
 
     private static char Code(TestStatus status) => status switch
     {

@@ -10,6 +10,7 @@ namespace Piston.Engine.Tests.History;
 public sealed class RunHistoryStoreTests : IDisposable
 {
     private const string Project = "App.Tests";
+    private const string ProjectId = "App.Tests/App.Tests.csproj";
     private const string Test = "App.Tests.CalculatorTests.Adds";
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "piston-history-tests", Guid.NewGuid().ToString("N"));
@@ -170,6 +171,41 @@ public sealed class RunHistoryStoreTests : IDisposable
         Assert.Equal("boom", result.ErrorMessage);
         Assert.Equal("at Adds()", result.StackTrace);
         Assert.Equal(FailureKind.PreExisting, Assert.Single(reopened.Record(Run("s3", TestStatus.Failed))).Kind);
+    }
+
+    [Fact]
+    public void VersionOneHistory_MigratesUniqueProjectNamesToIds()
+    {
+        var location = HistoryLocation.Resolve(BaseDirectory, _solution);
+        _ = Directory.CreateDirectory(location.Directory);
+        File.WriteAllText(location.FilePath, LegacyFile());
+
+        using var store = Open();
+        store.ResolveLegacyProjects([Path.Combine(Path.GetDirectoryName(_solution)!, "App.Tests", "App.Tests.csproj")],
+            Path.GetDirectoryName(_solution)!);
+        store.Save();
+
+        var history = Assert.Single(store.GetTestHistory(Test, ProjectId));
+        Assert.Equal(ProjectId, history.ProjectId);
+        Assert.Contains("\"Version\":2", File.ReadAllText(location.FilePath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void VersionOneHistory_DropsProjectNamesThatAreNowAmbiguous()
+    {
+        var location = HistoryLocation.Resolve(BaseDirectory, _solution);
+        _ = Directory.CreateDirectory(location.Directory);
+        File.WriteAllText(location.FilePath, LegacyFile());
+
+        using var store = Open();
+        store.ResolveLegacyProjects(
+            [
+                Path.Combine(Path.GetDirectoryName(_solution)!, "App.Tests", "App.Tests.csproj"),
+                Path.Combine(Path.GetDirectoryName(_solution)!, "Other", "App.Tests.csproj"),
+            ],
+            Path.GetDirectoryName(_solution)!);
+
+        Assert.Empty(store.GetTestHistory(Test));
     }
 
     [Fact]
@@ -433,9 +469,26 @@ public sealed class RunHistoryStoreTests : IDisposable
             RequestedAt = _time.Now,
             CompletedAt = _time.Now,
             SourceAfter = new SourceFingerprint("sha256", source, 1),
-            Suites = [new TestSuite(Project, [result], _time.Now, result.Duration)],
+            Suites = [new TestSuite(Project, [result], _time.Now, result.Duration) { ProjectId = ProjectId }],
         };
     }
+
+    private string LegacyFile() => """
+        {
+          "Version": 1,
+          "Names": ["App.Tests", "App.Tests.CalculatorTests.Adds"],
+          "Tests": [
+            {
+              "Project": 0,
+              "Test": 1,
+              "Runs": [
+                { "RunId": "legacy-run", "At": "2025-01-01T00:00:00+00:00", "Status": "P", "DurationMs": 12.5 }
+              ]
+            }
+          ],
+          "Runs": []
+        }
+        """;
 
     private sealed class ManualTime(DateTimeOffset now) : TimeProvider
     {

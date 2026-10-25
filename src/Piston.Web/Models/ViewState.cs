@@ -128,7 +128,7 @@ public sealed class ViewState
             return null;
         }
 
-        var tests = suites.Where(s => SelectedTestProject is null || s.Name == SelectedTestProject)
+        var tests = suites.Where(s => SelectedTestProject is null || (s.ProjectId ?? s.Name) == SelectedTestProject)
             .SelectMany(s => s.Tests).ToList();
         return tests.FirstOrDefault(t => t.Key == key)
             ?? tests.FirstOrDefault(t => t.FullyQualifiedName == key
@@ -200,8 +200,10 @@ public sealed class ViewState
 /// <summary>A test result key scoped to its suite name, independent of the host's project path separators.</summary>
 public sealed record TestReference(string Project, string Key)
 {
-    public static TestReference FromProjectPath(string projectPath, string key) =>
-        new(Path.GetFileNameWithoutExtension(projectPath.Replace('\\', '/')), key);
+    public static TestReference FromProjectPath(string projectPath, string key, string? solutionPath = null) =>
+        new(solutionPath is null
+            ? Path.GetFileNameWithoutExtension(projectPath.Replace('\\', '/'))
+            : Path.GetRelativePath(Path.GetDirectoryName(Path.GetFullPath(solutionPath))!, Path.GetFullPath(projectPath)).Replace('\\', '/'), key);
 }
 
 public enum DetailPosition

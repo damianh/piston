@@ -15,6 +15,7 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
 
     private const string Lib = "/repo/Lib/Lib.csproj";
     private const string LibTests = "/repo/Lib.Tests/Lib.Tests.csproj";
+    private const string LibTestsId = "Lib.Tests/Lib.Tests.csproj";
 
     [Fact]
     public void BuildTargetPaths_IncludesAffectedTestProjects()
@@ -195,7 +196,7 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         await runner.WaitForCallsAsync(1);
 
         var run = await orchestrator.RunSelectedAsync(
-            new TestSelection(["Lib.Tests"], ["Lib.T.A(x: 1)", "Lib.T.A(x: 2)", "Lib.T.B"]));
+            new TestSelection([LibTestsId], ["Lib.T.A(x: 1)", "Lib.T.A(x: 2)", "Lib.T.B"]));
 
         Assert.Equal(TestRunTrigger.Targeted, run.Trigger);
         Assert.Equal(TestRunScope.Selective, run.Scope);
@@ -225,10 +226,10 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         [
             new TestSuite("Lib.Tests",
                 [new("Lib.T.nice name", "nice name", TestStatus.Passed, TimeSpan.Zero, null, null, null, null) { Method = "Lib.T.M" }],
-                DateTimeOffset.UtcNow, TimeSpan.Zero),
+                DateTimeOffset.UtcNow, TimeSpan.Zero) { ProjectId = LibTestsId },
         ];
 
-        var run = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"], ["Lib.T.nice name"]));
+        var run = await orchestrator.RunSelectedAsync(new TestSelection([LibTestsId], ["Lib.T.nice name"]));
 
         Assert.Equal("FullyQualifiedName=Lib.T.M", run.Context!.EffectiveFilter);
     }
@@ -243,7 +244,7 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         await runner.WaitForCallsAsync(1);
 
         _ = await Assert.ThrowsAsync<ArgumentException>(() => orchestrator.RunSelectedAsync(
-            new TestSelection(["Lib.Tests"], ["X\" --settings \"/tmp/extra.runsettings"])));
+            new TestSelection([LibTestsId], ["X\" --settings \"/tmp/extra.runsettings"])));
         _ = Assert.Single(runner.Calls);
     }
 
@@ -256,14 +257,14 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         await orchestrator.StartAsync("/repo/All.slnx");
         await runner.WaitForCallsAsync(1);
 
-        var run = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"]));
+        var run = await orchestrator.RunSelectedAsync(new TestSelection([LibTestsId]));
 
         Assert.Null(run.Context!.EffectiveFilter);
         Assert.Null(runner.Filters[1]);
     }
 
     [Fact]
-    public async Task RunSelected_ProjectsSharingAName_RunsAllOfThem()
+    public async Task RunSelected_ProjectsSharingAName_RunsOnlyTheSelectedProject()
     {
         const string otherTests = "/repo/Other/Lib.Tests.csproj";
         var runner = new RecordingTestRunner();
@@ -273,9 +274,26 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         await orchestrator.StartAsync("/repo/All.slnx");
         await runner.WaitForCallsAsync(1);
 
-        _ = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"], ["Lib.T.A"]));
+        _ = await orchestrator.RunSelectedAsync(new TestSelection([LibTestsId], ["Lib.T.A"]));
 
-        Assert.Equal([LibTests, otherTests], runner.Calls[1]);
+        Assert.Equal([LibTests], runner.Calls[1]);
+        var otherProjectId = "Other/Lib.Tests.csproj";
+        _ = await orchestrator.RunSelectedAsync(new TestSelection([otherProjectId], ["Lib.T.A"]));
+        Assert.Equal([otherTests], runner.Calls[2]);
+    }
+
+    [Fact]
+    public async Task RunSelected_ShortNameIsRejected()
+    {
+        var runner = new RecordingTestRunner();
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), new RecordingBuildService(),
+            runner, new FixedImpactAnalyzer(new([], [], false, false)) { TestProjects = [LibTests] }, new PistonState());
+        await orchestrator.StartAsync("/repo/All.slnx");
+        await runner.WaitForCallsAsync(1);
+
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() =>
+            orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"])));
+        Assert.Contains("not a test project", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -287,7 +305,7 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         await orchestrator.StartAsync("/repo/All.slnx");
         await runner.WaitForCallsAsync(1);
 
-        var ex = await Assert.ThrowsAsync<ArgumentException>(() => orchestrator.RunSelectedAsync(new TestSelection(["Nope.Tests"])));
+        var ex = await Assert.ThrowsAsync<ArgumentException>(() => orchestrator.RunSelectedAsync(new TestSelection(["Nope.Tests/Nope.Tests.csproj"])));
         Assert.Contains("Nope.Tests", ex.Message, StringComparison.Ordinal);
     }
 
@@ -300,7 +318,7 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         await orchestrator.StartAsync("/repo/All.slnx");
         await runner.WaitForCallsAsync(1);
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"])));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => orchestrator.RunSelectedAsync(new TestSelection([LibTestsId])));
         Assert.Contains("already in progress", ex.Message, StringComparison.Ordinal);
         Assert.False(runner.LastToken.IsCancellationRequested);
 
@@ -314,16 +332,16 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         var build = new RecordingBuildService();
         var runner = new RecordingTestRunner();
         using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), build, runner,
-            new FixedImpactAnalyzer(new([], [], false, false)), state);
+            TempAnalyzer(new([], [], false, false)), state);
         await StartInTempRepoAsync(orchestrator, state);
 
-        var first = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"], ["Lib.T.A"]));
-        var second = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"]));
+        var first = await orchestrator.RunSelectedAsync(new TestSelection([LibTestsId], ["Lib.T.A"]));
+        var second = await orchestrator.RunSelectedAsync(new TestSelection([LibTestsId]));
 
         _ = Assert.Single(build.Calls);
         Assert.Equal(BuildStatus.Skipped, first.Build!.Status);
         Assert.Equal(BuildStatus.Skipped, second.Build!.Status);
-        Assert.Equal([LibTests], runner.Calls[2]);
+        Assert.Equal([TempLibTests], runner.Calls[2]);
     }
 
     [Fact]
@@ -332,11 +350,11 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         var state = new PistonState();
         var build = new RecordingBuildService();
         using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), build, new RecordingTestRunner(),
-            new FixedImpactAnalyzer(new([], [], false, false)), state);
+            TempAnalyzer(new([], [], false, false)), state);
         await StartInTempRepoAsync(orchestrator, state);
 
         File.WriteAllText(Path.Combine(_root, "Code.cs"), "class Code { int X; }");
-        var run = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"]));
+        var run = await orchestrator.RunSelectedAsync(new TestSelection([LibTestsId]));
 
         Assert.Equal(2, build.Calls.Count);
         Assert.Equal(BuildStatus.Succeeded, run.Build!.Status);
@@ -348,11 +366,11 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         var state = new PistonState();
         var build = new RecordingBuildService { Status = BuildStatus.Failed };
         using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), build, new RecordingTestRunner(),
-            new FixedImpactAnalyzer(new([], [], false, false)), state);
+            TempAnalyzer(new([], [], false, false)), state);
         await StartInTempRepoAsync(orchestrator, state);
 
         build.Status = BuildStatus.Succeeded;
-        var run = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"]));
+        var run = await orchestrator.RunSelectedAsync(new TestSelection([LibTestsId]));
 
         Assert.Equal(2, build.Calls.Count);
         Assert.Equal(BuildStatus.Succeeded, run.Build!.Status);
@@ -365,7 +383,7 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         var watcher = new StubFileWatcherService();
         var build = new RecordingBuildService();
         using var orchestrator = new PistonOrchestrator(watcher, build, new RecordingTestRunner(),
-            new FixedImpactAnalyzer(new([Lib], [], false, false)), state);
+            TempAnalyzer(new([Lib], [], false, false)), state);
         await StartInTempRepoAsync(orchestrator, state);
 
         watcher.TriggerChange(new FileChangeBatch(
@@ -373,10 +391,10 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
             DateTimeOffset.UtcNow));
         await WaitForAsync(() => state.LastRun is { Trigger: TestRunTrigger.FileChange });
 
-        var run = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"]));
+        var run = await orchestrator.RunSelectedAsync(new TestSelection([LibTestsId]));
 
         Assert.Equal([Lib], build.Calls[1]);
-        Assert.Equal([LibTests], build.Calls[2]);
+        Assert.Equal([TempLibTests], build.Calls[2]);
         Assert.Equal(BuildStatus.Succeeded, run.Build!.Status);
     }
 
@@ -386,11 +404,11 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         var state = new PistonState();
         var build = new RecordingBuildService();
         using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), build, new RecordingTestRunner(),
-            new FixedImpactAnalyzer(new([], [], false, false)) { MtpOutputPath = Path.Combine(_root, "bin", "Lib.Tests.dll") },
+            TempAnalyzer(new([], [], false, false), Path.Combine(_root, "bin", "Lib.Tests.dll")),
             state);
         await StartInTempRepoAsync(orchestrator, state);
 
-        var run = await orchestrator.RunSelectedAsync(new TestSelection(["Lib.Tests"]));
+        var run = await orchestrator.RunSelectedAsync(new TestSelection([LibTestsId]));
 
         Assert.Equal(2, build.Calls.Count);
         Assert.Equal(BuildStatus.Succeeded, run.Build!.Status);
@@ -409,6 +427,18 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         await orchestrator.StartAsync(Path.Combine(_root, "All.slnx"));
         await WaitForAsync(() => state.LastRun is { Trigger: TestRunTrigger.Startup });
     }
+
+    private string TempLibTests => Path.Combine(_root, "Lib.Tests", "Lib.Tests.csproj");
+
+    private FixedImpactAnalyzer TempAnalyzer(ImpactAnalysisResult selective) =>
+        TempAnalyzer(selective, null);
+
+    private FixedImpactAnalyzer TempAnalyzer(ImpactAnalysisResult selective, string? mtpOutputPath) =>
+        new(selective)
+        {
+            TestProjects = [TempLibTests],
+            MtpOutputPath = mtpOutputPath,
+        };
 
     private static async Task WaitForAsync(Func<bool> condition)
     {

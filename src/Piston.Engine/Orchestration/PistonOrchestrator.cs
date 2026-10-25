@@ -304,14 +304,14 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     /// with the run's record. Unlike file-change and forced runs it never supersedes another run.
     /// </summary>
     /// <exception cref="ArgumentException">
-    /// The selection names no project, a project that is not a test project, or a test whose name contains a double quote.
+    /// The selection has no project ID, an ID that is not a test project, or a test whose name contains a double quote.
     /// </exception>
     /// <exception cref="InvalidOperationException">The engine is not ready, or a run is already in progress.</exception>
     public Task<TestRunRecord> RunSelectedAsync(TestSelection selection)
     {
         ArgumentNullException.ThrowIfNull(selection);
         var solutionPath = _solutionPath ?? throw new InvalidOperationException("The engine has not been started.");
-        if (selection.Projects.Count == 0)
+        if (selection.ProjectIds.Count == 0)
         {
             throw new ArgumentException("Select at least one test project.", nameof(selection));
         }
@@ -322,25 +322,23 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             throw new InvalidOperationException("Test projects are still loading.");
         }
 
-        // Results are reported under the project's file name, so projects sharing one (e.g. One/Tests.csproj and
-        // Two/Tests.csproj) appear as a single node; selecting it runs all of them.
+        var solutionDirectory = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? Path.GetFullPath(solutionPath);
         var paths = new List<string>();
-        var projects = selection.Projects.Distinct(StringComparer.Ordinal).ToList();
-        foreach (var name in projects)
+        var projectIds = selection.ProjectIds.Distinct(StringComparer.Ordinal).ToList();
+        foreach (var projectId in projectIds)
         {
-            var matches = allTestProjects
-                .Where(p => string.Equals(TestProjectNames.SuiteName(p), name, StringComparison.Ordinal))
-                .ToList();
-            if (matches.Count == 0)
+            var path = allTestProjects.FirstOrDefault(p =>
+                string.Equals(TestProjectNames.ProjectId(solutionDirectory, p), projectId, StringComparison.Ordinal));
+            if (path is null)
             {
-                throw new ArgumentException($"'{name}' is not a test project in this solution.", nameof(selection));
+                throw new ArgumentException($"'{projectId}' is not a test project in this solution.", nameof(selection));
             }
 
-            paths.AddRange(matches);
+            paths.Add(path);
         }
 
         var known = _state.TestSuites
-            .Where(s => projects.Contains(s.Name, StringComparer.Ordinal))
+            .Where(s => projectIds.Contains(s.Key, StringComparer.Ordinal))
             .SelectMany(s => s.Tests);
         return TriggerRunAsync(solutionPath, null, TestRunTrigger.Targeted,
             new SelectedRun(paths, TestSelectionFilter.Build(selection.Tests, known)));
@@ -988,6 +986,12 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 testTargets = impactResult.AffectedTestProjectPaths;
             }
 
+            var allIdentityProjects = _impactAnalyzer.GetAllTestProjectPaths();
+            if (allIdentityProjects.Count > 0)
+            {
+                RunHistory?.ResolveLegacyProjects(allIdentityProjects, solutionDir);
+            }
+
             Dictionary<string, string> TestWorkingDirectories(IReadOnlyList<string>? targets) =>
                 (targets ?? [Path.GetFullPath(solutionPath)])
                     .ToDictionary(
@@ -1195,8 +1199,10 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             }
 
             // Seed InProgressSuites — for selective runs, only seed the affected suites
+            var solutionDirectory = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? Path.GetFullPath(solutionPath);
             var suitesToSeed = testTargets is not null
-                ? _state.TestSuites.Where(s => IsSuiteAffected(s, testTargets)).ToList()
+                ? _state.TestSuites.Where(s => s.ProjectId is not null
+                    && testTargets.Any(p => string.Equals(s.ProjectId, TestProjectNames.ProjectId(solutionDirectory, p), StringComparison.Ordinal))).ToList()
                 : _state.TestSuites;
 
             // Per-project progress tracking
@@ -1223,7 +1229,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 _state.ProjectStatuses = new Dictionary<string, Models.ProjectRunStatus>(projectStatuses);
                 _state.InProgressSuites = ComposeTestOverlay(
                     suitesToSeed, discoveredByProject, liveByProject, filtered,
-                    out var expectedTests, out var completedTests);
+                    out var expectedTests, out var completedTests, solutionDirectory);
                 _state.TotalExpectedTests = expectedTests;
                 _state.CompletedTests = completedTests;
             }
@@ -1234,7 +1240,10 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             var projectOutcomes = new Dictionary<string, TestRunProjectOutcome>(StringComparer.Ordinal);
             foreach (var project in testTargets ?? [])
             {
-                projectOutcomes[project] = new TestRunProjectOutcome(project, Models.ProjectRunStatus.Pending, 0);
+                projectOutcomes[project] = new TestRunProjectOutcome(project, Models.ProjectRunStatus.Pending, 0)
+                {
+                    ProjectId = TestProjectNames.ProjectId(solutionDirectory, project),
+                };
             }
 
             _state.NotifyChanged();
@@ -1347,7 +1356,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             void OnProjectProgress(string projectPath, IReadOnlyList<TestSuite> liveSuites) =>
                 UpdateOverlay(() =>
                 {
-                    liveByProject[projectPath] = liveSuites;
+                    var projectId = TestProjectNames.ProjectId(solutionDirectory, projectPath);
+                    liveByProject[projectPath] = liveSuites.Select(s => s with { ProjectId = projectId }).ToList();
                     runningClock.Observe(projectPath, liveSuites);
                 }, throttle: true);
 
@@ -1379,11 +1389,15 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 }
 
                 projectOutcomes[result.ProjectPath] = new TestRunProjectOutcome(
-                    result.ProjectPath, projectStatus, testCount, noTestsReason, result.TimedOut);
+                    result.ProjectPath, projectStatus, testCount, noTestsReason, result.TimedOut)
+                {
+                    ProjectId = TestProjectNames.ProjectId(solutionDirectory, result.ProjectPath),
+                };
 
                 if (result.Suites.Count > 0)
                 {
-                    liveByProject[result.ProjectPath] = result.Suites;
+                    var projectId = TestProjectNames.ProjectId(solutionDirectory, result.ProjectPath);
+                    liveByProject[result.ProjectPath] = result.Suites.Select(s => s with { ProjectId = projectId }).ToList();
 
                     // The project's final results are the authority on what ran: drop its discovery
                     // placeholders, whose listed names may not match the final identities.
@@ -1402,10 +1416,10 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             var discoveryTask = Task.CompletedTask;
             if (testTargets is { Count: > 0 })
             {
-                var knownSuiteNames = suitesToSeed.Select(s => s.Name).ToHashSet(StringComparer.Ordinal);
+                var knownProjectIds = suitesToSeed.Select(s => s.Key).ToHashSet(StringComparer.Ordinal);
                 var toDiscover = filtered
                     ? [.. testTargets]
-                    : testTargets.Where(p => !knownSuiteNames.Contains(TestProjectNames.SuiteName(p))).ToList();
+                    : testTargets.Where(p => !knownProjectIds.Contains(TestProjectNames.ProjectId(solutionDirectory, p))).ToList();
                 if (toDiscover.Count > 0)
                 {
                     discoveryTask = _testRunner.DiscoverTestsAsync(
@@ -1469,7 +1483,13 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                         OnProjectCompleted = OnProjectCompleted,
                     },
                     ct).ConfigureAwait(false);
-                newSuites = result.Suites.Select(s => s with { RunId = run.RunId }).ToList();
+                newSuites = result.Projects.Count > 0
+                    ? result.Projects.SelectMany(project => project.Suites.Select(s => s with
+                    {
+                        ProjectId = TestProjectNames.ProjectId(solutionDirectory, project.ProjectPath),
+                        RunId = run.RunId,
+                    })).ToList()
+                    : result.Suites.Select(s => s with { RunId = run.RunId }).ToList();
                 coverageReportPaths = result.CoverageReportPaths;
                 projectResults = result.Projects;
                 runnerError = result.RunnerError;
@@ -1938,20 +1958,6 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     }
 
     /// <summary>
-    /// Determines whether a test suite is in the set of affected test project paths.
-    /// Matches by suite name suffix against project directory/name heuristic.
-    /// Falls back to including all suites when uncertain.
-    /// </summary>
-    private static bool IsSuiteAffected(TestSuite suite, IReadOnlyList<string> testProjectPaths) =>
-        // If we have test project paths, check if the suite's source matches any
-        testProjectPaths.Any(p =>
-        {
-            var projectDir = Path.GetDirectoryName(p);
-            return projectDir is not null &&
-                suite.Name.Contains(Path.GetFileNameWithoutExtension(p), StringComparison.OrdinalIgnoreCase);
-        });
-
-    /// <summary>
     /// Merges new suite results from a selective run into the existing full suite list.
     /// Tests are matched by <see cref="TestResult.ResultKey"/> (name and target framework): re-run tests
     /// replace their previous results, while tests that were not re-run are preserved. A result without a
@@ -2031,24 +2037,38 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         IReadOnlyDictionary<string, IReadOnlyList<TestSuite>> liveByProject,
         bool filtered,
         out int expectedTests,
-        out int completedTests)
+        out int completedTests,
+        string? solutionDirectory = null)
     {
         // Duplicate identities are tolerated here (last wins) and reported on the run record. Live results
         // are keyed by name and framework; one without a framework (VSTest console and collector progress)
         // stands for the test under every framework until the final results tell them apart.
-        var liveByKey = new Dictionary<string, TestResult>(StringComparer.Ordinal);
-        foreach (var test in liveByProject.Values.SelectMany(suites => suites).SelectMany(s => s.Tests))
+        var liveByKey = new Dictionary<(string Project, string Key), TestResult>();
+        foreach (var (projectPath, projectSuites) in liveByProject)
         {
-            liveByKey[test.ResultKey] = test;
+            var projectId = TestProjectNames.IsProjectFile(projectPath)
+                ? solutionDirectory is null
+                    ? TestProjectNames.SuiteName(projectPath)
+                    : TestProjectNames.ProjectId(solutionDirectory, projectPath)
+                : null;
+            foreach (var suite in projectSuites)
+            {
+                var projectKey = suite.ProjectId ?? projectId ?? suite.Name;
+                foreach (var test in suite.Tests)
+                {
+                    liveByKey[(projectKey, test.ResultKey)] = test;
+                }
+            }
         }
 
-        var selected = filtered ? new HashSet<string>(StringComparer.Ordinal) : null;
-        var placeholders = new List<(string SuiteName, TestResult Test)>();
+        var selected = filtered ? new HashSet<(string Project, string Test)>() : null;
+        var placeholders = new List<(string SuiteName, string? ProjectId, string ProjectKey, TestResult Test)>();
         foreach (var (projectPath, tests) in discoveredByProject)
         {
             var suiteName = TestProjectNames.SuiteName(projectPath);
+            var projectId = solutionDirectory is null ? suiteName : TestProjectNames.ProjectId(solutionDirectory, projectPath);
             var matcher = new DiscoveredNameMatcher(
-                lastSuites.Where(s => s.Name == suiteName)
+                lastSuites.Where(s => string.Equals(s.Key, projectId, StringComparison.Ordinal))
                     .Concat(liveByProject.GetValueOrDefault(projectPath) ?? [])
                     .SelectMany(s => s.Tests)
                     .Select(t => t.FullyQualifiedName));
@@ -2057,12 +2077,18 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 var matches = matcher.Match(test.FullyQualifiedName);
                 if (matches.Count == 0)
                 {
-                    placeholders.Add((suiteName, test));
-                    _ = selected?.Add(test.FullyQualifiedName);
+                    placeholders.Add((suiteName, projectId, projectId, test));
+                    _ = selected?.Add((projectId, test.FullyQualifiedName));
                 }
                 else
                 {
-                    selected?.UnionWith(matches);
+                    if (selected is not null)
+                    {
+                        foreach (var match in matches)
+                        {
+                            selected.Add((projectId, match));
+                        }
+                    }
                 }
             }
         }
@@ -2070,12 +2096,41 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         var expected = 0;
         var completed = 0;
 
-        TestResult Resolve(TestResult test)
+        var suites = new List<(string Name, string? ProjectId, DateTimeOffset Timestamp, TimeSpan Duration, List<TestResult> Tests)>();
+        var suiteIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+        var placed = new HashSet<(string Project, string Key)>();
+        var placedNames = new HashSet<(string Project, string Name)>();
+
+        void Add(string suiteName, string? projectId, string projectKey, TestResult test)
         {
-            var resolved = liveByKey.TryGetValue(test.ResultKey, out var live)
-                || (test.TargetFramework is not null && liveByKey.TryGetValue(test.FullyQualifiedName, out live))
+            // A result without a framework is already shown when the test is, under any framework.
+            if (test.TargetFramework is null
+                ? placedNames.Contains((projectKey, test.FullyQualifiedName))
+                : !placed.Add((projectKey, test.ResultKey)))
+            {
+                return;
+            }
+
+            _ = placed.Add((projectKey, test.ResultKey));
+            _ = placedNames.Add((projectKey, test.FullyQualifiedName));
+
+            var key = projectId ?? suiteName;
+            if (!suiteIndex.TryGetValue(key, out var index))
+            {
+                index = suites.Count;
+                suiteIndex[key] = index;
+                suites.Add((suiteName, projectId, DateTimeOffset.UtcNow, TimeSpan.Zero, []));
+            }
+
+            suites[index].Tests.Add(Resolve(test, projectKey));
+        }
+
+        TestResult Resolve(TestResult test, string projectKey)
+        {
+            var resolved = liveByKey.TryGetValue((projectKey, test.ResultKey), out var live)
+                || (test.TargetFramework is not null && liveByKey.TryGetValue((projectKey, test.FullyQualifiedName), out live))
                 ? live with { TargetFramework = test.TargetFramework ?? live.TargetFramework }
-                : selected is not null && !selected.Contains(test.FullyQualifiedName)
+                : selected is not null && !selected.Contains((projectKey, test.FullyQualifiedName))
                     ? null
                     : test with { Status = TestStatus.NotRun };
             if (resolved is null)
@@ -2093,57 +2148,32 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             return resolved;
         }
 
-        var suites = new List<(string Name, DateTimeOffset Timestamp, TimeSpan Duration, List<TestResult> Tests)>();
-        var suiteIndex = new Dictionary<string, int>(StringComparer.Ordinal);
-        var placed = new HashSet<string>(StringComparer.Ordinal);
-        var placedNames = new HashSet<string>(StringComparer.Ordinal);
-
-        void Add(string suiteName, TestResult test)
-        {
-            // A result without a framework is already shown when the test is, under any framework.
-            if (test.TargetFramework is null ? placedNames.Contains(test.FullyQualifiedName) : !placed.Add(test.ResultKey))
-            {
-                return;
-            }
-
-            _ = placed.Add(test.ResultKey);
-            _ = placedNames.Add(test.FullyQualifiedName);
-
-            if (!suiteIndex.TryGetValue(suiteName, out var index))
-            {
-                index = suites.Count;
-                suiteIndex[suiteName] = index;
-                suites.Add((suiteName, DateTimeOffset.UtcNow, TimeSpan.Zero, []));
-            }
-
-            suites[index].Tests.Add(Resolve(test));
-        }
-
         foreach (var suite in lastSuites)
         {
-            if (!suiteIndex.ContainsKey(suite.Name))
+            var key = suite.Key;
+            if (!suiteIndex.ContainsKey(key))
             {
-                suiteIndex[suite.Name] = suites.Count;
-                suites.Add((suite.Name, suite.Timestamp, suite.TotalDuration, []));
+                suiteIndex[key] = suites.Count;
+                suites.Add((suite.Name, suite.ProjectId, suite.Timestamp, suite.TotalDuration, []));
             }
 
             foreach (var test in suite.Tests)
             {
-                Add(suite.Name, test);
+                Add(suite.Name, suite.ProjectId, key, test);
             }
         }
 
         // Discovery does not say which framework a test is listed for; once results for a test arrive
         // per framework, they stand in for its placeholder.
-        var namesWithFrameworkResults = liveByKey.Values
-            .Where(t => t.TargetFramework is not null)
-            .Select(t => t.FullyQualifiedName)
-            .ToHashSet(StringComparer.Ordinal);
-        foreach (var (suiteName, test) in placeholders)
+        var namesWithFrameworkResults = liveByKey
+            .Where(pair => pair.Value.TargetFramework is not null)
+            .Select(pair => (pair.Key.Project, pair.Value.FullyQualifiedName))
+            .ToHashSet();
+        foreach (var (suiteName, projectId, projectKey, test) in placeholders)
         {
-            if (!namesWithFrameworkResults.Contains(test.FullyQualifiedName))
+            if (!namesWithFrameworkResults.Contains((projectKey, test.FullyQualifiedName)))
             {
-                Add(suiteName, test);
+                Add(suiteName, projectId, projectKey, test);
             }
         }
 
@@ -2154,9 +2184,14 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 var suiteName = TestProjectNames.IsProjectFile(projectPath)
                     ? TestProjectNames.SuiteName(projectPath)
                     : suite.Name;
+                var projectId = suite.ProjectId
+                    ?? (TestProjectNames.IsProjectFile(projectPath) && solutionDirectory is not null
+                        ? TestProjectNames.ProjectId(solutionDirectory, projectPath)
+                        : null);
+                var projectKey = projectId ?? suiteName;
                 foreach (var test in suite.Tests)
                 {
-                    Add(suiteName, test);
+                    Add(suiteName, projectId, projectKey, test);
                 }
             }
         }
@@ -2165,7 +2200,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         completedTests = completed;
         return suites
             .Where(s => s.Tests.Count > 0)
-            .Select(s => new TestSuite(s.Name, s.Tests, s.Timestamp, s.Duration))
+            .Select(s => new TestSuite(s.Name, s.Tests, s.Timestamp, s.Duration) { ProjectId = s.ProjectId })
             .ToList();
     }
 

@@ -163,18 +163,18 @@ public sealed class HistoryCommandTests
                 new TestHistory("A.Tests", "A.One", [
                     new TestHistoryEntry("r1", DateTimeOffset.UnixEpoch, TestStatus.Passed, 5, "abc"),
                     new TestHistoryEntry("r2", DateTimeOffset.UnixEpoch.AddMinutes(1), TestStatus.Failed, 9, null),
-                ], Flakiness: null),
+                ], Flakiness: null) { ProjectId = "tests/A.Tests/A.Tests.csproj" },
             ],
         };
         var dispatcher = new EngineCommandDispatcher(engine);
 
         var result = await dispatcher.HandleCommandAsync(
-            ProtocolMethods.HistoryGetTestHistory, new JsonObject { ["test"] = "A.One", ["project"] = "A.Tests" }, _ct);
+            ProtocolMethods.HistoryGetTestHistory, new JsonObject { ["test"] = "A.One", ["projectId"] = "tests/A.Tests/A.Tests.csproj" }, _ct);
 
         Assert.True(result!["enabled"]!.GetValue<bool>());
         var test = Assert.Single(result["tests"]!.AsArray())!;
         Assert.Equal(["Passed", "Failed"], test["runs"]!.AsArray().Select(r => r!["status"]!.GetValue<string>()));
-        Assert.Equal("A.Tests", engine.LastHistoryProject);
+        Assert.Equal("tests/A.Tests/A.Tests.csproj", engine.LastHistoryProject);
     }
 
     [Fact]

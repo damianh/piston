@@ -94,7 +94,7 @@ public static class DashboardStatus
     public static RunTestsCommand? RunFailed(IReadOnlyList<TestSuiteDto> suites)
     {
         var failed = suites
-            .SelectMany(s => s.Tests.Where(t => t.Status == TestStatusDto.Failed).Select(t => (Project: s.Name, Test: t)))
+            .SelectMany(s => s.Tests.Where(t => t.Status == TestStatusDto.Failed).Select(t => (Project: s.ProjectId ?? s.Name, Test: t)))
             .ToList();
         if (failed.Count == 0)
         {

@@ -146,7 +146,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<GetTestHistoryCommand>(@params);
                     // An empty name matches no test, but still reports whether history is on.
-                    var histories = _engine.GetTestHistory(cmd?.Test ?? "", cmd?.Project);
+                    var histories = _engine.GetTestHistory(cmd?.Test ?? "", cmd?.ProjectId);
                     var result = new TestHistoriesDto(histories is not null, histories?.Select(DtoMapper.ToDto).ToList() ?? []);
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
@@ -190,7 +190,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
             case ProtocolMethods.EngineRunTests:
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<RunTestsCommand>(@params);
-                    if (cmd?.Projects is not { Count: > 0 } projects || projects.Any(string.IsNullOrWhiteSpace))
+                    if (cmd?.ProjectIds is not { Count: > 0 } projectIds || projectIds.Any(string.IsNullOrWhiteSpace))
                     {
                         throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "projects is required.");
                     }
@@ -199,7 +199,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                     Task run;
                     try
                     {
-                        run = _engine.RunSelectedAsync(new Engine.Models.TestSelection(projects, cmd.Tests));
+                        run = _engine.RunSelectedAsync(new Engine.Models.TestSelection(projectIds, cmd.Tests));
                         if (run.IsFaulted)
                         {
                             await run.ConfigureAwait(false);
@@ -225,12 +225,12 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
             case ProtocolMethods.TestsGetRunLog:
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<GetRunLogCommand>(@params);
-                    if (string.IsNullOrWhiteSpace(cmd?.Project))
+                    if (string.IsNullOrWhiteSpace(cmd?.ProjectId))
                     {
                         throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "project is required.");
                     }
 
-                    var response = new RunLogResponse(_engine.State.FindRunLog(cmd.Project));
+                    var response = new RunLogResponse(_engine.State.FindRunLog(cmd.ProjectId));
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
                 }

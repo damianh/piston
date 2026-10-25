@@ -96,7 +96,8 @@ public static class DtoMapper
             suite.Tests.Select(t => t.ToDto()).ToList(),
             suite.Timestamp,
             suite.TotalDuration.TotalMilliseconds,
-            suite.RunId
+            suite.RunId,
+            suite.ProjectId
         );
 
     /// <summary>
@@ -213,14 +214,14 @@ public static class DtoMapper
     }
 
     /// <summary>
-    /// The log of the latest run of the test project named <paramref name="project"/> (one process covers
+    /// The log of the latest run of the test project identified by <paramref name="projectId"/> (one process covers
     /// all of its target frameworks), or <see langword="null"/> when none was recorded.
     /// </summary>
-    public static ExecutionLogDto? FindRunLog(this PistonState state, string project)
+    public static ExecutionLogDto? FindRunLog(this PistonState state, string projectId)
     {
         // A selective run leaves the project's untouched results in the previous suite, so take the latest.
         var latest = state.TestSuites
-            .Where(s => s.ExecutionLog is not null && string.Equals(s.Name, project, StringComparison.Ordinal))
+            .Where(s => s.ExecutionLog is not null && string.Equals(s.ProjectId, projectId, StringComparison.Ordinal))
             .MaxBy(s => s.Timestamp);
 
         return latest?.ExecutionLog!.ToDto(latest.RunId);
@@ -236,12 +237,13 @@ public static class DtoMapper
     public static StoredRunDto ToDto(this StoredRun run) => new(
         run.Summary.ToDto(),
         [.. run.Results.Select(r => new StoredTestResultDto(r.Project, r.Test, r.Status.ToString(), r.DurationMs, r.ErrorMessage, r.StackTrace,
-            r.Attempts is { Count: > 0 } attempts ? [.. attempts.Select(a => new StoredAttemptDto(a.Status.ToString(), a.DurationMs, a.ErrorMessage))] : null))]);
+            r.Attempts is { Count: > 0 } attempts ? [.. attempts.Select(a => new StoredAttemptDto(a.Status.ToString(), a.DurationMs, a.ErrorMessage))] : null,
+            r.ProjectId))]);
 
     public static TestHistoryDto ToDto(this TestHistory history) => new(
         history.Project, history.Test, history.Flaky,
         [.. history.Runs.Select(e => new TestHistoryEntryDto(e.RunId, e.At, e.Status.ToString(), e.DurationMs, e.Source, e.Attempt))],
-        history.Flakiness?.ToDto());
+        history.Flakiness?.ToDto(), history.ProjectId);
 
     public static FlakyEvidenceDto ToDto(this FlakinessEvidence evidence) => new(
         evidence.Source, evidence.Passed, evidence.Failed, evidence.RetryOutcomes, evidence.OtherWorktrees, evidence.Describe(),
@@ -250,18 +252,18 @@ public static class DtoMapper
     /// <summary>One mark per test that is failing now or flaky.</summary>
     public static List<TestMarkDto> ToMarks(IReadOnlyList<FailureClassification> failures, IReadOnlyList<TestHistory> flaky)
     {
-        var flakyByKey = flaky.GroupBy(f => (f.Project, f.Test)).ToDictionary(g => g.Key, g => g.First().Flakiness);
+        var flakyByKey = flaky.GroupBy(f => (f.ProjectId, f.Test)).ToDictionary(g => g.Key, g => g.First().Flakiness);
         var marks = failures
             .Select(f =>
             {
-                var evidence = f.Flakiness ?? flakyByKey.GetValueOrDefault((f.Project, f.Test));
+                var evidence = f.Flakiness ?? flakyByKey.GetValueOrDefault((f.ProjectId, f.Test));
                 return new TestMarkDto(f.Project, f.Test, f.Kind.ToString(), f.Evidence,
-                    evidence is not null || flakyByKey.ContainsKey((f.Project, f.Test)), evidence?.ToDto());
+                    evidence is not null || flakyByKey.ContainsKey((f.ProjectId, f.Test)), evidence?.ToDto(), f.ProjectId);
             })
             .ToList();
-        var failing = failures.Select(f => (f.Project, f.Test)).ToHashSet();
-        marks.AddRange(flaky.Where(f => !failing.Contains((f.Project, f.Test)))
-            .Select(f => new TestMarkDto(f.Project, f.Test, null, null, Flaky: true, f.Flakiness?.ToDto())));
+        var failing = failures.Select(f => (f.ProjectId, f.Test)).ToHashSet();
+        marks.AddRange(flaky.Where(f => !failing.Contains((f.ProjectId, f.Test)))
+            .Select(f => new TestMarkDto(f.Project, f.Test, null, null, Flaky: true, f.Flakiness?.ToDto(), f.ProjectId)));
         return marks;
     }
 
@@ -288,7 +290,7 @@ public static class DtoMapper
             SourceAfter: run.SourceAfter?.ToDto(),
             SourceChangeObserved: run.SourceChangeObserved,
             EffectiveFilter: run.Context?.EffectiveFilter,
-            TestProjects: run.Context?.TestProjects,
+            TestProjects: run.Context?.TestProjects?.Select(path => ProjectId(run.Context.SolutionPath, path)).ToList(),
             TotalTests: tests.Count,
             Passed: tests.Count(t => t.Status == TestStatus.Passed),
             Failed: tests.Count(t => t.Status == TestStatus.Failed),
@@ -302,15 +304,29 @@ public static class DtoMapper
                 kv => (IReadOnlyList<TestSelectionReasonDto>)[.. kv.Value.Select(r => r.ToDto())],
                 StringComparer.Ordinal),
             ChangedFiles: run.ChangedFiles,
-            FixedTests: [.. run.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
-            NewlyFailingTests: [.. run.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
+            FixedTests: [.. run.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key) { ProjectId = t.ProjectId })],
+            NewlyFailingTests: [.. run.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key) { ProjectId = t.ProjectId })],
             RetryLimit: run.RetryLimit,
             RetriesSkippedReason: run.RetriesSkippedReason,
-            PassedOnRetry: tests.Count(t => t.Status == TestStatus.Passed && t.Attempts.Count > 0));
+            PassedOnRetry: tests.Count(t => t.Status == TestStatus.Passed && t.Attempts.Count > 0),
+            Projects: [.. run.Projects.Select(project => new TestRunProjectOutcomeDto(
+                project.ProjectPath,
+                project.ProjectId,
+                project.Status.ToString(),
+                project.TestCount,
+                project.NoTestsReason,
+                project.TimedOut?.Test,
+                project.TimedOut is { } timeout ? timeout.Limit.TotalMilliseconds : null))]);
     }
 
     public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
         new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath);
+
+    private static string ProjectId(string solutionPath, string projectPath)
+    {
+        var solutionDirectory = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? Path.GetFullPath(solutionPath);
+        return Path.GetRelativePath(solutionDirectory, Path.GetFullPath(projectPath, solutionDirectory)).Replace('\\', '/');
+    }
 
     public static CoveringTestsDto ToCoveringTestsDto(string filePath, IReadOnlyList<CoveringTest>? tests) =>
         new(filePath, [.. (tests ?? []).Select(t => new CoveringTestDto(
