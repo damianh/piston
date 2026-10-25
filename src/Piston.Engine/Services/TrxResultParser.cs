@@ -98,9 +98,15 @@ public sealed class TrxResultParser : ITestResultParser
             DisplayName: testName,
             Status: status,
             Duration: duration,
-            Output: capturedOutput.Length == 0 ? null : capturedOutput,
-            ErrorMessage: string.IsNullOrWhiteSpace(errorMessage) ? null : errorMessage.Trim(),
-            StackTrace: string.IsNullOrWhiteSpace(stackTrace) ? null : stackTrace.Trim(),
+            Output: capturedOutput.Length == 0
+                ? null
+                : RetentionLimits.TruncateHeadTail(capturedOutput, RetentionLimits.MaxTestTextLength),
+            ErrorMessage: string.IsNullOrWhiteSpace(errorMessage)
+                ? null
+                : RetentionLimits.TruncateHead(errorMessage.Trim(), RetentionLimits.MaxTestTextLength),
+            StackTrace: string.IsNullOrWhiteSpace(stackTrace)
+                ? null
+                : RetentionLimits.TruncateHead(stackTrace.Trim(), RetentionLimits.MaxTestTextLength),
             Source: null
         )
         {

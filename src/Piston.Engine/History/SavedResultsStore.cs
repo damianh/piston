@@ -248,21 +248,14 @@ internal sealed class SavedResultsStore : IDisposable
         {
             Errors = ClipDiagnostics(result.Errors),
             Warnings = ClipDiagnostics(result.Warnings),
+            OmittedErrors = result.OmittedErrors + Math.Max(0, result.Errors.Count - MaxBuildDiagnostics),
+            OmittedWarnings = result.OmittedWarnings + Math.Max(0, result.Warnings.Count - MaxBuildDiagnostics),
         };
 
-    private static IReadOnlyList<string> ClipDiagnostics(IReadOnlyList<string> diagnostics)
-    {
-        var keepCount = Math.Max(0, MaxBuildDiagnostics - (diagnostics.Count > MaxBuildDiagnostics ? 1 : 0));
-        var kept = diagnostics.Take(keepCount)
+    private static IReadOnlyList<string> ClipDiagnostics(IReadOnlyList<string> diagnostics) =>
+        diagnostics.Take(MaxBuildDiagnostics)
             .Select(d => ClipText(d, MaxBuildDiagnosticLength)!)
             .ToList();
-        if (diagnostics.Count > keepCount)
-        {
-            kept.Add($"{diagnostics.Count - keepCount} more omitted");
-        }
-
-        return kept;
-    }
 
     private static string? ClipText(string? value, int max)
     {

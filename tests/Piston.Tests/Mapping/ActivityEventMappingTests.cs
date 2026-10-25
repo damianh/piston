@@ -46,6 +46,20 @@ public sealed class ActivityEventMappingTests
         },
     };
 
+    [Fact]
+    public void BuildCompleted_ReportsTotalErrorCountSeparatelyFromRetainedErrors()
+    {
+        var activity = new BuildCompletedActivityEvent("/repo/Test.slnx", false, 12.5, ["first error"])
+        {
+            ErrorCount = 123,
+        };
+
+        var mapped = activity.ToDto();
+
+        Assert.Equal(123, mapped.Data!["errorCount"]!.GetValue<int>());
+        _ = Assert.Single(mapped.Data["errors"]!.AsArray());
+    }
+
     [Theory]
     [MemberData(nameof(Events))]
     public void EngineActivity_PreservesWireShapeAndTimestamp(EngineActivityEvent activity, string expectedJson)

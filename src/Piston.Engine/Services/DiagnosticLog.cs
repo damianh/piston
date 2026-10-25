@@ -1,6 +1,9 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Text;
+using Piston.Engine.Models;
+
 namespace Piston.Engine.Services;
 
 /// <summary>
@@ -14,14 +17,21 @@ namespace Piston.Engine.Services;
 internal sealed class DiagnosticLog : IDisposable
 {
     private const int MaxBufferedEntries = 1000;
+    internal const long DefaultMaxFileBytes = 10 * 1024 * 1024;
 
     private readonly Lock _lock = new();
     private readonly string _solutionDirectory;
+    private readonly long _maxFileBytes;
+    private long _bytesWritten;
     private List<string>? _buffer = [];
     private StreamWriter? _writer;
     private bool _disposed;
 
-    private DiagnosticLog(string solutionDirectory) => _solutionDirectory = solutionDirectory;
+    internal DiagnosticLog(string solutionDirectory, long maxFileBytes = DefaultMaxFileBytes)
+    {
+        _solutionDirectory = solutionDirectory;
+        _maxFileBytes = Math.Max(1, maxFileBytes);
+    }
 
     /// <summary>
     /// Shared singleton. Set via <see cref="Initialize"/> during engine startup.
@@ -36,9 +46,9 @@ internal sealed class DiagnosticLog : IDisposable
     /// Creates the diagnostic log for the given solution directory without touching the file system.
     /// Entries are buffered until <see cref="Open"/>.
     /// </summary>
-    internal static DiagnosticLog Initialize(string solutionDirectory)
+    internal static DiagnosticLog Initialize(string solutionDirectory, long maxFileBytes = DefaultMaxFileBytes)
     {
-        var log = new DiagnosticLog(solutionDirectory);
+        var log = new DiagnosticLog(solutionDirectory, maxFileBytes);
         Instance = log;
         return log;
     }
@@ -64,18 +74,14 @@ internal sealed class DiagnosticLog : IDisposable
                 _ = Directory.CreateDirectory(pistonDir);
                 var logPath = Path.Combine(pistonDir, "diagnostics.log");
 
-                // FileShare.Delete so an open log never blocks removing the worktree (Windows).
-                var stream = new FileStream(
-                    logPath,
-                    FileMode.Create,
-                    FileAccess.Write,
-                    FileShare.ReadWrite | FileShare.Delete);
-                _writer = new StreamWriter(stream) { AutoFlush = true };
+                File.Delete(logPath + ".1");
+                _writer = OpenWriter(logPath, FileMode.Create);
+                _bytesWritten = 0;
                 FilePath = logPath;
-                _writer.WriteLine(Format("DiagnosticLog", $"Initialized. Log path: {logPath}"));
+                WriteLineLocked(Format("DiagnosticLog", $"Initialized. Log path: {logPath}"));
                 foreach (var line in buffered)
                 {
-                    _writer.WriteLine(line);
+                    WriteLineLocked(line);
                 }
             }
             catch
@@ -111,7 +117,7 @@ internal sealed class DiagnosticLog : IDisposable
                     return;
                 }
 
-                _writer?.WriteLine(line);
+                WriteLineLocked(line);
             }
         }
         catch
@@ -120,8 +126,73 @@ internal sealed class DiagnosticLog : IDisposable
         }
     }
 
+    private void WriteLineLocked(string line)
+    {
+        if (_writer is null)
+        {
+            return;
+        }
+
+        line = RetentionLimits.TruncateHead(line, RetentionLimits.MaxDiagnosticLogLineLength)!;
+        var lineBytes = Encoding.UTF8.GetByteCount(line) + Encoding.UTF8.GetByteCount(Environment.NewLine);
+        if (_bytesWritten > 0 && _bytesWritten + lineBytes > _maxFileBytes)
+        {
+            RotateLocked();
+        }
+
+        if (_writer is not null)
+        {
+            _writer.WriteLine(line);
+            _bytesWritten += lineBytes;
+        }
+    }
+
+    private void RotateLocked()
+    {
+        if (FilePath is null || _writer is null)
+        {
+            return;
+        }
+
+        _writer.Flush();
+        _writer.Dispose();
+        _writer = null;
+        try
+        {
+            File.Delete(FilePath + ".1");
+            File.Move(FilePath, FilePath + ".1");
+            _writer = OpenWriter(FilePath, FileMode.Create);
+            _bytesWritten = 0;
+            var rotatedLine = Format("DiagnosticLog", "Rotated diagnostics.log; previous log is diagnostics.log.1");
+            _writer.WriteLine(rotatedLine);
+            _bytesWritten = Encoding.UTF8.GetByteCount(rotatedLine) + Encoding.UTF8.GetByteCount(Environment.NewLine);
+        }
+        catch
+        {
+            _writer?.Dispose();
+            _writer = null;
+            try
+            {
+                _writer = OpenWriter(FilePath, FileMode.Append);
+                _bytesWritten = new FileInfo(FilePath).Length;
+            }
+            catch
+            {
+                _writer = null;
+                throw;
+            }
+        }
+    }
+
+    private static StreamWriter OpenWriter(string path, FileMode mode)
+    {
+        var stream = new FileStream(path, mode, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+        return new StreamWriter(stream) { AutoFlush = true };
+    }
+
     private static string Format(string category, string message) =>
-        $"[{DateTime.UtcNow:HH:mm:ss.fff}] [{category}] {message}";
+        RetentionLimits.TruncateHead($"[{DateTime.UtcNow:HH:mm:ss.fff}] [{category}] {message}",
+            RetentionLimits.MaxDiagnosticLogLineLength)!;
 
     public void Dispose()
     {

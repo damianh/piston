@@ -84,7 +84,13 @@ public sealed class SavedResultsStoreTests : IDisposable
                     ],
                 },
             ],
-            LastBuild = new BuildResult(BuildStatus.Failed, Enumerable.Repeat(new string('b', 3000), 105).ToList(), [], TimeSpan.Zero),
+            LastBuild = new BuildResult(BuildStatus.Failed,
+                Enumerable.Repeat(new string('b', 3000), 105).ToList(),
+                Enumerable.Repeat("warning", 102).ToList(), TimeSpan.Zero)
+            {
+                OmittedErrors = 7,
+                OmittedWarnings = 3,
+            },
         };
         using (var store = Open())
         {
@@ -98,7 +104,10 @@ public sealed class SavedResultsStoreTests : IDisposable
         Assert.EndsWith("[truncated]", result.ErrorMessage);
         Assert.EndsWith("[truncated]", result.StackTrace);
         Assert.Equal(100, restored.LastBuild!.Errors.Count);
-        Assert.Equal("6 more omitted", restored.LastBuild.Errors[^1]);
+        Assert.EndsWith("[truncated]", restored.LastBuild.Errors[^1]);
+        Assert.Equal(12, restored.LastBuild.OmittedErrors);
+        Assert.Equal(100, restored.LastBuild.Warnings.Count);
+        Assert.Equal(5, restored.LastBuild.OmittedWarnings);
     }
 
     [Fact]

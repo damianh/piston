@@ -7,5 +7,7 @@ public sealed record BuildResultDto(
     BuildStatusDto Status,
     IReadOnlyList<string> Errors,
     IReadOnlyList<string> Warnings,
-    double DurationMs
+    double DurationMs,
+    int OmittedErrors = 0,
+    int OmittedWarnings = 0
 );

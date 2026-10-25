@@ -63,6 +63,8 @@ public static class TestRunJson
                 ["status"] = run.Build.Status.ToString(),
                 ["errors"] = Strings(run.Build.Errors),
                 ["warnings"] = Strings(run.Build.Warnings),
+                ["omittedErrors"] = run.Build.OmittedErrors,
+                ["omittedWarnings"] = run.Build.OmittedWarnings,
                 ["durationMs"] = Math.Round(run.Build.Duration.TotalMilliseconds, 3),
             },
             ["projects"] = new JsonArray(run.Projects
