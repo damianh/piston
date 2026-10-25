@@ -10,6 +10,26 @@ namespace Piston.Tests;
 public sealed class StatusAllFormatterTests
 {
     [Fact]
+    public void Format_UnavailableScanDoesNotReportIdleOrZeroUsage()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var owner = new OwnershipRecord(
+            "worktree-key", OwnershipLiveness.Live,
+            new ExecutionOwnerInfo(123, "/repo/App.slnx", "/repo", now, "daemon"));
+        var overview = new MachineExecutionOverview(
+            now, new ExecutionBudget(2, 1024, "/user/budget.json"),
+            [owner], [], [], "Scan failed", CoordinationAvailable: false);
+
+        var output = StatusAllFormatter.Format(overview);
+
+        Assert.Contains("[Unknown]", output, StringComparison.Ordinal);
+        Assert.Contains("CPU unknown/2", output, StringComparison.Ordinal);
+        Assert.Contains("memory unknown/1,024 MiB", output, StringComparison.Ordinal);
+        Assert.Contains("running and queued counts unknown", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("[Idle]", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Format_ReportsOwnerStateBudgetAndFifoQueue()
     {
         var now = DateTimeOffset.UtcNow;

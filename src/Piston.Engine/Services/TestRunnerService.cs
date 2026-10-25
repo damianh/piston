@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Piston.Engine.Execution;
 using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
@@ -9,6 +10,7 @@ public sealed class TestRunnerService : ITestRunnerService
 {
     private readonly ITestExecutionStrategy _strategy;
     private readonly ITestProcessPool? _pool;
+    private readonly ITestResourceGate? _resources;
 
     // Without a pool, discovery and execution still share a single test-process slot.
     private readonly SemaphoreSlim _soloSlot = new(1, 1);
@@ -19,6 +21,17 @@ public sealed class TestRunnerService : ITestRunnerService
     {
         _strategy = strategy;
         _pool = pool;
+    }
+
+    /// <summary>
+    /// Runs each project only once it holds its exclusive test resources from <paramref name="resources"/>,
+    /// acquired before a pool slot so waiting projects do not occupy slots.
+    /// </summary>
+    internal TestRunnerService(ITestExecutionStrategy strategy, ITestProcessPool? pool, ITestResourceGate? resources)
+    {
+        _strategy = strategy;
+        _pool = pool;
+        _resources = resources;
     }
 
     public Task<TestRunResult> RunTestsAsync(
@@ -70,22 +83,38 @@ public sealed class TestRunnerService : ITestRunnerService
             // Single target (whole solution path) — run directly
             var request = new ProjectTestRequest(solutionPath, filter, collectCoverage);
             ProjectTestResult single;
-            IDisposable slot;
-            try
+            var (resources, refused) = await AcquireResourcesAsync(solutionPath, callbacks, ct).ConfigureAwait(false);
+            if (refused is not null)
             {
-                slot = await AcquireSlotAsync(ct).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                return new TestRunResult([], null, []);
+                if (ct.IsCancellationRequested)
+                {
+                    return new TestRunResult([], null, []);
+                }
+
+                callbacks.OnProjectCompleted?.Invoke(refused);
+                return new TestRunResult([], refused.RunnerError, []) { Projects = [refused] };
             }
 
-            using (slot)
+            using (resources)
             {
-                callbacks.OnProjectStarted?.Invoke(solutionPath);
-                single = await _strategy.ExecuteAsync(request, ProgressFor(callbacks, solutionPath), ct).ConfigureAwait(false);
+                IDisposable slot;
+                try
+                {
+                    slot = await AcquireSlotAsync(ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    return new TestRunResult([], null, []);
+                }
+
+                using (slot)
+                {
+                    callbacks.OnProjectStarted?.Invoke(solutionPath);
+                    single = await _strategy.ExecuteAsync(request, ProgressFor(callbacks, solutionPath), ct).ConfigureAwait(false);
+                }
             }
 
+            single = WithResources(single, resources);
             callbacks.OnProjectCompleted?.Invoke(single);
             return new TestRunResult(single.Suites, single.RunnerError, single.CoverageReportPaths) { Projects = [single] };
         }
@@ -150,6 +179,50 @@ public sealed class TestRunnerService : ITestRunnerService
         await Task.WhenAll(testProjectPaths.Select(DiscoverOneAsync)).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Waits for <paramref name="target"/>'s exclusive test resources. Returns the lease (null without a
+    /// gate), or a result to report instead of running: empty when cancelled, crashed when coordination failed.
+    /// </summary>
+    private async Task<(TestResourceLease? Lease, ProjectTestResult? Refused)> AcquireResourcesAsync(
+        string target, TestRunCallbacks callbacks, CancellationToken ct)
+    {
+        if (_resources is null)
+        {
+            return (null, null);
+        }
+
+        try
+        {
+            var needs = _resources.Resolve(target);
+            var lease = await _resources.AcquireAsync(
+                needs,
+                status => callbacks.OnProjectWaiting?.Invoke(target, status),
+                ct).ConfigureAwait(false);
+            try
+            {
+                callbacks.OnProjectResourcesAcquired?.Invoke(target);
+            }
+            catch
+            {
+                lease.Dispose();
+                throw;
+            }
+            return (lease, null);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return (null, new ProjectTestResult(target, [], null, [], Crashed: false));
+        }
+        catch (ExecutionCoordinationException ex)
+        {
+            return (null, new ProjectTestResult(
+                target, [], $"Could not acquire exclusive test resources: {ex.Message}", [], Crashed: true));
+        }
+    }
+
+    private static ProjectTestResult WithResources(ProjectTestResult result, TestResourceLease? lease) =>
+        lease is null || lease.Status is null ? result : result with { Resources = lease.Resources };
+
     private async Task<IDisposable> AcquireSlotAsync(CancellationToken ct)
     {
         if (_pool is not null)
@@ -177,8 +250,27 @@ public sealed class TestRunnerService : ITestRunnerService
             .Select(p => new ProjectTestRequest(p, filter, collectCoverage))
             .ToList();
 
-        var results = await _pool!.RunProjectsAsync(requests, callbacks, ct)
-            .ConfigureAwait(false);
+        async Task<ProjectTestResult> RunOneAsync(ProjectTestRequest request)
+        {
+            var (resources, refused) = await AcquireResourcesAsync(request.ProjectPath, callbacks, ct).ConfigureAwait(false);
+            if (refused is not null)
+            {
+                callbacks.OnProjectCompleted?.Invoke(refused);
+                return refused;
+            }
+
+            ProjectTestResult result;
+            using (resources)
+            {
+                result = await _pool!.RunProjectAsync(request, callbacks, ct).ConfigureAwait(false);
+            }
+
+            result = WithResources(result, resources);
+            callbacks.OnProjectCompleted?.Invoke(result);
+            return result;
+        }
+
+        var results = await Task.WhenAll(requests.Select(RunOneAsync)).ConfigureAwait(false);
 
         var allSuites = new List<TestSuite>();
         var allCoveragePaths = new List<string>();
@@ -220,10 +312,22 @@ public sealed class TestRunnerService : ITestRunnerService
             {
                 var request = new ProjectTestRequest(projectPath, filter, collectCoverage);
                 ProjectTestResult result;
-                using (await AcquireSlotAsync(ct).ConfigureAwait(false))
+                var (resources, refused) = await AcquireResourcesAsync(projectPath, callbacks, ct).ConfigureAwait(false);
+                if (refused is not null)
                 {
-                    callbacks.OnProjectStarted?.Invoke(projectPath);
-                    result = await _strategy.ExecuteAsync(request, ProgressFor(callbacks, projectPath), ct).ConfigureAwait(false);
+                    ct.ThrowIfCancellationRequested();
+                    result = refused;
+                }
+                else
+                {
+                    using (resources)
+                    using (await AcquireSlotAsync(ct).ConfigureAwait(false))
+                    {
+                        callbacks.OnProjectStarted?.Invoke(projectPath);
+                        result = await _strategy.ExecuteAsync(request, ProgressFor(callbacks, projectPath), ct).ConfigureAwait(false);
+                    }
+
+                    result = WithResources(result, resources);
                 }
 
                 projects.Add(result);

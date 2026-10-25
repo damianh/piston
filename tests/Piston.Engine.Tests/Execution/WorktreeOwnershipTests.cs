@@ -356,8 +356,10 @@ public sealed class WorktreeOwnershipTests : IDisposable
         Assert.Contains("Piston mcp process", ex.Message);
     }
 
-    [Fact]
-    public void Acquire_RecordsOnlyValidatedLocalDashboardUrls()
+    [Theory]
+    [InlineData("https://example.com")]
+    [InlineData("http://loopback:5199")]
+    public void Acquire_RecordsOnlyValidatedLocalDashboardUrls(string invalidUrl)
     {
         var solution = CreateSolution(CreateWorktree("dashboard"));
         using var owner = WorktreeOwnership.Acquire(_directory, solution, "daemon", dashboardUrl: "http://localhost:5199/");
@@ -367,7 +369,7 @@ public sealed class WorktreeOwnershipTests : IDisposable
 
         var infoPath = Path.Combine(_directory.OwnersDirectory, owner.Worktree.Key + ".json");
         var json = File.ReadAllText(infoPath).Replace(
-            "http://localhost:5199", "https://example.com", StringComparison.Ordinal);
+            "http://localhost:5199", invalidUrl, StringComparison.Ordinal);
         File.WriteAllText(infoPath, json);
 
         record = Assert.Single(WorktreeOwnership.ListOwners(_directory));
@@ -376,8 +378,21 @@ public sealed class WorktreeOwnershipTests : IDisposable
     }
 
     [Theory]
+    [InlineData("http://localhost:5199")]
+    [InlineData("http://127.0.0.1:5199")]
+    [InlineData("http://[::1]:5199")]
+    public void Acquire_AcceptsLoopbackDashboardUrls(string url)
+    {
+        var solution = CreateSolution(CreateWorktree("local-url"));
+        using var owner = WorktreeOwnership.Acquire(_directory, solution, dashboardUrl: url);
+
+        Assert.Equal(url, Assert.Single(WorktreeOwnership.ListOwners(_directory)).Owner!.DashboardUrl);
+    }
+
+    [Theory]
     [InlineData("https://localhost:5199")]
     [InlineData("http://example.com:5199")]
+    [InlineData("http://loopback:5199")]
     [InlineData("javascript:alert(1)")]
     [InlineData("http://localhost:5199/admin")]
     public void Acquire_RejectsNonLocalDashboardUrls(string url)

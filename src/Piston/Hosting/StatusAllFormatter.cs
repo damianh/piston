@@ -26,7 +26,7 @@ public static class StatusAllFormatter
                 : null;
             var state = running ? "Running"
                 : queued is not null ? $"Queued #{queued.QueuePosition}"
-                : owner is null ? "Unknown"
+                : owner is null || !overview.CoordinationAvailable ? "Unknown"
                 : "Idle";
             var dashboard = owner?.DashboardUrl is { } url ? $" | dashboard {url}" : "";
             lines.Add($"Live : [{state}] {OwnerLookup.Describe(record)}{dashboard}");
@@ -39,12 +39,17 @@ public static class StatusAllFormatter
 
         if (overview.Budget is { } budget)
         {
+            var memoryInUse = overview.MemoryMbInUse?.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
             var memory = budget.MemoryMb is { } maxMemory
-                ? $"{overview.MemoryMbInUse.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}/{maxMemory.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} MiB"
-                : $"{overview.MemoryMbInUse.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} MiB (not budgeted)";
+                ? $"{memoryInUse}/{maxMemory.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} MiB"
+                : $"{memoryInUse} MiB (not budgeted)";
+            var cpuInUse = overview.CpuSlotsInUse?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "unknown";
+            var counts = overview.CoordinationAvailable
+                ? $"{overview.Running.Count} running, {overview.Queue.Count} queued"
+                : "running and queued counts unknown";
             lines.Add(
-                $"Budget: CPU {overview.CpuSlotsInUse}/{budget.CpuSlots} slot(s); memory {memory}; " +
-                $"{overview.Running.Count} running, {overview.Queue.Count} queued ({budget.Source})");
+                $"Budget: CPU {cpuInUse}/{budget.CpuSlots} slot(s); memory {memory}; " +
+                $"{counts} ({budget.Source})");
         }
 
         foreach (var entry in overview.Running)

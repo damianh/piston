@@ -40,6 +40,7 @@ public sealed record StateSnapshotNotification(
     string? LastBuiltProject = null,
     ImpactBackfillDto? ImpactBackfill = null,
     RunningTestDto? LongestRunningTest = null,
+    IReadOnlyDictionary<string, TestResourceWaitDto>? ProjectResourceWaits = null,
     string? RetryStatus = null
 );
 

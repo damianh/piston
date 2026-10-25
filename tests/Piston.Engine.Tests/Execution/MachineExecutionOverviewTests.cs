@@ -58,6 +58,55 @@ public sealed class MachineExecutionOverviewTests : IDisposable
     }
 
     [Fact]
+    public async Task ReadAsync_LockTimeoutMarksUsageUnknown()
+    {
+        using var admissionLock = await ExclusiveFileLock.AcquireAsync(_directory.AdmissionLockPath, _ct);
+
+        var overview = await MachineExecutionOverviewReader.ReadAsync(_directory, _ct);
+
+        Assert.False(overview.CoordinationAvailable);
+        Assert.Null(overview.CpuSlotsInUse);
+        Assert.Null(overview.MemoryMbInUse);
+        Assert.Contains("Timed out", overview.Error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("foreign.lock", true)]
+    [InlineData("invalid.lease", false)]
+    public async Task ReadAsync_HeldInvalidEntryDiscardsPartialSnapshot(string name, bool inQueue)
+    {
+        var ticketName = $"00000000000000000001_1_0_{Environment.ProcessId}_run.ticket";
+        using var ticket = ExclusiveFileLock.TryAcquire(
+            Path.Combine(_directory.QueueDirectory, ticketName), FileMode.CreateNew);
+        using var invalid = ExclusiveFileLock.TryAcquire(
+            Path.Combine(inQueue ? _directory.QueueDirectory : _directory.LeasesDirectory, name), FileMode.CreateNew);
+        Assert.NotNull(ticket);
+        Assert.NotNull(invalid);
+
+        var overview = await MachineExecutionOverviewReader.ReadAsync(_directory, _ct);
+
+        Assert.False(overview.CoordinationAvailable);
+        Assert.Empty(overview.Queue);
+        Assert.Empty(overview.Running);
+        Assert.Null(overview.CpuSlotsInUse);
+        Assert.Contains("Unrecognised held entry", overview.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ReadAsync_IgnoresUnheldForeignFilesWithoutDeletingThem()
+    {
+        var path = Path.Combine(_directory.QueueDirectory, "foreign.lock");
+        await File.WriteAllTextAsync(path, "", _ct);
+
+        var overview = await MachineExecutionOverviewReader.ReadAsync(_directory, _ct);
+
+        Assert.True(overview.CoordinationAvailable);
+        Assert.Null(overview.Error);
+        Assert.Empty(overview.Queue);
+        Assert.True(File.Exists(path));
+    }
+
+    [Fact]
     public async Task ReadAsync_DoesNotCreateCoordinationDirectory()
     {
         var missing = new ExecutionCoordinationDirectory(Path.Combine(_root, "missing"));

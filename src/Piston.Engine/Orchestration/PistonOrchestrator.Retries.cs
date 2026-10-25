@@ -126,18 +126,14 @@ public sealed partial class PistonOrchestrator
                     }
 
                     var completed = new List<ProjectTestResult>();
-                    var callbacks = new TestRunCallbacks
+                    var result = await RunSecondaryTestsAsync(
+                        solutionPath, groupTargets, filter, collectCoverage: false, p =>
                     {
-                        OnProjectCompleted = p =>
+                        lock (completed)
                         {
-                            lock (completed)
-                            {
-                                completed.Add(p);
-                            }
-                        },
-                    };
-                    var result = await _testRunner.RunTestsAsync(
-                        solutionPath, groupTargets, filter, collectCoverage: false, callbacks, ct).ConfigureAwait(false);
+                            completed.Add(p);
+                        }
+                    }, ct).ConfigureAwait(false);
                     ct.ThrowIfCancellationRequested();
 
                     // A retry that crashed, timed out or failed to run proves nothing, even about the tests it passed.

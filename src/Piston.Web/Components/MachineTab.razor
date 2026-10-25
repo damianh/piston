@@ -12,17 +12,17 @@
                 <span class="text-gray-500">Updated @current.CapturedAt.ToLocalTime().ToString("T")</span>
             }
         </div>
-        @if (_overview?.Budget is { } budget)
+        @if (_overview is { CoordinationAvailable: true, Budget: { CpuSlotsInUse: { } cpuInUse, MemoryMbInUse: { } memoryInUse } budget })
         {
             <div class="flex items-center gap-2 min-w-40">
                 <span class="text-gray-400">CPU</span>
                 <div class="w-24 h-1.5 bg-gray-700 rounded-full overflow-hidden" role="progressbar"
                      aria-label="CPU slots in use" aria-valuemin="0" aria-valuemax="@budget.CpuSlots"
-                     aria-valuenow="@Math.Min(budget.CpuSlotsInUse, budget.CpuSlots)">
+                     aria-valuenow="@Math.Min(cpuInUse, budget.CpuSlots)">
                     <div class="h-full bg-cyan-400 rounded-full"
-                         style="width: @Percent(budget.CpuSlotsInUse, budget.CpuSlots)%"></div>
+                         style="width: @Percent(cpuInUse, budget.CpuSlots)%"></div>
                 </div>
-                <span class="text-gray-300 tabular-nums">@budget.CpuSlotsInUse/@budget.CpuSlots slots</span>
+                <span class="text-gray-300 tabular-nums">@cpuInUse/@budget.CpuSlots slots</span>
             </div>
             <div class="flex items-center gap-2 min-w-40">
                 <span class="text-gray-400">Memory</span>
@@ -30,20 +30,24 @@
                 {
                     <div class="w-24 h-1.5 bg-gray-700 rounded-full overflow-hidden" role="progressbar"
                          aria-label="Memory in use" aria-valuemin="0" aria-valuemax="@memoryBudget"
-                         aria-valuenow="@Math.Min(budget.MemoryMbInUse, memoryBudget)">
+                         aria-valuenow="@Math.Min(memoryInUse, memoryBudget)">
                         <div class="h-full bg-violet-400 rounded-full"
-                             style="width: @Percent(budget.MemoryMbInUse, memoryBudget)%"></div>
+                             style="width: @Percent(memoryInUse, memoryBudget)%"></div>
                     </div>
-                    <span class="text-gray-300 tabular-nums">@FormatMemory(budget.MemoryMbInUse)/@FormatMemory(memoryBudget)</span>
+                    <span class="text-gray-300 tabular-nums">@FormatMemory(memoryInUse)/@FormatMemory(memoryBudget)</span>
                 }
                 else
                 {
                     <span class="text-gray-400">
-                        Not budgeted@(budget.MemoryMbInUse > 0 ? $" · {FormatMemory(budget.MemoryMbInUse)} reserved" : "")
+                        Not budgeted@(memoryInUse > 0 ? $" · {FormatMemory(memoryInUse)} reserved" : "")
                     </span>
                 }
             </div>
             <span class="text-gray-500">Budget: @budget.Source</span>
+        }
+        else if (_overview is { CoordinationAvailable: false })
+        {
+            <span class="text-gray-400">Resource usage unknown</span>
         }
         else if (_overview is null && _error is null)
         {
@@ -54,8 +58,8 @@
             <span class="text-gray-400">Budget unavailable</span>
         }
         <div class="ml-auto flex items-center gap-3 text-gray-400 tabular-nums">
-            <span>@(_overview?.Running.Count ?? 0) running</span>
-            <span>@(_overview?.Queue.Count ?? 0) queued</span>
+            <span>@(_overview is { CoordinationAvailable: true } counts ? counts.Running.Count.ToString() : "?") running</span>
+            <span>@(_overview is { CoordinationAvailable: true } queuedCounts ? queuedCounts.Queue.Count.ToString() : "?") queued</span>
         </div>
     </div>
 
@@ -124,7 +128,7 @@
                                              && !worktree.IsCurrent
                                              && worktree.Liveness == "Live")
                                         {
-                                            <a class="text-blue-400 hover:text-blue-300 hover:underline focus-visible:outline focus-visible:outline-1 focus-visible:outline-blue-400"
+                                            <a class="text-blue-400 hover:underline focus-visible:outline focus-visible:outline-1 focus-visible:outline-blue-400"
                                                href="@dashboardUrl" target="_blank" rel="noopener noreferrer">@linkLabel</a>
                                         }
                                         else
@@ -142,9 +146,13 @@
 
         <section aria-labelledby="running-heading" class="mt-4">
             <h2 id="running-heading" class="px-4 py-2 text-gray-200 font-semibold border-y border-gray-800">
-                Running work <span class="ml-1 text-gray-500 font-normal tabular-nums">@(_overview?.Running.Count ?? 0)</span>
+                Running work <span class="ml-1 text-gray-500 font-normal tabular-nums">@(_overview is { CoordinationAvailable: true } runningCounts ? runningCounts.Running.Count.ToString() : "?")</span>
             </h2>
-            @if (_overview is { Running.Count: 0 })
+            @if (_overview is { CoordinationAvailable: false })
+            {
+                <p class="px-4 py-3 text-gray-500 italic">Running work is unknown. Retrying automatically.</p>
+            }
+            else if (_overview is { Running.Count: 0 })
             {
                 <p class="px-4 py-3 text-gray-500 italic">No runs currently hold machine budget.</p>
             }
@@ -168,9 +176,13 @@
 
         <section aria-labelledby="queue-heading" class="mt-4">
             <h2 id="queue-heading" class="px-4 py-2 text-gray-200 font-semibold border-y border-gray-800">
-                FIFO queue <span class="ml-1 text-gray-500 font-normal tabular-nums">@(_overview?.Queue.Count ?? 0)</span>
+                FIFO queue <span class="ml-1 text-gray-500 font-normal tabular-nums">@(_overview is { CoordinationAvailable: true } queueCounts ? queueCounts.Queue.Count.ToString() : "?")</span>
             </h2>
-            @if (_overview is { Queue.Count: 0 })
+            @if (_overview is { CoordinationAvailable: false })
+            {
+                <p class="px-4 py-3 text-gray-500 italic">Queued work is unknown. Retrying automatically.</p>
+            }
+            else if (_overview is { Queue.Count: 0 })
             {
                 <p class="px-4 py-3 text-gray-500 italic">The machine queue is empty.</p>
             }

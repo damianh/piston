@@ -9,15 +9,16 @@ public sealed record MachineOverviewDto(
     IReadOnlyList<MachineWorktreeDto> Worktrees,
     IReadOnlyList<MachineExecutionEntryDto> Running,
     IReadOnlyList<MachineExecutionEntryDto> Queue,
-    string? Error);
+    string? Error,
+    bool CoordinationAvailable = true);
 
 public sealed record MachineBudgetDto(
     int CpuSlots,
     int? MemoryMb,
-    int CpuSlotsInUse,
-    long MemoryMbInUse,
-    int RunningCount,
-    int QueuedCount,
+    int? CpuSlotsInUse,
+    long? MemoryMbInUse,
+    int? RunningCount,
+    int? QueuedCount,
     string Source);
 
 public sealed record MachineWorktreeDto(

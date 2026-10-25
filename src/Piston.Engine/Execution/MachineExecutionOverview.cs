@@ -10,10 +10,11 @@ public sealed record MachineExecutionOverview(
     IReadOnlyList<OwnershipRecord> Owners,
     IReadOnlyList<MachineExecutionEntry> Running,
     IReadOnlyList<MachineExecutionEntry> Queue,
-    string? Error)
+    string? Error,
+    bool CoordinationAvailable = true)
 {
-    public int CpuSlotsInUse => Running.Sum(entry => entry.CpuSlots);
-    public long MemoryMbInUse => Running.Sum(entry => (long)(entry.MemoryMb ?? 0));
+    public int? CpuSlotsInUse => CoordinationAvailable ? Running.Sum(entry => entry.CpuSlots) : null;
+    public long? MemoryMbInUse => CoordinationAvailable ? Running.Sum(entry => (long)(entry.MemoryMb ?? 0)) : null;
 }
 
 /// <summary>One running or queued machine-wide execution reservation.</summary>
@@ -53,6 +54,7 @@ public static class MachineExecutionOverviewReader
 
         var tickets = new List<ExecutionQueueEntry>();
         var leases = new List<ExecutionQueueEntry>();
+        var coordinationAvailable = true;
         if (Directory.Exists(directory.StateDirectory))
         {
             try
@@ -67,12 +69,20 @@ public static class MachineExecutionOverviewReader
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
             {
-                errors.Add("Timed out waiting for the machine admission lock; running and queued work may be stale.");
+                coordinationAvailable = false;
+                errors.Add("Timed out waiting for the machine admission lock; running and queued work are unknown.");
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ExecutionCoordinationException)
             {
+                coordinationAvailable = false;
                 errors.Add($"Could not read the machine execution queue: {ex.Message}");
             }
+        }
+
+        if (!coordinationAvailable)
+        {
+            tickets.Clear();
+            leases.Clear();
         }
 
         var liveOwnersByProcess = owners
@@ -92,7 +102,8 @@ public static class MachineExecutionOverviewReader
             .ToList();
 
         return new MachineExecutionOverview(
-            capturedAt, budget, owners, running, queue, errors.Count == 0 ? null : string.Join(Environment.NewLine, errors));
+            capturedAt, budget, owners, running, queue,
+            errors.Count == 0 ? null : string.Join(Environment.NewLine, errors), coordinationAvailable);
     }
 
     private static MachineExecutionEntry ToOverviewEntry(
@@ -116,11 +127,6 @@ public static class MachineExecutionOverviewReader
         foreach (var path in Directory.EnumerateFiles(directory))
         {
             var fileName = Path.GetFileName(path);
-            if (!fileName.EndsWith(extension, StringComparison.Ordinal))
-            {
-                continue;
-            }
-
             FileStream? probe;
             try
             {
@@ -137,7 +143,8 @@ public static class MachineExecutionOverviewReader
                 continue;
             }
 
-            if (!ExecutionQueueEntry.TryParse(fileName, out var entry))
+            if (!fileName.EndsWith(extension, StringComparison.Ordinal)
+                || !ExecutionQueueEntry.TryParse(fileName, out var entry))
             {
                 throw new ExecutionCoordinationException(
                     $"Unrecognised held entry '{path}' in the execution coordination directory.");

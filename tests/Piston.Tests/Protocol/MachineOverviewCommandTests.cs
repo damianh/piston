@@ -22,6 +22,31 @@ public sealed class MachineOverviewCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task MachineGetOverview_UnavailableScanReturnsUnknownStateAndUsage()
+    {
+        var owner = new OwnershipRecord(
+            "worktree-key", OwnershipLiveness.Live,
+            new ExecutionOwnerInfo(123, "/repo/App.slnx", "/repo", DateTimeOffset.UtcNow, "daemon"));
+        var overview = new MachineExecutionOverview(
+            DateTimeOffset.UtcNow, new ExecutionBudget(2, 1024, "/budget.json"),
+            [owner], [], [], "Scan failed", CoordinationAvailable: false);
+        var dispatcher = new EngineCommandDispatcher(new StubEngine());
+        dispatcher.SetMachineOverviewProvider(_ => Task.FromResult(overview));
+
+        var response = await dispatcher.HandleCommandAsync(ProtocolMethods.MachineGetOverview, null, _ct);
+        var dto = response!.Deserialize<MachineOverviewDto>(JsonRpcSerializer.Options)!;
+
+        Assert.False(dto.CoordinationAvailable);
+        Assert.Equal("Unknown", Assert.Single(dto.Worktrees).State);
+        Assert.NotNull(dto.Budget);
+        Assert.Null(dto.Budget.CpuSlotsInUse);
+        Assert.Null(dto.Budget.MemoryMbInUse);
+        Assert.Null(dto.Budget.RunningCount);
+        Assert.Null(dto.Budget.QueuedCount);
+        Assert.Equal("Scan failed", dto.Error);
+    }
+
+    [Fact]
     public async Task MachineGetOverview_ReturnsSafeDashboardUrlAndCurrentOwner()
     {
         var directory = new ExecutionCoordinationDirectory(Path.Combine(_root, "coordination"));

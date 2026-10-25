@@ -29,7 +29,7 @@ public static class DtoMapper
                 var runningHere = info is not null && running.Any(entry => entry.ProcessId == info.ProcessId);
                 var queuedHere = info is not null ? queue.FirstOrDefault(entry => entry.ProcessId == info.ProcessId) : null;
                 var state = owner.Liveness == OwnershipLiveness.Stale ? "Stale"
-                    : info is null ? "Unknown"
+                    : info is null || !overview.CoordinationAvailable ? "Unknown"
                     : runningHere ? "Running"
                     : queuedHere is not null ? "Queued"
                     : "Idle";
@@ -51,10 +51,12 @@ public static class DtoMapper
         var budget = overview.Budget is { } value
             ? new MachineBudgetDto(
                 value.CpuSlots, value.MemoryMb, overview.CpuSlotsInUse, overview.MemoryMbInUse,
-                running.Count, queue.Count, value.Source)
+                overview.CoordinationAvailable ? running.Count : null,
+                overview.CoordinationAvailable ? queue.Count : null, value.Source)
             : null;
 
-        return new MachineOverviewDto(overview.CapturedAt, budget, worktrees, running, queue, overview.Error);
+        return new MachineOverviewDto(
+            overview.CapturedAt, budget, worktrees, running, queue, overview.Error, overview.CoordinationAvailable);
     }
 
     private static MachineExecutionEntryDto ToMachineEntryDto(
@@ -124,6 +126,7 @@ public static class DtoMapper
         ProjectRunStatus.Failed => ProjectRunStatusDto.Failed,
         ProjectRunStatus.Crashed => ProjectRunStatusDto.Crashed,
         ProjectRunStatus.TimedOut => ProjectRunStatusDto.TimedOut,
+        ProjectRunStatus.WaitingForResources => ProjectRunStatusDto.WaitingForResources,
         _ => ProjectRunStatusDto.Pending,
     };
 
@@ -357,10 +360,38 @@ public static class DtoMapper
             ChangedFiles: run.ChangedFiles,
             FixedTests: [.. run.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
             NewlyFailingTests: [.. run.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
+            ProjectResources: run.Projects.Any(p => p.Resources is not null || p.SuspectedResourceConflict is not null)
+                ? [.. run.Projects
+                    .Where(p => p.Resources is not null || p.SuspectedResourceConflict is not null)
+                    .Select(p => p.ToResourcesDto())]
+                : null,
             RetryLimit: run.RetryLimit,
             RetriesSkippedReason: run.RetriesSkippedReason,
             PassedOnRetry: tests.Count(t => t.Status == TestStatus.Passed && t.Attempts.Count > 0));
     }
+
+    public static TestProjectResourcesDto ToResourcesDto(this TestRunProjectOutcome project) =>
+        new(
+            ProjectPath: project.ProjectPath,
+            Keys: project.Resources?.Needs.Keys ?? [],
+            UsesContainers: project.Resources?.Needs.UsesContainers ?? false,
+            Reasons: project.Resources?.Needs.Reasons ?? [],
+            Wait: project.Resources?.Wait?.ToDto(),
+            Warnings: project.Resources?.Warnings ?? [],
+            SuspectedConflict: project.SuspectedResourceConflict);
+
+    public static TestResourceWaitDto ToDto(this TestResourceWait wait) =>
+        new(
+            State: wait.State.ToString(),
+            Keys: wait.Keys,
+            UsesContainers: wait.UsesContainers,
+            BlockedBy: [.. wait.BlockedBy.Select(b => new TestResourceBlockerDto(b.Resource, b.Kind.ToString(), b.ProcessId, b.Worktree, b.Project, b.Since))],
+            QueuedAhead: wait.QueuedAhead,
+            ContainerSlotsInUse: wait.ContainerSlotsInUse,
+            ContainerSlotBudget: wait.ContainerSlotBudget,
+            WaitingSince: wait.WaitingSince,
+            AcquiredAt: wait.AcquiredAt,
+            WaitedMs: wait.Waited?.TotalMilliseconds);
 
     public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
         new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath);
@@ -437,6 +468,9 @@ public static class DtoMapper
                 : null,
             LongestRunningTest: state.LongestRunningTest is { } running
                 ? new RunningTestDto(running.Name, running.ProjectPath, running.StartedAt, running.PossiblyHanging)
+                : null,
+            ProjectResourceWaits: state.ProjectResourceWaits.Count > 0
+                ? state.ProjectResourceWaits.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToDto())
                 : null,
             RetryStatus: state.RetryStatus
         );

@@ -199,7 +199,7 @@ public sealed class WorktreeOwnership : IDisposable
         safeUrl = "";
         if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
             || !string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
-            || !uri.IsLoopback
+            || !HasLoopbackHost(uri)
             || uri.UserInfo.Length > 0
             || (uri.AbsolutePath is not "" and not "/")
             || uri.Query.Length > 0
@@ -210,6 +210,27 @@ public sealed class WorktreeOwnership : IDisposable
 
         safeUrl = uri.GetLeftPart(UriPartial.Authority);
         return true;
+    }
+
+    private static bool HasLoopbackHost(Uri uri)
+    {
+        // Uri canonicalizes the DNS name "loopback" to "localhost"; validate the original host.
+        var original = uri.OriginalString.AsSpan().Trim();
+        const string prefix = "http://";
+        if (!original.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var authority = original[prefix.Length..];
+        var pathStart = authority.IndexOf('/');
+        authority = pathStart >= 0 ? authority[..pathStart] : authority;
+        var hostEnd = authority.StartsWith("[", StringComparison.Ordinal)
+            ? authority.IndexOf(']') + 1
+            : authority.IndexOf(':');
+        var host = hostEnd >= 0 ? authority[..hostEnd] : authority;
+        return host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || (System.Net.IPAddress.TryParse(host, out var address) && System.Net.IPAddress.IsLoopback(address));
     }
 
     private static void WriteInfo(string infoPath, ExecutionOwnerInfo owner)

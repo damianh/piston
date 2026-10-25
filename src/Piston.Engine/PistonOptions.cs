@@ -109,6 +109,11 @@ public sealed class PistonOptions
     public string? ExecutionCoordinationDirectory { get; init; }
 
     /// <summary>
+    /// Overrides of the exclusive resources inferred for test projects (<c>testResources</c> in <c>.piston.json</c>).
+    /// </summary>
+    public IReadOnlyList<Execution.TestResourceRule> TestResourceRules { get; init; } = [];
+
+    /// <summary>
     /// Keeps per-test run history outside the checkout and classifies failures as new, pre-existing or flaky.
     /// Default is true.
     /// </summary>

@@ -36,6 +36,7 @@
     <Compile Include="..\..\src\Piston.Web\Models\CSharpHighlighter.cs" Link="Web\CSharpHighlighter.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\WatchStrip.cs" Link="Web\WatchStrip.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\MachineOverviewView.cs" Link="Web\MachineOverviewView.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\ResourceWaitText.cs" Link="Web\ResourceWaitText.cs" />
   </ItemGroup>
 
   <ItemGroup>
