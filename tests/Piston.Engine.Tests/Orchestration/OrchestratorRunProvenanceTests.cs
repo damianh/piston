@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Text.Json.Nodes;
 using Piston.Engine.History;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
@@ -94,6 +95,38 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         Assert.Equal(_root, run!.Context!.WorkingDirectory);
         Assert.Equal(TestProcessRunner.WorkingDirectoryFor(Projects[0]) ?? Environment.CurrentDirectory, run.Context.TestWorkingDirectories![Projects[0]]);
         Assert.Equal(_root, run.Context.TestWorkingDirectories[Projects[1]]);
+    }
+
+    [Fact]
+    public async Task Structurally_invalid_saved_results_do_not_reach_startup_notifications()
+    {
+        var savedSuite = new TestSuite("A.Tests",
+            [new TestResult("A.Tests.Test1", "Test1", TestStatus.Passed, TimeSpan.Zero, null, null, null, null)],
+            DateTimeOffset.UtcNow, TimeSpan.Zero);
+        using (var writer = new SavedResultsStore(SolutionPath, _ => { }))
+        {
+            writer.Schedule(new SavedResultsSnapshot(
+                DateTimeOffset.UtcNow, null, null, null, null, [savedSuite], null));
+        }
+
+        var filePath = Path.Combine(_root, ".piston", "App.results.json");
+        var json = JsonNode.Parse(File.ReadAllText(filePath))!;
+        json["TestSuites"]![0]!["Tests"]![0] = null;
+        File.WriteAllText(filePath, json.ToJsonString());
+        using var store = new SavedResultsStore(SolutionPath, _ => { });
+        _orchestrator.ResultsStore = store;
+        _state.StateChanged += () =>
+        {
+            foreach (var result in _state.TestSuites.SelectMany(s => s.Tests))
+            {
+                _ = result.FullyQualifiedName.Length;
+            }
+        };
+
+        await StartAndWaitForStartupRunAsync();
+
+        Assert.Equal(TestRunStatus.Completed, _state.LastRun!.Status);
+        Assert.DoesNotContain(_state.TestSuites, suite => suite.Restored);
     }
 
     [Fact]

@@ -49,6 +49,90 @@ public sealed class SavedResultsStoreTests : IDisposable
     }
 
     [Fact]
+    public void Saves_last_run_results_only_under_suites()
+    {
+        using (var store = Open())
+        {
+            store.Schedule(Snapshot());
+        }
+
+        var json = JsonNode.Parse(File.ReadAllText(FilePath))!;
+        var run = json["LastRun"]!.AsObject();
+        Assert.False(run.ContainsKey("Tests"));
+        Assert.Single(run["Suites"]![0]!["Tests"]!.AsArray());
+        using var reader = Open();
+        Assert.Equal(Result, Assert.Single(reader.TryLoad()!.LastRun!.Tests));
+    }
+
+    [Theory]
+    [InlineData("TestSuites", null)]
+    [InlineData("TestSuites/0", null)]
+    [InlineData("TestSuites/0/Name", null)]
+    [InlineData("TestSuites/0/Name", "<missing>")]
+    [InlineData("TestSuites/0/Tests", null)]
+    [InlineData("TestSuites/0/Tests/0", null)]
+    [InlineData("TestSuites/0/Tests/0/FullyQualifiedName", null)]
+    [InlineData("TestSuites/0/Tests/0/DisplayName", null)]
+    [InlineData("LastBuild/Errors", null)]
+    [InlineData("LastBuild/Warnings", "[null]")]
+    [InlineData("LastRun/RunId", null)]
+    [InlineData("LastRun/RunId", "<missing>")]
+    [InlineData("LastRun/EngineInstanceId", null)]
+    [InlineData("LastRun/Suites", null)]
+    [InlineData("LastRun/Suites/0", null)]
+    [InlineData("LastRun/Suites/0/Tests/0", null)]
+    [InlineData("LastRun/Projects", null)]
+    [InlineData("LastRun/Projects", "[null]")]
+    [InlineData("LastRun/Projects", "[{\"ProjectPath\":null,\"Status\":\"Completed\",\"TestCount\":1}]")]
+    [InlineData("LastRun/Build/Errors", "[null]")]
+    [InlineData("LastRun/Context/Runtime", null)]
+    [InlineData("LastRun/Context/TestProjects", "[null]")]
+    [InlineData("LastRun/Context/BuildTargets", "[null]")]
+    [InlineData("LastRun/Context/TestWorkingDirectories", "{\"App.Tests\":null}")]
+    [InlineData("LastRun/Context/SelectionReasons", "{\"App.Tests\":null}")]
+    [InlineData("LastRun/Context/SelectionReasons", "{\"App.Tests\":[null]}")]
+    [InlineData("LastRun/DuplicateTestIds", "[null]")]
+    [InlineData("LastRun/PossiblyHangingTests", "[null]")]
+    [InlineData("LastRun/ChangedFiles", "[null]")]
+    [InlineData("LastRun/FixedTests", "[null]")]
+    [InlineData("LastRun/NewlyFailingTests", "[null]")]
+    [InlineData("LastRun/FailureClassifications", "[null]")]
+    public void Ignores_structurally_invalid_results_before_restore(string path, string? replacement)
+    {
+        using (var store = Open())
+        {
+            store.Schedule(Snapshot());
+        }
+
+        var json = JsonNode.Parse(File.ReadAllText(FilePath))!;
+        var parts = path.Split('/');
+        var parent = json;
+        foreach (var part in parts[..^1])
+        {
+            parent = parent is JsonArray array ? array[int.Parse(part)]! : parent[part]!;
+        }
+
+        if (replacement == "<missing>")
+        {
+            _ = parent.AsObject().Remove(parts[^1]);
+        }
+        else if (parent is JsonArray items)
+        {
+            items[int.Parse(parts[^1])] = replacement is null ? null : JsonNode.Parse(replacement);
+        }
+        else
+        {
+            parent[parts[^1]] = replacement is null ? null : JsonNode.Parse(replacement);
+        }
+        File.WriteAllText(FilePath, json.ToJsonString());
+
+        using var reader = Open();
+        Assert.Null(reader.TryLoad());
+        Assert.Contains(_messages, m => m.Contains("saved results", StringComparison.Ordinal)
+            && (m.Contains("Ignoring", StringComparison.Ordinal) || m.Contains("Cannot read", StringComparison.Ordinal)));
+    }
+
+    [Fact]
     public async Task Debounces_and_saves_scheduled_results()
     {
         using var store = Open();
@@ -183,6 +267,10 @@ public sealed class SavedResultsStoreTests : IDisposable
             Freshness = ResultFreshness.Current,
             RequestedAt = DateTimeOffset.UnixEpoch,
             CompletedAt = DateTimeOffset.UnixEpoch,
+            Build = new BuildResult(BuildStatus.Succeeded, [], [], TimeSpan.FromSeconds(1)),
+            Context = new TestRunContext(
+                "/App.slnx", ["App.Tests"], ["App.Tests"], null, null, null, false,
+                "Debug", null, ".NET", "OS", "/"),
             Suites = [Suite],
         };
         return new SavedResultsSnapshot(

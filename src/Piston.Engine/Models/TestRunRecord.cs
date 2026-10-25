@@ -270,6 +270,7 @@ public sealed record TestRunRecord
     /// </summary>
     public bool IsCurrentFullResult =>
         Status == TestRunStatus.Completed
+        && !Restored
         && IsFullScope
         && Freshness == ResultFreshness.Current
         && DuplicateTestIds.Count == 0

@@ -4,6 +4,7 @@
 using System.Reflection;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.Json.Serialization.Metadata;
 using Piston.Engine.Models;
 
 namespace Piston.Engine.History;
@@ -18,7 +19,22 @@ internal sealed class SavedResultsStore : IDisposable
     internal TimeSpan SaveDelay { get; set; } = TimeSpan.FromSeconds(2);
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
+        RespectNullableAnnotations = true,
+        RespectRequiredConstructorParameters = true,
         Converters = { new JsonStringEnumConverter() },
+        TypeInfoResolver = new DefaultJsonTypeInfoResolver
+        {
+            Modifiers =
+            {
+                info =>
+                {
+                    if (info.Type == typeof(TestRunRecord))
+                    {
+                        _ = info.Properties.Remove(info.Properties.Single(p => p.Name == nameof(TestRunRecord.Tests)));
+                    }
+                },
+            },
+        },
     };
 
     private readonly object _gate = new();
@@ -84,6 +100,12 @@ internal sealed class SavedResultsStore : IDisposable
                 return null;
             }
 
+            if (!ValidSuites(file.TestSuites) || !ValidBuild(file.LastBuild) || !ValidRun(file.LastRun))
+            {
+                _log($"Ignoring saved results {_filePath}: invalid nested result structure.");
+                return null;
+            }
+
             _log($"Loaded saved results for {file.TestSuites.Sum(s => s.Tests.Count)} test(s) from {_filePath}.");
             return new SavedResultsSnapshot(
                 file.SavedAt,
@@ -100,6 +122,34 @@ internal sealed class SavedResultsStore : IDisposable
             return null;
         }
     }
+
+    private static bool ValidSuites(IReadOnlyList<TestSuite> suites) =>
+        suites.All(s => s is not null && HasNoNullItems(s.Tests));
+
+    private static bool ValidBuild(BuildResult? build) =>
+        build is null || (HasNoNullItems(build.Errors) && HasNoNullItems(build.Warnings));
+
+    private static bool ValidRun(TestRunRecord? run) =>
+        run is null ||
+        (ValidSuites(run.Suites)
+            && ValidBuild(run.Build)
+            && HasNoNullItems(run.Projects)
+            && HasNoNullItems(run.DuplicateTestIds)
+            && HasNoNullItems(run.PossiblyHangingTests)
+            && HasNoNullItems(run.ChangedFiles)
+            && HasNoNullItems(run.FixedTests)
+            && HasNoNullItems(run.NewlyFailingTests)
+            && HasNoNullItems(run.FailureClassifications)
+            && (run.Context is not { } context ||
+                ((context.TestProjects is null || HasNoNullItems(context.TestProjects))
+                    && (context.BuildTargets is null || HasNoNullItems(context.BuildTargets))
+                    && (context.TestWorkingDirectories is null || HasNoNullItems(context.TestWorkingDirectories.Values))
+                    && (context.SelectionReasons is null ||
+                        context.SelectionReasons.Values.All(reasons => reasons is not null && HasNoNullItems(reasons))))));
+
+    // Nullable annotation enforcement does not cover collection elements or dictionary values.
+    private static bool HasNoNullItems<T>(IEnumerable<T> items) where T : class =>
+        items.All(item => item is not null);
 
     public void Schedule(SavedResultsSnapshot snapshot)
     {
