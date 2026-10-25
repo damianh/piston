@@ -198,6 +198,15 @@ public sealed class TestRunnerService : ITestRunnerService
                 needs,
                 status => callbacks.OnProjectWaiting?.Invoke(target, status),
                 ct).ConfigureAwait(false);
+            try
+            {
+                callbacks.OnProjectResourcesAcquired?.Invoke(target);
+            }
+            catch
+            {
+                lease.Dispose();
+                throw;
+            }
             return (lease, null);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

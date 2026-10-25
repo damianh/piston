@@ -265,6 +265,49 @@ public sealed class MachineResourceCoordinatorTests : IDisposable
         Assert.False(File.Exists(orphan));
     }
 
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("invalid-json")]
+    [InlineData("invalid-schema")]
+    [InlineData("null-key")]
+    public async Task UnreadableHeldLease_FailsClosed_WithoutGrantingResources(string corruption)
+    {
+        using var holder = await Coordinator().AcquireAsync(Needs("/wt/a/A.csproj", true, "port:4444"), _ => { }, _ct);
+        var sidecar = Assert.Single(Directory.GetFiles(_directory.ResourceLeasesDirectory, "*.json"));
+        if (corruption == "missing")
+        {
+            File.Delete(sidecar);
+        }
+        else
+        {
+            File.WriteAllText(sidecar, corruption switch
+            {
+                "invalid-json" => "{",
+                "null-key" => File.ReadAllText(sidecar).Replace("\"port:4444\"", "null", StringComparison.Ordinal),
+                _ => "{}",
+            });
+        }
+
+        var error = await Assert.ThrowsAsync<ExecutionCoordinationException>(() =>
+            Coordinator().AcquireAsync(Needs("/wt/b/B.csproj", true, "port:4444"), _ => { }, _ct));
+
+        Assert.Contains("Cannot interpret held test resource entry", error.Message, StringComparison.Ordinal);
+        _ = Assert.Single(Directory.GetFiles(_directory.ResourceLeasesDirectory, "*.lease"));
+        Assert.Empty(Directory.GetFiles(_directory.ResourceQueueDirectory));
+    }
+
+    [Fact]
+    public async Task UnparseableHeldFilename_FailsClosed()
+    {
+        var path = Path.Combine(_directory.ResourceLeasesDirectory, "invalid.lease");
+        using var held = ExclusiveFileLock.TryAcquire(path, FileMode.CreateNew);
+        Assert.NotNull(held);
+
+        _ = await Assert.ThrowsAsync<ExecutionCoordinationException>(() =>
+            Coordinator().AcquireAsync(Needs("/wt/a/A.csproj", false, "port:4444"), _ => { }, _ct));
+        Assert.True(File.Exists(path));
+    }
+
     [Fact]
     public async Task DeclaredPortInUseOutsidePiston_IsAWarning()
     {

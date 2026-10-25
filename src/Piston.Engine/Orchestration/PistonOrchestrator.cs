@@ -1359,6 +1359,15 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 });
             }
 
+            void OnProjectResourcesAcquired(string projectPath) => UpdateOverlay(() =>
+            {
+                _ = resourceWaits.Remove(projectPath);
+                if (projectStatuses.GetValueOrDefault(projectPath) == Models.ProjectRunStatus.WaitingForResources)
+                {
+                    projectStatuses[projectPath] = Models.ProjectRunStatus.Pending;
+                }
+            });
+
             void OnProjectStarted(string projectPath) => UpdateOverlay(() =>
             {
                 _ = resourceWaits.Remove(projectPath);
@@ -1507,6 +1516,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     new TestRunCallbacks
                     {
                         OnProjectWaiting = OnProjectWaiting,
+                        OnProjectResourcesAcquired = OnProjectResourcesAcquired,
                         OnProjectStarted = OnProjectStarted,
                         OnProjectProgress = OnProjectProgress,
                         OnProjectCompleted = OnProjectCompleted,

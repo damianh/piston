@@ -84,6 +84,50 @@ public sealed partial class PistonOrchestrator
             }
         }
 
+        var resourceStateLock = new Lock();
+        var originalStatuses = _state.ProjectStatuses;
+        var retryStatuses = new Dictionary<string, ProjectRunStatus>(originalStatuses, StringComparer.Ordinal);
+        var resourceWaits = new Dictionary<string, TestResourceWait>(StringComparer.Ordinal);
+        var retriesOver = false;
+
+        void UpdateResourceState(string project, TestResourceWait? wait, ProjectRunStatus? status = null)
+        {
+            lock (resourceStateLock)
+            {
+                if (retriesOver)
+                {
+                    return;
+                }
+
+                if (wait is not null)
+                {
+                    resourceWaits[project] = wait;
+                    retryStatuses[project] = ProjectRunStatus.WaitingForResources;
+                }
+                else
+                {
+                    _ = resourceWaits.Remove(project);
+                    if (status is { } current)
+                    {
+                        retryStatuses[project] = current;
+                    }
+                    else if (originalStatuses.TryGetValue(project, out var original))
+                    {
+                        retryStatuses[project] = original;
+                    }
+                    else
+                    {
+                        _ = retryStatuses.Remove(project);
+                    }
+                }
+
+                _state.ProjectResourceWaits = new Dictionary<string, TestResourceWait>(resourceWaits);
+                _state.ProjectStatuses = new Dictionary<string, ProjectRunStatus>(retryStatuses);
+            }
+
+            _state.NotifyChanged();
+        }
+
         try
         {
             for (var attempt = 1; attempt <= limit; attempt++)
@@ -128,8 +172,12 @@ public sealed partial class PistonOrchestrator
                     var completed = new List<ProjectTestResult>();
                     var callbacks = new TestRunCallbacks
                     {
+                        OnProjectWaiting = (project, wait) => UpdateResourceState(project, wait),
+                        OnProjectResourcesAcquired = project => UpdateResourceState(project, null, ProjectRunStatus.Pending),
+                        OnProjectStarted = project => UpdateResourceState(project, null, ProjectRunStatus.Running),
                         OnProjectCompleted = p =>
                         {
+                            UpdateResourceState(p.ProjectPath, null);
                             lock (completed)
                             {
                                 completed.Add(p);
@@ -190,6 +238,13 @@ public sealed partial class PistonOrchestrator
         }
         finally
         {
+            lock (resourceStateLock)
+            {
+                retriesOver = true;
+                _state.ProjectResourceWaits = new Dictionary<string, TestResourceWait>();
+                _state.ProjectStatuses = originalStatuses;
+            }
+
             _state.RetryStatus = null;
             _state.NotifyChanged();
         }

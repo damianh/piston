@@ -77,6 +77,46 @@ public sealed class TestRunnerServiceResourceTests
 
     [Theory]
     [MemberData(nameof(Paths))]
+    public async Task Acquisition_IsReportedBeforeEnteringAFullPool(string path)
+    {
+        var gate = new FakeGate(_events) { WaitBeforeAcquiring = true };
+        var strategy = new RecordingStrategy(_events);
+        using var pool = new TestProcessPool(poolSize: 1, recycleAfter: 50, strategy);
+        using var occupied = await pool.AcquireSlotAsync(_ct);
+        var sut = new TestRunnerService(strategy, pool, gate);
+        var targets = path switch
+        {
+            "solution" => new[] { "/w/App.slnx" },
+            "sequential" => ["/w/A.csproj"],
+            _ => ["/w/A.csproj", "/w/B.csproj"],
+        };
+        var acquired = new ConcurrentQueue<string>();
+        var run = RunAsync(sut, path, targets, new TestRunCallbacks
+        {
+            OnProjectWaiting = (p, _) => _events.Enqueue($"waiting {Name(p)}"),
+            OnProjectResourcesAcquired = p => acquired.Enqueue(p),
+            OnProjectStarted = p => _events.Enqueue($"started {Name(p)}"),
+        });
+
+        await gate.Acquired.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        // The gate returns before the callback, so allow all projects to reach the pool queue.
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (acquired.Count != targets.Length)
+        {
+            Assert.True(DateTime.UtcNow < deadline, "Acquisition was not published while the pool was full.");
+            await Task.Delay(10, _ct);
+        }
+        Assert.False(run.IsCompleted);
+        Assert.DoesNotContain(_events, e => e.StartsWith("started ", StringComparison.Ordinal));
+        Assert.DoesNotContain(_events, e => e.StartsWith("execute ", StringComparison.Ordinal));
+        Assert.Equal(targets.Order(), acquired.Order());
+
+        occupied.Dispose();
+        _ = await run.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+    }
+
+    [Theory]
+    [MemberData(nameof(Paths))]
     public async Task UncoordinatedRuns_HaveNoResources(string path)
     {
         var gate = new FakeGate(_events) { Uncoordinated = true };
@@ -170,6 +210,7 @@ public sealed class TestRunnerServiceResourceTests
     private sealed class FakeGate(ConcurrentQueue<string> events) : ITestResourceGate
     {
         private readonly TaskCompletionSource _blocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _acquired = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public ConcurrentQueue<string> Resolved { get; } = new();
 
@@ -182,6 +223,7 @@ public sealed class TestRunnerServiceResourceTests
         public Exception? Failure { get; init; }
 
         public Task Blocked => _blocked.Task;
+        public Task Acquired => _acquired.Task;
 
         public TestResourceNeeds Resolve(string projectPath)
         {
@@ -217,6 +259,7 @@ public sealed class TestRunnerServiceResourceTests
 
             var name = Name(needs.ProjectPath);
             events.Enqueue($"acquire {name}");
+            _ = _acquired.TrySetResult();
             return new TestResourceLease(
                 needs,
                 Status(needs, TestResourceWaitState.Acquired, since, DateTimeOffset.UtcNow),

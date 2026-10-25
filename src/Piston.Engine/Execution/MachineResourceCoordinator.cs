@@ -313,11 +313,14 @@ internal sealed class MachineResourceCoordinator : ITestResourceGate
                 }
 
                 _ = liveStems.Add(stem);
-                if (Entry.TryParse(Path.GetFileName(path), out var sequence)
-                    && EntryInfo.TryRead(infoPath) is { } info)
+                if (!Entry.TryParse(Path.GetFileName(path), out var sequence)
+                    || EntryInfo.TryRead(infoPath) is not { } info)
                 {
-                    live.Add(new Entry(sequence, Path.GetFileName(path), info));
+                    throw new ExecutionCoordinationException(
+                        $"Cannot interpret held test resource entry '{path}' or its sidecar '{infoPath}'. Resources cannot safely be granted.");
                 }
+
+                live.Add(new Entry(sequence, Path.GetFileName(path), info));
             }
 
             // Sidecars of entries whose process died between writing the sidecar and its entry, or after.
@@ -405,8 +408,14 @@ internal sealed class MachineResourceCoordinator : ITestResourceGate
             {
                 using var document = JsonDocument.Parse(File.ReadAllBytes(path));
                 var root = document.RootElement;
+                var keys = root.GetProperty("keys").EnumerateArray().Select(k => k.GetString()).ToList();
+                if (keys.Any(string.IsNullOrWhiteSpace))
+                {
+                    return null;
+                }
+
                 return new EntryInfo(
-                    [.. root.GetProperty("keys").EnumerateArray().Select(k => k.GetString() ?? "")],
+                    [.. keys.Select(k => k!)],
                     root.GetProperty("usesContainers").GetBoolean(),
                     root.GetProperty("processId").GetInt32(),
                     root.TryGetProperty("worktree", out var worktree) ? worktree.GetString() : null,

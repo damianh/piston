@@ -28,6 +28,38 @@ public sealed class ResourceWaitTextTests
     }
 
     [Fact]
+    public void WindowsPaths_UseTheSameSuiteNamesInTheBrowser()
+    {
+        const string project = @"C:\repo\tests\Db.Tests.csproj";
+        var blocker = new TestResourceBlockerDto("port:5432", "Held", 42, @"C:\other", project, T0);
+        var wait = Wait("Waiting", blocker);
+
+        Assert.Equal(["Db.Tests"], ResourceWaitText.BySuiteName(new Dictionary<string, TestResourceWaitDto> { [project] = wait }).Keys);
+        Assert.StartsWith("Db.Tests waiting ", ResourceWaitText.Describe(project, wait, T0), StringComparison.Ordinal);
+        Assert.Contains("held by Db.Tests in", ResourceWaitText.Blocker(blocker, wait), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SameNamedProjects_CombineAllNeedsAndBlockers()
+    {
+        var first = Wait("Waiting", new TestResourceBlockerDto("port:5432", "Held", 42, "/other", "/other/A.Tests.csproj", T0));
+        var second = Wait("Waiting", new TestResourceBlockerDto("port:6000", "Held", 43, "/other", "/other/B.Tests.csproj", T0))
+            with
+        { Keys = ["port:6000"], WaitingSince = T0.AddSeconds(1) };
+
+        var waits = ResourceWaitText.BySuiteName(new Dictionary<string, TestResourceWaitDto>
+        {
+            ["/w/tests/A/Db.Tests.csproj"] = first,
+            ["/w/tests/B/Db.Tests.csproj"] = second,
+        });
+
+        var merged = Assert.Single(waits).Value;
+        Assert.Equal(["port:5432", "port:6000"], merged.Keys);
+        Assert.Equal(2, merged.BlockedBy.Count);
+        Assert.Equal(T0, merged.WaitingSince);
+    }
+
+    [Fact]
     public void Describe_ListsNeedsSlotsAndBlockers()
     {
         var wait = Wait("Waiting",

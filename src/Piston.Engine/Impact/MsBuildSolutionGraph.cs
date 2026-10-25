@@ -87,12 +87,6 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
             if (isTest || isMtp)
             {
                 _testProjects.Add(projectPath);
-                _testProjectFacts[projectPath] = new TestProjectFacts(
-                    node.ProjectInstance.GetPropertyValue("OutputType"),
-                    isMtp,
-                    node.ProjectInstance.GetItems("PackageReference")
-                        .Select(item => item.EvaluatedInclude)
-                        .ToHashSet(StringComparer.OrdinalIgnoreCase));
             }
 
             // Determine if this is an MTP v2 project
@@ -140,6 +134,18 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
             {
                 _sortedProjectDirs.Add((projectDir, projectPath));
             }
+        }
+
+        foreach (var projectPath in _testProjects.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            var nodes = _nodesByPath[projectPath];
+            _testProjectFacts[projectPath] = new TestProjectFacts(
+                nodes.Select(n => n.ProjectInstance.GetPropertyValue("OutputType"))
+                    .FirstOrDefault(output => !string.IsNullOrEmpty(output)) ?? "",
+                nodes.Any(IsMtpProjectNode),
+                nodes.SelectMany(n => n.ProjectInstance.GetItems("PackageReference"))
+                    .Select(item => item.EvaluatedInclude)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase));
         }
 
         // Sort by directory length descending (longest first) so we match most-specific first

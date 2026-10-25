@@ -240,7 +240,7 @@ Limits: this is admission control by reservation. Piston does not cap the actual
 
 Test projects that start containers or bind fixed ports collide when two worktrees run them at the same time. Piston schedules them through the same per-user coordination directory, so such runs queue instead of failing:
 
-- **Inference.** A test project that directly references a container testing package (`Testcontainers`, `Testcontainers.*`, `DotNet.Testcontainers*`, `Aspire.Hosting.Testing`, `Docker.DotNet*`, `Ductus.FluentDocker*`, `Squadron.*`) uses containers. By default it is isolated per repository: only one run of that project at a time across all worktrees of the repository (on this machine, for this user), because such tests often reuse fixed container names, volumes and ports. Projects without container packages run without coordination unless a rule declares resources.
+- **Inference.** A test project that directly references a container testing package (`Testcontainers`, `Testcontainers.*`, `DotNet.Testcontainers*`, `Aspire.Hosting.Testing`, `Docker.DotNet*`, `Ductus.FluentDocker*`, `Squadron.*`) uses containers. References across all target frameworks are combined, including framework-conditional references. By default it is isolated per repository: only one run of that project at a time across all worktrees of the repository (on this machine, for this user), because such tests often reuse fixed container names, volumes and ports. Projects without container packages run without coordination unless a rule declares resources.
 - **Exclusive resources.** A run holds all of its resources at once, and a project waits, before taking a test-process slot, while another run holds or is queued ahead for any of them. Waiting is first-in, first-out per resource, so nothing starves or deadlocks. Resources are released when the project's test process ends, when the run is cancelled, or when the daemon exits or crashes.
 - **Container slots.** `containerSlots` in `budget.json` caps how many container-using test projects run at once machine-wide (for example `{ "cpuSlots": 8, "containerSlots": 2 }`). Without it, container projects are limited only by their exclusive resources.
 
@@ -428,7 +428,8 @@ second concurrent request for the same app gets its own process, and a reused ho
 test is retried once in a new process. Coverage runs still go through `dotnet test` in a fresh process. Warm hosts
 get the environment variable `PISTON_WARM_HOST=1`, so a test suite can tell when process-wide state may outlive a
 run; state that a fresh process would reset (statics, environment changes) carries over between runs, which is why
-this is off by default. Hosts are asked to exit when the daemon stops.
+this is off by default. Projects needing resource coordination always use fresh processes for discovery and execution,
+even with warm hosts enabled, so process-lifetime resources cannot outlive their leases. Hosts are asked to exit when the daemon stops.
 
 ### User settings
 

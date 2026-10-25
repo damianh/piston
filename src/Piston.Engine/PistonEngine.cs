@@ -78,6 +78,10 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             solutionPath => new MsBuildSolutionGraph(solutionPath),
             _coverageStore);
 
+        var resourceResolver = new TestResourceResolver(
+            new TestResourceInference(options.SolutionPath, options.TestResourceRules, impactAnalyzer.GetTestProjectFacts),
+            impactAnalyzer.GetAllTestProjectPaths,
+            message => _diagnosticLog.Write("Resources", message));
         var vsTestStrategy = new ProcessTestExecutionStrategy(trxParser);
         _warmHosts = options.WarmTestHosts ? new MtpWarmHostPool() : null;
         var buildService = new BuildService(_warmHosts);
@@ -85,7 +89,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             projectPath => impactAnalyzer.GetMtpOutputPath(projectPath),
             solutionDir,
             impactAnalyzer.IsMultiTargeted,
-            _warmHosts);
+            _warmHosts,
+            projectPath => !resourceResolver.Resolve(projectPath).IsEmpty);
 
         ITestExecutionStrategy strategy = options.TestExecutionMode switch
         {
@@ -113,10 +118,6 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             new ExecutionReservation(effectivePoolSize, options.ExecutionMemoryReservationMb));
 
         // Test projects that share ports, container names or containers wait for each other machine-wide.
-        var resourceResolver = new TestResourceResolver(
-            new TestResourceInference(options.SolutionPath, options.TestResourceRules, impactAnalyzer.GetTestProjectFacts),
-            impactAnalyzer.GetAllTestProjectPaths,
-            message => _diagnosticLog.Write("Resources", message));
         var resourceGate = new MachineResourceCoordinator(
             coordinationDirectory,
             resourceResolver.Resolve,
