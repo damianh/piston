@@ -144,5 +144,10 @@ internal sealed class StubEngine : IEngine
     public IReadOnlyList<Engine.Coverage.CoveringTest>? GetCoveringTests(string filePath) =>
         CoveringTests.GetValueOrDefault(filePath);
 
+    /// <summary>Test project paths returned by <see cref="GetTestProjectPaths"/>.</summary>
+    public IReadOnlyList<string>? TestProjectPaths { get; set; }
+
+    public IReadOnlyList<string>? GetTestProjectPaths() => TestProjectPaths;
+
     public void Dispose() { }
 }

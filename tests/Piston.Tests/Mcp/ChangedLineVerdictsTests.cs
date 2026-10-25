@@ -274,6 +274,19 @@ public sealed class ChangedLineVerdictsTests
         Assert.Equal(CoveringTestOutcome.NoResult, Outcome("T.Missing"));
     }
 
+    [Fact]
+    public void OutcomeLookup_ProjectsSharingAFileName_HaveNoResult()
+    {
+        var state = new PistonState { TestSuites = [Suite("A.Tests", ("T.Pass", TestStatus.Passed))] };
+        var lookup = ChangedLineVerdicts.OutcomeLookup(state, [Project, "/other/A.Tests/A.Tests.csproj", "/tests/B.Tests/B.Tests.csproj"]);
+
+        // The other A.Tests project's results land in the same suite, so this one's cannot be told apart.
+        Assert.Equal(CoveringTestOutcome.NoResult, lookup(new CoveringTest("T.Pass", Project, "test", [], true)));
+        Assert.Equal(CoveringTestOutcome.Passed,
+            ChangedLineVerdicts.OutcomeLookup(state, [Project, "/tests/B.Tests/B.Tests.csproj"])(
+                new CoveringTest("T.Pass", Project, "test", [], true)));
+    }
+
     private static TestSuite Suite(string name, params (string Fqn, TestStatus Status)[] tests) =>
         new(name, [.. tests.Select(t => new TestResult(t.Fqn, t.Fqn, t.Status, TimeSpan.Zero, null, null, null, null))],
             DateTimeOffset.UnixEpoch, TimeSpan.Zero);

@@ -60,6 +60,9 @@ public interface IEngine : IDisposable
     /// </summary>
     IReadOnlyList<Coverage.CoveringTest>? GetCoveringTests(string filePath) => null;
 
+    /// <summary>Absolute paths of the solution's test projects. Null when unsupported or not yet known.</summary>
+    IReadOnlyList<string>? GetTestProjectPaths() => null;
+
     /// <summary>
     /// Returns what a run triggered by changes to <paramref name="filePaths"/> (absolute, or relative to the solution
     /// directory) would build and test, without running anything or changing any state. Null when unsupported.

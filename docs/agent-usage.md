@@ -234,13 +234,13 @@ are available to protocol clients as `coverage/getChangedLines`.
 
 | Unknown reason | Meaning | What to do |
 |---|---|---|
-| `stale` | The file changed after it was measured, so the coverage describes old code; or, for a `range`, the file differs between the range's last commit and the working tree, so the changed line numbers do not match the measured file. | Run the affected tests (`run_affected_tests`) and ask again. |
+| `stale` | The file changed after it was measured, so the coverage describes old code; or, for a `range`, the file differs between the range's last commit and the working tree, so the changed line numbers do not match the measured file; or the file kept changing while the verdicts were read (every changed line is then `stale`). | Run the affected tests (`run_affected_tests`) and ask again. |
 | `notMeasured` | No coverage run measured the file, for example it is not compiled into a tested assembly. | Run the tests, or accept that the file is not covered by tests. |
 | `noTestEvidence` | The line ran, but the impact map has no current record of which tests executed it. | Run the affected tests. |
 | `mixedEvidence` | Passing and failing tests are both credited with the line. | Fix the failing tests, then ask again. |
 | `testsNotRun` | A credited test has no result yet (or is still running), or every credited test was skipped. | Run the affected tests. |
 | `outdatedEvidence` | Evidence recorded against older content may credit other tests with the line, and their results would change the verdict. | Run the affected tests. |
-| `resultsUpdating` | A run was publishing new coverage and test results while the verdicts were read, so the line's coverage and its tests' results may come from different runs. | Ask again when the run finishes. |
+| `resultsUpdating` | A run was publishing new coverage and test results while the verdicts were read, so the coverage and its tests' results may come from different runs. Every changed line is then `unknown`. | Ask again when the run finishes. |
 
 Each file reports `measured`, `isStale`, `isPartial` (only a selective run measured
 it, so tests that did not run may cover more), per-verdict line ranges, `unknown`
@@ -259,7 +259,9 @@ How to read the verdicts:
   `coveredByPassing` only when every credited test passed; any mix gives `unknown`.
 - A credited test's result is its latest result in its own test project. A test
   with no result there counts as not run, even if another project has a test of
-  the same name.
+  the same name. Results are grouped by project file name, so tests of two
+  projects that share one (such as `One/Tests.csproj` and `Two/Tests.csproj`)
+  also count as not run.
 - Known limitation: while a file's content is unchanged, a selective run adds its
   hits to the stored coverage instead of replacing them, and the coverage does not
   record which run hit each line. Verdicts use each credited test's latest result.

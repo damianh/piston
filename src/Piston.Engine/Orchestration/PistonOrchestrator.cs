@@ -586,6 +586,9 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     }
 
     /// <summary>What a run triggered by changes to <paramref name="filePaths"/> would select, without changing state.</summary>
+    /// <summary>Absolute paths of the solution's test projects; empty until the project graph has loaded.</summary>
+    internal IReadOnlyList<string> GetTestProjectPaths() => _impactAnalyzer.GetAllTestProjectPaths();
+
     internal ImpactAnalysisResult PlanAffected(IReadOnlyList<string> filePaths) =>
         _impactAnalyzer.Preview([.. filePaths.Select(p => new FileChangeEvent(
             p, File.Exists(p) ? WatcherChangeTypes.Changed : WatcherChangeTypes.Deleted, DateTimeOffset.UtcNow))]);

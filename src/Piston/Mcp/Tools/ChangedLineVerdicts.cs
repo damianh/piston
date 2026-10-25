@@ -160,8 +160,10 @@ internal static class ChangedLineVerdicts
 
     /// <summary>Reads git changes and classifies them against <paramref name="engine"/>'s coverage and test results.</summary>
     /// <param name="settleTimeout">
-    /// How long to wait for a run that is publishing results to finish, so the coverage and the outcomes describe the
-    /// same runs. When they still overlap, lines that ran are reported as <see cref="UnknownReason.ResultsUpdating"/>.
+    /// How long to wait for the changed files and the published results to hold still while they are read, so the
+    /// changed lines, the coverage and the outcomes describe the same content and runs. When they do not settle in
+    /// time, every changed line is reported as unknown: <see cref="UnknownReason.ResultsUpdating"/> while a run is
+    /// publishing results, or <see cref="UnknownReason.Stale"/> while the files keep changing.
     /// </param>
     /// <exception cref="ArgumentException">The base or ref is invalid.</exception>
     /// <exception cref="InvalidOperationException">Git failed or no base was found.</exception>
@@ -169,22 +171,48 @@ internal static class ChangedLineVerdicts
         IEngine engine, string solutionDirectory, string? @base, string? baseRef, CancellationToken ct,
         TimeSpan? settleTimeout = null)
     {
-        var changes = await ChangedLines.GetCheckedAsync(solutionDirectory, @base, baseRef, ct).ConfigureAwait(false);
         var state = engine.State;
         var runBefore = state.CurrentRun;
         var deadline = DateTimeOffset.UtcNow + (settleTimeout ?? DefaultSettleTimeout);
+        var changes = await ChangedLines.GetCheckedAsync(solutionDirectory, @base, baseRef, ct).ConfigureAwait(false);
         ChangedLineCoverageResult? result = null;
+        var unsettled = UnknownReason.ResultsUpdating;
         while (true)
         {
+            // The changed lines are numbered for the files' content when git read them, and coverage is judged
+            // against the content when it is read: both must see the same content.
+            var contents = ContentHashes(changes);
             var version = state.ResultsVersion;
             if (!state.IsPublishingResults)
             {
-                var read = Classify(changes, engine.GetFileCoverage, engine.GetCoveringTests, OutcomeLookup(state));
-                if (!state.IsPublishingResults && state.ResultsVersion == version)
+                var read = await ReadAsync(engine, changes, deadline, ct).ConfigureAwait(false);
+                if (read is null)
                 {
-                    result = read;
+                    unsettled = UnknownReason.ResultsUpdating;
                     break;
                 }
+
+                if (!state.IsPublishingResults && state.ResultsVersion == version)
+                {
+                    var again = await ChangedLines.GetCheckedAsync(solutionDirectory, @base, baseRef, ct)
+                        .ConfigureAwait(false);
+                    if (SameChanges(changes, again) && SameContents(contents, ContentHashes(changes)))
+                    {
+                        result = read;
+                        break;
+                    }
+
+                    changes = again;
+                    unsettled = UnknownReason.Stale;
+                }
+                else
+                {
+                    unsettled = UnknownReason.ResultsUpdating;
+                }
+            }
+            else
+            {
+                unsettled = UnknownReason.ResultsUpdating;
             }
 
             if (DateTimeOffset.UtcNow >= deadline)
@@ -198,9 +226,12 @@ internal static class ChangedLineVerdicts
         var warnings = new List<string>();
         if (result is null)
         {
-            result = Unsettled(Classify(changes, engine.GetFileCoverage, engine.GetCoveringTests, OutcomeLookup(state)));
-            warnings.Add("Test results were being published while the verdicts were read, so lines that ran are " +
-                "unknown (resultsUpdating). Ask again when the run finishes.");
+            result = Unsettled(changes, unsettled);
+            warnings.Add(unsettled == UnknownReason.Stale
+                ? "The changed files kept changing while the verdicts were read, so every changed line is unknown " +
+                  "(stale). Ask again once they are saved."
+                : "Test results were being published while the verdicts were read, so every changed line is unknown " +
+                  "(resultsUpdating). Ask again when the run finishes.");
         }
 
         if ((state.CurrentRun ?? runBefore) is { } run)
@@ -215,19 +246,72 @@ internal static class ChangedLineVerdicts
     private static readonly TimeSpan DefaultSettleTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan SettlePollInterval = TimeSpan.FromMilliseconds(50);
 
+    /// <summary>An unblocked read finishes well within this, even once the settle time is spent.</summary>
+    private static readonly TimeSpan MinReadWait = TimeSpan.FromSeconds(1);
+
     /// <summary>
-    /// The coverage and the test outcomes may come from different runs: only lines whose verdict does not depend on
-    /// outcomes keep it.
+    /// Classifies off the caller's thread: coverage reads wait for a run that is storing coverage, so give up at
+    /// <paramref name="deadline"/> (but not before <see cref="MinReadWait"/>) and return null rather than wait for
+    /// the run. Cancellation stops the wait.
     /// </summary>
-    private static ChangedLineCoverageResult Unsettled(ChangedLineCoverageResult result) => result with
+    private static async Task<ChangedLineCoverageResult?> ReadAsync(
+        IEngine engine, ChangedLinesResult changes, DateTimeOffset deadline, CancellationToken ct)
     {
-        Files = [.. result.Files.Select(f => f with
+        var outcomes = OutcomeLookup(engine.State, engine.GetTestProjectPaths());
+        var read = Task.Run(() => Classify(changes, engine.GetFileCoverage, engine.GetCoveringTests, outcomes), ct);
+        var remaining = deadline - DateTimeOffset.UtcNow;
+        try
         {
-            Lines = [.. f.Lines.Select(l => l.Coverage is { HitCount: > 0 }
-                ? new ChangedLineResult(l.Line, ChangedLineVerdict.Unknown, UnknownReason.ResultsUpdating, l.Coverage)
-                : l)],
-        })],
-    };
+            return await read.WaitAsync(remaining > MinReadWait ? remaining : MinReadWait, ct).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>A hash of each changed source file's content on disk, or null when it does not exist.</summary>
+    private static Dictionary<string, string?> ContentHashes(ChangedLinesResult changes)
+    {
+        var hashes = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (var path in changes.Files.Keys.Where(IsCodeFile))
+        {
+            try
+            {
+                hashes[path] = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)));
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                hashes[path] = null;
+            }
+        }
+
+        return hashes;
+    }
+
+    private static bool SameContents(Dictionary<string, string?> before, Dictionary<string, string?> after) =>
+        before.Count == after.Count
+        && before.All(kv => after.TryGetValue(kv.Key, out var hash) && string.Equals(hash, kv.Value, StringComparison.Ordinal));
+
+    private static bool SameChanges(ChangedLinesResult a, ChangedLinesResult b) =>
+        string.Equals(a.Basis, b.Basis, StringComparison.Ordinal)
+        && a.Files.Count == b.Files.Count
+        && a.Files.All(kv => b.Files.TryGetValue(kv.Key, out var lines) && lines.SetEquals(kv.Value))
+        && a.DivergedFiles.SetEquals(b.DivergedFiles);
+
+    /// <summary>
+    /// The changes could not be read against one consistent state, so no line gets a verdict. Built without reading
+    /// coverage, which may still be held by a run storing it.
+    /// </summary>
+    private static ChangedLineCoverageResult Unsettled(ChangedLinesResult changes, UnknownReason reason) =>
+        new(changes.Basis,
+            [.. changes.Files
+                .Where(f => IsCodeFile(f.Key) && f.Value.Count > 0)
+                .OrderBy(f => f.Key, StringComparer.Ordinal)
+                .Select(f => new ChangedFileVerdicts(f.Key, IsMeasured: false, IsStale: reason == UnknownReason.Stale,
+                    IsPartial: false,
+                    [.. f.Value.Select(n => new ChangedLineResult(n, ChangedLineVerdict.Unknown, reason))]))],
+            changes.Warnings);
 
     public static ChangedLineCoverageResult Classify(
         ChangedLinesResult changes,
@@ -356,11 +440,13 @@ internal static class ChangedLineVerdicts
     /// <summary>
     /// Looks up a covering test's latest outcome in <paramref name="state"/>, in the suite named after its project
     /// (both runners name a project's suite that way). A test with no result there has
-    /// <see cref="CoveringTestOutcome.NoResult"/>, even when another project has a test of the same name. A test that
-    /// ran under several frameworks failed if any result failed, and passed if every result passed or was skipped
-    /// (but not all skipped).
+    /// <see cref="CoveringTestOutcome.NoResult"/>, even when another project has a test of the same name. So does a
+    /// test whose project shares its file name with another of <paramref name="testProjectPaths"/>: their results
+    /// share a suite, so they cannot be told apart. A test that ran under several frameworks failed if any result
+    /// failed, and passed if every result passed or was skipped (but not all skipped).
     /// </summary>
-    public static Func<CoveringTest, CoveringTestOutcome> OutcomeLookup(PistonState state)
+    public static Func<CoveringTest, CoveringTestOutcome> OutcomeLookup(
+        PistonState state, IEnumerable<string>? testProjectPaths = null)
     {
         var bySuite = new Dictionary<(string Suite, string Fqn), List<TestStatus>>();
         foreach (var suite in state.TestSuites)
@@ -376,9 +462,22 @@ internal static class ChangedLineVerdicts
             }
         }
 
+        var sharedSuites = (testProjectPaths ?? [])
+            .Select(Path.GetFullPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .GroupBy(Path.GetFileNameWithoutExtension, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key!)
+            .ToHashSet(StringComparer.Ordinal);
+
         return test =>
         {
             var suite = Path.GetFileNameWithoutExtension(test.ProjectPath);
+            if (sharedSuites.Contains(suite))
+            {
+                return CoveringTestOutcome.NoResult;
+            }
+
             var statuses = bySuite.GetValueOrDefault((suite, test.TestFqn));
             return statuses switch
             {

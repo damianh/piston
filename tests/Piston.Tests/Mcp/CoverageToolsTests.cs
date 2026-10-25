@@ -362,7 +362,7 @@ public sealed class CoverageToolsTests : IDisposable
     }
 
     [Fact]
-    public async Task GetChangedLineVerdicts_RunStillPublishing_ReportsLinesThatRanAsResultsUpdating()
+    public async Task GetChangedLineVerdicts_RunStillPublishing_ReportsEveryLineAsResultsUpdating()
     {
         var (engine, _) = await ChangedMeasuredFileAsync();
         engine.State.CurrentRun = Running("run-1");
@@ -377,11 +377,87 @@ public sealed class CoverageToolsTests : IDisposable
         var result = await ChangedLineVerdicts.GetAsync(engine, _root, null, null, _ct, settleTimeout: TimeSpan.FromMilliseconds(100));
 
         var lines = Assert.Single(result.Files).Lines;
-        Assert.Equal((ChangedLineVerdict.Unknown, UnknownReason.ResultsUpdating), (lines[0].Verdict, lines[0].Reason));
-        Assert.Equal(ChangedLineVerdict.Uncovered, lines[1].Verdict);
-        Assert.Equal(1, result.UnknownReasons[UnknownReason.ResultsUpdating]);
+        Assert.All(lines, l => Assert.Equal((ChangedLineVerdict.Unknown, UnknownReason.ResultsUpdating), (l.Verdict, l.Reason)));
+        Assert.Equal(2, result.UnknownReasons[UnknownReason.ResultsUpdating]);
         Assert.Contains(result.Warnings, w => w.Contains("resultsUpdating", StringComparison.Ordinal));
         Assert.Contains(result.Warnings, w => w.Contains("run-1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetChangedLineVerdicts_CoverageReadBlockedByARun_GivesUpWithoutWaitingForIt()
+    {
+        var (engine, _) = await ChangedMeasuredFileAsync();
+        using var release = new ManualResetEventSlim();
+        engine.OnGetFileCoverage = _ => release.Wait(TimeSpan.FromSeconds(30));
+        try
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var result = await ChangedLineVerdicts.GetAsync(engine, _root, null, null, _ct, settleTimeout: TimeSpan.FromMilliseconds(200));
+
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"Took {stopwatch.Elapsed}.");
+            var lines = Assert.Single(result.Files).Lines;
+            Assert.All(lines, l => Assert.Equal((ChangedLineVerdict.Unknown, UnknownReason.ResultsUpdating), (l.Verdict, l.Reason)));
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Fact]
+    public async Task GetChangedLineVerdicts_CoverageReadBlocked_HonoursCancellation()
+    {
+        var (engine, _) = await ChangedMeasuredFileAsync();
+        using var release = new ManualResetEventSlim();
+        engine.OnGetFileCoverage = _ => release.Wait(TimeSpan.FromSeconds(30));
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+        cts.CancelAfter(TimeSpan.FromMilliseconds(200));
+        try
+        {
+            _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                ChangedLineVerdicts.GetAsync(engine, _root, null, null, cts.Token, settleTimeout: TimeSpan.FromSeconds(30)));
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Fact]
+    public async Task GetChangedLineVerdicts_FileEditedDuringTheRead_RereadsTheChangedLines()
+    {
+        var (engine, path) = await ChangedMeasuredFileAsync();
+        var edited = false;
+        engine.OnGetFileCoverage = _ =>
+        {
+            if (!edited)
+            {
+                // Line 3 is reverted after git read the changes, and the coverage now describes the new content.
+                edited = true;
+                File.WriteAllLines(path, ["a", "B", "c"]);
+            }
+        };
+
+        var result = await ChangedLineVerdicts.GetAsync(engine, _root, null, null, _ct);
+
+        var line = Assert.Single(Assert.Single(result.Files).Lines);
+        Assert.Equal((2, ChangedLineVerdict.CoveredByPassing), (line.Line, line.Verdict));
+        Assert.Empty(result.Warnings);
+    }
+
+    [Fact]
+    public async Task GetChangedLineVerdicts_FileKeepsChanging_ReportsEveryLineAsStale()
+    {
+        var (engine, path) = await ChangedMeasuredFileAsync();
+        var edits = 0;
+        engine.OnGetFileCoverage = _ => File.WriteAllLines(path, ["a", "B", $"C{++edits}"]);
+
+        var result = await ChangedLineVerdicts.GetAsync(engine, _root, null, null, _ct, settleTimeout: TimeSpan.FromMilliseconds(200));
+
+        var file = Assert.Single(result.Files);
+        Assert.True(file.IsStale);
+        Assert.All(file.Lines, l => Assert.Equal((ChangedLineVerdict.Unknown, UnknownReason.Stale), (l.Verdict, l.Reason)));
+        Assert.Contains(result.Warnings, w => w.Contains("kept changing", StringComparison.Ordinal));
     }
 
     [Fact]
