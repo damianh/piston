@@ -73,9 +73,15 @@ public sealed class MtpExecutionTests : IAsyncLifetime
             public class SampleTests
             {
                 [Xunit.Fact]
-                public void PassingTest()
+                public async System.Threading.Tasks.Task PassingTest()
                 {
                     Xunit.TestContext.Current.TestOutputHelper?.WriteLine("hello from PassingTest");
+
+                    var gate = System.IO.Path.GetFullPath(System.IO.Path.Combine(System.AppContext.BaseDirectory, "../../../progress-gate"));
+                    while (System.IO.File.Exists(gate))
+                    {
+                        await System.Threading.Tasks.Task.Delay(50, Xunit.TestContext.Current.CancellationToken);
+                    }
 
                     // Server mode and dotnet test must both start the app in the solution directory, so
                     // solution-relative paths resolve identically on either path.
@@ -84,7 +90,10 @@ public sealed class MtpExecutionTests : IAsyncLifetime
                         throw new System.InvalidOperationException($"Started in {LaunchDirectory.Value}, not the solution directory.");
                     }
                 }
+            }
 
+            public class FailingTests
+            {
                 [Xunit.Fact]
                 public void FailingTest()
                 {
@@ -363,7 +372,11 @@ public sealed class MtpExecutionTests : IAsyncLifetime
         }
 
         var snapshots = new List<IReadOnlyList<TestResult>>();
-        var result = await MtpTestProcessRunner.RunAsync(
+        var partialResults = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var gate = Path.Combine(_root, "progress-gate");
+        await File.WriteAllTextAsync(gate, "", _ct);
+        using var stopRun = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+        var runTask = MtpTestProcessRunner.RunAsync(
             projectPath: _testCsproj,
             appPath: AppPath,
             solutionDirectory: _root,
@@ -373,19 +386,33 @@ public sealed class MtpExecutionTests : IAsyncLifetime
                 lock (snapshots)
                 {
                     snapshots.Add([.. suites.SelectMany(s => s.Tests)]);
+                    if (snapshots[^1].Any(t => t.Status == TestStatus.Running)
+                        || snapshots[^1] is { Count: 1 } partial && partial[0].Status == TestStatus.Failed)
+                    {
+                        _ = partialResults.TrySetResult();
+                    }
                 }
             },
-            ct: CancellationToken.None,
+            ct: stopRun.Token,
             MtpCoverage.Collect);
+        ProjectTestResult? result = null;
         try
         {
+            await partialResults.Task.WaitAsync(TimeSpan.FromSeconds(30), _ct);
+            Assert.False(runTask.IsCompleted);
+            File.Delete(gate);
+            result = await runTask.WaitAsync(TimeSpan.FromSeconds(30), _ct);
             Assert.Equal("MTP server", Assert.Single(result.Suites).ExecutionLog!.Runner);
-            Assert.Contains(snapshots, s => s.Count > 0);
+            Assert.Contains(snapshots, s => s.Any(t => t.Status == TestStatus.Running)
+                || s.Count == 1 && s[0].Status == TestStatus.Failed);
             Assert.All(snapshots[^1], t => Assert.NotEqual(TestStatus.Running, t.Status));
             _ = Assert.Single(result.CoverageReportPaths);
         }
         finally
         {
+            File.Delete(gate);
+            await stopRun.CancelAsync();
+            result ??= await runTask;
             foreach (var dir in result.CoverageReportPaths.Select(PistonOrchestrator.CoverageResultsDirectory).OfType<string>().Distinct())
             {
                 try { Directory.Delete(dir, recursive: true); } catch { /* ignore */ }

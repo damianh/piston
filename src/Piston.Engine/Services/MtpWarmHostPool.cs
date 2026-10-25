@@ -157,11 +157,12 @@ internal sealed class MtpWarmHostPool : IAsyncDisposable
             return new MtpServerSession.Result(outcome, error, stderr);
         }
 
+        var reportedNodes = host.Connection!.ReportedNodes;
         Retire(host);
         var result = await host.EndAsync(outcome, error, log).ConfigureAwait(false);
 
         // A reused host may have died while idle: the request never reached it, so start afresh.
-        if (reused && !host.Connection.ReportedNodes && !ct.IsCancellationRequested
+        if (reused && !reportedNodes && !ct.IsCancellationRequested
             && outcome is MtpServerSession.Outcome.Failed or MtpServerSession.Outcome.NotStarted)
         {
             log?.Invoke("MtpServer", "Warm host failed before reporting any test; retrying in a new process");

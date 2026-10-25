@@ -131,7 +131,7 @@ internal static class MtpServerSession
             }
 
             processCleanedUp = true;
-            return await EndAsync(host.Process, outcome, error, output, log, link.ExitTimeout).ConfigureAwait(false);
+            return await EndAsync(host.Process, outcome, error, output, log, link.ExitTimeout, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -165,12 +165,21 @@ internal static class MtpServerSession
     /// </summary>
     internal static async Task<Result> EndAsync(
         OwnedTestProcess process, Outcome outcome, string? error, HostOutput output, Action<string, string>? log,
-        TimeSpan? exitTimeout = null)
+        TimeSpan? exitTimeout = null, CancellationToken ct = default)
     {
         switch (outcome)
         {
             case Outcome.Completed:
-                await WaitForExitOrKillAsync(process, exitTimeout ?? ExitTimeout, log).ConfigureAwait(false);
+                try
+                {
+                    await WaitForExitOrKillAsync(process, exitTimeout ?? ExitTimeout, log, ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    await KillAndWaitAsync(process, log).ConfigureAwait(false);
+                    return new Result(Outcome.Cancelled, null, output.Snapshot());
+                }
+
                 break;
             case Outcome.Cancelled:
             case Outcome.TimedOut:
@@ -850,11 +859,12 @@ internal static class MtpServerSession
         }
     }
 
-    internal static Task WaitForExitOrKillAsync(OwnedTestProcess process, TimeSpan timeout, Action<string, string>? log) =>
+    internal static Task WaitForExitOrKillAsync(
+        OwnedTestProcess process, TimeSpan timeout, Action<string, string>? log, CancellationToken ct = default) =>
         RedirectedProcessDrain.WaitForExitAndDrainAsync(
             process,
             RedirectedProcessDrain.DefaultTimeout,
-            CancellationToken.None,
+            ct,
             message => log?.Invoke("MtpServer", message),
             timeout);
 

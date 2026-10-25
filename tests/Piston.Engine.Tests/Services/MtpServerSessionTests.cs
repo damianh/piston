@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
@@ -23,6 +24,33 @@ public sealed class MtpServerSessionTests
 
     // For exchanges expected to complete: a loaded CI runner can take longer than Short to answer.
     private static readonly MtpServerSession.StageTimeouts Generous = new(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+
+    [Fact]
+    public async Task CompletedRequest_CancellationDuringControllerExit_KillsAndDrainsHost()
+    {
+        var start = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        start.ArgumentList.Add(typeof(TestProcessHost.Program).Assembly.Location);
+        start.ArgumentList.Add("--hold-output");
+        using var process = new OwnedTestProcess(start);
+        process.Start();
+        process.Process.BeginOutputReadLine();
+        process.Process.BeginErrorReadLine();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+        var ending = MtpServerSession.EndAsync(process, MtpServerSession.Outcome.Completed, null,
+            new MtpServerSession.HostOutput(null), null, MtpServerSession.ControllerExitTimeout, stop.Token);
+        Assert.False(ending.IsCompleted);
+        await stop.CancelAsync();
+
+        var result = await ending.WaitAsync(TimeSpan.FromSeconds(20), _ct);
+
+        Assert.Equal(MtpServerSession.Outcome.Cancelled, result.Outcome);
+        Assert.True(process.Process.HasExited);
+    }
 
     [Fact]
     public async Task MissingHostExecutable_ReturnsNotStarted()
