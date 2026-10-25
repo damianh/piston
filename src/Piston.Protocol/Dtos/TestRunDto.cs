@@ -70,5 +70,8 @@ public sealed record TestRunDto(
     IReadOnlyDictionary<string, IReadOnlyList<TestSelectionReasonDto>>? SelectionReasons = null,
     IReadOnlyList<string>? ChangedFiles = null,
     IReadOnlyList<TestOutcomeReferenceDto>? FixedTests = null,
-    IReadOnlyList<TestOutcomeReferenceDto>? NewlyFailingTests = null
+    IReadOnlyList<TestOutcomeReferenceDto>? NewlyFailingTests = null,
+    int RetryLimit = 0,
+    string? RetriesSkippedReason = null,
+    int PassedOnRetry = 0
 );

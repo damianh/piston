@@ -61,6 +61,9 @@ ARCHITECTURE describe the implementation in detail.
 - Persistent per-worktree run history outside the checkout, grouped by repository.
 - Failures classified as new, pre-existing, flaky (same fingerprint, both
   outcomes) or unknown, in `verify`, `get_test_run` and `get_test_history`.
+- Flakiness evidence on every flaky label: counts, source, outcomes from other
+  worktrees of the repository, and opt-in in-run retries of failed tests
+  (`retryFailures`), reported in MCP and the dashboard.
 
 **Coverage and selection**
 - Solution line and branch coverage stored in `.piston/piston.db`, with LCOV and
@@ -123,13 +126,6 @@ opens by hand (today's `piston-dashboard` skill).
 - Branch-level attribution in the impact map.
 - Method-level identity, so line shifts do not invalidate evidence. Never reuse old
   line evidence without validated remapping.
-
-### Memory
-- A declared baseline: the merge-base with a configured base ref, run in a
-  Piston-managed worktree, so "new versus pre-existing" does not depend on this
-  worktree's own history.
-- Richer flakiness evidence (retries, repeated outcomes across worktrees of one
-  repository).
 
 ### Execution
 - Explore MTP server mode further for structured results and stable test

@@ -13,6 +13,45 @@ public sealed class TrxResultParserTests
         Path.Combine(AppContext.BaseDirectory, "Services", "Fixtures", name);
 
     [Fact]
+    public void Parse_LargeTextFields_AreTruncatedAtTheRetentionLimit()
+    {
+        var limit = RetentionLimits.MaxTestTextLength;
+        var largeText = new string('x', limit * 2);
+        var trx = $"""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <Results>
+                <UnitTestResult testId="t1" testName="Tests.Noisy" outcome="Failed" duration="00:00:00.001">
+                  <Output>
+                    <StdOut>{largeText}</StdOut>
+                    <ErrorInfo><Message>{largeText}</Message><StackTrace>{largeText}</StackTrace></ErrorInfo>
+                  </Output>
+                </UnitTestResult>
+              </Results>
+              <TestDefinitions><UnitTest id="t1"><TestMethod className="Tests" name="Noisy" /></UnitTest></TestDefinitions>
+            </TestRun>
+            """;
+        var path = Path.Combine(Path.GetTempPath(), $"piston-trx-{Guid.NewGuid():N}.trx");
+        File.WriteAllText(path, trx);
+        try
+        {
+            var result = Assert.Single(new TrxResultParser().Parse(path)[0].Tests);
+            Assert.InRange(result.Output!.Length, 1, limit);
+            Assert.StartsWith(new string('x', 100), result.Output, StringComparison.Ordinal);
+            Assert.EndsWith(new string('x', 100), result.Output, StringComparison.Ordinal);
+            Assert.Contains("characters truncated", result.Output, StringComparison.Ordinal);
+            Assert.InRange(result.ErrorMessage!.Length, 1, limit);
+            Assert.Contains("characters truncated", result.ErrorMessage, StringComparison.Ordinal);
+            Assert.InRange(result.StackTrace!.Length, 1, limit);
+            Assert.Contains("characters truncated", result.StackTrace, StringComparison.Ordinal);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Parse_MixedResults_ReturnsSingleSuite()
     {
         var sut = new TrxResultParser();

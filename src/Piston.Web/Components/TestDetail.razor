@@ -66,6 +66,27 @@ else
 
         <HistoryStrip TestKey="@Test.Key" Project="@Project" />
 
+        <!-- Earlier attempts when the test was retried within the run -->
+        @if (Test.Attempts is { Count: > 0 } attempts)
+        {
+            <div>
+                <div class="text-gray-400 font-semibold mb-1">Retries <span class="font-normal text-yellow-400">@TestRetries.Describe(Test)</span></div>
+                <ol class="flex flex-col gap-1">
+                    @for (var i = 0; i < attempts.Count; i++)
+                    {
+                        var attempt = attempts[i];
+                        <li>
+                            <div class="text-gray-400">Attempt @(i + 1): <span class="@(attempt.Status == TestStatusDto.Failed ? "text-red-400" : "text-gray-300")">@attempt.Status</span> in @FormatDuration(attempt.DurationMs)</div>
+                            @if (!string.IsNullOrEmpty(attempt.ErrorMessage))
+                            {
+                                <pre class="bg-gray-900 border border-gray-800 rounded p-2 text-red-300 text-xs max-h-32 overflow-auto whitespace-pre-wrap break-all">@attempt.ErrorMessage</pre>
+                            }
+                        </li>
+                    }
+                </ol>
+            </div>
+        }
+
         <!-- Why the last run selected it -->
         @if (SelectionReasons is { Count: > 0 } reasons)
         {

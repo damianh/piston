@@ -8,4 +8,8 @@ public sealed record BuildResult(
     IReadOnlyList<string> Errors,
     IReadOnlyList<string> Warnings,
     TimeSpan Duration
-);
+)
+{
+    public int OmittedErrors { get; init; }
+    public int OmittedWarnings { get; init; }
+}
