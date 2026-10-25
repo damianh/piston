@@ -19,17 +19,19 @@ This document describes implemented behavior and its limits. Planned work is in
 | `Piston.Engine` | Watcher, impact analysis, builds, test execution, current state, coverage processing. |
 | `Piston.Protocol` | JSON-RPC contracts, DTOs, framing, named-pipe and stdio transports. |
 | `Piston.Web` | Blazor WebAssembly dashboard connected over WebSocket. |
+| `Piston.LiveCollector` | VSTest data collector, deployed with the engine, that streams per-test start/end events to the engine over loopback (`PISTON_LIVE_PORT`). |
+| `Piston.ProcessHost` | Small launcher that puts a test process in its own Unix session or Windows job, so the engine can terminate the test process and its descendants together (`OwnedTestProcess`). |
 
 Hosting and MCP source live in `src/Piston/Hosting` and `src/Piston/Mcp`.
 Their `Piston.Hosting` and `Piston.Mcp` namespaces remain, but they are not
-separate projects or assemblies. Desktop source and its project are deleted.
-The Roslyn worker/tools, diagnostic polling/UI, and VS Code extension have also
-been removed. Clients can use their own code intelligence alongside Piston.
+separate projects or assemblies.
 
 The production dependency shape is:
 
 ```text
-Piston (CLI + host + MCP) ------> Piston.Engine
+Piston (CLI + host + MCP) ------> Piston.Engine ------> Piston.ProcessHost
+         |                                |
+         |                                +---- deploys Piston.LiveCollector (not loaded in-process)
          |
          +---------------------> Piston.Protocol <----- Piston.Web
          |
@@ -46,7 +48,9 @@ MCP call-log data remains a host/protocol concern.
 `Piston.Tests` combines tool/hosting, protocol, and MCP tests.
 `Piston.Engine.Tests` retains `Piston.TestProcessHost` and
 `Piston.ExecutionLeaseHolder` for process-tree cleanup and cross-process lease
-coverage. The measurement solution and its locked dependencies remain separate.
+coverage. `tests/fixtures/` holds the small solution the opt-in dogfood and stdio
+MCP smoke tests copy. `samples/` holds one sample project per test framework,
+outside `Piston.slnx`, for the packed-tool smoke tests that `build.cs` runs.
 
 The CLI runs the daemon in a separate process; `piston daemon` hosts `DaemonHost`
 in that process. `piston mcp` (`McpStdioHost`) instead runs an in-process engine
@@ -202,12 +206,13 @@ test projects available from the graph. Selective result merging uses
 test FQN rather than timestamp-dependent TRX suite names, avoiding stale
 duplicates from that merge path.
 
-Both execution backends launch new `dotnet test` processes:
+Both execution backends start a new process per test project and run (unless
+warm hosts are enabled for MTP), each under `Piston.ProcessHost`:
 
 | Backend | Current mechanism |
 |---|---|
-| VSTest | Project/solution target, `--no-build`, normal verbosity, TRX results; stdout progress parsing. |
-| Microsoft.Testing.Platform (MTP) | `--project`, `--no-build`, detailed output; results parsed from stdout. Requires the appropriate SDK runner configuration in the solution's `global.json`. |
+| VSTest | `dotnet test` on the project/solution target, `--no-build`, normal verbosity, TRX results. The `PistonLive` data collector streams per-test start/end events; stdout is parsed for progress as well. |
+| Microsoft.Testing.Platform (MTP) | Runs the built test app in MTP server mode (JSON-RPC), which reports each test as it starts and finishes. Falls back to `dotnet test --project <csproj> --no-build` with stdout parsing when the app is not found or server mode fails, and always uses `dotnet test` for coverage. The fallback needs the MTP runner configured in the solution's `global.json`. |
 
 When the graph identifies an MTP output path, the composite strategy selects
 MTP; otherwise it selects VSTest. `Auto` and the currently named `Process` mode
@@ -451,6 +456,8 @@ and persisted coverage in the current solution directory. It does not cancel an
 active pipeline; a subsequent completion can publish fresh results. It does not
 clear [run history](#coverage-and-persistence), which `get_test_history` and
 `verify`'s failure classification read.
+
+## Build processes and engine test setup
 
 Engine-test setup process helpers drain both stdout and stderr and enforce a
 90-second deadline. A small test-only process host establishes a Unix session or
