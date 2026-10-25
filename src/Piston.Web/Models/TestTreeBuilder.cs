@@ -27,12 +27,11 @@ public static class TestTreeBuilder
         }
 
         var live = inProgressSuites
-            .SelectMany(s => s.Tests)
-            .Select(t => t.FullyQualifiedName)
-            .ToHashSet(StringComparer.Ordinal);
+            .SelectMany(s => s.Tests.Select(t => (Project: s.ProjectId ?? s.Name, t.FullyQualifiedName)))
+            .ToHashSet();
 
         var untouched = suites
-            .Select(s => s with { Tests = s.Tests.Where(t => !live.Contains(t.FullyQualifiedName)).ToList() })
+            .Select(s => s with { Tests = s.Tests.Where(t => !live.Contains((s.ProjectId ?? s.Name, t.FullyQualifiedName))).ToList() })
             .Where(s => s.Tests.Count > 0);
 
         return [.. inProgressSuites, .. untouched];
@@ -119,8 +118,26 @@ public static class TestTreeBuilder
     /// </summary>
     public static TestSuiteDto? ForProject(IEnumerable<TestSuiteDto> suites, string project)
     {
-        var parts = suites.Where(s => string.Equals(s.Name, project, StringComparison.Ordinal)).ToList();
+        var parts = suites.Where(s => string.Equals(s.ProjectId ?? s.Name, project, StringComparison.Ordinal)).ToList();
         return parts.Count == 0 ? null : Combine(parts);
+    }
+
+    public static string DisplayProjectName(IEnumerable<TestSuiteDto> suites, string projectId)
+    {
+        var allSuites = suites.ToList();
+        var suite = ForProject(allSuites, projectId);
+        if (suite is null)
+        {
+            return projectId;
+        }
+
+        var hasDuplicateName = allSuites
+            .Where(s => string.Equals(s.Name, suite.Name, StringComparison.Ordinal))
+            .Select(s => s.ProjectId ?? s.Name)
+            .Distinct(StringComparer.Ordinal)
+            .Skip(1)
+            .Any();
+        return hasDuplicateName ? $"{suite.Name} ({projectId})" : suite.Name;
     }
 
     private static TestSuiteDto Combine(IReadOnlyList<TestSuiteDto> parts) =>
@@ -143,10 +160,18 @@ public static class TestTreeBuilder
 
         var anyVisible = false;
 
-        foreach (var parts in suites.GroupBy(s => s.Name, StringComparer.Ordinal))
+        var duplicateNames = suites
+            .GroupBy(s => s.Name, StringComparer.Ordinal)
+            .Where(group => group.Select(s => s.ProjectId ?? s.Name).Distinct(StringComparer.Ordinal).Skip(1).Any())
+            .Select(group => group.Key)
+            .ToHashSet(StringComparer.Ordinal);
+
+        foreach (var parts in suites.GroupBy(s => s.ProjectId ?? s.Name, StringComparer.Ordinal))
         {
             var suite = Combine([.. parts]);
-            var visibleTests = GetVisibleTests(suite.Tests, suite.Name, matcher, viewState);
+            var projectId = suite.ProjectId ?? suite.Name;
+            var displayName = duplicateNames.Contains(suite.Name) ? $"{suite.Name} ({projectId})" : suite.Name;
+            var visibleTests = GetVisibleTests(suite.Tests, projectId, matcher, viewState);
             if (visibleTests.Count == 0)
             {
                 continue;
@@ -163,11 +188,11 @@ public static class TestTreeBuilder
 
             var suiteNode = new TestNode
             {
-                Label = suite.Name,
+                Label = displayName,
                 Kind = TestNodeKind.Suite,
                 Suite = suite,
-                ExpansionKey = $"suite:{suite.Name}",
-                IsExpanded = viewState.IsNodeExpanded($"suite:{suite.Name}"),
+                ExpansionKey = $"suite:{projectId}",
+                IsExpanded = viewState.IsNodeExpanded($"suite:{projectId}"),
             };
 
             // A multi-targeted project runs each test once per framework: group by framework first, so a
@@ -180,13 +205,13 @@ public static class TestTreeBuilder
 
             if (byFramework.Count == 0)
             {
-                AddNamespaceTree(suiteNode.Children, visibleTests, isStale, suite.Name, suite.Name, viewState);
+                AddNamespaceTree(suiteNode.Children, visibleTests, isStale, projectId, projectId, viewState);
             }
             else
             {
                 foreach (var frameworkGroup in byFramework)
                 {
-                    var scope = $"{suite.Name}|{frameworkGroup.Key}";
+                    var scope = $"{projectId}|{frameworkGroup.Key}";
                     var frameworkNode = new TestNode
                     {
                         Label = frameworkGroup.Key,
@@ -195,13 +220,13 @@ public static class TestTreeBuilder
                         ExpansionKey = $"tfm:{scope}",
                         IsExpanded = viewState.IsNodeExpanded($"tfm:{scope}"),
                     };
-                    AddNamespaceTree(frameworkNode.Children, [.. frameworkGroup], isStale, scope, suite.Name, viewState);
+                    AddNamespaceTree(frameworkNode.Children, [.. frameworkGroup], isStale, scope, projectId, viewState);
                     suiteNode.Children.Add(frameworkNode);
                 }
 
                 // Tests discovered but not yet run have no framework until their results arrive.
                 AddNamespaceTree(
-                    suiteNode.Children, [.. visibleTests.Where(t => t.TargetFramework is null)], isStale, suite.Name, suite.Name, viewState);
+                    suiteNode.Children, [.. visibleTests.Where(t => t.TargetFramework is null)], isStale, projectId, projectId, viewState);
             }
 
             roots.Add(suiteNode);
@@ -334,7 +359,7 @@ public static class TestTreeBuilder
         var allTests = suites
             .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
             .Where(x => matcher is null || matcher(x.Test.FullyQualifiedName))
-            .Where(x => IsHistoryVisible(x.Test, x.Suite.Name, viewState))
+            .Where(x => IsHistoryVisible(x.Test, x.Suite.ProjectId ?? x.Suite.Name, viewState))
             .ToList();
 
         if (allTests.Count == 0)
@@ -383,7 +408,7 @@ public static class TestTreeBuilder
                     Label = ClassMethodLabel(test.FullyQualifiedName),
                     Kind = TestNodeKind.Test,
                     Test = test,
-                    Project = suite.Name,
+                    Project = suite.ProjectId ?? suite.Name,
                     IsStale = isStale,
                     Framework = test.TargetFramework,
                 });
@@ -405,7 +430,7 @@ public static class TestTreeBuilder
         var allTests = suites
             .SelectMany(s => s.Tests.Select(t => (Suite: s, Test: t)))
             .Where(x => matcher is null || matcher(x.Test.FullyQualifiedName))
-            .Where(x => IsStatusVisible(x.Test.Status, viewState) && IsHistoryVisible(x.Test, x.Suite.Name, viewState));
+            .Where(x => IsStatusVisible(x.Test.Status, viewState) && IsHistoryVisible(x.Test, x.Suite.ProjectId ?? x.Suite.Name, viewState));
         var ordered = OrderTests(allTests, x => x.Test, ClassMethodLabel)
             .ThenBy(x => x.Test.TargetFramework, FrameworkComparer.Instance)
             .ToList();
@@ -424,7 +449,7 @@ public static class TestTreeBuilder
                 Label = ClassMethodLabel(test.FullyQualifiedName),
                 Kind = TestNodeKind.Test,
                 Test = test,
-                Project = suite.Name,
+                Project = suite.ProjectId ?? suite.Name,
                 IsStale = isStale,
                 Framework = test.TargetFramework,
             });
@@ -471,7 +496,7 @@ public static class TestTreeBuilder
                 Label = ClassMethodLabel(test.FullyQualifiedName),
                 Kind = TestNodeKind.Test,
                 Test = test,
-                Project = suite.Name,
+                Project = suite.ProjectId ?? suite.Name,
                 IsStale = isStale,
                 Framework = test.TargetFramework,
             });

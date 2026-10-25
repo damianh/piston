@@ -107,23 +107,31 @@ public sealed class HistoryCommandTests
         var passingEvidence = new FlakinessEvidence("abcdef", 2, 1, 0, ["feature-x"], [new("r9", at, TestStatus.Failed, 0, "feature-x")]);
         var engine = new StubEngine
         {
-            LatestFailures = [new FailureClassification("A.Tests", "A.Wobbles", FailureKind.Flaky, failingEvidence.Describe(), failingEvidence)],
+            LatestFailures =
+            [
+                new FailureClassification("A.Tests", "A.Wobbles", FailureKind.Flaky, failingEvidence.Describe(), failingEvidence)
+                {
+                    ProjectId = "One/A.Tests.csproj",
+                },
+            ],
             Histories =
             [
-                new TestHistory("A.Tests", "A.Wobbles", [], failingEvidence),
-                new TestHistory("A.Tests", "A.WobblesButPassing", [], passingEvidence),
+                new TestHistory("A.Tests", "A.Wobbles", [], failingEvidence) { ProjectId = "One/A.Tests.csproj" },
+                new TestHistory("A.Tests", "A.Wobbles", [], passingEvidence) { ProjectId = "Two/A.Tests.csproj" },
             ],
         };
 
         var result = await new EngineCommandDispatcher(engine).HandleCommandAsync(ProtocolMethods.HistoryGetTestMarks, null, _ct);
 
-        var marks = result!["tests"]!.AsArray().ToDictionary(m => m!["test"]!.GetValue<string>());
-        var failing = marks["A.Wobbles"]!["flakiness"]!;
+        var marks = result!["tests"]!.AsArray().ToDictionary(m => m!["projectId"]!.GetValue<string>());
+        Assert.Equal(2, marks.Count);
+        var failing = marks["One/A.Tests.csproj"]!["flakiness"]!;
         Assert.Null(failing["source"]);
         Assert.Equal(1, failing["retryOutcomes"]!.GetValue<int>());
         Assert.Equal(1, failing["outcomes"]![1]!["attempt"]!.GetValue<int>());
         Assert.StartsWith("Passed 1 and failed 1 time(s) within run r2", failing["summary"]!.GetValue<string>());
-        var passing = marks["A.WobblesButPassing"]!["flakiness"]!;
+        Assert.Null(marks["Two/A.Tests.csproj"]!["failureKind"]);
+        var passing = marks["Two/A.Tests.csproj"]!["flakiness"]!;
         Assert.Equal("abcdef", passing["source"]!.GetValue<string>());
         Assert.Equal(["feature-x"], passing["otherWorktrees"]!.AsArray().Select(w => w!.GetValue<string>()));
         Assert.Equal("feature-x", passing["outcomes"]![0]!["worktree"]!.GetValue<string>());
@@ -133,13 +141,15 @@ public sealed class HistoryCommandTests
     public async Task GetRun_IncludesRetryAttemptsAndCounts()
     {
         var run = Run("r1", new StoredTestResult("A.Tests", "A.Wobbles", TestStatus.Passed, 12, null, null,
-            [new StoredAttempt(TestStatus.Failed, 8, "first")]));
+            [new StoredAttempt(TestStatus.Failed, 8, "first")])
+        { ProjectId = "One/A.Tests.csproj" });
         var engine = new StubEngine { StoredRuns = [run with { Summary = run.Summary with { Retried = 1, PassedOnRetry = 1 } }] };
 
         var result = await new EngineCommandDispatcher(engine).HandleCommandAsync(ProtocolMethods.HistoryGetRun, new JsonObject { ["runId"] = "r1" }, _ct);
 
         Assert.Equal(1, result!["summary"]!["retried"]!.GetValue<int>());
         Assert.Equal(1, result["summary"]!["passedOnRetry"]!.GetValue<int>());
+        Assert.Equal("One/A.Tests.csproj", result["results"]![0]!["projectId"]!.GetValue<string>());
         var attempt = Assert.Single(result["results"]![0]!["attempts"]!.AsArray())!;
         Assert.Equal("Failed", attempt["status"]!.GetValue<string>());
         Assert.Equal("first", attempt["errorMessage"]!.GetValue<string>());
@@ -163,18 +173,31 @@ public sealed class HistoryCommandTests
                 new TestHistory("A.Tests", "A.One", [
                     new TestHistoryEntry("r1", DateTimeOffset.UnixEpoch, TestStatus.Passed, 5, "abc"),
                     new TestHistoryEntry("r2", DateTimeOffset.UnixEpoch.AddMinutes(1), TestStatus.Failed, 9, null),
-                ], Flakiness: null),
+                ], Flakiness: null) { ProjectId = "tests/A.Tests/A.Tests.csproj" },
             ],
         };
         var dispatcher = new EngineCommandDispatcher(engine);
 
         var result = await dispatcher.HandleCommandAsync(
-            ProtocolMethods.HistoryGetTestHistory, new JsonObject { ["test"] = "A.One", ["project"] = "A.Tests" }, _ct);
+            ProtocolMethods.HistoryGetTestHistory, new JsonObject { ["test"] = "A.One", ["projectId"] = "tests/A.Tests/A.Tests.csproj" }, _ct);
 
         Assert.True(result!["enabled"]!.GetValue<bool>());
         var test = Assert.Single(result["tests"]!.AsArray())!;
         Assert.Equal(["Passed", "Failed"], test["runs"]!.AsArray().Select(r => r!["status"]!.GetValue<string>()));
-        Assert.Equal("A.Tests", engine.LastHistoryProject);
+        Assert.Equal("tests/A.Tests/A.Tests.csproj", engine.LastHistoryProject);
+    }
+
+    [Fact]
+    public async Task GetTestHistory_UnknownProject_IsInvalidParams()
+    {
+        var engine = new StubEngine { GetTestHistoryError = new ArgumentException("'Unknown/Tests.csproj' is not a test project ID in this solution.") };
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var error = await Assert.ThrowsAsync<JsonRpcException>(() => dispatcher.HandleCommandAsync(
+            ProtocolMethods.HistoryGetTestHistory, new JsonObject { ["test"] = "A.One", ["projectId"] = "Unknown/Tests.csproj" }, _ct));
+
+        Assert.Equal(JsonRpcErrorCodes.InvalidParams, error.Code);
+        Assert.Equal(engine.GetTestHistoryError.Message, error.Message);
     }
 
     [Fact]

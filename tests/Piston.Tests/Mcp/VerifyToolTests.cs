@@ -84,19 +84,25 @@ public sealed class VerifyToolTests
         var run = Run() with
         {
             Suites = projects.Select(project => new TestSuite(project,
-                [Test("Shared.Test", TestStatus.Failed)], DateTimeOffset.UnixEpoch, TimeSpan.Zero)).ToList(),
+                [Test("Shared.Test", TestStatus.Failed)], DateTimeOffset.UnixEpoch, TimeSpan.Zero)
+            {
+                ProjectId = $"tests/{project}/{project}.csproj",
+            }).ToList(),
             FailureClassifications = projects.Select(project => new FailureClassification(project, "Shared.Test",
-                project == "New" ? FailureKind.New : FailureKind.PreExisting, "history")).ToList(),
+                project == "New" ? FailureKind.New : FailureKind.PreExisting, "history")
+            {
+                ProjectId = $"tests/{project}/{project}.csproj",
+            }).ToList(),
         };
 
         var text = await VerifyAsync(new(VerificationVerdict.TestsFailed, "21 test(s) failed.",
             VerificationSource.Forced, 1, run, Source));
 
         Assert.Contains("Failure history: 1 new, 20 pre-existing", text);
-        var newlyFailed = text.IndexOf("  - New :: Shared.Test [new]", StringComparison.Ordinal);
-        var old = text.IndexOf("  - Old0 :: Shared.Test [pre-existing]", StringComparison.Ordinal);
+        var newlyFailed = text.IndexOf("  - New [tests/New/New.csproj] :: Shared.Test [new]", StringComparison.Ordinal);
+        var old = text.IndexOf("  - Old0 [tests/Old0/Old0.csproj] :: Shared.Test [pre-existing]", StringComparison.Ordinal);
         Assert.True(newlyFailed >= 0 && old > newlyFailed, text);
-        Assert.DoesNotContain("Old19 ::", text);
+        Assert.DoesNotContain("Old19 [tests/Old19/Old19.csproj]", text);
         Assert.Contains("... 1 more", text);
     }
 

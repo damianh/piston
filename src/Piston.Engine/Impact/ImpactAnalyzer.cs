@@ -354,6 +354,14 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         }
     }
 
+    public IReadOnlyList<string>? GetRestoredTestProjectPaths()
+    {
+        lock (_graphLock)
+        {
+            return _graph is { EvaluatedBeforeRestore: false } ? _graph.TestProjectPaths : null;
+        }
+    }
+
     public IReadOnlyList<string> GetBuildProjectPaths(IReadOnlyList<string>? buildTargets)
     {
         lock (_graphLock)

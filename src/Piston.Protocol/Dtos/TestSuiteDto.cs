@@ -9,5 +9,6 @@ public sealed record TestSuiteDto(
     DateTimeOffset Timestamp,
     double TotalDurationMs,
     string? RunId = null,
-    bool Restored = false
+    bool Restored = false,
+    string? ProjectId = null
 );

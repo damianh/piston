@@ -23,6 +23,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     private readonly string _solutionPath;
     private readonly MachineExecutionCoordinator _executionCoordinator;
     private readonly string? _ownerHost;
+    private readonly string? _ownerDashboardUrl;
     private readonly bool _historyEnabled;
     private readonly MtpWarmHostPool? _warmHosts;
     private readonly string? _historyDirectory;
@@ -40,6 +41,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     {
         _activitySink = activitySink;
         _ownerHost = options.OwnerHost;
+        _ownerDashboardUrl = options.OwnerDashboardUrl;
         _historyEnabled = options.HistoryEnabled;
         _historyDirectory = options.HistoryDirectory;
         _persistResults = options.PersistResults;
@@ -194,6 +196,9 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     /// <summary>Worktree ownership held by this engine; null before <see cref="StartAsync"/>.</summary>
     internal WorktreeOwnership? Ownership => _ownership;
 
+    /// <summary>The machine-wide coordination directory used by this engine.</summary>
+    public ExecutionCoordinationDirectory ExecutionCoordinationDirectory => _executionCoordinator.Directory;
+
     /// <summary>
     /// Acquires exclusive ownership of the solution's worktree and validates the machine execution
     /// budget, then starts watching and runs the initial build/test.
@@ -217,7 +222,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         }
 
         var budget = _executionCoordinator.Initialize();
-        _ownership = WorktreeOwnership.Acquire(_executionCoordinator.Directory, solutionPath, _ownerHost);
+        _ownership = WorktreeOwnership.Acquire(
+            _executionCoordinator.Directory, solutionPath, _ownerHost, dashboardUrl: _ownerDashboardUrl);
         // Only the owner may touch the worktree's .piston directory.
         _diagnosticLog.Open();
         _diagnosticLog.Write("Engine",
@@ -308,7 +314,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         _savedResults = null;
     }
 
-    public IReadOnlyList<TestHistory>? GetTestHistory(string test, string? project = null) => _history?.GetTestHistory(test, project);
+    public IReadOnlyList<TestHistory>? GetTestHistory(string test, string? projectId = null) => _history?.GetTestHistory(test, projectId);
 
     public IReadOnlyList<TestHistory>? GetFlakyTests() => _history?.GetFlakyTests();
 

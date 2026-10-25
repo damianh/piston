@@ -9,4 +9,5 @@ public enum DashboardTab
     Tests,
     Coverage,
     Runs,
+    Machine,
 }

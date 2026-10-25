@@ -115,7 +115,8 @@ public static class HostHelpers
         bool cliCoverage,
         int cliParallelism,
         PistonConfig config,
-        string? ownerHost = null)
+        string? ownerHost = null,
+        string? ownerDashboardUrl = null)
     {
         var debounceMs = cliDebounceMs > 0 ? cliDebounceMs
             : config.DebounceMs is > 0 ? config.DebounceMs.Value
@@ -185,6 +186,7 @@ public static class HostHelpers
             ExecutionMemoryReservationMb = memoryReservationMb,
             TestResourceRules = testResourceRules,
             OwnerHost = ownerHost,
+            OwnerDashboardUrl = ownerDashboardUrl,
         };
     }
 

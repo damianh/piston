@@ -40,6 +40,7 @@ public sealed class SavedResultsStoreTests : IDisposable
         var expectedSuite = Assert.Single(expected.TestSuites);
         var restoredSuite = Assert.Single(restored.TestSuites);
         Assert.Equal(expectedSuite.Name, restoredSuite.Name);
+        Assert.Equal(expectedSuite.ProjectId, restoredSuite.ProjectId);
         Assert.Equivalent(Assert.Single(expectedSuite.Tests), Assert.Single(restoredSuite.Tests), strict: true);
         Assert.Equal(expected.LastRun?.RunId, restored.LastRun?.RunId);
         Assert.Equivalent(expected.LastRun!.FailureClassifications, restored.LastRun!.FailureClassifications, strict: true);
@@ -327,7 +328,10 @@ public sealed class SavedResultsStoreTests : IDisposable
             run);
     }
 
-    private static TestSuite Suite => new("App.Tests", [Result], DateTimeOffset.UnixEpoch, TimeSpan.FromMilliseconds(20));
+    private static TestSuite Suite => new("App.Tests", [Result], DateTimeOffset.UnixEpoch, TimeSpan.FromMilliseconds(20))
+    {
+        ProjectId = "tests/App.Tests/App.Tests.csproj",
+    };
 
     private static TestResult Result => new(
         "App.Tests.MathTests.Adds", "Adds", TestStatus.Passed, TimeSpan.FromMilliseconds(20), null, null, null, null)

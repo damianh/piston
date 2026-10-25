@@ -157,6 +157,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         foreach (var suite in state.TestSuites)
         {
             _ = sb.AppendLine($"\nSuite: {suite.Name}" +
+                (suite.ProjectId is null ? "" : $" [{suite.ProjectId}]") +
                 (suite.RunId is null ? "" : $" (run {suite.RunId})") +
                 (suite.Restored ? " (restored; not re-verified)" : ""));
             foreach (var test in suite.Tests)
@@ -187,7 +188,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         "run ID, status, full/selective scope, filters, freshness, source fingerprints captured before and after the run, " +
         "build/runner context, machine-wide execution admission (queue position and CPU/memory reservations), " +
         "per-project exclusive test resources (keys, wait, warnings, suspected port/container conflicts), " +
-        "and every test's fully-qualified name and status. " +
+        "and every test's project ID, fully-qualified name and status. " +
         "Pass a run ID, \"latest\" or empty for the most recent finished run, or \"active\" for the run in progress. " +
         "A result is trustworthy for a full-scope oracle only when isCurrentFullResult is true and sourceAfter matches the expected source.")]
     public string GetTestRun(string runId = "")
@@ -231,12 +232,12 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         "optional); pass empty to list flaky tests with their evidence.")]
     public string GetTestHistory(
         [Description("Fully-qualified test name; empty lists flaky tests.")] string test = "",
-        [Description("Optional test project name to disambiguate.")] string? project = null)
+        [Description("Optional solution-relative test project ID to disambiguate.")] string? projectId = null)
     {
         availability?.ThrowIfUnavailable();
         var sw = Stopwatch.StartNew();
         var key = test?.Trim() ?? "";
-        var histories = key.Length == 0 ? engine.GetFlakyTests() : engine.GetTestHistory(key, string.IsNullOrWhiteSpace(project) ? null : project.Trim());
+        var histories = key.Length == 0 ? engine.GetFlakyTests() : engine.GetTestHistory(key, string.IsNullOrWhiteSpace(projectId) ? null : projectId.Trim());
         string result;
         if (histories is null)
         {
@@ -251,7 +252,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
             var sb = new StringBuilder();
             foreach (var history in histories)
             {
-                _ = sb.AppendLine($"{history.Project} :: {history.Test}{(history.Flaky ? " (flaky)" : "")}");
+                _ = sb.AppendLine($"{history.Project} [{history.ProjectId}] :: {history.Test}{(history.Flaky ? " (flaky)" : "")}");
                 if (history.Flakiness is { } evidence)
                 {
                     _ = sb.AppendLine($"  Evidence: {evidence.Describe()}");

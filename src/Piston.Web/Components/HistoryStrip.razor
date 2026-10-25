@@ -104,7 +104,7 @@
         if (key == TestKey && project == Project)
         {
             // The key names one framework's results, so the match is exact.
-            _history = result?.Tests.FirstOrDefault(t => t.Test == key && (project is null || t.Project == project)) is { Runs.Count: > 0 } h ? h : null;
+            _history = result?.Tests.FirstOrDefault(t => t.Test == key && (project is null || (t.ProjectId ?? t.Project) == project)) is { Runs.Count: > 0 } h ? h : null;
         }
     }
 

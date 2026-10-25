@@ -25,6 +25,8 @@ public sealed record NodeDetail(
     string? RunId,
     RunTestsCommand? Run)
 {
+    public IReadOnlyList<string> DisplayProjects { get; init; } = [];
+
     /// <summary>
     /// Details of the node with <paramref name="key"/> (its expansion key), or null when it no longer exists.
     /// A project resolves in any grouping; other nodes only while they are in <paramref name="tree"/>.
@@ -42,7 +44,7 @@ public sealed record NodeDetail(
         {
             foreach (var test in suite.Tests)
             {
-                _ = projectOf.TryAdd(test, suite.Name);
+                _ = projectOf.TryAdd(test, suite.ProjectId ?? suite.Name);
             }
         }
 
@@ -51,9 +53,12 @@ public sealed record NodeDetail(
         {
             var project = key["suite:".Length..];
             return TestTreeBuilder.ForProject(displayed, project) is { } suite
-                ? new(structure, project, null, suite.Tests, [project], projectOf,
+                ? new(structure, TestTreeBuilder.DisplayProjectName(displayed, project), null, suite.Tests, [project], projectOf,
                     TestTreeBuilder.ForProject(completed, project)?.RunId,
                     new RunTestsCommand([project]))
+                {
+                    DisplayProjects = [TestTreeBuilder.DisplayProjectName(displayed, project)],
+                }
                 : null;
         }
 
@@ -84,6 +89,9 @@ public sealed record NodeDetail(
             _ => (node.Label, (string?)null),
         };
 
-        return new(structure, title, subtitle == title ? null : subtitle, tests, projects, projectOf, null, run);
+        return new(structure, title, subtitle == title ? null : subtitle, tests, projects, projectOf, null, run)
+        {
+            DisplayProjects = [.. projects.Select(project => TestTreeBuilder.DisplayProjectName(displayed, project))],
+        };
     }
 }

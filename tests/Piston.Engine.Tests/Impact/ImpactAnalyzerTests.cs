@@ -107,6 +107,22 @@ public sealed class ImpactAnalyzerTests : IDisposable
     // ── Tests ──────────────────────────────────────────────────────────────────
 
     [Fact]
+    public async Task RestoredTestProjectListIsUnavailableUntilTheGraphIsComplete()
+    {
+        var analyzer = new ImpactAnalyzer(_factory);
+        Assert.Null(analyzer.GetRestoredTestProjectPaths());
+        _graph.EvaluatedBeforeRestore = true;
+        await analyzer.InitializeAsync("solution.slnx", _ct);
+        Assert.Null(analyzer.GetRestoredTestProjectPaths());
+        Assert.Equal([_testsCsproj], analyzer.GetAllTestProjectPaths());
+
+        _graph.EvaluatedBeforeRestore = false;
+        Assert.Equal([_testsCsproj], analyzer.GetRestoredTestProjectPaths());
+        analyzer.InvalidateGraph();
+        Assert.Null(analyzer.GetRestoredTestProjectPaths());
+    }
+
+    [Fact]
     public async Task SingleCsFileInSourceProject_BuildsThatProject_RunsDependentTestProjects()
     {
         var analyzer = new ImpactAnalyzer(_factory);

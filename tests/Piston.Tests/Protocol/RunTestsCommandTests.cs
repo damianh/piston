@@ -22,11 +22,11 @@ public sealed class RunTestsCommandTests
 
         var result = await dispatcher.HandleCommandAsync(
             ProtocolMethods.EngineRunTests,
-            JsonNode.Parse("""{"projects":["A.Tests"],"tests":["A.C.M"]}"""),
+            JsonNode.Parse("""{"projectIds":["A.Tests/A.Tests.csproj"],"tests":["A.C.M"]}"""),
             _ct);
 
         Assert.Null(result);
-        Assert.Equal(["A.Tests"], engine.LastSelection!.Projects);
+        Assert.Equal(["A.Tests/A.Tests.csproj"], engine.LastSelection!.ProjectIds);
         Assert.Equal(["A.C.M"], engine.LastSelection.Tests!);
     }
 
@@ -36,15 +36,16 @@ public sealed class RunTestsCommandTests
         var engine = new StubEngine();
 
         _ = await new EngineCommandDispatcher(engine).HandleCommandAsync(
-            ProtocolMethods.EngineRunTests, JsonNode.Parse("""{"projects":["A.Tests"]}"""), _ct);
+            ProtocolMethods.EngineRunTests, JsonNode.Parse("""{"projectIds":["A.Tests/A.Tests.csproj"]}"""), _ct);
 
         Assert.Null(engine.LastSelection!.Tests);
     }
 
     [Theory]
     [InlineData("{}")]
-    [InlineData("""{"projects":[]}""")]
-    [InlineData("""{"projects":[" "]}""")]
+    [InlineData("""{"projects":["A.Tests"]}""")]
+    [InlineData("""{"projectIds":[]}""")]
+    [InlineData("""{"projectIds":[" "]}""")]
     public async Task WithoutProjects_IsInvalidParams(string json)
     {
         var dispatcher = new EngineCommandDispatcher(new StubEngine());
@@ -61,7 +62,7 @@ public sealed class RunTestsCommandTests
         var engine = new StubEngine { RunSelectedError = new ArgumentException("'X' is not a test project.") };
 
         var ex = await Assert.ThrowsAsync<JsonRpcException>(() => new EngineCommandDispatcher(engine)
-            .HandleCommandAsync(ProtocolMethods.EngineRunTests, JsonNode.Parse("""{"projects":["X"]}"""), _ct));
+            .HandleCommandAsync(ProtocolMethods.EngineRunTests, JsonNode.Parse("""{"projectIds":["X"]}"""), _ct));
 
         Assert.Equal(JsonRpcErrorCodes.InvalidParams, ex.Code);
         Assert.Equal("'X' is not a test project.", ex.Message);
@@ -76,7 +77,7 @@ public sealed class RunTestsCommandTests
         };
 
         var ex = await Assert.ThrowsAsync<JsonRpcException>(() => new EngineCommandDispatcher(engine)
-            .HandleCommandAsync(ProtocolMethods.EngineRunTests, JsonNode.Parse("""{"projects":["A.Tests"]}"""), _ct));
+            .HandleCommandAsync(ProtocolMethods.EngineRunTests, JsonNode.Parse("""{"projectIds":["A.Tests/A.Tests.csproj"]}"""), _ct));
 
         Assert.Equal(JsonRpcErrorCodes.InvalidRequest, ex.Code);
         Assert.Equal("A test run is already in progress.", ex.Message);

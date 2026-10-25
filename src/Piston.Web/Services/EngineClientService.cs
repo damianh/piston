@@ -288,11 +288,16 @@ public sealed class EngineClientService : IAsyncDisposable
     public async Task<JsonNode?> SendRequestAsync(string method, object? @params) =>
         (await SendForResponseAsync(method, @params).ConfigureAwait(false))?.Result;
 
+    public async Task<JsonNode?> SendRequestAsync(
+        string method, object? @params, CancellationToken cancellationToken) =>
+        (await SendForResponseAsync(method, @params, cancellationToken).ConfigureAwait(false))?.Result;
+
     /// <summary>
     /// Sends a request and returns its response, including any error, or <see langword="null"/> when the
     /// daemon is unreachable or does not reply in time.
     /// </summary>
-    private async Task<JsonRpcResponse?> SendForResponseAsync(string method, object? @params)
+    private async Task<JsonRpcResponse?> SendForResponseAsync(
+        string method, object? @params, CancellationToken cancellationToken = default)
     {
         if (_webSocket?.State != WebSocketState.Open)
         {
@@ -321,8 +326,16 @@ public sealed class EngineClientService : IAsyncDisposable
         }
 
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        _ = timeoutCts.Token.Register(() => tcs.TrySetResult(null));
-        return await tcs.Task.ConfigureAwait(false);
+        using var timeoutRegistration = timeoutCts.Token.Register(() => tcs.TrySetResult(null));
+        try
+        {
+            return await tcs.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _ = _pendingRequests.TryRemove(id, out _);
+            throw;
+        }
     }
 
     /// <summary>
@@ -350,9 +363,9 @@ public sealed class EngineClientService : IAsyncDisposable
     /// The log of a test project's latest run, or <see langword="null"/> when none was recorded or the
     /// daemon is unreachable.
     /// </summary>
-    public async Task<ExecutionLogDto?> GetRunLogAsync(string project)
+    public async Task<ExecutionLogDto?> GetRunLogAsync(string projectId)
     {
-        var result = await SendRequestAsync(ProtocolMethods.TestsGetRunLog, new GetRunLogCommand(project))
+        var result = await SendRequestAsync(ProtocolMethods.TestsGetRunLog, new GetRunLogCommand(projectId))
             .ConfigureAwait(false);
         return result?.Deserialize<RunLogResponse>(JsonRpcSerializer.Options)?.Log;
     }
@@ -401,9 +414,9 @@ public sealed class EngineClientService : IAsyncDisposable
     }
 
     /// <summary>Recorded results of a test; null when the daemon is unreachable.</summary>
-    public async Task<TestHistoriesDto?> GetTestHistoryAsync(string test, string? project)
+    public async Task<TestHistoriesDto?> GetTestHistoryAsync(string test, string? projectId)
     {
-        var result = await SendRequestAsync(ProtocolMethods.HistoryGetTestHistory, new GetTestHistoryCommand(test, project)).ConfigureAwait(false);
+        var result = await SendRequestAsync(ProtocolMethods.HistoryGetTestHistory, new GetTestHistoryCommand(test, projectId)).ConfigureAwait(false);
         return result?.Deserialize<TestHistoriesDto>(JsonRpcSerializer.Options);
     }
 
@@ -495,6 +508,12 @@ public sealed class EngineClientService : IAsyncDisposable
         Settings = response.Settings;
         SettingsFilePath = response.FilePath;
         SettingsChanged?.Invoke();
+    }
+
+    public async Task<MachineOverviewDto?> GetMachineOverviewAsync(CancellationToken cancellationToken = default)
+    {
+        var result = await SendRequestAsync(ProtocolMethods.MachineGetOverview, null, cancellationToken).ConfigureAwait(false);
+        return result?.Deserialize<MachineOverviewDto>(JsonRpcSerializer.Options);
     }
 
     public Task ResetAsync() => SendCommandAsync(ProtocolMethods.EngineReset);

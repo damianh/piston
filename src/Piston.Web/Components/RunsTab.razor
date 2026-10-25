@@ -128,7 +128,7 @@
                                 <div class="flex items-center gap-2">
                                     <span class="w-14 shrink-0 @StatusText(result.Status)">@result.Status</span>
                                     <button class="truncate text-left text-gray-200 hover:underline" title="@result.Project :: @result.Test"
-                                            @onclick="() => OnOpenTest.InvokeAsync(new TestReference(result.Project, result.Test))">@result.Test</button>
+                                            @onclick="() => OnOpenTest.InvokeAsync(new TestReference(result.ProjectId ?? result.Project, result.Test))">@result.Test</button>
                                     <span class="flex-1"></span>
                                     <span class="text-yellow-600 tabular-nums shrink-0">@TestNode.FormatDuration(result.DurationMs)</span>
                                 </div>

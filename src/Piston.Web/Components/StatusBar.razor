@@ -82,11 +82,13 @@
         {
             var elapsed = TestNode.FormatDuration(Math.Max(0, (DateTimeOffset.UtcNow - longest.StartedAt).TotalMilliseconds));
             var shortName = WatchStrip.ShortTestName(longest.Name);
+            var projectName = ProjectLabels.For(longest.ProjectPath, Snapshot.ProjectStatuses?.Keys ?? [], Snapshot.SolutionPath);
             <span class="flex items-center gap-1.5 min-w-0 @(longest.PossiblyHanging ? "text-amber-400" : "text-gray-400")"
                   data-testid="longest-running-test"
-                  title="@($"Running longest: {longest.Name}{Environment.NewLine}{Path.GetFileNameWithoutExtension(longest.ProjectPath)}{(longest.PossiblyHanging ? $"{Environment.NewLine}Running longer than the hang threshold: possibly hanging" : "")}")">
+                  title="@($"Running longest: {longest.Name}{Environment.NewLine}{projectName}{(longest.PossiblyHanging ? $"{Environment.NewLine}Running longer than the hang threshold: possibly hanging" : "")}")">
                 <span class="shrink-0">@(longest.PossiblyHanging ? "⚠" : "⏱")</span>
                 <span class="truncate">@shortName</span>
+                <span class="shrink-0 truncate max-w-32">@projectName</span>
                 <span class="shrink-0 tabular-nums">@elapsed</span>
                 @if (longest.PossiblyHanging)
                 {
@@ -198,12 +200,15 @@
         _tick?.Dispose();
     }
 
-    private static List<string> RunningProjects(StateSnapshotNotification snapshot) =>
-        snapshot.ProjectStatuses?
+    private static List<string> RunningProjects(StateSnapshotNotification snapshot)
+    {
+        var projectPaths = snapshot.ProjectStatuses?.Keys.ToList() ?? [];
+        return snapshot.ProjectStatuses?
             .Where(p => p.Value == ProjectRunStatusDto.Running)
-            .Select(p => Path.GetFileNameWithoutExtension(p.Key))
+            .Select(p => ProjectLabels.For(p.Key, projectPaths, snapshot.SolutionPath))
             .Order(StringComparer.Ordinal)
             .ToList() ?? [];
+    }
 
     private static List<(string Project, TestResourceWaitDto Wait)> WaitingProjects(StateSnapshotNotification snapshot) =>
         snapshot.ProjectResourceWaits?

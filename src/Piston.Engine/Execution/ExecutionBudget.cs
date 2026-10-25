@@ -39,7 +39,7 @@ public sealed record ExecutionBudget(int CpuSlots, int? MemoryMb, string Source,
                 document = JsonDocument.Parse(reader.ReadToEnd());
                 break;
             }
-            catch (FileNotFoundException)
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
                 return Default;
             }
