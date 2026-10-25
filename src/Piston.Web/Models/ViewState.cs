@@ -26,7 +26,7 @@ public sealed class ViewState
     public TestMarkDto? GetTestMark(string? project, string testKey) =>
         project is null ? null : TestMarks.GetValueOrDefault((project, testKey));
 
-    /// <summary>Test projects waiting for exclusive test resources, keyed by suite name.</summary>
+    /// <summary>Test projects waiting for exclusive test resources, keyed by project ID (see <see cref="ResourceWaitText.ByProjectId"/>).</summary>
     public IReadOnlyDictionary<string, TestResourceWaitDto> ResourceWaits { get; set; } =
         new Dictionary<string, TestResourceWaitDto>();
 
@@ -132,7 +132,7 @@ public sealed class ViewState
             return null;
         }
 
-        var tests = suites.Where(s => SelectedTestProject is null || s.Name == SelectedTestProject)
+        var tests = suites.Where(s => SelectedTestProject is null || (s.ProjectId ?? s.Name) == SelectedTestProject)
             .SelectMany(s => s.Tests).ToList();
         return tests.FirstOrDefault(t => t.Key == key)
             ?? tests.FirstOrDefault(t => t.FullyQualifiedName == key
@@ -201,11 +201,13 @@ public sealed class ViewState
         new(DetailPosition == DetailPosition.Bottom ? DetailPanePosition.Bottom : DetailPanePosition.Right);
 }
 
-/// <summary>A test result key scoped to its suite name, independent of the host's project path separators.</summary>
+/// <summary>A test result key scoped to its project identity, independent of the host's project path separators.</summary>
 public sealed record TestReference(string Project, string Key)
 {
-    public static TestReference FromProjectPath(string projectPath, string key) =>
-        new(Path.GetFileNameWithoutExtension(projectPath.Replace('\\', '/')), key);
+    public static TestReference FromProjectPath(string projectPath, string key, string? solutionPath = null) =>
+        new(solutionPath is null
+            ? Path.GetFileNameWithoutExtension(projectPath.Replace('\\', '/'))
+            : ProjectPaths.ProjectId(projectPath, solutionPath), key);
 }
 
 public enum DetailPosition

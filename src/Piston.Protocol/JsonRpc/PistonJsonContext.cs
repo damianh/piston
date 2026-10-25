@@ -31,6 +31,7 @@ namespace Piston.Protocol.JsonRpc;
 // ── DTO records ───────────────────────────────────────────────────────────
 [JsonSerializable(typeof(TestResultDto))]
 [JsonSerializable(typeof(TestSuiteDto))]
+[JsonSerializable(typeof(TestRunProjectOutcomeDto))]
 [JsonSerializable(typeof(BuildResultDto))]
 [JsonSerializable(typeof(BuildStatusDto))]
 [JsonSerializable(typeof(PistonPhaseDto))]
@@ -113,6 +114,7 @@ namespace Piston.Protocol.JsonRpc;
 // ── Concrete collection registrations for IReadOnlyList<T>/IReadOnlyDictionary<K,V> ──
 // STJ source generators cannot resolve interface-typed collection properties automatically.
 [JsonSerializable(typeof(List<TestSuiteDto>))]
+[JsonSerializable(typeof(List<TestRunProjectOutcomeDto>))]
 [JsonSerializable(typeof(List<TestResultDto>))]
 [JsonSerializable(typeof(List<string>))]
 [JsonSerializable(typeof(List<CoverageLineDto>))]

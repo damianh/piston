@@ -38,7 +38,8 @@ public sealed record StoredTestResultDto(
     double DurationMs,
     string? ErrorMessage,
     string? StackTrace,
-    IReadOnlyList<StoredAttemptDto>? Attempts = null);
+    IReadOnlyList<StoredAttemptDto>? Attempts = null,
+    string? ProjectId = null);
 
 /// <summary>An earlier attempt of a test retried within a stored run.</summary>
 public sealed record StoredAttemptDto(string Status, double DurationMs, string? ErrorMessage);
@@ -51,7 +52,7 @@ public sealed record StoredRunDto(StoredRunSummaryDto Summary, IReadOnlyList<Sto
 /// <param name="Evidence">The earlier runs the failure kind rests on.</param>
 /// <param name="Flaky">True when the test passed and failed on the same source within its recorded history.</param>
 /// <param name="Flakiness">Why the test is flaky; null when it is not.</param>
-public sealed record TestMarkDto(string Project, string Test, string? FailureKind, string? Evidence, bool Flaky, FlakyEvidenceDto? Flakiness = null);
+public sealed record TestMarkDto(string Project, string Test, string? FailureKind, string? Evidence, bool Flaky, FlakyEvidenceDto? Flakiness = null, string? ProjectId = null);
 
 /// <summary>The outcomes behind a flaky label.</summary>
 /// <param name="Source">The source fingerprint the test passed and failed on; null when only retries within one run disagree.</param>
@@ -86,7 +87,7 @@ public sealed record TestHistoryEntryDto(string RunId, DateTimeOffset At, string
 
 /// <summary>Recorded results of one test, oldest first.</summary>
 /// <param name="Flakiness">Why the test is flaky; null when it is not.</param>
-public sealed record TestHistoryDto(string Project, string Test, bool Flaky, IReadOnlyList<TestHistoryEntryDto> Runs, FlakyEvidenceDto? Flakiness = null);
+public sealed record TestHistoryDto(string Project, string Test, bool Flaky, IReadOnlyList<TestHistoryEntryDto> Runs, FlakyEvidenceDto? Flakiness = null, string? ProjectId = null);
 
 /// <summary>Recorded results of the tests matching a name.</summary>
 /// <param name="Enabled">False when the daemon keeps no run history.</param>

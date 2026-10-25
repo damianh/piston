@@ -18,12 +18,18 @@ public static class TestRunJson
 
     public static JsonObject ToJson(TestRunRecord run)
     {
-        var tests = run.Tests.ToList();
+        var tests = run.Suites
+            .SelectMany(suite => suite.Tests.Select(test => (ProjectId: suite.Key, Test: test)))
+            .ToList();
         var testArray = new JsonArray();
-        foreach (var t in tests.OrderBy(t => t.FullyQualifiedName, StringComparer.Ordinal).ThenBy(t => t.TargetFramework, StringComparer.Ordinal))
+        foreach (var (projectId, t) in tests
+                     .OrderBy(item => item.ProjectId, StringComparer.Ordinal)
+                     .ThenBy(item => item.Test.FullyQualifiedName, StringComparer.Ordinal)
+                     .ThenBy(item => item.Test.TargetFramework, StringComparer.Ordinal))
         {
             testArray.Add(new JsonObject
             {
+                ["projectId"] = projectId,
                 ["fullyQualifiedName"] = t.FullyQualifiedName,
                 ["targetFramework"] = t.TargetFramework,
                 ["displayName"] = t.DisplayName,
@@ -78,6 +84,7 @@ public static class TestRunJson
                 .Select(p => (JsonNode)new JsonObject
                 {
                     ["projectPath"] = p.ProjectPath,
+                    ["projectId"] = p.ProjectId,
                     ["status"] = p.Status.ToString(),
                     ["testCount"] = p.TestCount,
                     ["noTestsReason"] = p.NoTestsReason,
@@ -94,17 +101,18 @@ public static class TestRunJson
             ["summary"] = new JsonObject
             {
                 ["total"] = tests.Count,
-                ["passed"] = tests.Count(t => t.Status == TestStatus.Passed),
-                ["failed"] = tests.Count(t => t.Status == TestStatus.Failed),
-                ["skipped"] = tests.Count(t => t.Status == TestStatus.Skipped),
-                ["passedOnRetry"] = tests.Count(t => t.Status == TestStatus.Passed && t.Attempts.Count > 0),
-                ["other"] = tests.Count(t => t.Status is not (TestStatus.Passed or TestStatus.Failed or TestStatus.Skipped)),
+                ["passed"] = tests.Count(t => t.Test.Status == TestStatus.Passed),
+                ["failed"] = tests.Count(t => t.Test.Status == TestStatus.Failed),
+                ["skipped"] = tests.Count(t => t.Test.Status == TestStatus.Skipped),
+                ["passedOnRetry"] = tests.Count(t => t.Test.Status == TestStatus.Passed && t.Test.Attempts.Count > 0),
+                ["other"] = tests.Count(t => t.Test.Status is not (TestStatus.Passed or TestStatus.Failed or TestStatus.Skipped)),
             },
             ["duplicateTestIds"] = new JsonArray(run.DuplicateTestIds.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
             ["failureClassifications"] = new JsonArray(run.FailureClassifications
                 .Select(c => (JsonNode)new JsonObject
                 {
                     ["project"] = c.Project,
+                    ["projectId"] = c.ProjectId,
                     ["test"] = c.Test,
                     ["kind"] = c.Kind.ToString(),
                     ["evidence"] = c.Evidence,
@@ -120,7 +128,7 @@ public static class TestRunJson
     }
 
     private static JsonArray OutcomeReferences(IReadOnlyList<TestOutcomeReference> tests) =>
-        new(tests.Select(t => (JsonNode)new JsonObject { ["project"] = t.Project, ["key"] = t.Key }).ToArray());
+        new(tests.Select(t => (JsonNode)new JsonObject { ["project"] = t.Project, ["projectId"] = t.ProjectId, ["key"] = t.Key }).ToArray());
 
     internal static JsonObject? Flakiness(FlakinessEvidence? f) => f is null
         ? null
@@ -211,7 +219,9 @@ public static class TestRunJson
         : new JsonObject
         {
             ["solutionPath"] = c.SolutionPath,
-            ["testProjects"] = Strings(c.TestProjects),
+            ["testProjects"] = c.TestProjects is null
+                ? null
+                : Strings(c.TestProjects.Select(path => ProjectId(c.SolutionPath, path)).ToList()),
             ["buildTargets"] = Strings(c.BuildTargets),
             ["userFilter"] = c.UserFilter,
             ["effectiveFilter"] = c.EffectiveFilter,
@@ -241,4 +251,10 @@ public static class TestRunJson
     private static JsonArray? Strings(IReadOnlyList<string>? values) => values is null
         ? null
         : new JsonArray(values.Select(v => (JsonNode)JsonValue.Create(v)!).ToArray());
+
+    private static string ProjectId(string solutionPath, string projectPath)
+    {
+        var solutionDirectory = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? Path.GetFullPath(solutionPath);
+        return Path.GetRelativePath(solutionDirectory, Path.GetFullPath(projectPath, solutionDirectory)).Replace('\\', '/');
+    }
 }

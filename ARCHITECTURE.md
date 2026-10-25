@@ -517,6 +517,24 @@ document. Raw diagnostic lines retain MSBuild's ID and file/line/column location
 A build failure uses the same source-freshness computation as test completion;
 `Current` build diagnostics do not make `isCurrentFullResult` true.
 
+Every test suite also carries its short display `Name` and a `ProjectId`: the
+project path relative to the solution directory, with `/` separators and the
+project-file extension (for example, `tests/One/Tests.csproj`). The ID is the
+key for `engine/runTests`, `tests/getRunLog`, history, and dashboard selection;
+short names are not accepted for targeted requests. The dashboard displays the
+short name unless another project shares it, in which case it adds the relative
+path; labels normalize daemon path separators regardless of the browser's platform.
+Duplicate test IDs are detected within each project, not across projects. When
+the runner falls back to a solution target without project IDs, suite names remain
+the fallback identities for logs and flattened test results.
+Run history format v2 stores project IDs, and retained history remains queryable
+by ID after a project is renamed or removed. On loading v1 history, a short
+name is migrated only when it identifies exactly one current test project,
+after a successful build and post-restore graph refresh. While project discovery
+is incomplete, legacy data is left unchanged and new runs are not recorded in
+history, with a diagnostic explaining why. Ambiguous or removed projects are dropped only once
+the complete project list is available.
+
 `set_test_filter` changes the active filter but does not itself run tests.
 `clear_results` clears in-memory suites, the last-run timestamp, coverage state,
 and persisted coverage in the current solution directory. It does not cancel an

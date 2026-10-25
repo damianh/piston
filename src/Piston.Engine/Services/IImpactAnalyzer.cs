@@ -18,6 +18,10 @@ public interface IImpactAnalyzer
     ImpactAnalysisResult AnalyzeFullRun();
     void InvalidateGraph();
     IReadOnlyList<string> GetAllTestProjectPaths();
+
+    /// <summary>The complete test project list after restore, or null while the graph is unavailable or incomplete.</summary>
+    IReadOnlyList<string>? GetRestoredTestProjectPaths() => GetAllTestProjectPaths();
+
     bool IsMtpProject(string projectPath);
     string? GetMtpOutputPath(string projectPath);
 

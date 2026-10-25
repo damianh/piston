@@ -326,7 +326,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                 {
                     "none" => Task.FromResult<TestRunRecord?>(null),
                     "full" => engine.RequestRunAsync(),
-                    _ => AsNullable(engine.RunSelectedAsync(Selection(plan))),
+                    _ => AsNullable(engine.RunSelectedAsync(Selection(plan, SolutionDirectory()))),
                 };
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NotSupportedException)
@@ -367,9 +367,10 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         static async Task<TestRunRecord?> AsNullable(Task<TestRunRecord> task) => await task.ConfigureAwait(false);
     }
 
-    /// <summary>The test projects of a narrowed or project-scope plan, by suite name, with its tests when narrowed.</summary>
-    internal static TestSelection Selection(ImpactAnalysisResult plan) => new(
-        [.. plan.AffectedTestProjectPaths.Select(Path.GetFileNameWithoutExtension).OfType<string>()
+    /// <summary>The test projects of a narrowed or project-scope plan, by solution-relative ID, with tests when narrowed.</summary>
+    internal static TestSelection Selection(ImpactAnalysisResult plan, string? solutionDirectory = null) => new(
+        [.. plan.AffectedTestProjectPaths
+            .Select(p => solutionDirectory is null ? Path.GetFullPath(p) : Relative(p, solutionDirectory))
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
         plan.NarrowsToTests ? [.. (plan.AffectedTestFqns ?? []).Order(StringComparer.Ordinal)] : null);
 

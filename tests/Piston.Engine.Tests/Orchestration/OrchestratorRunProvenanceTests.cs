@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Text.Json;
 using Piston.Engine.History;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
@@ -242,10 +243,10 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         var fixedRun = _state.LastRun!;
 
         Assert.Empty(broken!.ChangedFiles);
-        Assert.Equal([new("A.Tests", "A.Tests.Test1")], broken.NewlyFailingTests);
+        Assert.Equal([new("A.Tests", "A.Tests.Test1") { ProjectId = TestProjectNames.ProjectId(_root, Projects[0]) }], broken.NewlyFailingTests);
         Assert.Empty(broken.FixedTests);
         Assert.Equal([code], fixedRun.ChangedFiles);
-        Assert.Equal([new("A.Tests", "A.Tests.Test1")], fixedRun.FixedTests);
+        Assert.Equal([new("A.Tests", "A.Tests.Test1") { ProjectId = TestProjectNames.ProjectId(_root, Projects[0]) }], fixedRun.FixedTests);
         Assert.Empty(fixedRun.NewlyFailingTests);
     }
 
@@ -262,6 +263,106 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         Assert.Equal(Projects, run.Context!.TestProjects);
         Assert.Equal(Projects, run.Context.TestWorkingDirectories!.Keys.Order(StringComparer.Ordinal));
         Assert.Equal(["A.Tests", "B.Tests"], _state.TestSuites.Select(s => s.Name).Order(StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StartupHistoryMigrationWaitsForTheCompletePostRestoreGraph(bool ambiguous)
+    {
+        var restoredProject = ambiguous ? "/src/Other/A.Tests.csproj" : Projects[1];
+        var legacyName = Path.GetFileNameWithoutExtension(restoredProject);
+        var historyDirectory = _root + "-history";
+        WriteLegacyHistory(historyDirectory, legacyName);
+        using var history = RunHistoryStore.Open(historyDirectory, SolutionPath);
+        _orchestrator.RunHistory = history;
+        _impact.TestProjects = [Projects[0]];
+        _impact.TestProjectsAfterRestore = [Projects[0], restoredProject];
+        _build.DuringBuild = () =>
+            Assert.Equal(legacyName, Assert.Single(history.GetTestHistory("Shared.Test")).ProjectId);
+
+        try
+        {
+            await StartAndWaitForStartupRunAsync();
+
+            var migrated = history.GetTestHistory("Shared.Test");
+            if (ambiguous)
+            {
+                Assert.Empty(migrated);
+            }
+            else
+            {
+                Assert.Equal(TestProjectNames.ProjectId(_root, restoredProject), Assert.Single(migrated).ProjectId);
+            }
+        }
+        finally
+        {
+            _orchestrator.RunHistory = null;
+            history.Dispose();
+            Directory.Delete(historyDirectory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IncompleteGraphOrFailedBuildLeavesLegacyHistoryUnchanged(bool buildFails)
+    {
+        var historyDirectory = _root + "-history";
+        WriteLegacyHistory(historyDirectory, "A.Tests");
+        var location = HistoryLocation.Resolve(historyDirectory, SolutionPath);
+        var original = File.ReadAllText(location.FilePath);
+        var messages = new List<string>();
+        using var history = RunHistoryStore.Open(historyDirectory, SolutionPath, messages.Add);
+        _orchestrator.RunHistory = history;
+        _impact.ProjectDiscoveryComplete = false;
+        _build.Fail = buildFails;
+
+        try
+        {
+            await StartAndWaitForStartupRunAsync();
+            history.Save();
+
+            Assert.Equal(original, File.ReadAllText(location.FilePath));
+            Assert.Equal("A.Tests", Assert.Single(history.GetTestHistory("Shared.Test")).ProjectId);
+            if (!buildFails)
+            {
+                Assert.Contains(messages, m => m.Contains("waiting for complete project discovery", StringComparison.Ordinal));
+            }
+
+            _impact.ProjectDiscoveryComplete = true;
+            _build.Fail = false;
+            _ = await _orchestrator.RequestRunAsync();
+            Assert.Equal(TestProjectNames.ProjectId(_root, Projects[0]),
+                Assert.Single(history.GetTestHistory("Shared.Test")).ProjectId);
+        }
+        finally
+        {
+            _orchestrator.RunHistory = null;
+            history.Dispose();
+            Directory.Delete(historyDirectory, recursive: true);
+        }
+    }
+
+    private void WriteLegacyHistory(string directory, string project)
+    {
+        var location = HistoryLocation.Resolve(directory, SolutionPath);
+        _ = Directory.CreateDirectory(location.Directory);
+        File.WriteAllText(location.FilePath, JsonSerializer.Serialize(new
+        {
+            Version = 1,
+            Names = new[] { project, "Shared.Test" },
+            Tests = new[]
+            {
+                new
+                {
+                    Project = 0,
+                    Test = 1,
+                    Runs = new[] { new { RunId = "legacy-run", At = DateTimeOffset.UtcNow, Status = "P", DurationMs = 1 } },
+                },
+            },
+            Runs = Array.Empty<object>(),
+        }));
     }
 
     [Fact]
@@ -322,7 +423,10 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         var flaky = await _orchestrator.RequestRunAsync();
 
         var classification = Assert.Single(broken!.FailureClassifications);
-        Assert.Equal(new FailureClassification("B.Tests", "B.Tests.Test1", FailureKind.New, classification.Evidence), classification);
+        Assert.Equal(new FailureClassification("B.Tests", "B.Tests.Test1", FailureKind.New, classification.Evidence)
+        {
+            ProjectId = TestProjectNames.ProjectId(_root, Projects[1]),
+        }, classification);
         Assert.Equal(FailureKind.Flaky, Assert.Single(flaky!.FailureClassifications).Kind);
         Assert.Equal(4, history.GetRuns().Count);
         _orchestrator.RunHistory = null;
@@ -388,6 +492,31 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         Assert.Equal(TestRunStatus.Incomplete, run!.Status);
         Assert.Contains(run.Projects, p => p.Status == ProjectRunStatus.Crashed);
         Assert.False(run.IsCurrentFullResult);
+    }
+
+    [Fact]
+    public async Task IdenticalTestsInDifferentProjects_AreNotDuplicateIdentities()
+    {
+        _impact.TestProjects =
+        [
+            Path.Combine(_root, "One", "Tests.csproj"),
+            Path.Combine(_root, "Two", "Tests.csproj"),
+        ];
+        await StartAndWaitForStartupRunAsync();
+
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(TestRunStatus.Completed, run!.Status);
+        Assert.Equal(["One/Tests.csproj", "Two/Tests.csproj"], run.Suites.Select(s => s.ProjectId));
+        Assert.All(run.Tests, test => Assert.Equal("Tests.Test1", test.ResultKey));
+        Assert.Empty(run.DuplicateTestIds);
+        Assert.True(run.IsCurrentFullResult);
+
+        _runner.DuplicateFirstTest = true;
+        var duplicated = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(["Tests.Test1"], duplicated!.DuplicateTestIds);
+        Assert.False(duplicated.IsCurrentFullResult);
     }
 
     [Fact]
@@ -483,6 +612,10 @@ internal sealed class ProvenanceImpactAnalyzer(IReadOnlyList<string> testProject
 
     /// <summary>The test projects the graph finds once reloaded after restore; null when it was restored already.</summary>
     public IReadOnlyList<string>? TestProjectsAfterRestore { get; set; }
+    public bool ProjectDiscoveryComplete { get; set; } = true;
+
+    public IReadOnlyList<string>? GetRestoredTestProjectPaths() =>
+        ProjectDiscoveryComplete && TestProjectsAfterRestore is null ? TestProjects : null;
 
     public bool RefreshGraphIfEvaluatedBeforeRestore()
     {

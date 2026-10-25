@@ -280,7 +280,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         _history = null;
     }
 
-    public IReadOnlyList<TestHistory>? GetTestHistory(string test, string? project = null) => _history?.GetTestHistory(test, project);
+    public IReadOnlyList<TestHistory>? GetTestHistory(string test, string? projectId = null) => _history?.GetTestHistory(test, projectId);
 
     public IReadOnlyList<TestHistory>? GetFlakyTests() => _history?.GetFlakyTests();
 

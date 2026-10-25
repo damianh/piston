@@ -4,7 +4,10 @@
 namespace Piston.Engine.Models;
 
 /// <summary>A test result key scoped to the project suite that produced it.</summary>
-public sealed record TestOutcomeReference(string Project, string Key);
+public sealed record TestOutcomeReference(string Project, string Key)
+{
+    public string ProjectId { get; init; } = Project;
+}
 
 /// <summary>What caused a test run to be requested.</summary>
 public enum TestRunTrigger
@@ -169,6 +172,8 @@ public sealed record TestRunProjectOutcome(
     string? NoTestsReason = null,
     TestTimeout? TimedOut = null)
 {
+    public string ProjectId { get; init; } = ProjectPath;
+
     /// <summary>The exclusive test resources the project held and how long it waited, when it needed any.</summary>
     public TestProjectResources? Resources { get; init; }
 
