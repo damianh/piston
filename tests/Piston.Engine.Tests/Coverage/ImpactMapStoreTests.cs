@@ -115,7 +115,7 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         var executor = Assert.Single(_sut.GetTestsExecuting(path));
         Assert.True(executor.IsUnitCurrent);
         Assert.True(executor.IsContentCurrent);
-        Assert.Equal([new LineSpan(3, 5)], executor.Spans);
+        Assert.Equal([new LineSpan(5, 5)], executor.Spans);
     }
 
     [Fact]
@@ -166,6 +166,43 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         Assert.False(Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Class)).IsCurrent);
         Assert.True(Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Run)).IsCurrent);
         Assert.Equal(["T.A.One", "T.B.One"], _sut.SelectTests([edited]).Tests.Keys.Order());
+    }
+
+    [Fact]
+    public async Task MarkChangedAsync_InsertingMemberAboveExecutedMethod_KeepsClassEvidenceCurrent()
+    {
+        const string original = "class C\n{\n    void A() { int x = 1; }\n}";
+        const string inserted = "class C\n{\n    void Added() { }\n    void A() { int x = 1; }\n}";
+        var member = Assert.Single(SourceMembers.Parse(original).Members);
+        await _sut.RecordImpactAsync(new ImpactRecording(
+            Project, ImpactGranularity.Class, "C", _sut.CreateRunId(), ["T.C.A"],
+            [new ImpactFile(File, [member.Lines], original)], Merge: false));
+
+        await _sut.MarkChangedAsync([new ChangedFile(File, inserted)]);
+
+        Assert.True(Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Class)).IsCurrent);
+    }
+
+    [Fact]
+    public async Task SelectTests_MethodBodyEdit_SelectsItsRecordedTestAndReportsMember()
+    {
+        const string original = "class C\n{\n    void A() { int x = 1; }\n    void B() { int y = 2; }\n}";
+        const string edited = "class C\n{\n    void A() { int x = 3; }\n    void B() { int y = 2; }\n}";
+        var members = SourceMembers.Parse(original).Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
+        var methodA = members.Values.Single(member => member.Key.StartsWith("C.A`", StringComparison.Ordinal));
+        var methodB = members.Values.Single(member => member.Key.StartsWith("C.B`", StringComparison.Ordinal));
+        var path = Path.Combine(_tempDir, "Methods.cs");
+        await _sut.RecordImpactAsync(new ImpactRecording(
+            Project, ImpactGranularity.Test, "C.A", _sut.CreateRunId(), ["T.C.A"],
+            [new ImpactFile(path, [methodA.Lines], original)], Merge: false));
+        await _sut.RecordImpactAsync(new ImpactRecording(
+            Project, ImpactGranularity.Test, "C.B", _sut.CreateRunId(), ["T.C.B"],
+            [new ImpactFile(path, [methodB.Lines], original)], Merge: false));
+
+        var selection = _sut.SelectTests([new ChangedFile(path, edited)]);
+
+        Assert.Equal(["T.C.A"], selection.Tests.Keys);
+        Assert.Equal(methodA.Key, Assert.Single(selection.Tests["T.C.A"]).Member);
     }
 
     [Fact]

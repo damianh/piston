@@ -623,18 +623,25 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
         CoverageFileSummary? file;
         IReadOnlyList<LineCoverage> lines;
+        IReadOnlyList<LineSpan> staleLines;
         _coverageLock.Wait();
         try
         {
             file = _coverageStore.GetReportFile(filePath);
             lines = file is null ? [] : _coverageStore.GetReportLines(filePath);
+            staleLines = file is null ? [] : _coverageStore.GetReportStaleLines(filePath);
         }
         finally
         {
             _ = _coverageLock.Release();
         }
 
-        return file is null ? null : new FileCoverageSnapshot(WithCurrentStaleness(file), lines);
+        return file is null
+            ? null
+            : new FileCoverageSnapshot(WithCurrentStaleness(file), lines)
+            {
+                StaleLines = [.. staleLines.Select(range => new CoveredLineRange(range.Start, range.End))],
+            };
     }
 
     /// <summary>
@@ -702,7 +709,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
     /// <summary>Flags a file stale when its content no longer matches what was measured, e.g. after edits while stopped.</summary>
     private static CoverageFileSummary WithCurrentStaleness(CoverageFileSummary file) =>
-        file.IsStale || file.ContentHash is null
+        file.ContentHash is null
+            || (file.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && !file.IsStale)
             || string.Equals(file.ContentHash, CoverageReportFile.ComputeContentHash(file.FilePath), StringComparison.Ordinal)
             ? file
             : file with { IsStale = true };

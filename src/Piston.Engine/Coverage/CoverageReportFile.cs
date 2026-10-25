@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Security.Cryptography;
+using Piston.Engine.Impact;
 
 namespace Piston.Engine.Coverage;
 
@@ -10,7 +11,7 @@ namespace Piston.Engine.Coverage;
 /// </summary>
 /// <param name="Coverage">The merged coverage for the file across every report in the run.</param>
 /// <param name="ContentHash">SHA-256 of the file's content when the run finished, or null when unreadable.</param>
-internal sealed record CoverageReportFile(FileCoverage Coverage, string? ContentHash)
+internal sealed record CoverageReportFile(FileCoverage Coverage, string? ContentHash, string? Content = null)
 {
     /// <summary>Returns the hex SHA-256 of <paramref name="filePath"/>, or null when it cannot be read.</summary>
     public static string? ComputeContentHash(string filePath)
@@ -56,7 +57,8 @@ public sealed record CoverageFileSummary(
     bool IsPartial,
     string? ContentHash,
     long RunId,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    string? SnapshotHash = null);
 
 /// <summary>
 /// The solution-wide coverage report: every measured file's totals.
@@ -78,7 +80,11 @@ public sealed record CoverageReportSnapshot(IReadOnlyList<CoverageFileSummary> F
 /// <summary>
 /// One file's coverage totals and per-line coverage.
 /// </summary>
-public sealed record FileCoverageSnapshot(CoverageFileSummary File, IReadOnlyList<LineCoverage> Lines);
+public sealed record FileCoverageSnapshot(CoverageFileSummary File, IReadOnlyList<LineCoverage> Lines)
+{
+    /// <summary>Current source line ranges for which stored coverage could not be validated.</summary>
+    public IReadOnlyList<CoveredLineRange> StaleLines { get; init; } = [];
+}
 
 /// <summary>An inclusive, 1-based range of source lines.</summary>
 public sealed record CoveredLineRange(int Start, int End);

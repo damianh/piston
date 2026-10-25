@@ -157,7 +157,7 @@
                                 var number = i + 1;
                                 var line = _lines.GetValueOrDefault(number);
                                 var picked = number == _selectedLine;
-                                <div class="flex @LineTint(line) @(picked ? "ring-1 ring-inset ring-blue-500/70" : "")" title="@LineTitle(line)">
+                                <div class="flex @LineTint(line, IsStaleLine(number)) @(picked ? "ring-1 ring-inset ring-blue-500/70" : "")" title="@LineTitle(line)">
                                     <span class="w-1 shrink-0 @GutterColor(line)" aria-hidden="true"></span>
                                     <button type="button" class="w-12 pr-2 text-right select-none shrink-0 tabular-nums @(picked ? "text-blue-300" : "text-gray-500 hover:text-gray-200")"
                                             title="Show the tests that executed line @number" aria-pressed="@(picked ? "true" : "false")"
@@ -551,7 +551,11 @@
             _ => "text-red-400",
         };
 
-    private static string LineTint(CoverageLineDto? line) => line?.Status switch
+    private bool IsStaleLine(int line) => _file?.StaleLines.Any(range => range.Start <= line && line <= range.End) == true;
+
+    private static string LineTint(CoverageLineDto? line, bool stale) => stale
+        ? "bg-gray-500/10 opacity-50"
+        : line?.Status switch
     {
         "covered" => "bg-green-400/10",
         "partial" => "bg-yellow-400/15",

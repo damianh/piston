@@ -3,6 +3,7 @@
 
 using Microsoft.Data.Sqlite;
 using Piston.Engine.Coverage;
+using Piston.Engine.Impact;
 using Xunit;
 
 namespace Piston.Engine.Tests.Coverage;
@@ -346,6 +347,9 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
     private static CoverageReportFile ReportFile(string path, string? hash, params LineCoverage[] lines) =>
         new(new FileCoverage(path, lines, "Lib"), hash);
 
+    private CoverageReportFile ReportFileWithContent(string path, string content, params LineCoverage[] lines) =>
+        new(new FileCoverage(path, lines, "Lib"), ImpactContent.Hash(content), content);
+
     [Fact]
     public async Task StoreReportAsync_FullRun_ReplacesWholeReportWithTotals()
     {
@@ -366,6 +370,38 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
         Assert.Equal(run, file.RunId);
         Assert.Equal(new LineCoverage(1, 3, 1, 2), _sut.GetReportLines("/repo/A.cs")[0]);
         Assert.Null(_sut.GetReportFile("/repo/Old.cs"));
+    }
+
+    [Fact]
+    public async Task GetReportLines_InsertingCommentsAboveMethodRemapsCoverageAndKeepsItCurrent()
+    {
+        const string original = "class C\n{\n    void A()\n    {\n        int x = 1;\n    }\n}";
+        const string updated = "class C\n{\n    // comment\n\n    void A()\n    {\n        int x = 1;\n    }\n}";
+        var path = Path.Combine(_tempDir, "Code.cs");
+        File.WriteAllText(path, original);
+        await _sut.StoreReportAsync(_sut.CreateRunId(), [ReportFileWithContent(path, original, new LineCoverage(5, 1))], isFullRun: true);
+
+        File.WriteAllText(path, updated);
+
+        Assert.Equal([new LineCoverage(7, 1)], _sut.GetReportLines(path));
+        Assert.Empty(_sut.GetReportStaleLines(path));
+        Assert.False(Assert.Single(_sut.GetReportFiles()).IsStale);
+    }
+
+    [Fact]
+    public async Task GetReportLines_MethodBodyEditDropsOldHitsAndMarksTheCurrentMethodStale()
+    {
+        const string original = "class C\n{\n    void A()\n    {\n        int x = 1;\n    }\n}";
+        const string updated = "class C\n{\n    void A()\n    {\n        int x = 2;\n    }\n}";
+        var path = Path.Combine(_tempDir, "Code.cs");
+        File.WriteAllText(path, original);
+        await _sut.StoreReportAsync(_sut.CreateRunId(), [ReportFileWithContent(path, original, new LineCoverage(5, 1))], isFullRun: true);
+
+        File.WriteAllText(path, updated);
+
+        Assert.Empty(_sut.GetReportLines(path));
+        Assert.Equal([new LineSpan(3, 6)], _sut.GetReportStaleLines(path));
+        Assert.True(Assert.Single(_sut.GetReportFiles()).IsStale);
     }
 
     [Fact]
@@ -450,6 +486,34 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
             command.CommandText = "SELECT COUNT(1) FROM sqlite_master WHERE name = 'coverage_map';";
             Assert.Equal(0L, await command.ExecuteScalarAsync(_ct));
         }
+    }
+
+    [Fact]
+    public async Task Clear_DatabaseFromOlderVersion_InitializesCurrentSchema()
+    {
+        _sut.Dispose();
+        var dbPath = Path.Combine(_dbDir, ".piston", "piston.db");
+        File.Delete(dbPath);
+        using (var connection = new SqliteConnection($"Data Source={dbPath};Pooling=False"))
+        {
+            await connection.OpenAsync(_ct);
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE coverage_map (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, run_id INTEGER NOT NULL, test_fqn TEXT NOT NULL,
+                    file_path TEXT NOT NULL, line_number INTEGER NOT NULL,
+                    hit_count INTEGER NOT NULL DEFAULT 0, is_stale INTEGER NOT NULL DEFAULT 0);
+                INSERT INTO coverage_map (run_id, test_fqn, file_path, line_number) VALUES (7, 'T', '/repo/A.cs', 1);
+                """;
+            _ = await command.ExecuteNonQueryAsync(_ct);
+        }
+
+        SqliteCoverageStore.Clear(_dbDir);
+        _sut = new SqliteCoverageStore();
+        await _sut.InitializeAsync(_dbDir);
+
+        Assert.Equal(1, _sut.CreateRunId());
+        Assert.Empty(_sut.GetReportFiles());
     }
 
     [Fact]

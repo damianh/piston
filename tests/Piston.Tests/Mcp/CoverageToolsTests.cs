@@ -143,6 +143,24 @@ public sealed class CoverageToolsTests : IDisposable
     }
 
     [Fact]
+    public void GetCoverage_File_ReportsUnvalidatedCurrentLines()
+    {
+        var engine = Engine();
+        engine.CoverageReport = new CoverageReportSnapshot([]);
+        engine.FileCoverage["src/A.cs"] = new FileCoverageSnapshot(
+            Summary(Path.Combine(_root, "src", "A.cs"), 2, 1, stale: true),
+            [new(1, 1)])
+        {
+            StaleLines = [new CoveredLineRange(2, 3)],
+        };
+        var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
+
+        var json = JsonNode.Parse(tools.GetCoverage("src/A.cs"))!;
+
+        Assert.Equal("2-3", json["staleLines"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void GetCoverage_UnmeasuredFile_Fails()
     {
         var engine = Engine();
@@ -189,6 +207,34 @@ public sealed class CoverageToolsTests : IDisposable
         Assert.Equal("3", file["uncoveredLines"]!.GetValue<string>());
         Assert.Equal(["Stale.cs"], json["staleFiles"]!.AsArray().Select(f => f!.GetValue<string>()));
         Assert.Equal(["New.cs"], json["notMeasuredFiles"]!.AsArray().Select(f => f!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task GetChangedLineCoverage_UsesRemappedLinesAndReportsStaleChangedLines()
+    {
+        Git("init", "-q", "-b", "main");
+        var measured = Path.Combine(_root, "Measured.cs");
+        await File.WriteAllLinesAsync(measured, ["a", "b", "c"], _ct);
+        Git("add", ".");
+        Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+        await File.WriteAllLinesAsync(measured, ["a", "B", "C"], _ct);
+
+        var engine = Engine();
+        engine.CoverageReport = new CoverageReportSnapshot([]);
+        engine.FileCoverage[measured] = new FileCoverageSnapshot(
+            Summary(measured, 2, 1, stale: true),
+            [new(2, 1)])
+        {
+            StaleLines = [new CoveredLineRange(3, 3)],
+        };
+        var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
+
+        var json = JsonNode.Parse(await tools.GetChangedLineCoverageAsync(ct: _ct))!;
+
+        Assert.Equal(1, json["totals"]!["executable"]!.GetValue<int>());
+        var file = Assert.Single(json["files"]!.AsArray())!;
+        Assert.Equal("3", file["staleLines"]!.GetValue<string>());
+        Assert.Empty(json["staleFiles"]!.AsArray());
     }
 
     [Fact]

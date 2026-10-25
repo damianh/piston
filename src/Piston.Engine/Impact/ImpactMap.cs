@@ -72,7 +72,8 @@ internal sealed record ImpactReason(
     LineSpan ChangedLines,
     LineSpan? ExecutedSpan,
     ImpactGranularity Granularity,
-    string ProjectPath);
+    string ProjectPath,
+    string? Member = null);
 
 /// <summary>The tests a set of changes affects, according to the impact map.</summary>
 /// <param name="Tests">Each selected test FQN with the reasons it was selected.</param>

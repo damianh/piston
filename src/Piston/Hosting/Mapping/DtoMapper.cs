@@ -292,7 +292,7 @@ public static class DtoMapper
     }
 
     public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
-        new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath);
+        new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath, reason.Member);
 
     public static CoveringTestsDto ToCoveringTestsDto(string filePath, IReadOnlyList<CoveringTest>? tests) =>
         new(filePath, [.. (tests ?? []).Select(t => new CoveringTestDto(
@@ -410,5 +410,8 @@ public static class DtoMapper
                 coverage.File.FilePath,
                 [.. coverage.Lines.Select(l => l.ToDto())],
                 coverage.File.ToDto(solutionDirectory),
-                includeSource ? SourceFileReader.Read(coverage.File.FilePath, solutionDirectory).Lines : null);
+                includeSource ? SourceFileReader.Read(coverage.File.FilePath, solutionDirectory).Lines : null)
+            {
+                StaleLines = [.. coverage.StaleLines.Select(range => new LineRangeDto(range.Start, range.End))],
+            };
 }

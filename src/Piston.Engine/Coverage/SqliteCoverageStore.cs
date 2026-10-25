@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using Microsoft.Data.Sqlite;
+using Piston.Engine.Impact;
 
 namespace Piston.Engine.Coverage;
 
@@ -72,6 +73,7 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
             file_path        TEXT    PRIMARY KEY,
             module           TEXT,
             content_hash     TEXT,
+            snapshot_hash    TEXT,
             lines_total      INTEGER NOT NULL,
             lines_covered    INTEGER NOT NULL,
             branches_total   INTEGER NOT NULL,
@@ -95,6 +97,7 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
     private readonly SemaphoreSlim _gate = new(1, 1);
     private SqliteConnection? _connection;
     private long _runCounter;
+    private const int SchemaVersion = 2;
 
     public async Task InitializeAsync(string solutionDirectory)
     {
@@ -114,6 +117,43 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
         walCmd.CommandText = "PRAGMA journal_mode=WAL;";
         _ = await walCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
 
+        long legacyMaxRunId = 0;
+        using (var legacyCmd = _connection.CreateCommand())
+        {
+            legacyCmd.CommandText = "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'coverage_map';";
+            if (await legacyCmd.ExecuteScalarAsync().ConfigureAwait(false) is 1L)
+            {
+                legacyCmd.CommandText = "SELECT COALESCE(MAX(run_id), 0) FROM coverage_map;";
+                legacyMaxRunId = Convert.ToInt64(await legacyCmd.ExecuteScalarAsync().ConfigureAwait(false) ?? 0L);
+            }
+        }
+
+        using (var versionCmd = _connection.CreateCommand())
+        {
+            versionCmd.CommandText = "PRAGMA user_version;";
+            var version = Convert.ToInt32(await versionCmd.ExecuteScalarAsync().ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+            versionCmd.CommandText = "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';";
+            var tableCount = Convert.ToInt32(await versionCmd.ExecuteScalarAsync().ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
+            if (tableCount > 0 && version != SchemaVersion)
+            {
+                versionCmd.CommandText = """
+                    DROP TABLE IF EXISTS coverage_map;
+                    DROP TABLE IF EXISTS coverage_set_lines;
+                    DROP TABLE IF EXISTS coverage_set_tests;
+                    DROP TABLE IF EXISTS coverage_sets;
+                    DROP TABLE IF EXISTS coverage_summary;
+                    DROP TABLE IF EXISTS coverage_lines;
+                    DROP TABLE IF EXISTS coverage_files;
+                    DROP TABLE IF EXISTS impact_unit_files;
+                    DROP TABLE IF EXISTS impact_unit_tests;
+                    DROP TABLE IF EXISTS impact_units;
+                    DROP TABLE IF EXISTS impact_snapshots;
+                    """;
+                _ = await versionCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            }
+
+        }
+
         // Create tables
         using var createCmd = _connection.CreateCommand();
         createCmd.CommandText = """
@@ -125,23 +165,14 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
 
             """ + SetSchema + ReportSchema + ImpactSchema;
         _ = await createCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        using (var versionCmd = _connection.CreateCommand())
+        {
+            versionCmd.CommandText = $"PRAGMA user_version={SchemaVersion};";
+            _ = await versionCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
 
         // Older databases stored one coverage_map row per test per line, which grows to millions of rows on
         // real solutions. It is only a cache, so drop it; the next run with coverage refills the sets.
-        long legacyMaxRunId = 0;
-        using var legacyCmd = _connection.CreateCommand();
-        legacyCmd.CommandText = "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'coverage_map';";
-        if (await legacyCmd.ExecuteScalarAsync().ConfigureAwait(false) is 1L)
-        {
-            using var dropCmd = _connection.CreateCommand();
-            dropCmd.CommandText = """
-                SELECT COALESCE(MAX(run_id), 0) FROM coverage_map;
-                """;
-            legacyMaxRunId = Convert.ToInt64(await dropCmd.ExecuteScalarAsync().ConfigureAwait(false) ?? 0L);
-            dropCmd.CommandText = "DROP TABLE coverage_map; DELETE FROM coverage_summary;";
-            _ = await dropCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-        }
-
         // Seed the run counter from the current max run_id
         using var maxRunCmd = _connection.CreateCommand();
         maxRunCmd.CommandText = """
@@ -181,7 +212,37 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
         using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = SetSchema + ReportSchema + ImpactSchema + ClearImpact + """
+        using (var versionCmd = connection.CreateCommand())
+        {
+            versionCmd.Transaction = transaction;
+            versionCmd.CommandText = "PRAGMA user_version;";
+            var version = Convert.ToInt32(versionCmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+            if (version != SchemaVersion)
+            {
+                command.CommandText = """
+                    DROP TABLE IF EXISTS coverage_map;
+                    DROP TABLE IF EXISTS coverage_set_lines;
+                    DROP TABLE IF EXISTS coverage_set_tests;
+                    DROP TABLE IF EXISTS coverage_sets;
+                    DROP TABLE IF EXISTS coverage_summary;
+                    DROP TABLE IF EXISTS coverage_lines;
+                    DROP TABLE IF EXISTS coverage_files;
+                    DROP TABLE IF EXISTS impact_unit_files;
+                    DROP TABLE IF EXISTS impact_unit_tests;
+                    DROP TABLE IF EXISTS impact_units;
+                    DROP TABLE IF EXISTS impact_snapshots;
+                    """;
+                _ = command.ExecuteNonQuery();
+            }
+        }
+
+        command.CommandText = """
+            CREATE TABLE IF NOT EXISTS coverage_summary (
+                file_path    TEXT    PRIMARY KEY,
+                last_run_id  INTEGER NOT NULL,
+                last_updated TEXT    NOT NULL
+            );
+            """ + SetSchema + ReportSchema + ImpactSchema + ClearImpact + """
             DROP TABLE IF EXISTS coverage_map;
             DELETE FROM coverage_set_lines;
             DELETE FROM coverage_set_tests;
@@ -189,6 +250,7 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
             DELETE FROM coverage_summary;
             DELETE FROM coverage_files;
             DELETE FROM coverage_lines;
+            PRAGMA user_version=2;
             """;
         _ = command.ExecuteNonQuery();
         transaction.Commit();
@@ -425,16 +487,36 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
                 var lines = file.Coverage.Lines;
                 var isPartial = !isFullRun;
 
-                if (!isFullRun && ReadFile(path, transaction) is { } existing
-                    && existing.ContentHash is not null
-                    && string.Equals(existing.ContentHash, file.ContentHash, StringComparison.Ordinal))
+                if (!isFullRun && ReadFile(path, transaction) is { } existing)
                 {
-                    // Same source as last measured: a subset run can only add hits, never remove them.
-                    lines = MergeLines(ReadLines(path, transaction), lines);
-                    isPartial = existing.IsPartial;
+                    if (existing.ContentHash is not null
+                        && string.Equals(existing.ContentHash, file.ContentHash, StringComparison.Ordinal))
+                    {
+                        // Same source as last measured: a subset run can only add hits, never remove them.
+                        lines = MergeLines(ReadLines(path, transaction), lines);
+                        isPartial = existing.IsPartial;
+                    }
+                    else if (existing.SnapshotHash is not null
+                        && file.Content is not null
+                        && ReadSnapshot(existing.SnapshotHash, transaction) is { } oldContent)
+                    {
+                        var remapped = RemapLines(oldContent, file.Content, ReadLines(path, transaction));
+                        lines = MergeLines(remapped, lines);
+                    }
                 }
 
                 await WriteFileAsync(runId, file, lines, isPartial, now, transaction).ConfigureAwait(false);
+            }
+
+            using (var pruneCmd = _connection.CreateCommand())
+            {
+                pruneCmd.Transaction = transaction;
+                pruneCmd.CommandText = """
+                    DELETE FROM impact_snapshots
+                    WHERE NOT EXISTS (SELECT 1 FROM impact_unit_files f WHERE f.snapshot_hash = impact_snapshots.snapshot_hash)
+                      AND NOT EXISTS (SELECT 1 FROM coverage_files c WHERE c.snapshot_hash = impact_snapshots.snapshot_hash);
+                    """;
+                _ = await pruneCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
 
             await transaction.CommitAsync().ConfigureAwait(false);
@@ -459,24 +541,95 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
             results.Add(ReadFileSummary(reader));
         }
 
-        return results;
+        return [.. results.Select(RefreshStaleness)];
     }
 
     public CoverageFileSummary? GetReportFile(string filePath)
     {
         using var gate = Enter();
-        return ReadFile(filePath, transaction: null);
+        var file = ReadFile(filePath, transaction: null);
+        return file is null ? null : RefreshStaleness(file);
     }
 
     public IReadOnlyList<LineCoverage> GetReportLines(string filePath)
     {
         using var gate = Enter();
-        return ReadLines(filePath, transaction: null);
+        var summary = ReadFile(filePath, transaction: null);
+        var currentContent = ImpactContent.TryRead(filePath);
+        if (summary is null)
+        {
+            return [];
+        }
+
+        if (currentContent is null)
+        {
+            return ReadLines(filePath, transaction: null);
+        }
+
+        var currentHash = ImpactContent.Hash(currentContent);
+        if (string.Equals(summary.SnapshotHash ?? summary.ContentHash, currentHash, StringComparison.Ordinal))
+        {
+            return ReadLines(filePath, transaction: null);
+        }
+
+        if (summary.SnapshotHash is not { } snapshotHash || ReadSnapshot(snapshotHash, null) is not { } oldContent)
+        {
+            return [];
+        }
+
+        return RemapLines(oldContent, currentContent, ReadLines(filePath, transaction: null));
+    }
+
+    public IReadOnlyList<LineSpan> GetReportStaleLines(string filePath)
+    {
+        using var gate = Enter();
+        var currentContent = ImpactContent.TryRead(filePath);
+        if (currentContent is null)
+        {
+            return [];
+        }
+
+        var summary = ReadFile(filePath, transaction: null);
+        if (summary is null)
+        {
+            return [];
+        }
+
+        var currentHash = ImpactContent.Hash(currentContent);
+        if (string.Equals(summary.SnapshotHash ?? summary.ContentHash, currentHash, StringComparison.Ordinal))
+        {
+            return [];
+        }
+
+        if (summary.SnapshotHash is not { } snapshotHash || ReadSnapshot(snapshotHash, null) is not { } oldContent)
+        {
+            return [new LineSpan(1, SnapshotDiff.SplitLines(currentContent).Length)];
+        }
+
+        if (!filePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return [new LineSpan(1, SnapshotDiff.SplitLines(currentContent).Length)];
+        }
+
+        var oldMembers = SourceMembers.Parse(oldContent);
+        var currentMembers = SourceMembers.Parse(currentContent);
+        if (oldMembers.Members.Count == 0 || currentMembers.Members.Count == 0
+            || oldMembers.ResidualHash != currentMembers.ResidualHash)
+        {
+            return [new LineSpan(1, SnapshotDiff.SplitLines(currentContent).Length)];
+        }
+
+        var oldByKey = oldMembers.Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
+        return LineSpan.Normalize(currentMembers.Members
+            .Where(member => !oldByKey.TryGetValue(member.Key, out var oldMember)
+                || oldMember.BodyHash != member.BodyHash)
+            .Select(member => member.Lines));
     }
 
     private const string SelectFileColumns = """
         SELECT file_path, module, lines_total, lines_covered, branches_total, branches_covered,
                is_stale, is_partial, content_hash, run_id, updated_at
+               , snapshot_hash
         FROM coverage_files
         """;
 
@@ -491,7 +644,29 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
         IsPartial: reader.GetInt64(7) != 0,
         ContentHash: reader.IsDBNull(8) ? null : reader.GetString(8),
         RunId: reader.GetInt64(9),
-        UpdatedAt: DateTimeOffset.Parse(reader.GetString(10), System.Globalization.CultureInfo.InvariantCulture));
+        UpdatedAt: DateTimeOffset.Parse(reader.GetString(10), System.Globalization.CultureInfo.InvariantCulture),
+        SnapshotHash: reader.IsDBNull(11) ? null : reader.GetString(11));
+
+    private CoverageFileSummary RefreshStaleness(CoverageFileSummary file)
+    {
+        var currentContent = ImpactContent.TryRead(file.FilePath);
+        if (currentContent is null)
+        {
+            return file;
+        }
+
+        var currentHash = ImpactContent.Hash(currentContent);
+        if (string.Equals(file.SnapshotHash ?? file.ContentHash, currentHash, StringComparison.Ordinal))
+        {
+            return file with { IsStale = false };
+        }
+
+        var oldContent = file.SnapshotHash is null ? null : ReadSnapshot(file.SnapshotHash, null);
+        var sameCode = oldContent is not null
+            && file.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            && SourceMembers.Parse(oldContent).HasSameCode(SourceMembers.Parse(currentContent));
+        return file with { IsStale = !sameCode };
+    }
 
     private CoverageFileSummary? ReadFile(string filePath, SqliteTransaction? transaction)
     {
@@ -522,6 +697,30 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
         }
 
         return results;
+    }
+
+    private static IReadOnlyList<LineCoverage> RemapLines(string oldContent, string currentContent, IReadOnlyList<LineCoverage> lines)
+    {
+        var oldMembers = SourceMembers.Parse(oldContent);
+        var currentMembers = SourceMembers.Parse(currentContent);
+        if (oldMembers.Members.Count == 0 || currentMembers.Members.Count == 0)
+        {
+            return [];
+        }
+
+        var lineMap = oldMembers.MapLinesTo(currentMembers);
+        var result = new List<LineCoverage>();
+        foreach (var line in lines)
+        {
+            if (!lineMap.TryGetValue(line.LineNumber, out var newLines))
+            {
+                continue;
+            }
+
+            result.AddRange(newLines.Select(lineNumber => line with { LineNumber = lineNumber }));
+        }
+
+        return MergeLines([], result);
     }
 
     private static List<LineCoverage> MergeLines(IReadOnlyList<LineCoverage> existing, IReadOnlyList<LineCoverage> incoming)
@@ -585,14 +784,24 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
         fileCmd.Transaction = transaction;
         fileCmd.CommandText = """
             INSERT OR REPLACE INTO coverage_files
-                (file_path, module, content_hash, lines_total, lines_covered, branches_total, branches_covered,
+                (file_path, module, content_hash, snapshot_hash, lines_total, lines_covered, branches_total, branches_covered,
                  is_stale, is_partial, run_id, updated_at)
             VALUES
-                ($file_path, $module, $hash, $lt, $lc, $bt, $bc, 0, $partial, $run_id, $now);
+                ($file_path, $module, $hash, $snapshot_hash, $lt, $lc, $bt, $bc, 0, $partial, $run_id, $now);
             """;
+        if (file.Content is not null && file.ContentHash is not null)
+        {
+            using var snapshotCmd = _connection.CreateCommand();
+            snapshotCmd.Transaction = transaction;
+            snapshotCmd.CommandText = "INSERT OR IGNORE INTO impact_snapshots (snapshot_hash, content) VALUES ($hash, $content);";
+            _ = snapshotCmd.Parameters.AddWithValue("$hash", file.ContentHash);
+            _ = snapshotCmd.Parameters.AddWithValue("$content", file.Content);
+            _ = await snapshotCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
         _ = fileCmd.Parameters.AddWithValue("$file_path", path);
         _ = fileCmd.Parameters.AddWithValue("$module", (object?)file.Coverage.Module ?? DBNull.Value);
         _ = fileCmd.Parameters.AddWithValue("$hash", (object?)file.ContentHash ?? DBNull.Value);
+        _ = fileCmd.Parameters.AddWithValue("$snapshot_hash", file.Content is null ? DBNull.Value : file.ContentHash ?? (object)DBNull.Value);
         _ = fileCmd.Parameters.AddWithValue("$lt", lines.Count);
         _ = fileCmd.Parameters.AddWithValue("$lc", lines.Count(l => l.HitCount > 0));
         _ = fileCmd.Parameters.AddWithValue("$bt", lines.Sum(l => l.BranchesTotal));
