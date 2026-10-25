@@ -78,6 +78,10 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             solutionPath => new MsBuildSolutionGraph(solutionPath),
             _coverageStore);
 
+        var resourceResolver = new TestResourceResolver(
+            new TestResourceInference(options.SolutionPath, options.TestResourceRules, impactAnalyzer.GetTestProjectFacts),
+            impactAnalyzer.GetAllTestProjectPaths,
+            message => _diagnosticLog.Write("Resources", message));
         var vsTestStrategy = new ProcessTestExecutionStrategy(trxParser);
         _warmHosts = options.WarmTestHosts ? new MtpWarmHostPool() : null;
         var buildService = new BuildService(_warmHosts);
@@ -85,7 +89,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             projectPath => impactAnalyzer.GetMtpOutputPath(projectPath),
             solutionDir,
             impactAnalyzer.IsMultiTargeted,
-            _warmHosts);
+            _warmHosts,
+            projectPath => !resourceResolver.Resolve(projectPath).IsEmpty);
 
         ITestExecutionStrategy strategy = options.TestExecutionMode switch
         {
@@ -112,7 +117,13 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             coordinationDirectory,
             new ExecutionReservation(effectivePoolSize, options.ExecutionMemoryReservationMb));
 
-        var testRunner = new TestRunnerService(strategy, _pool);
+        // Test projects that share ports, container names or containers wait for each other machine-wide.
+        var resourceGate = new MachineResourceCoordinator(
+            coordinationDirectory,
+            resourceResolver.Resolve,
+            WorktreeIdentity.FromSolutionPath(options.SolutionPath).RootPath);
+
+        var testRunner = new TestRunnerService(strategy, _pool, resourceGate);
 
         _orchestrator = new PistonOrchestrator(
             fileWatcher,
@@ -134,6 +145,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             _ => null,
         };
         _orchestrator.HangThreshold = options.HangThreshold;
+        _orchestrator.RetryFailedTests = Math.Clamp(options.RetryFailedTests, 0, PistonOptions.MaxRetryFailedTests);
         _orchestrator.SdkVersionProvider = dir => sdkVersions.GetOrAdd(dir, d => new Lazy<string?>(() => ProbeSdkVersion(d))).Value;
     }
 

@@ -21,6 +21,7 @@
 
   <ItemGroup>
     <None Include="Services\Fixtures\**\*.trx" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Services\MtpNodes\**\*.json" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Coverage\Fixtures\**" CopyToOutputDirectory="PreserveNewest" />
     <None Include="..\Piston.TestProcessHost\bin\$(Configuration)\$(TargetFramework)\Piston.TestProcessHost.runtimeconfig.json"
           Link="Piston.TestProcessHost.runtimeconfig.json" CopyToOutputDirectory="PreserveNewest" />

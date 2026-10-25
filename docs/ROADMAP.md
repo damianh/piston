@@ -50,6 +50,11 @@ ARCHITECTURE describe the implementation in detail.
   freshness, its own build diagnostics, and fixed and newly failing tests.
 - One owner per worktree through OS file locks, and a machine-wide CPU/memory
   admission budget (`budget.json`) with visible FIFO queueing.
+- Integration-test resource scheduling: container use inferred from package
+  references, per-repository isolation of container test projects, exclusive
+  `port:`/`container:`/`resource:` keys and overrides in `testResources`, an
+  optional `containerSlots` budget, visible waits, and port-probe and
+  conflict-signature hints.
 - Correct selective builds: one solution-filter build of the affected projects,
   then no-build test execution.
 - VSTest and Microsoft.Testing.Platform routing, with opt-in warm MTP test hosts.
@@ -61,6 +66,9 @@ ARCHITECTURE describe the implementation in detail.
 - Persistent per-worktree run history outside the checkout, grouped by repository.
 - Failures classified as new, pre-existing, flaky (same fingerprint, both
   outcomes) or unknown, in `verify`, `get_test_run` and `get_test_history`.
+- Flakiness evidence on every flaky label: counts, source, outcomes from other
+  worktrees of the repository, and opt-in in-run retries of failed tests
+  (`retryFailures`), reported in MCP and the dashboard.
 
 **Coverage and selection**
 - Solution line and branch coverage stored in `.piston/piston.db`, with LCOV and
@@ -122,20 +130,10 @@ opens by hand (today's `piston-dashboard` skill).
 - Method-level identity, so line shifts do not invalidate evidence. Never reuse old
   line evidence without validated remapping.
 
-### Memory
-- A declared baseline: the merge-base with a configured base ref, run in a
-  Piston-managed worktree, so "new versus pre-existing" does not depend on this
-  worktree's own history.
-- Richer flakiness evidence (retries, repeated outcomes across worktrees of one
-  repository).
-
 ### Execution
 - Explore MTP server mode further for structured results and stable test
-  identities; keep VSTest/TRX as the compatibility path.
-- Integration-test resources: infer likely needs (containers, exclusive
-  resources) from package references, with explicit overrides, and schedule
-  them within the budget. Address fixed-port and container-name conflicts
-  conservatively.
+  identities; keep VSTest/TRX as the compatibility path. The investigation and
+  current decision are in [MTP server-mode investigation](mtp-server-mode.md).
 - Per-test output and relevant artifacts in the MCP tools and the dashboard.
 
 ### Dashboard

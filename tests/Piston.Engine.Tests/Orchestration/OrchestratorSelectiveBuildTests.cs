@@ -65,6 +65,41 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
     }
 
     [Fact]
+    public void MergeTestSuites_PartialRerunsKeepOnlyLatestLogPerProject()
+    {
+        static TestResult T(string fqn) =>
+            new(fqn, fqn, TestStatus.Passed, TimeSpan.Zero, null, null, null, null);
+
+        var untouched = T("Lib.T.Untouched") with { Output = "retained output" };
+        var otherLog = new ExecutionLog("/repo/Other.Tests/Other.Tests.csproj");
+        IReadOnlyList<TestSuite> merged =
+        [
+            new TestSuite("original", [T("Lib.T.A"), T("Lib.T.B"), untouched], DateTimeOffset.UtcNow, TimeSpan.Zero)
+            {
+                ExecutionLog = new ExecutionLog(LibTests),
+            },
+            new TestSuite("Other.Tests", [T("Other.T.C")], DateTimeOffset.UtcNow, TimeSpan.Zero)
+            {
+                ExecutionLog = otherLog,
+            },
+        ];
+
+        for (var i = 0; i < PistonState.MaxRecentRuns + 2; i++)
+        {
+            var latestLog = new ExecutionLog(LibTests);
+            merged = PistonOrchestrator.MergeTestSuites(merged,
+                [new TestSuite($"partial-{i}", [T(i % 2 == 0 ? "Lib.T.A" : "Lib.T.B")],
+                    DateTimeOffset.UtcNow, TimeSpan.Zero) { ExecutionLog = latestLog }]);
+
+            var retainedLog = Assert.Single(merged, s => s.ExecutionLog?.ProjectPath == LibTests);
+            Assert.Same(latestLog, retainedLog.ExecutionLog);
+            Assert.Same(otherLog, merged.Single(s => s.Name == "Other.Tests").ExecutionLog);
+            Assert.Equal(4, merged.Sum(s => s.Tests.Count));
+            Assert.Same(untouched, merged.SelectMany(s => s.Tests).Single(t => t.FullyQualifiedName == untouched.FullyQualifiedName));
+        }
+    }
+
+    [Fact]
     public void MergeTestSuites_FrameworkResultReplacesOnlyThatFramework()
     {
         static TestResult T(string fqn, string? framework, TestStatus status) =>

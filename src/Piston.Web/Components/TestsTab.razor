@@ -137,6 +137,7 @@
         if (Client.CurrentSnapshot is { } current)
         {
             _snapshot = current;
+            _viewState.ResourceWaits = ResourceWaitText.BySuiteName(current.ProjectResourceWaits);
             RebuildTree();
         }
 
@@ -194,6 +195,7 @@
         }
 
         _snapshot = snapshot;
+        _viewState.ResourceWaits = ResourceWaitText.BySuiteName(snapshot.ProjectResourceWaits);
         RebuildTree();
         InvokeAsync(StateHasChanged);
     }

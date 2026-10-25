@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Text;
 using System.Text.RegularExpressions;
 using Piston.Engine.Models;
 
@@ -56,10 +57,11 @@ internal sealed class MtpStdoutParser
     private TimeSpan _pendingDuration;
     private string? _pendingSource;
     private string? _pendingTargetFramework;
-    private readonly List<string> _pendingExtraLines = [];
-    private readonly List<string> _pendingStdOut = [];
-    private readonly List<string> _pendingStdErr = [];
-    private List<string>? _currentOutputSection;
+    private readonly BoundedTextBuffer _pendingErrorLines = new(RetentionLimits.MaxTestTextLength);
+    private readonly BoundedTextBuffer _pendingStackTrace = new(RetentionLimits.MaxTestTextLength);
+    private readonly BoundedTextBuffer _pendingStdOut = new(RetentionLimits.MaxTestTextLength);
+    private readonly BoundedTextBuffer _pendingStdErr = new(RetentionLimits.MaxTestTextLength);
+    private BoundedTextBuffer? _currentOutputSection;
 
     /// <summary>
     /// Processes a single stdout line. Returns a completed <see cref="MtpParsedResult"/>
@@ -74,7 +76,7 @@ internal sealed class MtpStdoutParser
         {
             if (line.StartsWith(OutputIndentation, StringComparison.Ordinal))
             {
-                _currentOutputSection.Add(line[OutputIndentation.Length..]);
+                _currentOutputSection.AppendLine(line[OutputIndentation.Length..]);
                 return null;
             }
 
@@ -123,7 +125,15 @@ internal sealed class MtpStdoutParser
         // Any other non-blank indented line after a "failed" header is error/stack info
         if (_pendingStatus == TestStatus.Failed && !string.IsNullOrWhiteSpace(line))
         {
-            _pendingExtraLines.Add(line.Trim());
+            var extraLine = line.Trim();
+            if (StackTraceLineRegex.IsMatch(extraLine))
+            {
+                _pendingStackTrace.AppendLine(extraLine);
+            }
+            else
+            {
+                _pendingErrorLines.AppendLine(extraLine);
+            }
         }
 
         return null;
@@ -143,30 +153,8 @@ internal sealed class MtpStdoutParser
             return null;
         }
 
-        string? errorMessage = null;
-        string? stackTrace = null;
-
-        if (_pendingExtraLines.Count > 0)
-        {
-            // Split extra lines into stack trace (lines starting with "at ") and error message
-            var stackLines = new List<string>();
-            var errorLines = new List<string>();
-
-            foreach (var extraLine in _pendingExtraLines)
-            {
-                if (StackTraceLineRegex.IsMatch(extraLine))
-                {
-                    stackLines.Add(extraLine);
-                }
-                else
-                {
-                    errorLines.Add(extraLine);
-                }
-            }
-
-            errorMessage = errorLines.Count > 0 ? string.Join(Environment.NewLine, errorLines) : null;
-            stackTrace = stackLines.Count > 0 ? string.Join(Environment.NewLine, stackLines) : null;
-        }
+        var errorMessage = _pendingErrorLines.GetHeadValue();
+        var stackTrace = _pendingStackTrace.GetHeadValue();
 
         var result = new MtpParsedResult(
             FullyQualifiedName: _pendingFqn,
@@ -179,22 +167,81 @@ internal sealed class MtpStdoutParser
             TargetFramework: _pendingTargetFramework);
 
         _pendingFqn = null;
-        _pendingExtraLines.Clear();
-        _pendingStdOut.Clear();
-        _pendingStdErr.Clear();
+        _pendingErrorLines.Reset();
+        _pendingStackTrace.Reset();
+        _pendingStdOut.Reset();
+        _pendingStdErr.Reset();
         _currentOutputSection = null;
 
         return result;
     }
 
-    private static string? JoinOutput(List<string> stdOut, List<string> stdErr)
+    private static string? JoinOutput(BoundedTextBuffer stdOut, BoundedTextBuffer stdErr)
     {
-        var output = string.Join(Environment.NewLine,
-            new[] { string.Join(Environment.NewLine, stdOut), string.Join(Environment.NewLine, stdErr) }
-                .Select(s => s.TrimEnd())
-                .Where(s => s.Length > 0));
+        var stdoutLength = stdOut.TrimmedLength;
+        var stderrLength = stdErr.TrimmedLength;
+        if (stdoutLength == 0 && stderrLength == 0)
+        {
+            return null;
+        }
 
-        return output.Length == 0 ? null : output;
+        var separatorLength = stdoutLength > 0 && stderrLength > 0 ? Environment.NewLine.Length : 0;
+        var totalLength = stdoutLength + stderrLength + separatorLength;
+        var limit = RetentionLimits.MaxTestTextLength;
+        var headSource = JoinPrefix(stdOut, stdoutLength, stdErr, stderrLength, limit);
+        if (totalLength <= limit)
+        {
+            return headSource;
+        }
+
+        var tailSource = JoinSuffix(stdOut, stdoutLength, stdErr, stderrLength, limit);
+        return RetentionLimits.TruncateHeadTail(headSource, tailSource, totalLength, limit);
+    }
+
+    private static string JoinPrefix(
+        BoundedTextBuffer stdOut, long stdoutLength, BoundedTextBuffer stdErr, long stderrLength, int limit)
+    {
+        var separatorLength = stdoutLength > 0 && stderrLength > 0 ? Environment.NewLine.Length : 0;
+        StringBuilder result = new((int)Math.Min(stdoutLength + stderrLength + separatorLength, limit));
+        var remaining = limit;
+        var fromStdOut = (int)Math.Min(stdoutLength, remaining);
+        _ = result.Append(stdOut.GetPrefix(fromStdOut));
+        remaining -= fromStdOut;
+        if (remaining > 0 && stdoutLength > 0 && stderrLength > 0)
+        {
+            var separator = Environment.NewLine;
+            var count = Math.Min(separator.Length, remaining);
+            _ = result.Append(separator.AsSpan(0, count));
+            remaining -= count;
+        }
+
+        if (remaining > 0)
+        {
+            _ = result.Append(stdErr.GetPrefix((int)Math.Min(stderrLength, remaining)));
+        }
+
+        return result.ToString();
+    }
+
+    private static string JoinSuffix(
+        BoundedTextBuffer stdOut, long stdoutLength, BoundedTextBuffer stdErr, long stderrLength, int limit)
+    {
+        var fromStdErr = (int)Math.Min(stderrLength, limit);
+        var remaining = limit - fromStdErr;
+        var separatorLength = remaining > 0 && stdoutLength > 0 && stderrLength > 0
+            ? Math.Min(Environment.NewLine.Length, remaining)
+            : 0;
+        remaining -= separatorLength;
+        var fromStdOut = (int)Math.Min(stdoutLength, remaining);
+        StringBuilder result = new(fromStdOut + separatorLength + fromStdErr);
+        _ = result.Append(stdOut.GetSuffix(fromStdOut));
+        if (separatorLength > 0)
+        {
+            _ = result.Append(Environment.NewLine.AsSpan(Environment.NewLine.Length - separatorLength));
+        }
+
+        _ = result.Append(stdErr.GetSuffix(fromStdErr));
+        return result.ToString();
     }
 
     private static TestStatus ParseStatus(string value) =>
@@ -241,6 +288,116 @@ internal sealed class MtpStdoutParser
         }
 
         return TimeSpan.Zero;
+    }
+}
+
+internal sealed class BoundedTextBuffer(int maxLength)
+{
+    private readonly StringBuilder _head = new();
+    private readonly Queue<char> _tail = new();
+    private readonly StringBuilder _pendingWhitespace = new();
+    private bool _hasLine;
+    private long _totalLength;
+    private long _pendingWhitespaceLength;
+
+    public long TrimmedLength => _totalLength - _pendingWhitespaceLength;
+
+    public void AppendLine(string line)
+    {
+        if (_hasLine)
+        {
+            Append(Environment.NewLine);
+        }
+
+        _hasLine = true;
+        Append(line);
+    }
+
+    public string? GetHeadValue()
+    {
+        var trimmedLength = TrimmedLength;
+        if (trimmedLength == 0)
+        {
+            return null;
+        }
+
+        var headLength = (int)Math.Min(trimmedLength, _head.Length);
+        return RetentionLimits.TruncateHead(_head.ToString(0, headLength), trimmedLength, maxLength);
+    }
+
+    public string GetPrefix(int length) => length == 0 ? string.Empty : _head.ToString(0, Math.Min(length, _head.Length));
+
+    public string GetSuffix(int length)
+    {
+        if (length == 0)
+        {
+            return string.Empty;
+        }
+
+        if (TrimmedLength <= _head.Length)
+        {
+            return _head.ToString(0, (int)TrimmedLength)[^length..];
+        }
+
+        var characters = _tail.ToArray();
+        var available = (int)Math.Min(TrimmedLength, characters.Length);
+        var count = Math.Min(length, available);
+        return new string(characters, available - count, count);
+    }
+
+    public void Reset()
+    {
+        _ = _head.Clear();
+        _tail.Clear();
+        _ = _pendingWhitespace.Clear();
+        _hasLine = false;
+        _totalLength = 0;
+        _pendingWhitespaceLength = 0;
+    }
+
+    private void Append(string text)
+    {
+        foreach (var character in text)
+        {
+            _totalLength++;
+            if (_head.Length < maxLength)
+            {
+                _ = _head.Append(character);
+            }
+
+            if (char.IsWhiteSpace(character))
+            {
+                _pendingWhitespaceLength++;
+                if (_pendingWhitespace.Length == maxLength)
+                {
+                    _ = _pendingWhitespace.Remove(0, 1);
+                }
+
+                _ = _pendingWhitespace.Append(character);
+                continue;
+            }
+
+            if (_pendingWhitespace.Length > 0)
+            {
+                foreach (var whitespace in _pendingWhitespace.ToString())
+                {
+                    AppendTail(whitespace);
+                }
+
+                _ = _pendingWhitespace.Clear();
+            }
+            _pendingWhitespaceLength = 0;
+            AppendTail(character);
+        }
+    }
+
+    private void AppendTail(char character)
+    {
+        _tail.Enqueue(character);
+        if (_tail.Count > maxLength)
+        {
+            _ = _tail.Dequeue();
+        }
     }
 }
 

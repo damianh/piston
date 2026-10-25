@@ -56,6 +56,14 @@
 
     <FrameworkBadge Framework="@Node.Framework" />
 
+    @if (Node.Kind == TestNodeKind.Suite && Node.Suite is { } waitingSuite
+         && View.ResourceWaits.TryGetValue(waitingSuite.Name, out var resourceWait))
+    {
+        <span class="shrink-0 px-1 rounded text-[10px] bg-amber-500/15 text-amber-400"
+              data-testid="resource-wait-badge"
+              title="@ResourceWaitText.Describe(waitingSuite.Name, resourceWait, DateTimeOffset.UtcNow)">waiting for resources</span>
+    }
+
     @if (isTest && Node.Test is { } marked)
     {
         @if (TestTreeBuilder.IsNewFailure(marked, Node.Project, View))
@@ -64,7 +72,12 @@
         }
         @if (TestTreeBuilder.IsFlaky(marked, Node.Project, View))
         {
-            <span class="shrink-0 px-1 rounded text-[10px] bg-yellow-500/15 text-yellow-400" title="Flaky: passed and failed on the same source">flaky</span>
+            <span class="shrink-0 px-1 rounded text-[10px] bg-yellow-500/15 text-yellow-400"
+                  title="@TestRetries.FlakyTitle(View.GetTestMark(Node.Project, marked.Key)?.Flakiness)">flaky</span>
+        }
+        @if (TestRetries.Describe(marked) is { } retried)
+        {
+            <span class="shrink-0 px-1 rounded text-[10px] bg-yellow-500/15 text-yellow-400" title="@retried">retried</span>
         }
     }
 

@@ -10,6 +10,20 @@ namespace Piston.Engine.Tests.Services;
 public sealed class MtpTestExecutionStrategyTests
 {
     [Fact]
+    public async Task CoordinatedProjects_DoNotRetainWarmHosts_ForExecutionOrDiscovery()
+    {
+        await using var pool = new MtpWarmHostPool();
+        var strategy = new MtpTestExecutionStrategy(
+            _ => "/path/to/tests.dll",
+            Path.GetTempPath(),
+            warmHosts: pool,
+            requiresResources: project => project == "integration.csproj");
+
+        Assert.Null(strategy.WarmHostsFor("integration.csproj"));
+        Assert.Same(pool, strategy.WarmHostsFor("unit.csproj"));
+    }
+
+    [Fact]
     public void CanExecute_WhenOutputPathAvailable_ReturnsTrue()
     {
         var strategy = new MtpTestExecutionStrategy(

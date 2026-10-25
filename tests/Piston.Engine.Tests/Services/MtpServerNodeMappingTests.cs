@@ -88,6 +88,28 @@ public sealed class MtpServerNodeMappingTests
         Assert.Equal("/bin/Mt.dll", result.Source);
     }
 
+    [Fact]
+    public void ToTestResult_TruncatesLargeTextFields()
+    {
+        var limit = RetentionLimits.MaxTestTextLength;
+        var node = Node($$"""
+            , "standardOutput": "{{new string('a', limit)}}{{new string('z', limit)}}",
+              "error.message": "{{new string('e', limit + 100)}}",
+              "error.stacktrace": "{{new string('s', limit + 100)}}"
+            """);
+
+        var result = MtpTestProcessRunner.ToTestResult(node, "/bin/Mt.dll", TestStatus.Failed);
+
+        Assert.InRange(result.Output!.Length, 1, limit);
+        Assert.StartsWith(new string('a', 100), result.Output, StringComparison.Ordinal);
+        Assert.EndsWith(new string('z', 100), result.Output, StringComparison.Ordinal);
+        Assert.Contains("characters truncated", result.Output, StringComparison.Ordinal);
+        Assert.InRange(result.ErrorMessage!.Length, 1, limit);
+        Assert.Contains("characters truncated", result.ErrorMessage, StringComparison.Ordinal);
+        Assert.InRange(result.StackTrace!.Length, 1, limit);
+        Assert.Contains("characters truncated", result.StackTrace, StringComparison.Ordinal);
+    }
+
     private static JsonElement Named(string uid, string state) => JsonDocument.Parse($$"""
         { "uid": "{{uid}}", "display-name": "Mt.A.Same", "node-type": "action", "execution-state": "{{state}}" }
         """).RootElement;

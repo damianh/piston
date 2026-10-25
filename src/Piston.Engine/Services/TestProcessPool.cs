@@ -66,7 +66,8 @@ public sealed class TestProcessPool : ITestProcessPool
         CancellationToken ct) =>
         RunProjectAsync(request, new TestRunCallbacks(), ct);
 
-    private async Task<ProjectTestResult> RunProjectAsync(
+    /// <inheritdoc/>
+    public async Task<ProjectTestResult> RunProjectAsync(
         ProjectTestRequest request,
         TestRunCallbacks callbacks,
         CancellationToken ct)

@@ -30,6 +30,14 @@ public static class TestRunJson
                 ["status"] = t.Status.ToString(),
                 ["durationMs"] = Math.Round(t.Duration.TotalMilliseconds, 3),
                 ["errorMessage"] = t.ErrorMessage,
+                ["attempts"] = t.Attempts.Count == 0 ? null : new JsonArray(t.Attempts
+                    .Select(a => (JsonNode)new JsonObject
+                    {
+                        ["status"] = a.Status.ToString(),
+                        ["durationMs"] = Math.Round(a.Duration.TotalMilliseconds, 3),
+                        ["errorMessage"] = a.ErrorMessage,
+                    })
+                    .ToArray()),
             });
         }
 
@@ -62,6 +70,8 @@ public static class TestRunJson
                 ["status"] = run.Build.Status.ToString(),
                 ["errors"] = Strings(run.Build.Errors),
                 ["warnings"] = Strings(run.Build.Warnings),
+                ["omittedErrors"] = run.Build.OmittedErrors,
+                ["omittedWarnings"] = run.Build.OmittedWarnings,
                 ["durationMs"] = Math.Round(run.Build.Duration.TotalMilliseconds, 3),
             },
             ["projects"] = new JsonArray(run.Projects
@@ -73,9 +83,13 @@ public static class TestRunJson
                     ["noTestsReason"] = p.NoTestsReason,
                     ["timedOutTest"] = p.TimedOut?.Test,
                     ["testTimeoutMs"] = p.TimedOut is { } timeout ? Math.Round(timeout.Limit.TotalMilliseconds, 3) : null,
+                    ["resources"] = Resources(p.Resources),
+                    ["suspectedResourceConflict"] = p.SuspectedResourceConflict,
                 })
                 .ToArray()),
             ["runnerError"] = run.RunnerError,
+            ["retryLimit"] = run.RetryLimit,
+            ["retriesSkippedReason"] = run.RetriesSkippedReason,
             ["admission"] = Admission(run.Admission),
             ["summary"] = new JsonObject
             {
@@ -83,6 +97,7 @@ public static class TestRunJson
                 ["passed"] = tests.Count(t => t.Status == TestStatus.Passed),
                 ["failed"] = tests.Count(t => t.Status == TestStatus.Failed),
                 ["skipped"] = tests.Count(t => t.Status == TestStatus.Skipped),
+                ["passedOnRetry"] = tests.Count(t => t.Status == TestStatus.Passed && t.Attempts.Count > 0),
                 ["other"] = tests.Count(t => t.Status is not (TestStatus.Passed or TestStatus.Failed or TestStatus.Skipped)),
             },
             ["duplicateTestIds"] = new JsonArray(run.DuplicateTestIds.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
@@ -93,6 +108,7 @@ public static class TestRunJson
                     ["test"] = c.Test,
                     ["kind"] = c.Kind.ToString(),
                     ["evidence"] = c.Evidence,
+                    ["flakiness"] = Flakiness(c.Flakiness),
                 })
                 .ToArray()),
             ["possiblyHangingTests"] = new JsonArray(run.PossiblyHangingTests.Select(d => (JsonNode)JsonValue.Create(d)!).ToArray()),
@@ -105,6 +121,27 @@ public static class TestRunJson
 
     private static JsonArray OutcomeReferences(IReadOnlyList<TestOutcomeReference> tests) =>
         new(tests.Select(t => (JsonNode)new JsonObject { ["project"] = t.Project, ["key"] = t.Key }).ToArray());
+
+    internal static JsonObject? Flakiness(FlakinessEvidence? f) => f is null
+        ? null
+        : new JsonObject
+        {
+            ["source"] = f.Source,
+            ["passed"] = f.Passed,
+            ["failed"] = f.Failed,
+            ["retryOutcomes"] = f.RetryOutcomes,
+            ["otherWorktrees"] = Strings(f.OtherWorktrees),
+            ["outcomes"] = new JsonArray(f.Outcomes
+                .Select(o => (JsonNode)new JsonObject
+                {
+                    ["runId"] = o.RunId,
+                    ["at"] = o.At.ToString("O"),
+                    ["status"] = o.Status.ToString(),
+                    ["attempt"] = o.Attempt,
+                    ["worktree"] = o.Worktree,
+                })
+                .ToArray()),
+        };
 
     private static JsonObject? Fingerprint(SourceFingerprint? fp) => fp is null
         ? null
@@ -132,6 +169,41 @@ public static class TestRunJson
             ["memoryMbInUse"] = a.MemoryMbInUse,
             ["queuedAt"] = a.QueuedAt.ToString("O"),
             ["admittedAt"] = a.AdmittedAt?.ToString("O"),
+        };
+
+    private static JsonObject? Resources(TestProjectResources? r) => r is null
+        ? null
+        : new JsonObject
+        {
+            ["keys"] = Strings(r.Needs.Keys),
+            ["usesContainers"] = r.Needs.UsesContainers,
+            ["reasons"] = Strings(r.Needs.Reasons),
+            ["wait"] = ResourceWait(r.Wait),
+            ["warnings"] = Strings(r.Warnings),
+        };
+
+    internal static JsonObject? ResourceWait(TestResourceWait? w) => w is null
+        ? null
+        : new JsonObject
+        {
+            ["state"] = w.State.ToString(),
+            ["keys"] = Strings(w.Keys),
+            ["usesContainers"] = w.UsesContainers,
+            ["blockedBy"] = new JsonArray(w.BlockedBy.Select(b => (JsonNode)new JsonObject
+            {
+                ["resource"] = b.Resource,
+                ["kind"] = b.Kind.ToString(),
+                ["processId"] = b.ProcessId,
+                ["worktree"] = b.Worktree,
+                ["project"] = b.Project,
+                ["since"] = b.Since.ToString("O"),
+            }).ToArray()),
+            ["queuedAhead"] = w.QueuedAhead,
+            ["containerSlotsInUse"] = w.ContainerSlotsInUse,
+            ["containerSlotBudget"] = w.ContainerSlotBudget,
+            ["waitingSince"] = w.WaitingSince.ToString("O"),
+            ["acquiredAt"] = w.AcquiredAt?.ToString("O"),
+            ["waitedMs"] = w.Waited is { } waited ? Math.Round(waited.TotalMilliseconds, 3) : null,
         };
 
     private static JsonObject? Context(TestRunContext? c) => c is null
