@@ -10,14 +10,13 @@ internal static class ProjectLabels
         projectPath = projectPath.Replace('\\', '/');
         var shortName = Path.GetFileNameWithoutExtension(projectPath);
         if (!projectPaths.Select(path => path.Replace('\\', '/')).Any(path =>
-                !string.Equals(path, projectPath, StringComparison.Ordinal)
+                !string.Equals(path, projectPath, ProjectPaths.Comparison(projectPath))
                 && string.Equals(Path.GetFileNameWithoutExtension(path), shortName, StringComparison.Ordinal)))
         {
             return shortName;
         }
 
-        var solutionDirectory = solutionPath is null ? null : Path.GetDirectoryName(solutionPath.Replace('\\', '/'));
-        var projectId = solutionDirectory is null ? projectPath : Path.GetRelativePath(solutionDirectory, projectPath);
+        var projectId = solutionPath is null ? projectPath : ProjectPaths.ProjectId(projectPath, solutionPath);
         return $"{shortName} ({projectId.Replace('\\', '/')})";
     }
 }

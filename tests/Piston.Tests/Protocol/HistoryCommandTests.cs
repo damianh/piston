@@ -188,6 +188,19 @@ public sealed class HistoryCommandTests
     }
 
     [Fact]
+    public async Task GetTestHistory_UnknownProject_IsInvalidParams()
+    {
+        var engine = new StubEngine { GetTestHistoryError = new ArgumentException("'Unknown/Tests.csproj' is not a test project ID in this solution.") };
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var error = await Assert.ThrowsAsync<JsonRpcException>(() => dispatcher.HandleCommandAsync(
+            ProtocolMethods.HistoryGetTestHistory, new JsonObject { ["test"] = "A.One", ["projectId"] = "Unknown/Tests.csproj" }, _ct));
+
+        Assert.Equal(JsonRpcErrorCodes.InvalidParams, error.Code);
+        Assert.Equal(engine.GetTestHistoryError.Message, error.Message);
+    }
+
+    [Fact]
     public async Task GetTestHistory_WithHistoryOff_ReportsDisabled()
     {
         var result = await new EngineCommandDispatcher(new StubEngine()).HandleCommandAsync(

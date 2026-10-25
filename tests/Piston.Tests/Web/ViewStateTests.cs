@@ -70,6 +70,16 @@ public sealed class ViewStateTests
         Assert.Equal(new TestReference("Two/Tests.csproj", "Shared.Test"),
             TestReference.FromProjectPath(project, "Shared.Test", solution));
 
+    [Theory]
+    [InlineData(@"c:\REPO\Two\Tests.csproj", @"C:\repo\All.slnx", "Two/Tests.csproj")]
+    [InlineData(@"D:\tests\Tests.csproj", @"C:\repo\All.slnx", "D:/tests/Tests.csproj")]
+    [InlineData(@"\\SERVER\Repo\Two\Tests.csproj", @"\\server\repo\All.slnx", "Two/Tests.csproj")]
+    [InlineData(@"\\server\other\Tests.csproj", @"\\server\repo\All.slnx", "//server/other/Tests.csproj")]
+    [InlineData(@"C:\other\Tests.csproj", @"C:\repo\All.slnx", "../other/Tests.csproj")]
+    public void CoverageReferencesRespectDaemonPathRootsAndCase(string project, string solution, string expected) =>
+        Assert.Equal(new TestReference(expected, "Shared.Test"),
+            TestReference.FromProjectPath(project, "Shared.Test", solution));
+
     [Fact]
     public void CoverageSplitLayoutIsIndependentAndRetainedAcrossOrientations()
     {

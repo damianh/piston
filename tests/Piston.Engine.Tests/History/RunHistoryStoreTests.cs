@@ -192,6 +192,40 @@ public sealed class RunHistoryStoreTests : IDisposable
     }
 
     [Fact]
+    public void FallbackSuiteNames_PreserveDotsBeforeAndAfterReopening()
+    {
+        var passed = FallbackRun(TestStatus.Passed);
+        var failed = FallbackRun(TestStatus.Failed);
+        using (var store = Open())
+        {
+            _ = store.Record(passed);
+            _ = store.Record(failed);
+            AssertNames(store);
+        }
+
+        using var reopened = Open();
+        AssertNames(reopened);
+
+        TestRunRecord FallbackRun(TestStatus status)
+        {
+            var run = Run("same", status);
+            return run with { Suites = [run.Suites[0] with { ProjectId = null }] };
+        }
+
+        void AssertNames(RunHistoryStore store)
+        {
+            var history = Assert.Single(store.GetTestHistory(Test, Project));
+            Assert.Equal(Project, history.Project);
+            Assert.Equal(Project, history.ProjectId);
+            Assert.Equal(Project, Assert.Single(store.GetLatestFailures()).Project);
+            Assert.Equal(Project, Assert.Single(store.GetFlakyTests()).Project);
+            var result = Assert.Single(Assert.IsType<StoredRun>(store.GetRun(failed.RunId)).Results);
+            Assert.Equal(Project, result.Project);
+            Assert.Equal(Project, result.ProjectId);
+        }
+    }
+
+    [Fact]
     public void VersionOneHistory_MigratesUniqueProjectNamesToIds()
     {
         var location = HistoryLocation.Resolve(BaseDirectory, _solution);

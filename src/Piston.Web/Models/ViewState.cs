@@ -203,8 +203,7 @@ public sealed record TestReference(string Project, string Key)
     public static TestReference FromProjectPath(string projectPath, string key, string? solutionPath = null) =>
         new(solutionPath is null
             ? Path.GetFileNameWithoutExtension(projectPath.Replace('\\', '/'))
-            : Path.GetRelativePath(Path.GetDirectoryName(Path.GetFullPath(solutionPath.Replace('\\', '/')))!,
-                Path.GetFullPath(projectPath.Replace('\\', '/'))).Replace('\\', '/'), key);
+            : ProjectPaths.ProjectId(projectPath, solutionPath), key);
 }
 
 public enum DetailPosition
