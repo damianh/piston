@@ -79,6 +79,7 @@
     private HashSet<SessionTimelineEdit> _relatedEdits = [];
     private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
     private string? _scrollTo;
+    private int _refreshGeneration;
 
     /// <summary>Opens a test, by project and result key, in the Tests tab.</summary>
     [Parameter] public EventCallback<TestReference> OnOpenTest { get; set; }
@@ -143,7 +144,15 @@
 
     private async Task RefreshAsync()
     {
-        _dto = await Client.GetSessionTimelineAsync();
+        // Refreshes can overlap; only the latest one may apply its result.
+        var generation = ++_refreshGeneration;
+        var dto = await Client.GetSessionTimelineAsync();
+        if (generation != _refreshGeneration)
+        {
+            return;
+        }
+
+        _dto = dto;
         _loaded = true;
         _timeline = _dto is null ? SessionTimeline.Empty : SessionTimeline.Build(_dto.Entries, _dto.EarlierRunsDropped);
         Recompute();
@@ -213,9 +222,13 @@
                                 <span>, after </span>
                                 <button class="text-gray-200 hover:underline" title="Show the edit in the timeline" @onclick="() => Reveal(EditId(edit))">@DescribeEdit(edit)</button>
                             }
+                            else if (traces[0].SourceUnchanged)
+                            {
+                                <span title="No edit was recorded since the session started">, on unchanged source</span>
+                            }
                             else
                             {
-                                <span>, on unchanged source</span>
+                                <span title="The edit that produced the source this run tested is not recorded">, no recorded edit</span>
                             }
                         }
                         else if (group.Key.Origin == FailureOrigin.SessionStart)
@@ -402,7 +415,7 @@
 
     private string UnknownOriginReason() => _timeline.EarlierRunsDropped > 0
         ? $"The run that introduced the failure may be among the session's {Plural(_timeline.EarlierRunsDropped, "oldest run")} no longer retained, or was omitted from a run's capped list of outcome changes"
-        : "A run's list of outcome changes was capped, so the run that introduced the failure cannot be identified";
+        : "A run's list of outcome changes was capped, or results were cleared before a run, so the run that introduced the failure cannot be identified";
 
     private static string RunId(SessionTimelineRun run) => "timeline-run-" + run.Entry.RunId;
 

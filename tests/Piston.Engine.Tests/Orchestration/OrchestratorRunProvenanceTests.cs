@@ -251,6 +251,23 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     }
 
     [Fact]
+    public async Task RunsWithoutEarlierResultsToCompare_AreMarked()
+    {
+        await StartAndWaitForStartupRunAsync();
+        var compared = await _orchestrator.RequestRunAsync();
+
+        _orchestrator.ClearResults(_root);
+        _runner.FailingTest = "A.Tests.Test1";
+        var afterClear = await _orchestrator.RequestRunAsync();
+
+        Assert.True(_state.SessionTimeline[0].NoEarlierResults);
+        Assert.False(compared!.NoEarlierResults);
+        Assert.True(afterClear!.NoEarlierResults);
+        Assert.Empty(afterClear.NewlyFailingTests);
+        Assert.True(_state.SessionTimeline[^1].NoEarlierResults);
+    }
+
+    [Fact]
     public async Task SessionTimeline_KeepsEveryTerminalRunWithItsEditsAndOutcomeChanges()
     {
         await StartAndWaitForStartupRunAsync();

@@ -22,7 +22,8 @@ public sealed class SessionTimelineTests
         TestReference[]? fixedTests = null,
         FailureClassificationDto[]? classifications = null,
         int unlistedNewlyFailing = 0,
-        int unlistedFixed = 0)
+        int unlistedFixed = 0,
+        bool noEarlierResults = false)
     {
         var at = DateTimeOffset.UnixEpoch.AddMinutes(sequence);
         return new SessionTimelineEntryDto(
@@ -31,7 +32,7 @@ public sealed class SessionTimelineTests
             "Succeeded", 0, 1, newlyFailing?.Length ?? 0, 0,
             [.. (newlyFailing ?? []).Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))], (newlyFailing?.Length ?? 0) + unlistedNewlyFailing,
             [.. (fixedTests ?? []).Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))], (fixedTests?.Length ?? 0) + unlistedFixed,
-            classifications ?? [], false);
+            classifications ?? [], false, noEarlierResults);
     }
 
     [Fact]
@@ -104,6 +105,76 @@ public sealed class SessionTimelineTests
         Assert.Equal(["/src/Break.cs"], trace.Edit!.Files);
         Assert.Equal("r3", trace.Edit.NextRunId);
         Assert.Equal(newKind, trace.Classification);
+    }
+
+    [Fact]
+    public void Build_NumbersRunsFromTheSessionsStart_WhenEarlierRunsWereDropped()
+    {
+        var timeline = SessionTimeline.Build([Entry(501, "aaa"), Entry(502, "bbb", files: ["/src/A.cs"])], earlierRunsDropped: 500);
+
+        Assert.Equal([501, 502], timeline.Runs.Select(r => r.Number));
+    }
+
+    [Fact]
+    public void TraceFailures_WhenTheIntroducingRunTestedTheStartingSource_ReportsUnchangedSource()
+    {
+        var timeline = SessionTimeline.Build([Entry(1, "aaa"), Entry(2, "aaa", newlyFailing: [Broken])]);
+
+        var trace = Assert.Single(timeline.TraceFailures([Broken]));
+
+        Assert.Equal("r2", trace.IntroducedBy!.Entry.RunId);
+        Assert.Null(trace.Edit);
+        Assert.True(trace.SourceUnchanged);
+    }
+
+    [Fact]
+    public void TraceFailures_WhenTheIntroducingRunsSourceIsUnknown_DoesNotClaimUnchangedSource()
+    {
+        var timeline = SessionTimeline.Build([Entry(1, "aaa"), Entry(2, null, newlyFailing: [Broken])]);
+
+        var trace = Assert.Single(timeline.TraceFailures([Broken]));
+
+        Assert.Equal("r2", trace.IntroducedBy!.Entry.RunId);
+        Assert.Null(trace.Edit);
+        Assert.False(trace.SourceUnchanged);
+    }
+
+    [Fact]
+    public void TraceFailures_WhenResultsWereClearedBeforeTheFailure_ReportsAnUnknownOrigin()
+    {
+        var timeline = SessionTimeline.Build(
+        [
+            Entry(1, "aaa", noEarlierResults: true),
+            Entry(2, "bbb", files: ["/src/Break.cs"], noEarlierResults: true),
+        ]);
+
+        var trace = Assert.Single(timeline.TraceFailures([Broken]));
+
+        Assert.Equal(FailureOrigin.Unknown, trace.Origin);
+    }
+
+    [Fact]
+    public void TraceFailures_WhenResultsWereClearedAfterTheIntroduction_KeepsTheIntroducingRun()
+    {
+        var timeline = SessionTimeline.Build(
+        [
+            Entry(1, "aaa", noEarlierResults: true),
+            Entry(2, "bbb", files: ["/src/Break.cs"], newlyFailing: [Broken]),
+            Entry(3, "bbb", noEarlierResults: true),
+        ]);
+
+        var trace = Assert.Single(timeline.TraceFailures([Broken]));
+
+        Assert.Equal(FailureOrigin.Run, trace.Origin);
+        Assert.Equal("r2", trace.IntroducedBy!.Entry.RunId);
+    }
+
+    [Fact]
+    public void TraceFailures_ForTheSessionsFirstResults_ReportsTheSessionStart()
+    {
+        var timeline = SessionTimeline.Build([Entry(1, "aaa", noEarlierResults: true), Entry(2, "bbb", files: ["/src/A.cs"])]);
+
+        Assert.Equal(FailureOrigin.SessionStart, Assert.Single(timeline.TraceFailures([Broken])).Origin);
     }
 
     [Fact]

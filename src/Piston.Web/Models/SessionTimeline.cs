@@ -26,7 +26,7 @@ public sealed record SessionTimelineEdit(
     string NextRunId) : SessionTimelineItem(At);
 
 /// <summary>A terminal run of the session.</summary>
-/// <param name="Number">Position of the run in the session, from 1.</param>
+/// <param name="Number">Position of the run in the session, from 1, counting runs no longer retained.</param>
 /// <param name="EditedDuringRun">The source changed while the run executed, so its results are not current.</param>
 public sealed record SessionTimelineRun(SessionTimelineEntryDto Entry, int Number, bool EditedDuringRun)
     : SessionTimelineItem(Entry.RequestedAt)
@@ -53,14 +53,16 @@ public enum FailureOrigin
 /// <summary>Where a currently failing test's failure came from.</summary>
 /// <param name="Origin">What the timeline establishes; <paramref name="IntroducedBy"/> is set only for <see cref="FailureOrigin.Run"/>.</param>
 /// <param name="IntroducedBy">The run in which the test started failing in this session.</param>
-/// <param name="Edit">The edit the introducing run was the first to test; null when the run tested unchanged source.</param>
+/// <param name="Edit">The edit that produced the source the introducing run tested; null when none is recorded.</param>
+/// <param name="SourceUnchanged">No edit is recorded because the introducing run tested the source the session started with.</param>
 /// <param name="Classification">How the run history classified the failure, when history is on.</param>
 public sealed record SessionFailureTrace(
     TestReference Test,
     FailureOrigin Origin,
     SessionTimelineRun? IntroducedBy,
     SessionTimelineEdit? Edit,
-    FailureClassificationDto? Classification);
+    FailureClassificationDto? Classification,
+    bool SourceUnchanged = false);
 
 /// <summary>The session's runs, with the edits between them derived from their source fingerprints.</summary>
 public sealed class SessionTimeline
@@ -91,7 +93,7 @@ public sealed class SessionTimeline
         var pendingSeen = new HashSet<string>(StringComparer.Ordinal);
         var pendingUnlisted = 0;
         DateTimeOffset? pendingAt = null;
-        var number = 0;
+        var number = earlierRunsDropped;
 
         foreach (var entry in entries.OrderBy(e => e.Sequence))
         {
@@ -155,15 +157,21 @@ public sealed class SessionTimeline
             FailureClassificationDto? latest = null;
 
             // A listed fix means the current streak started later. An unlisted fix (a truncated fixed list) only
-            // matters if an unlisted new failure (a truncated newly failing list) could follow it.
+            // matters if an unlisted new failure (a truncated newly failing list) could follow it. A run with no
+            // earlier results to compare with after the session already had some (results were cleared) lists no
+            // changes at all, as if both its lists were truncated.
             var fixedSinceStreak = false;
             var possiblyFixedUnlisted = false;
             var uncertain = false;
+            var sawResults = EarlierRunsDropped > 0;
             foreach (var run in Runs)
             {
                 var entry = run.Entry;
                 var classification = entry.FailureClassifications.FirstOrDefault(c => c.Project == test.Project && c.Test == test.Key);
                 latest = classification ?? latest;
+                var blind = entry.NoEarlierResults && sawResults;
+                var fixedUnlisted = blind || entry.FixedCount > entry.FixedTests.Count;
+                var failingUnlisted = blind || entry.NewlyFailingCount > entry.NewlyFailingTests.Count;
                 if (entry.FixedTests.Any(t => Matches(t, test)))
                 {
                     introducedBy = null;
@@ -172,12 +180,7 @@ public sealed class SessionTimeline
                     possiblyFixedUnlisted = false;
                     uncertain = false;
                 }
-                else if (entry.FixedCount > entry.FixedTests.Count)
-                {
-                    possiblyFixedUnlisted = true;
-                }
-
-                if (entry.NewlyFailingTests.Any(t => Matches(t, test)))
+                else if (entry.NewlyFailingTests.Any(t => Matches(t, test)))
                 {
                     introducedBy = run;
                     introducedAs = classification;
@@ -185,11 +188,18 @@ public sealed class SessionTimeline
                     possiblyFixedUnlisted = false;
                     uncertain = false;
                 }
-                else if (entry.NewlyFailingCount > entry.NewlyFailingTests.Count
-                    && (introducedBy is null || possiblyFixedUnlisted))
+                else
                 {
-                    uncertain = true;
+                    // A test can't be fixed and newly fail in the same run, so only an earlier unlisted fix counts.
+                    if (failingUnlisted && (introducedBy is null || possiblyFixedUnlisted))
+                    {
+                        uncertain = true;
+                    }
+
+                    possiblyFixedUnlisted |= fixedUnlisted;
                 }
+
+                sawResults |= entry.Passed + entry.Failed + entry.Skipped > 0;
             }
 
             var origin = introducedBy is not null
@@ -201,7 +211,9 @@ public sealed class SessionTimeline
             }
 
             var edit = introducedBy is null ? null : EditThatProduced(introducedBy);
-            traces.Add(new SessionFailureTrace(test, origin, introducedBy, edit, introducedBy is null ? latest : introducedAs ?? latest));
+            var sourceUnchanged = edit is null && introducedBy?.Entry.SourceBefore is not null && EarlierRunsDropped == 0;
+            traces.Add(new SessionFailureTrace(
+                test, origin, introducedBy, edit, introducedBy is null ? latest : introducedAs ?? latest, sourceUnchanged));
         }
 
         return traces;

@@ -504,7 +504,8 @@ public static class DtoMapper
         [.. entry.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
         entry.FixedCount,
         [.. entry.FailureClassifications.Select(c => new FailureClassificationDto(c.Project, c.Test, c.Kind.ToString(), c.Evidence))],
-        entry.InRunHistory);
+        entry.InRunHistory,
+        entry.NoEarlierResults);
 
     public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
         new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath);

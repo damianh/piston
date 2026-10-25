@@ -20,6 +20,8 @@ public sealed record FailureClassificationDto(string Project, string Test, strin
 /// <param name="FixedTests">Tests that failed before this run and passed in it.</param>
 /// <param name="FailureClassifications">How the run's failures relate to run history; empty when history is off.</param>
 /// <param name="InRunHistory">True when the run is currently kept in the run history (the dashboard's Runs tab).</param>
+/// <param name="NoEarlierResults">The run had no earlier results to compare with (the session's first results, or the
+/// first after results were cleared), so its outcome changes are unknown rather than empty.</param>
 public sealed record SessionTimelineEntryDto(
     string RunId,
     long Sequence,
@@ -49,7 +51,8 @@ public sealed record SessionTimelineEntryDto(
     IReadOnlyList<TestOutcomeReferenceDto> FixedTests,
     int FixedCount,
     IReadOnlyList<FailureClassificationDto> FailureClassifications,
-    bool InRunHistory);
+    bool InRunHistory,
+    bool NoEarlierResults = false);
 
 /// <summary>A page of the terminal runs since the daemon's engine started, in request order.</summary>
 /// <param name="StartedAt">When the session began.</param>

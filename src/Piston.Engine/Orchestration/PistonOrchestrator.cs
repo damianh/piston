@@ -1628,6 +1628,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 CleanUpCoverageResultsDirs(coverageReportPaths);
             }
 
+            var noEarlierResults = !_state.TestSuites.Any(s => s.Tests.Count > 0) && newSuites.Any(s => s.Tests.Count > 0);
             var (fixedTests, newlyFailingTests) = TestOutcomeChanges.Compare(_state.TestSuites, newSuites);
 
             // Merge selective results with preserved results from untouched test projects
@@ -1681,6 +1682,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 PossiblyHangingTests = hangingTests,
                 FixedTests = fixedTests,
                 NewlyFailingTests = newlyFailingTests,
+                NoEarlierResults = noEarlierResults,
                 RunnerError = runnerError,
                 RetryLimit = RetryFailedTests,
                 RetriesSkippedReason = retriesSkippedReason,

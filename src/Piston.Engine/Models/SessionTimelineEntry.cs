@@ -19,6 +19,7 @@ namespace Piston.Engine.Models;
 /// <param name="FixedCount">How many tests the run fixed, including any beyond <see cref="FixedTests"/>.</param>
 /// <param name="FailureClassifications">How the run's failures relate to the run history, at most <see cref="MaxListItems"/>; empty when history is off.</param>
 /// <param name="InRunHistory">True when the run was kept in the persistent run history, so it can be opened there.</param>
+/// <param name="NoEarlierResults">The run had no earlier results to compare with, so its outcome changes are unknown rather than empty.</param>
 public sealed record SessionTimelineEntry(
     string RunId,
     long Sequence,
@@ -48,7 +49,8 @@ public sealed record SessionTimelineEntry(
     IReadOnlyList<TestOutcomeReference> FixedTests,
     int FixedCount,
     IReadOnlyList<FailureClassification> FailureClassifications,
-    bool InRunHistory)
+    bool InRunHistory,
+    bool NoEarlierResults = false)
 {
     /// <summary>Upper bound on each list an entry keeps, so one huge run cannot dominate memory.</summary>
     public const int MaxListItems = 200;
@@ -86,6 +88,7 @@ public sealed record SessionTimelineEntry(
             [.. run.FixedTests.Take(MaxListItems)],
             run.FixedTests.Count,
             [.. run.FailureClassifications.Take(MaxListItems)],
-            inRunHistory);
+            inRunHistory,
+            run.NoEarlierResults);
     }
 }
