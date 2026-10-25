@@ -135,6 +135,7 @@ internal sealed class SavedResultsStore : IDisposable
         (ValidSuites(run.Suites)
             && ValidBuild(run.Build)
             && HasNoNullItems(run.Projects)
+            && run.Projects.All(p => ValidResources(p.Resources))
             && HasNoNullItems(run.DuplicateTestIds)
             && HasNoNullItems(run.PossiblyHangingTests)
             && HasNoNullItems(run.ChangedFiles)
@@ -149,6 +150,14 @@ internal sealed class SavedResultsStore : IDisposable
                     && (context.TestWorkingDirectories is null || HasNoNullItems(context.TestWorkingDirectories.Values))
                     && (context.SelectionReasons is null ||
                         context.SelectionReasons.Values.All(reasons => reasons is not null && HasNoNullItems(reasons))))));
+
+    private static bool ValidResources(TestProjectResources? resources) =>
+        resources is null ||
+        (HasNoNullItems(resources.Needs.Keys)
+            && HasNoNullItems(resources.Needs.Reasons)
+            && HasNoNullItems(resources.Warnings)
+            && (resources.Wait is not { } wait ||
+                (HasNoNullItems(wait.Keys) && HasNoNullItems(wait.BlockedBy))));
 
     // Nullable annotation enforcement does not cover collection elements or dictionary values.
     private static bool HasNoNullItems<T>(IEnumerable<T> items) where T : class =>

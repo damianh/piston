@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Text.Json.Nodes;
+using Piston.Engine.Execution;
 using Piston.Engine.History;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
@@ -98,21 +99,49 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         Assert.Equal(_root, run.Context.TestWorkingDirectories[Projects[1]]);
     }
 
-    [Fact]
-    public async Task Structurally_invalid_saved_results_do_not_reach_startup_notifications()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Structurally_invalid_saved_results_do_not_reach_startup_notifications(bool corruptResourceBlocker)
     {
         var savedSuite = new TestSuite("A.Tests",
             [new TestResult("A.Tests.Test1", "Test1", TestStatus.Passed, TimeSpan.Zero, null, null, null, null)],
             DateTimeOffset.UtcNow, TimeSpan.Zero);
+        var savedRun = new TestRunRecord
+        {
+            RunId = "saved-run",
+            EngineInstanceId = "saved-engine",
+            Sequence = 1,
+            Trigger = TestRunTrigger.Startup,
+            RequestedAt = DateTimeOffset.UtcNow,
+            Suites = [savedSuite],
+            Projects =
+            [
+                new(Projects[0], ProjectRunStatus.Completed, 1)
+                {
+                    Resources = new(TestResourceNeeds.None(Projects[0]),
+                        new TestResourceWait(TestResourceWaitState.Acquired, [], false,
+                            [new("database", TestResourceBlockerKind.Held, 1, null, null, DateTimeOffset.UtcNow)],
+                            0, 0, null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow), []),
+                },
+            ],
+        };
         using (var writer = new SavedResultsStore(SolutionPath, _ => { }))
         {
             writer.Schedule(new SavedResultsSnapshot(
-                DateTimeOffset.UtcNow, null, null, null, null, [savedSuite], null));
+                DateTimeOffset.UtcNow, null, null, null, null, [savedSuite], savedRun));
         }
 
         var filePath = Path.Combine(_root, ".piston", "App.results.json");
         var json = JsonNode.Parse(File.ReadAllText(filePath))!;
-        json["TestSuites"]![0]!["Tests"]![0] = null;
+        if (corruptResourceBlocker)
+        {
+            json["LastRun"]!["Projects"]![0]!["Resources"]!["Wait"]!["BlockedBy"]![0] = null;
+        }
+        else
+        {
+            json["TestSuites"]![0]!["Tests"]![0] = null;
+        }
         File.WriteAllText(filePath, json.ToJsonString());
         using var store = new SavedResultsStore(SolutionPath, _ => { });
         _orchestrator.ResultsStore = store;
@@ -121,6 +150,13 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
             foreach (var result in _state.TestSuites.SelectMany(s => s.Tests))
             {
                 _ = result.FullyQualifiedName.Length;
+            }
+            foreach (var project in _state.LastRun?.Projects ?? [])
+            {
+                foreach (var blocker in project.Resources?.Wait?.BlockedBy ?? [])
+                {
+                    _ = blocker.Resource.Length;
+                }
             }
         };
 

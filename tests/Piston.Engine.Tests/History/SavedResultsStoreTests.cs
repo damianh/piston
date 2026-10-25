@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Text.Json.Nodes;
+using Piston.Engine.Execution;
 using Piston.Engine.History;
 using Piston.Engine.Models;
 using Xunit;
@@ -42,6 +43,7 @@ public sealed class SavedResultsStoreTests : IDisposable
         Assert.Equivalent(Assert.Single(expectedSuite.Tests), Assert.Single(restoredSuite.Tests), strict: true);
         Assert.Equal(expected.LastRun?.RunId, restored.LastRun?.RunId);
         Assert.Equivalent(expected.LastRun!.FailureClassifications, restored.LastRun!.FailureClassifications, strict: true);
+        Assert.Equivalent(expected.LastRun.Projects, restored.LastRun.Projects, strict: true);
         Assert.Equal(expected.LastBuild!.Status, restored.LastBuild!.Status);
         Assert.Equal(expected.LastBuild.Duration, restored.LastBuild.Duration);
         Assert.Equal(expected.LastBuild.Errors, restored.LastBuild.Errors);
@@ -88,6 +90,17 @@ public sealed class SavedResultsStoreTests : IDisposable
     [InlineData("LastRun/Projects", null)]
     [InlineData("LastRun/Projects", "[null]")]
     [InlineData("LastRun/Projects", "[{\"ProjectPath\":null,\"Status\":\"Completed\",\"TestCount\":1}]")]
+    [InlineData("LastRun/Projects/0/Resources/Needs", null)]
+    [InlineData("LastRun/Projects/0/Resources/Needs/Keys", null)]
+    [InlineData("LastRun/Projects/0/Resources/Needs/Keys", "[null]")]
+    [InlineData("LastRun/Projects/0/Resources/Needs/Reasons", null)]
+    [InlineData("LastRun/Projects/0/Resources/Needs/Reasons", "[null]")]
+    [InlineData("LastRun/Projects/0/Resources/Warnings", null)]
+    [InlineData("LastRun/Projects/0/Resources/Warnings", "[null]")]
+    [InlineData("LastRun/Projects/0/Resources/Wait/Keys", null)]
+    [InlineData("LastRun/Projects/0/Resources/Wait/Keys", "[null]")]
+    [InlineData("LastRun/Projects/0/Resources/Wait/BlockedBy", null)]
+    [InlineData("LastRun/Projects/0/Resources/Wait/BlockedBy", "[null]")]
     [InlineData("LastRun/Build/Errors", "[null]")]
     [InlineData("LastRun/Context/Runtime", null)]
     [InlineData("LastRun/Context/TestProjects", "[null]")]
@@ -285,6 +298,18 @@ public sealed class SavedResultsStoreTests : IDisposable
                 "/App.slnx", ["App.Tests"], ["App.Tests"], null, null, null, false,
                 "Debug", null, ".NET", "OS", "/"),
             Suites = [Suite],
+            Projects =
+            [
+                new("App.Tests", ProjectRunStatus.Completed, 1)
+                {
+                    Resources = new(
+                        new TestResourceNeeds("App.Tests", ["database"], false, ["declared"]),
+                        new TestResourceWait(TestResourceWaitState.Acquired, ["database"], false,
+                            [new("database", TestResourceBlockerKind.Held, 1, null, null, DateTimeOffset.UnixEpoch)],
+                            0, 0, null, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch),
+                        []),
+                },
+            ],
             FailureClassifications =
             [
                 new("App.Tests", Result.FullyQualifiedName, FailureKind.Flaky, "Passed on retry",
