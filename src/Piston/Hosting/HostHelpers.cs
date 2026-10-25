@@ -4,6 +4,7 @@
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.Configuration;
 using Piston.Engine;
+using Piston.Engine.Execution;
 using Piston.Engine.Services;
 using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
@@ -95,6 +96,7 @@ public static class HostHelpers
                 .AddJsonStream(stream)
                 .Build();
 
+            ValidateTestResourcesShape(configuration.GetSection("testResources"));
             var config = new PistonConfig();
             configuration.Bind(config);
             return config;
@@ -162,6 +164,8 @@ public static class HostHelpers
                 $"Invalid 'execution.memoryMb' in .piston.json: must be a positive number of MiB; got {memoryReservationMb}.");
         }
 
+        var testResourceRules = BuildTestResourceRules(config.TestResources);
+
         return new PistonOptions
         {
             SolutionPath = solutionPath,
@@ -179,8 +183,92 @@ public static class HostHelpers
             ProcessRecycleAfter = processRecycleAfter,
             TestExecutionMode = testExecutionMode,
             ExecutionMemoryReservationMb = memoryReservationMb,
+            TestResourceRules = testResourceRules,
             OwnerHost = ownerHost,
         };
+    }
+
+    // Binding ignores unknown keys and accepts an object for a list, so check the raw shape first.
+    private static void ValidateTestResourcesShape(IConfigurationSection section)
+    {
+        if (section.Value is not null)
+        {
+            throw new InvalidOperationException(
+                "Invalid 'testResources' in .piston.json: expected an array of { \"projects\": \"<glob>\", ... } entries.");
+        }
+
+        foreach (var entry in section.GetChildren())
+        {
+            if (!int.TryParse(entry.Key, out _))
+            {
+                throw new InvalidOperationException(
+                    "Invalid 'testResources' in .piston.json: expected an array of { \"projects\": \"<glob>\", ... } entries.");
+            }
+
+            foreach (var property in entry.GetChildren())
+            {
+                if (!PistonTestResourceConfig.PropertyNames.Contains(property.Key, StringComparer.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException(
+                        $"Invalid 'testResources[{entry.Key}]' in .piston.json: unknown property '{property.Key}'. " +
+                        $"Supported: {string.Join(", ", PistonTestResourceConfig.PropertyNames)}.");
+                }
+
+                if (property.Key.Equals("exclusive", StringComparison.OrdinalIgnoreCase)
+                    && (property.Value is not null || property.GetChildren().Any(child => !int.TryParse(child.Key, out _))))
+                {
+                    throw new InvalidOperationException(
+                        $"Invalid 'testResources[{entry.Key}].exclusive' in .piston.json: expected an array of resource keys.");
+                }
+            }
+        }
+    }
+
+    private static IReadOnlyList<TestResourceRule> BuildTestResourceRules(List<PistonTestResourceConfig>? entries)
+    {
+        var rules = new List<TestResourceRule>();
+        for (var i = 0; i < (entries?.Count ?? 0); i++)
+        {
+            var entry = entries![i];
+            var where = $"testResources[{i}]";
+            if (string.IsNullOrWhiteSpace(entry.Projects))
+            {
+                throw new InvalidOperationException(
+                    $"Invalid '{where}' in .piston.json: 'projects' (a glob such as \"tests/**/*.IntegrationTests.csproj\") is required.");
+            }
+
+            var exclusive = new List<string>();
+            foreach (var raw in entry.Exclusive ?? [])
+            {
+                if (!TestResourceKey.TryNormalize(raw, out var key, out var error))
+                {
+                    throw new InvalidOperationException($"Invalid '{where}.exclusive' in .piston.json: {error}");
+                }
+
+                exclusive.Add(key);
+            }
+
+            TestResourceIsolation? isolation = null;
+            if (entry.Isolation is not null)
+            {
+                isolation = entry.Isolation.Trim().ToLowerInvariant() switch
+                {
+                    "repository" => TestResourceIsolation.Repository,
+                    "none" => TestResourceIsolation.None,
+                    _ => throw new InvalidOperationException(
+                        $"Invalid '{where}.isolation' in .piston.json: expected \"repository\" or \"none\"; got \"{entry.Isolation}\"."),
+                };
+            }
+
+            rules.Add(new TestResourceRule(entry.Projects.Trim())
+            {
+                Exclusive = exclusive,
+                Containers = entry.Containers,
+                Isolation = isolation,
+            });
+        }
+
+        return rules;
     }
 
     private static TimeSpan? ParseDuration(string? text, string key, TimeSpan? defaultValue)

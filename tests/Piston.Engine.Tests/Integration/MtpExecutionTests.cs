@@ -117,6 +117,27 @@ public sealed class MtpExecutionTests : IAsyncLifetime
 
     // ── Tests ──────────────────────────────────────────────────────────────────
 
+    [Fact]
+    public async Task CoordinatedProject_DoesNotRetainAHost_AfterDiscoveryOrExecution()
+    {
+        Assert.True(_available, "The MTP fixture must restore and build.");
+        await using var warmHosts = new MtpWarmHostPool();
+        var app = Path.Combine(_root, "bin", "Debug", "net10.0", "MtpE2E.dll");
+        var strategy = new MtpTestExecutionStrategy(
+            _ => app, _root, warmHosts: warmHosts, requiresResources: _ => true);
+        const string filter = "FullyQualifiedName=MtpE2E.SampleTests.PassingTest";
+
+        var discovered = await strategy.DiscoverAsync(_testCsproj, filter, null, _ct);
+        _ = Assert.Single(discovered);
+        Assert.Equal(0, warmHosts.Count);
+
+        var result = await strategy.ExecuteAsync(new ProjectTestRequest(_testCsproj, filter, false), null, _ct);
+
+        Assert.Null(result.RunnerError);
+        Assert.Equal(TestStatus.Passed, Assert.Single(result.Suites.SelectMany(s => s.Tests)).Status);
+        Assert.Equal(0, warmHosts.Count);
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]

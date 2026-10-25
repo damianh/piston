@@ -38,6 +38,8 @@ public sealed record TestRunAdmissionDto(
 /// whose change triggered the run; <see cref="FixedTests"/> and <see cref="NewlyFailingTests"/> are the project-scoped result keys of
 /// tests whose outcome the run changed from failed to passed, and to failed from passed or no result.
 /// <see cref="Restored"/> identifies a saved run that has not been re-verified since daemon restart.
+/// <see cref="ProjectResources"/> lists the test projects that needed exclusive test resources or whose failure looks
+/// like a resource conflict.
 /// </summary>
 public sealed record TestRunDto(
     string RunId,
@@ -73,6 +75,7 @@ public sealed record TestRunDto(
     IReadOnlyList<TestOutcomeReferenceDto>? FixedTests = null,
     IReadOnlyList<TestOutcomeReferenceDto>? NewlyFailingTests = null,
     bool Restored = false,
+    IReadOnlyList<TestProjectResourcesDto>? ProjectResources = null,
     int RetryLimit = 0,
     string? RetriesSkippedReason = null,
     int PassedOnRetry = 0

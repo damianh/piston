@@ -282,6 +282,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         _state.CompletedBuildProjects = 0;
         _state.LastBuiltProject = null;
         _state.ProjectStatuses = new Dictionary<string, ProjectRunStatus>();
+        _state.ProjectResourceWaits = new Dictionary<string, TestResourceWait>();
         _state.AffectedProjects = null;
         _state.AffectedTestProjects = null;
         _state.LastFileChangeTime = null;
@@ -1269,6 +1270,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 ? testTargets.ToDictionary(p => p, _ => Models.ProjectRunStatus.Pending)
                 : new Dictionary<string, Models.ProjectRunStatus>();
             _state.ProjectStatuses = projectStatuses;
+            var resourceWaits = new Dictionary<string, TestResourceWait>(StringComparer.Ordinal);
+            _state.ProjectResourceWaits = new Dictionary<string, TestResourceWait>();
 
             // Live overlay inputs: discovered test lists and live/final results, keyed by project path.
             var discoveredByProject = new Dictionary<string, IReadOnlyList<TestResult>>(StringComparer.Ordinal);
@@ -1284,6 +1287,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             void RefreshOverlay()
             {
                 _state.ProjectStatuses = new Dictionary<string, Models.ProjectRunStatus>(projectStatuses);
+                _state.ProjectResourceWaits = new Dictionary<string, TestResourceWait>(resourceWaits);
                 _state.InProgressSuites = ComposeTestOverlay(
                     suitesToSeed, discoveredByProject, liveByProject, filtered,
                     out var expectedTests, out var completedTests);
@@ -1399,8 +1403,37 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 }
             }
 
+            void OnProjectWaiting(string projectPath, TestResourceWait wait)
+            {
+                var blockers = wait.BlockedBy
+                    .Select(b => $"{b.Resource} ({b.Kind.ToString().ToLowerInvariant()} by {(b.Project is null ? "?" : Path.GetFileNameWithoutExtension(b.Project))}" +
+                        $"{(b.Worktree is null ? "" : $" in {b.Worktree}")}, pid {b.ProcessId})")
+                    .Distinct();
+                log?.Write("Orchestrator",
+                    $"{Path.GetFileNameWithoutExtension(projectPath)} waiting for test resources: {string.Join("; ", blockers)}");
+                UpdateOverlay(() =>
+                {
+                    resourceWaits[projectPath] = wait;
+                    if (projectStatuses.TryGetValue(projectPath, out var current)
+                        && current is Models.ProjectRunStatus.Pending or Models.ProjectRunStatus.WaitingForResources)
+                    {
+                        projectStatuses[projectPath] = Models.ProjectRunStatus.WaitingForResources;
+                    }
+                });
+            }
+
+            void OnProjectResourcesAcquired(string projectPath) => UpdateOverlay(() =>
+            {
+                _ = resourceWaits.Remove(projectPath);
+                if (projectStatuses.GetValueOrDefault(projectPath) == Models.ProjectRunStatus.WaitingForResources)
+                {
+                    projectStatuses[projectPath] = Models.ProjectRunStatus.Pending;
+                }
+            });
+
             void OnProjectStarted(string projectPath) => UpdateOverlay(() =>
             {
+                _ = resourceWaits.Remove(projectPath);
                 if (projectStatuses.ContainsKey(projectPath))
                 {
                     projectStatuses[projectPath] = Models.ProjectRunStatus.Running;
@@ -1418,6 +1451,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             {
                 _state.CompletedTestProjects++;
                 runningClock.Clear(result.ProjectPath);
+                _ = resourceWaits.Remove(result.ProjectPath);
 
                 var projectStatus = result.TimedOut is not null
                     ? Models.ProjectRunStatus.TimedOut
@@ -1441,8 +1475,19 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                         $"{Path.GetFileNameWithoutExtension(result.ProjectPath)} reported no tests: {noTestsReason}");
                 }
 
+                var suspectedConflict = ResourceConflictScanner.Scan(result);
+                if (suspectedConflict is not null)
+                {
+                    DiagnosticLog.Instance?.Write("Orchestrator",
+                        $"{Path.GetFileNameWithoutExtension(result.ProjectPath)}: {suspectedConflict}");
+                }
+
                 projectOutcomes[result.ProjectPath] = new TestRunProjectOutcome(
-                    result.ProjectPath, projectStatus, testCount, noTestsReason, result.TimedOut);
+                    result.ProjectPath, projectStatus, testCount, noTestsReason, result.TimedOut)
+                {
+                    Resources = result.Resources,
+                    SuspectedResourceConflict = suspectedConflict,
+                };
 
                 if (result.Suites.Count > 0)
                 {
@@ -1492,6 +1537,12 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     testPhaseOver = true;
                 }
 
+                if (_state.ProjectResourceWaits.Count > 0)
+                {
+                    _state.ProjectResourceWaits = new Dictionary<string, TestResourceWait>();
+                    _state.NotifyChanged();
+                }
+
                 if (_state.LongestRunningTest is not null)
                 {
                     _state.LongestRunningTest = null;
@@ -1527,6 +1578,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     _coverageEnabled,
                     new TestRunCallbacks
                     {
+                        OnProjectWaiting = OnProjectWaiting,
+                        OnProjectResourcesAcquired = OnProjectResourcesAcquired,
                         OnProjectStarted = OnProjectStarted,
                         OnProjectProgress = OnProjectProgress,
                         OnProjectCompleted = OnProjectCompleted,

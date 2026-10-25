@@ -54,6 +54,8 @@ internal static class VerificationReport
             _ = sb.AppendLine(TestTools.DescribeAdmission(admission));
         }
 
+        AppendList(sb, "Test resources", TestTools.DescribeResourceNotes(run, TestTools.ResourceWaitWorthReporting), note => note);
+
         if (result.Verdict == VerificationVerdict.BuildFailed && run.Build is { } build)
         {
             AppendList(sb, "Build errors", build.Errors, e => e, CapBuildError);
