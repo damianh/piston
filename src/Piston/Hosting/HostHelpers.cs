@@ -190,6 +190,12 @@ public static class HostHelpers
     // Binding ignores unknown keys and accepts an object for a list, so check the raw shape first.
     private static void ValidateTestResourcesShape(IConfigurationSection section)
     {
+        if (section.Value is not null)
+        {
+            throw new InvalidOperationException(
+                "Invalid 'testResources' in .piston.json: expected an array of { \"projects\": \"<glob>\", ... } entries.");
+        }
+
         foreach (var entry in section.GetChildren())
         {
             if (!int.TryParse(entry.Key, out _))
@@ -205,6 +211,13 @@ public static class HostHelpers
                     throw new InvalidOperationException(
                         $"Invalid 'testResources[{entry.Key}]' in .piston.json: unknown property '{property.Key}'. " +
                         $"Supported: {string.Join(", ", PistonTestResourceConfig.PropertyNames)}.");
+                }
+
+                if (property.Key.Equals("exclusive", StringComparison.OrdinalIgnoreCase)
+                    && (property.Value is not null || property.GetChildren().Any(child => !int.TryParse(child.Key, out _))))
+                {
+                    throw new InvalidOperationException(
+                        $"Invalid 'testResources[{entry.Key}].exclusive' in .piston.json: expected an array of resource keys.");
                 }
             }
         }

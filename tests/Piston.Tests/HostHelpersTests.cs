@@ -272,6 +272,13 @@ public sealed class HostHelpersTests : IDisposable
 
     [Theory]
     [InlineData("""{ "testResources": { "projects": "a" } }""", "expected an array")]
+    [InlineData("""{ "testResources": "port:5432" }""", "expected an array")]
+    [InlineData("""{ "testResources": 42 }""", "expected an array")]
+    [InlineData("""{ "testResources": true }""", "expected an array")]
+    [InlineData("""{ "testResources": [ { "projects": "a", "exclusive": "port:5432" } ] }""", "testResources[0].exclusive")]
+    [InlineData("""{ "testResources": [ { "projects": "a", "exclusive": 5432 } ] }""", "testResources[0].exclusive")]
+    [InlineData("""{ "testResources": [ { "projects": "a", "exclusive": true } ] }""", "testResources[0].exclusive")]
+    [InlineData("""{ "testResources": [ { "projects": "a", "exclusive": { "port": 5432 } } ] }""", "testResources[0].exclusive")]
     [InlineData("""{ "testResources": [ { "projects": "a", "exclusiv": ["port:1"] } ] }""", "unknown property 'exclusiv'")]
     public void MalformedTestResourcesAreRejectedOnLoad(string json, string expected)
     {
