@@ -64,7 +64,7 @@ public sealed class OrchestratorRetryTests : IDisposable
 
         var run = await RunAsync();
 
-        Assert.Single(_runner.Calls);
+        _ = Assert.Single(_runner.Calls);
         Assert.Equal(0, run.RetryLimit);
         Assert.Empty(Test(run, "B.Tests.Test1").Attempts);
     }
@@ -133,7 +133,7 @@ public sealed class OrchestratorRetryTests : IDisposable
 
         var run = await RunAsync();
 
-        Assert.Single(_runner.Calls);
+        _ = Assert.Single(_runner.Calls);
         Assert.Contains("not retried", run.RetriesSkippedReason, StringComparison.Ordinal);
     }
 

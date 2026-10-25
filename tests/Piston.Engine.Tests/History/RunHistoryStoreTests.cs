@@ -308,7 +308,7 @@ public sealed class RunHistoryStoreTests : IDisposable
         Assert.Contains(evidence.Outcomes, o => o.Worktree == "feature" && o.Status == TestStatus.Passed);
         Assert.Contains("other worktrees: feature", classification.Evidence, StringComparison.Ordinal);
         Assert.True(Assert.Single(store.GetTestHistory(Test)).Flaky);
-        Assert.Single(store.GetFlakyTests());
+        _ = Assert.Single(store.GetFlakyTests());
     }
 
     [Fact]
@@ -354,7 +354,7 @@ public sealed class RunHistoryStoreTests : IDisposable
         Assert.Equal(FailureKind.Unknown, Assert.Single(store.Record(Run("s1", TestStatus.Failed))).Kind);
         _ = store.GetFlakyTests();
 
-        Assert.Single(messages, m => m.Contains(location.FilePath, StringComparison.Ordinal));
+        _ = Assert.Single(messages, m => m.Contains(location.FilePath, StringComparison.Ordinal));
     }
 
     public void Dispose()
