@@ -54,6 +54,12 @@ internal enum UnknownReason
     /// outcomes would change the verdict.
     /// </summary>
     OutdatedEvidence,
+
+    /// <summary>
+    /// A run was publishing new coverage and test results while they were read, so the line's coverage and its
+    /// tests' outcomes may come from different runs.
+    /// </summary>
+    ResultsUpdating,
 }
 
 /// <summary>A test's latest outcome, combined over the frameworks it ran under.</summary>
@@ -153,21 +159,75 @@ internal static class ChangedLineVerdicts
     public static bool IsCodeFile(string path) => CodeExtensions.Contains(Path.GetExtension(path));
 
     /// <summary>Reads git changes and classifies them against <paramref name="engine"/>'s coverage and test results.</summary>
+    /// <param name="settleTimeout">
+    /// How long to wait for a run that is publishing results to finish, so the coverage and the outcomes describe the
+    /// same runs. When they still overlap, lines that ran are reported as <see cref="UnknownReason.ResultsUpdating"/>.
+    /// </param>
     /// <exception cref="ArgumentException">The base or ref is invalid.</exception>
     /// <exception cref="InvalidOperationException">Git failed or no base was found.</exception>
     public static async Task<ChangedLineCoverageResult> GetAsync(
-        IEngine engine, string solutionDirectory, string? @base, string? baseRef, CancellationToken ct)
+        IEngine engine, string solutionDirectory, string? @base, string? baseRef, CancellationToken ct,
+        TimeSpan? settleTimeout = null)
     {
         var changes = await ChangedLines.GetCheckedAsync(solutionDirectory, @base, baseRef, ct).ConfigureAwait(false);
-        var result = Classify(changes, engine.GetFileCoverage, engine.GetCoveringTests, OutcomeLookup(engine.State));
-        return engine.State.CurrentRun is { } run
-            ? result with
+        var state = engine.State;
+        var runBefore = state.CurrentRun;
+        var deadline = DateTimeOffset.UtcNow + (settleTimeout ?? DefaultSettleTimeout);
+        ChangedLineCoverageResult? result = null;
+        while (true)
+        {
+            var version = state.ResultsVersion;
+            if (!state.IsPublishingResults)
             {
-                Warnings = [.. result.Warnings,
-                    $"Run {run.RunId} is in progress; verdicts use the previous results and may change when it finishes."],
+                var read = Classify(changes, engine.GetFileCoverage, engine.GetCoveringTests, OutcomeLookup(state));
+                if (!state.IsPublishingResults && state.ResultsVersion == version)
+                {
+                    result = read;
+                    break;
+                }
             }
-            : result;
+
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                break;
+            }
+
+            await Task.Delay(SettlePollInterval, ct).ConfigureAwait(false);
+        }
+
+        var warnings = new List<string>();
+        if (result is null)
+        {
+            result = Unsettled(Classify(changes, engine.GetFileCoverage, engine.GetCoveringTests, OutcomeLookup(state)));
+            warnings.Add("Test results were being published while the verdicts were read, so lines that ran are " +
+                "unknown (resultsUpdating). Ask again when the run finishes.");
+        }
+
+        if ((state.CurrentRun ?? runBefore) is { } run)
+        {
+            warnings.Add($"Run {run.RunId} was in progress; verdicts use the results available when they were read " +
+                "and may change when it finishes.");
+        }
+
+        return warnings.Count == 0 ? result : result with { Warnings = [.. result.Warnings, .. warnings] };
     }
+
+    private static readonly TimeSpan DefaultSettleTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan SettlePollInterval = TimeSpan.FromMilliseconds(50);
+
+    /// <summary>
+    /// The coverage and the test outcomes may come from different runs: only lines whose verdict does not depend on
+    /// outcomes keep it.
+    /// </summary>
+    private static ChangedLineCoverageResult Unsettled(ChangedLineCoverageResult result) => result with
+    {
+        Files = [.. result.Files.Select(f => f with
+        {
+            Lines = [.. f.Lines.Select(l => l.Coverage is { HitCount: > 0 }
+                ? new ChangedLineResult(l.Line, ChangedLineVerdict.Unknown, UnknownReason.ResultsUpdating, l.Coverage)
+                : l)],
+        })],
+    };
 
     public static ChangedLineCoverageResult Classify(
         ChangedLinesResult changes,
@@ -294,27 +354,32 @@ internal static class ChangedLineVerdicts
     }
 
     /// <summary>
-    /// Looks up a covering test's latest outcome in <paramref name="state"/>: in the suite of its project, or in any
-    /// suite when that suite has no result for it. A test that ran under several frameworks failed if any result
-    /// failed, and passed if every result passed or was skipped (but not all skipped).
+    /// Looks up a covering test's latest outcome in <paramref name="state"/>, in the suite named after its project
+    /// (both runners name a project's suite that way). A test with no result there has
+    /// <see cref="CoveringTestOutcome.NoResult"/>, even when another project has a test of the same name. A test that
+    /// ran under several frameworks failed if any result failed, and passed if every result passed or was skipped
+    /// (but not all skipped).
     /// </summary>
     public static Func<CoveringTest, CoveringTestOutcome> OutcomeLookup(PistonState state)
     {
         var bySuite = new Dictionary<(string Suite, string Fqn), List<TestStatus>>();
-        var byName = new Dictionary<string, List<TestStatus>>(StringComparer.Ordinal);
         foreach (var suite in state.TestSuites)
         {
             foreach (var test in suite.Tests)
             {
-                Add(bySuite, (suite.Name, test.FullyQualifiedName), test.Status);
-                Add(byName, test.FullyQualifiedName, test.Status);
+                if (!bySuite.TryGetValue((suite.Name, test.FullyQualifiedName), out var list))
+                {
+                    bySuite[(suite.Name, test.FullyQualifiedName)] = list = [];
+                }
+
+                list.Add(test.Status);
             }
         }
 
         return test =>
         {
             var suite = Path.GetFileNameWithoutExtension(test.ProjectPath);
-            var statuses = bySuite.GetValueOrDefault((suite, test.TestFqn)) ?? byName.GetValueOrDefault(test.TestFqn);
+            var statuses = bySuite.GetValueOrDefault((suite, test.TestFqn));
             return statuses switch
             {
                 null or [] => CoveringTestOutcome.NoResult,
@@ -324,17 +389,6 @@ internal static class ChangedLineVerdicts
                 _ => CoveringTestOutcome.NoResult,
             };
         };
-
-        static void Add<TKey>(Dictionary<TKey, List<TestStatus>> map, TKey key, TestStatus status)
-            where TKey : notnull
-        {
-            if (!map.TryGetValue(key, out var list))
-            {
-                map[key] = list = [];
-            }
-
-            list.Add(status);
-        }
     }
 
     /// <summary>The camelCase wire name of a verdict.</summary>
@@ -356,6 +410,7 @@ internal static class ChangedLineVerdicts
         UnknownReason.MixedEvidence => "mixedEvidence",
         UnknownReason.TestsNotRun => "testsNotRun",
         UnknownReason.OutdatedEvidence => "outdatedEvidence",
+        UnknownReason.ResultsUpdating => "resultsUpdating",
         _ => null,
     };
 }

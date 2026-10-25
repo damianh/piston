@@ -109,6 +109,21 @@ public sealed class OrchestratorBackfillTests : IDisposable
     }
 
     [Fact]
+    public async Task ARunPublishesItsCoverageAndResultsAsOneResultsUpdate()
+    {
+        _orchestrator.BackfillGranularity = null;
+        var observed = new List<(bool Publishing, int Suites)>();
+        _processor.OnProcess = () => observed.Add((_state.IsPublishingResults, _state.TestSuites.Count));
+
+        await StartAsync();
+
+        Assert.Equal((true, 0), Assert.Single(observed));
+        Assert.False(_state.IsPublishingResults);
+        Assert.Equal(2, _state.ResultsVersion);
+        Assert.NotEmpty(_state.TestSuites);
+    }
+
+    [Fact]
     public async Task GetCoveringTests_MarksEvidenceRecordedAgainstOtherContentAsNotCurrent()
     {
         await _store.InitializeAsync(_root);
@@ -189,9 +204,15 @@ public sealed class OrchestratorBackfillTests : IDisposable
     {
         public List<CoverageImpactOptions> Recorded { get; } = [];
 
+        public Action? OnProcess { get; set; }
+
         public Task ProcessCoverageAsync(
             long runId, IReadOnlyList<string> coberturaXmlPaths, IReadOnlyList<string> testFqns, ICoverageStore store,
-            bool isFullRun, string? sourceRoot, CoverageImpactOptions? impact) => Task.CompletedTask;
+            bool isFullRun, string? sourceRoot, CoverageImpactOptions? impact)
+        {
+            OnProcess?.Invoke();
+            return Task.CompletedTask;
+        }
 
         public async Task RecordImpactAsync(long runId, CoverageImpactOptions impact, IImpactMapStore store, string? sourceRoot)
         {

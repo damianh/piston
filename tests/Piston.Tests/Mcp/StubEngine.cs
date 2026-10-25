@@ -129,8 +129,14 @@ internal sealed class StubEngine : IEngine
         return AffectedPlan;
     }
 
-    public Engine.Coverage.FileCoverageSnapshot? GetFileCoverage(string filePath) =>
-        FileCoverage.GetValueOrDefault(filePath);
+    /// <summary>Called with the requested path before <see cref="GetFileCoverage"/> returns, e.g. to publish a run mid-read.</summary>
+    public Action<string>? OnGetFileCoverage { get; set; }
+
+    public Engine.Coverage.FileCoverageSnapshot? GetFileCoverage(string filePath)
+    {
+        OnGetFileCoverage?.Invoke(filePath);
+        return FileCoverage.GetValueOrDefault(filePath);
+    }
 
     /// <summary>Covering tests returned by <see cref="GetCoveringTests"/>, keyed by the requested path.</summary>
     public Dictionary<string, IReadOnlyList<Engine.Coverage.CoveringTest>> CoveringTests { get; } = [];

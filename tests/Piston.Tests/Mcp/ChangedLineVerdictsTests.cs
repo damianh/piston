@@ -249,7 +249,7 @@ public sealed class ChangedLineVerdictsTests
     }
 
     [Fact]
-    public void OutcomeLookup_CombinesFrameworksAndPrefersTheTestsOwnSuite()
+    public void OutcomeLookup_CombinesFrameworksAndUsesOnlyTheTestsOwnSuite()
     {
         var state = new PistonState
         {
@@ -270,7 +270,7 @@ public sealed class ChangedLineVerdictsTests
         Assert.Equal(CoveringTestOutcome.Skipped, Outcome("T.Skip"));
         Assert.Equal(CoveringTestOutcome.NoResult, Outcome("T.Running"));
         Assert.Equal(CoveringTestOutcome.Passed, Outcome("T.Shared"));
-        Assert.Equal(CoveringTestOutcome.Failed, Outcome("T.OnlyInB"));
+        Assert.Equal(CoveringTestOutcome.NoResult, Outcome("T.OnlyInB"));
         Assert.Equal(CoveringTestOutcome.NoResult, Outcome("T.Missing"));
     }
 

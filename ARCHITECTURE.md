@@ -71,9 +71,13 @@ Coverage requests return the solution's coverage summary, one file's line
 coverage (optionally with its source), and LCOV or Cobertura exports.
 `coverage/getCoveringTests` returns the tests the impact map records as executing
 a file, with their evidence granularity and executed line ranges.
-`coverage/getChangedLines` returns a verdict for each changed line of the git
+`coverage/getChangedLines` returns the verdicts for the changed lines of the git
 changes (`base`, `baseRef`), as `get_changed_line_coverage` does (see
-[MCP behavior and limitations](#mcp-behavior-and-limitations)).
+[MCP behavior and limitations](#mcp-behavior-and-limitations)): per file, line
+ranges per verdict, unknown ranges per reason, partial-branch lines and up to 20
+failing tests. File detail is bounded to half the message size limit: files
+past it give only their totals (`detailOmitted`), then are counted in
+`filesOmitted`, with a warning. The overall totals always count every changed line.
 `source/get` returns a source file's lines for the dashboard's stack-trace view;
 it refuses paths that resolve (following symlinks) outside the solution
 directory, files over 1 MB and binary files.
@@ -428,7 +432,10 @@ engine state and pipeline as other clients; MCP does not bypass builds.
 from the coverage report, the impact map and the latest test results. Stale files
 and outdated impact evidence never count as covered, and because the impact map
 records executed methods, a line is covered by passing tests only when every
-current test credited with it passed. Test
+current test credited with it passed. A run stores its coverage before it replaces
+`TestSuites`, and marks that window with `PistonState.BeginResultsUpdate`/`EndResultsUpdate`.
+The classifier rereads when `ResultsVersion` changes during a read, and after a bounded
+wait reports lines that ran as `unknown` (`resultsUpdating`) rather than combine two runs. Test
 processes are fresh unless `warmTestHosts` is enabled (see
 [Builds and execution](#builds-and-execution)).
 

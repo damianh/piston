@@ -303,6 +303,100 @@ public sealed class CoverageToolsTests : IDisposable
     private static TestResult Result(string fqn, TestStatus status) =>
         new(fqn, fqn, status, TimeSpan.Zero, null, null, null, null);
 
+    private static TestSuite LibSuite(TestStatus status) =>
+        new("Lib.Tests", [Result("Lib.Tests.T", status)], DateTimeOffset.UnixEpoch, TimeSpan.Zero);
+
+    private static TestRunRecord Running(string runId) => new()
+    {
+        RunId = runId,
+        EngineInstanceId = "engine",
+        Sequence = 1,
+        Trigger = TestRunTrigger.FileChange,
+        Status = TestRunStatus.Running,
+        RequestedAt = DateTimeOffset.UnixEpoch,
+    };
+
+    /// <summary>A working-tree change to lines 2 and 3 of a measured file: line 2 ran, line 3 did not.</summary>
+    private async Task<(StubEngine Engine, string Path)> ChangedMeasuredFileAsync()
+    {
+        Git("init", "-q", "-b", "main");
+        var path = Path.Combine(_root, "Code.cs");
+        await File.WriteAllLinesAsync(path, ["a", "b", "c"], _ct);
+        Git("add", ".");
+        Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+        await File.WriteAllLinesAsync(path, ["a", "B", "C"], _ct);
+
+        var engine = Engine();
+        engine.CoverageReport = new CoverageReportSnapshot([]);
+        engine.FileCoverage[path] = new FileCoverageSnapshot(Summary(path, 2, 1), [new(2, 1), new(3, 0)]);
+        engine.CoveringTests[path] = [Covering("Lib.Tests.T", 1, 3)];
+        engine.State.TestSuites = [LibSuite(TestStatus.Passed)];
+        return (engine, path);
+    }
+
+    [Fact]
+    public async Task GetChangedLineVerdicts_RunPublishedDuringTheRead_RereadsBothFromTheSameRun()
+    {
+        var (engine, _) = await ChangedMeasuredFileAsync();
+        var published = false;
+        engine.OnGetFileCoverage = _ =>
+        {
+            if (published)
+            {
+                return;
+            }
+
+            // A run where the test fails stores its coverage, then its results, after the outcomes were captured.
+            published = true;
+            engine.State.BeginResultsUpdate();
+            engine.State.TestSuites = [LibSuite(TestStatus.Failed)];
+            engine.State.EndResultsUpdate();
+        };
+
+        var result = await ChangedLineVerdicts.GetAsync(engine, _root, null, null, _ct);
+
+        var lines = Assert.Single(result.Files).Lines;
+        Assert.Equal(ChangedLineVerdict.CoveredOnlyByFailing, lines[0].Verdict);
+        Assert.Equal(ChangedLineVerdict.Uncovered, lines[1].Verdict);
+        Assert.Empty(result.Warnings);
+    }
+
+    [Fact]
+    public async Task GetChangedLineVerdicts_RunStillPublishing_ReportsLinesThatRanAsResultsUpdating()
+    {
+        var (engine, _) = await ChangedMeasuredFileAsync();
+        engine.State.CurrentRun = Running("run-1");
+        engine.OnGetFileCoverage = _ =>
+        {
+            if (!engine.State.IsPublishingResults)
+            {
+                engine.State.BeginResultsUpdate();
+            }
+        };
+
+        var result = await ChangedLineVerdicts.GetAsync(engine, _root, null, null, _ct, settleTimeout: TimeSpan.FromMilliseconds(100));
+
+        var lines = Assert.Single(result.Files).Lines;
+        Assert.Equal((ChangedLineVerdict.Unknown, UnknownReason.ResultsUpdating), (lines[0].Verdict, lines[0].Reason));
+        Assert.Equal(ChangedLineVerdict.Uncovered, lines[1].Verdict);
+        Assert.Equal(1, result.UnknownReasons[UnknownReason.ResultsUpdating]);
+        Assert.Contains(result.Warnings, w => w.Contains("resultsUpdating", StringComparison.Ordinal));
+        Assert.Contains(result.Warnings, w => w.Contains("run-1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetChangedLineVerdicts_RunFinishingDuringTheRead_StillWarns()
+    {
+        var (engine, _) = await ChangedMeasuredFileAsync();
+        engine.State.CurrentRun = Running("run-2");
+        engine.OnGetFileCoverage = _ => engine.State.CurrentRun = null;
+
+        var result = await ChangedLineVerdicts.GetAsync(engine, _root, null, null, _ct);
+
+        Assert.Equal(ChangedLineVerdict.CoveredByPassing, Assert.Single(result.Files).Lines[0].Verdict);
+        Assert.Contains(result.Warnings, w => w.Contains("run-2", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task GetChangedLineCoverage_RejectsOptionLikeBase()
     {

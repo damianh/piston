@@ -99,8 +99,10 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         "line of a source file is coveredByPassing (it ran and every current test credited with executing it passed), " +
         "coveredOnlyByFailing (every such test failed; failingTests lists them), uncovered, nonExecutable, or unknown " +
         "with a reason: stale (the file changed after it was measured: run the tests), notMeasured, noTestEvidence, " +
-        "mixedEvidence, testsNotRun or outdatedEvidence. Only coveredByPassing shows a line is exercised by passing " +
-        "tests. Requires the daemon to run with coverage enabled.")]
+        "mixedEvidence, testsNotRun, outdatedEvidence or resultsUpdating (a run was publishing results: ask again). " +
+        "Only coveredByPassing shows a line is exercised by passing tests; it uses each credited test's latest " +
+        "result, so hits kept from an earlier run of unchanged code are judged by later results. Requires the daemon " +
+        "to run with coverage enabled.")]
     public async Task<string> GetChangedLineCoverageAsync(
         [Description(BaseRefDescription)] string? baseRef = null,
         [Description(BaseDescription)] string? @base = null,
@@ -143,7 +145,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
     }
 
     /// <summary>Most failing tests listed per file.</summary>
-    private const int MaxFailingTestsPerFile = 20;
+    internal const int MaxFailingTestsPerFile = 20;
 
     internal static JsonObject ChangedLineCoverage(ChangedLineCoverageResult result, string solutionDirectory)
     {
