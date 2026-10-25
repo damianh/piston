@@ -8,6 +8,7 @@ using Piston.Engine.Coverage;
 using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
 using Piston.Hosting.Services;
+using Piston.Mcp.Tools;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
@@ -104,6 +105,34 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                     var filePath = cmd?.FilePath ?? string.Empty;
                     var tests = string.IsNullOrWhiteSpace(filePath) ? null : _engine.GetCoveringTests(filePath);
                     var result = DtoMapper.ToCoveringTestsDto(filePath, tests);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.CoverageGetChangedLines:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<GetChangedLineCoverageCommand>(@params);
+                    ChangedLineCoverageDto result;
+                    if (_engine.GetCoverageReport() is null)
+                    {
+                        result = DtoMapper.DisabledChangedLineCoverage;
+                    }
+                    else
+                    {
+                        var solutionDirectory = SolutionDirectory
+                            ?? throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, "No solution is loaded.");
+                        try
+                        {
+                            result = (await ChangedLineVerdicts
+                                .GetAsync(_engine, solutionDirectory, cmd?.Base, cmd?.BaseRef, ct)
+                                .ConfigureAwait(false)).ToDto(solutionDirectory);
+                        }
+                        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+                        {
+                            throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, ex.Message);
+                        }
+                    }
+
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
                 }

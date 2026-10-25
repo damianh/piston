@@ -5,6 +5,7 @@ using Piston.Engine;
 using Piston.Engine.Coverage;
 using Piston.Engine.Models;
 using Piston.Hosting.Services;
+using Piston.Mcp.Tools;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
@@ -301,6 +302,38 @@ public static class DtoMapper
             t.Granularity,
             [.. t.ExecutedLines.Select(r => new LineRangeDto(r.Start, r.End))],
             t.IsCurrent))]);
+
+    /// <summary>The changed-line coverage reply when coverage is disabled.</summary>
+    public static ChangedLineCoverageDto DisabledChangedLineCoverage { get; } =
+        new(false, null, new ChangedLineTotalsDto(0, 0, 0, 0, 0, 0), new Dictionary<string, int>(), [], []);
+
+    internal static ChangedLineCoverageDto ToDto(this ChangedLineCoverageResult result, string solutionDirectory) =>
+        new(
+            Enabled: true,
+            Base: result.Basis,
+            Totals: result.Totals.ToDto(),
+            UnknownReasons: result.UnknownReasons.ToDictionary(
+                kv => ChangedLineVerdicts.Name(kv.Key)!, kv => kv.Value, StringComparer.Ordinal),
+            Files: [.. result.Files.Select(f => new ChangedLineFileDto(
+                f.FilePath,
+                Path.GetRelativePath(solutionDirectory, f.FilePath).Replace('\\', '/'),
+                f.IsMeasured,
+                f.IsStale,
+                f.IsPartial,
+                f.Totals.ToDto(),
+                [.. f.Lines.Select(l => new ChangedLineDto(
+                    l.Line,
+                    ChangedLineVerdicts.Name(l.Verdict),
+                    ChangedLineVerdicts.Name(l.Reason),
+                    l.Coverage?.HitCount,
+                    l.Coverage?.BranchesCovered ?? 0,
+                    l.Coverage?.BranchesTotal ?? 0,
+                    l.FailingTests))]))],
+            Warnings: result.Warnings);
+
+    private static ChangedLineTotalsDto ToDto(this ChangedLineTotals totals) =>
+        new(totals.ChangedLines, totals.CoveredByPassing, totals.CoveredOnlyByFailing, totals.Uncovered,
+            totals.NonExecutable, totals.Unknown);
 
     public static TestRunAdmissionDto ToDto(this TestRunAdmission admission) =>
         new(

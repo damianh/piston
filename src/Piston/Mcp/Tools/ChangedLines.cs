@@ -45,6 +45,25 @@ internal static partial class ChangedLines
         return parsed is not null;
     }
 
+    /// <summary>Validates a base and ref given by a client, then reads the changes they select.</summary>
+    /// <exception cref="ArgumentException"><paramref name="base"/> or <paramref name="reference"/> is invalid.</exception>
+    /// <exception cref="InvalidOperationException">Git failed, a ref is unknown or no base was found.</exception>
+    public static Task<ChangedLinesResult> GetCheckedAsync(
+        string directory, string? @base, string? reference, CancellationToken ct)
+    {
+        if (!TryParseBase(@base, reference, out var kind))
+        {
+            throw new ArgumentException($"'{@base}' is not a base: use working, branch or range.", nameof(@base));
+        }
+
+        if (!string.IsNullOrWhiteSpace(reference) && !IsValidRevision(reference))
+        {
+            throw new ArgumentException($"'{reference}' is not a valid git revision.", nameof(reference));
+        }
+
+        return GetAsync(directory, kind, reference, ct);
+    }
+
     /// <summary>
     /// Returns each changed file's absolute path with its added or modified line numbers. Untracked files count
     /// as wholly changed. With a <paramref name="baseRevision"/>, changes are taken since its merge base with HEAD.
@@ -72,6 +91,7 @@ internal static partial class ChangedLines
         string basis;
         string[] revisions;
         var includeUntracked = true;
+        string? newSide = null;
         switch (kind)
         {
             case ChangeBase.Branch:
@@ -125,6 +145,7 @@ internal static partial class ChangedLines
                         }
 
                         revisions = [from, to];
+                        newSide = to;
                     }
                     else
                     {
@@ -133,6 +154,7 @@ internal static partial class ChangedLines
                         var parent = await TryRunGitAsync(top, ["rev-parse", "--verify", "--quiet", commit + "^"], ct)
                             .ConfigureAwait(false);
                         revisions = [string.IsNullOrWhiteSpace(parent) ? EmptyTree : parent.Trim(), commit];
+                        newSide = commit;
                     }
 
                     break;
@@ -164,7 +186,31 @@ internal static partial class ChangedLines
             }
         }
 
-        return new ChangedLinesResult(basis, files) { Warnings = warnings };
+        var diverged = new HashSet<string>(StringComparer.Ordinal);
+        if (newSide is not null && files.Count > 0)
+        {
+            // A range's line numbers are those of its last revision; files that differ in the working tree have
+            // other content at those numbers.
+            var differing = await RunGitAsync(
+                top, ["-c", "core.quotepath=off", "diff", "--name-only", "-z", "--no-renames", newSide, "--"], ct).ConfigureAwait(false);
+            foreach (var path in differing.Split('\0', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var full = Path.GetFullPath(Path.Combine(top, path));
+                if (files.ContainsKey(full))
+                {
+                    _ = diverged.Add(full);
+                }
+            }
+
+            if (diverged.Count > 0)
+            {
+                warnings.Add(
+                    $"{diverged.Count} changed file(s) differ between {newSide} and the working tree: their line numbers " +
+                    "do not match the working tree.");
+            }
+        }
+
+        return new ChangedLinesResult(basis, files) { Warnings = warnings, DivergedFiles = diverged };
 
         static string Side(string side) => side.Length == 0 ? "HEAD" : RequireRevision(side);
     }
@@ -367,6 +413,12 @@ internal sealed record ChangedLinesResult(string Basis, IReadOnlyDictionary<stri
 {
     /// <summary>Caveats about the comparison, such as a missing merge base.</summary>
     public IReadOnlyList<string> Warnings { get; init; } = [];
+
+    /// <summary>
+    /// For a range: changed files whose content at the range's last revision differs from the working tree, so their
+    /// line numbers do not describe the files on disk.
+    /// </summary>
+    public IReadOnlySet<string> DivergedFiles { get; init; } = new HashSet<string>();
 }
 
 /// <summary>What changes are compared against: see <see cref="ChangedLines.GetAsync(string, ChangeBase, string?, CancellationToken)"/>.</summary>

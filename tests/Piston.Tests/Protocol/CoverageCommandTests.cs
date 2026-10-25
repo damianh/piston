@@ -19,7 +19,15 @@ public sealed class CoverageCommandTests : IDisposable
     private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
     private readonly string _root = Directory.CreateTempSubdirectory("piston-coverage-cmd-").FullName;
 
-    public void Dispose() => Directory.Delete(_root, recursive: true);
+    public void Dispose()
+    {
+        foreach (var file in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
+        {
+            File.SetAttributes(file, FileAttributes.Normal);
+        }
+
+        Directory.Delete(_root, recursive: true);
+    }
 
     private static CoverageFileSummary Summary(string path, int total, int covered, bool stale = false) =>
         new(path, "Lib", total, covered, 4, 3, stale, IsPartial: false, "hash", 3, DateTimeOffset.UnixEpoch);
@@ -187,6 +195,74 @@ public sealed class CoverageCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task GetChangedLines_WithCoverageDisabled_ReportsDisabled()
+    {
+        var dispatcher = new EngineCommandDispatcher(new StubEngine());
+
+        var result = await dispatcher.HandleCommandAsync(ProtocolMethods.CoverageGetChangedLines, null, _ct);
+
+        Assert.False(result!["enabled"]!.GetValue<bool>());
+        Assert.Equal(0, result["totals"]!["changedLines"]!.GetValue<int>());
+        Assert.Empty(result["files"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task GetChangedLines_OptionLikeBase_IsInvalidParams()
+    {
+        var engine = new StubEngine { CoverageReport = new CoverageReportSnapshot([]) };
+        engine.State.SolutionPath = Path.Combine(_root, "App.slnx");
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var ex = await Assert.ThrowsAsync<JsonRpcException>(() => dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageGetChangedLines, JsonNode.Parse("""{"base":"--output=/tmp/x"}"""), _ct));
+
+        Assert.Equal(JsonRpcErrorCodes.InvalidParams, ex.Code);
+    }
+
+    [Fact]
+    public async Task GetChangedLines_ReturnsAVerdictPerChangedLine()
+    {
+        Git("init", "-q", "-b", "main");
+        var path = Path.Combine(_root, "src", "A.cs");
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllLinesAsync(path, ["a", "b", "c"], _ct);
+        Git("add", ".");
+        Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+        await File.WriteAllLinesAsync(path, ["A", "B", "C"], _ct);
+
+        var engine = new StubEngine { CoverageReport = new CoverageReportSnapshot([]) };
+        engine.State.SolutionPath = Path.Combine(_root, "App.slnx");
+        engine.FileCoverage[path] = new FileCoverageSnapshot(Summary(path, 2, 1), [new(1, 2), new(2, 0)]);
+        engine.CoveringTests[path] = [new CoveringTest("T.Fail", "/t/T.csproj", "test", [new CoveredLineRange(1, 1)], IsCurrent: true)];
+        engine.State.TestSuites =
+        [
+            new Engine.Models.TestSuite(
+                "T",
+                [new Engine.Models.TestResult("T.Fail", "Fail", Engine.Models.TestStatus.Failed, TimeSpan.Zero, null, null, null, null)],
+                DateTimeOffset.UnixEpoch,
+                TimeSpan.Zero),
+        ];
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var node = await dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageGetChangedLines, JsonNode.Parse("""{"base":"working"}"""), _ct);
+        var result = node.Deserialize<ChangedLineCoverageDto>(JsonRpcSerializer.Options)!;
+
+        Assert.True(result.Enabled);
+        Assert.Equal(new ChangedLineTotalsDto(3, 0, 1, 1, 1, 0), result.Totals);
+        Assert.Equal(0, result.UnknownReasons["stale"]);
+        var file = Assert.Single(result.Files);
+        Assert.Equal("src/A.cs", file.RelativePath);
+        Assert.Equal(
+            [(1, "coveredOnlyByFailing"), (2, "uncovered"), (3, "nonExecutable")],
+            file.Lines.Select(l => (l.Line, l.Verdict)));
+        Assert.Equal(["T.Fail"], file.Lines[0].FailingTests);
+        Assert.Equal(2, file.Lines[0].HitCount);
+        Assert.Null(file.Lines[2].HitCount);
+        Assert.All(file.Lines, l => Assert.Null(l.Reason));
+    }
+
+    [Fact]
     public async Task Export_ReturnsLcovContent()
     {
         var engine = new StubEngine();
@@ -285,5 +361,19 @@ public sealed class CoverageCommandTests : IDisposable
 
         Assert.Equal(JsonRpcErrorCodes.InvalidParams, badFormat.Code);
         Assert.Contains("disabled", disabled.Message, StringComparison.Ordinal);
+    }
+
+    private void Git(params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git") { WorkingDirectory = _root, RedirectStandardError = true };
+        foreach (var arg in args)
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(process.ExitCode == 0, error);
     }
 }

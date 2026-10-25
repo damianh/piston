@@ -153,43 +153,155 @@ public sealed class CoverageToolsTests : IDisposable
     }
 
     [Fact]
-    public async Task GetChangedLineCoverage_ClassifiesChangedExecutableLines()
+    public async Task GetChangedLineCoverage_GivesEachChangedLineAVerdict()
     {
         Git("init", "-q", "-b", "main");
         var measured = Path.Combine(_root, "Measured.cs");
-        var stale = Path.Combine(_root, "Stale.cs");
-        await File.WriteAllLinesAsync(measured, ["a", "b", "c", "d", "e"], _ct);
-        await File.WriteAllLinesAsync(stale, ["a"], _ct);
+        await File.WriteAllLinesAsync(measured, ["a", "b", "c", "d", "e", "g"], _ct);
         await File.WriteAllTextAsync(Path.Combine(_root, "README.md"), "x", _ct);
         Git("add", ".");
         Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
 
-        await File.WriteAllLinesAsync(measured, ["a", "B", "C", "d", "E", "f"], _ct);
-        await File.WriteAllLinesAsync(stale, ["A"], _ct);
+        await File.WriteAllLinesAsync(measured, ["a", "B", "C", "D", "E", "f", "G"], _ct);
         await File.WriteAllTextAsync(Path.Combine(_root, "README.md"), "y", _ct);
         await File.WriteAllLinesAsync(Path.Combine(_root, "New.cs"), ["n"], _ct);
 
         var engine = Engine();
         engine.CoverageReport = new CoverageReportSnapshot([]);
         engine.FileCoverage[measured] = new FileCoverageSnapshot(
-            Summary(measured, 4, 2),
-            [new(2, 1), new(3, 0), new(4, 1), new(5, 1, 1, 2)]);
-        engine.FileCoverage[stale] = new FileCoverageSnapshot(Summary(stale, 1, 1, stale: true), [new(1, 1)]);
+            Summary(measured, 5, 4),
+            [new(2, 1), new(3, 0), new(4, 2), new(5, 1, 1, 2), new(7, 1)]);
+        engine.CoveringTests[measured] =
+        [
+            Covering("Lib.Tests.Pass", 2, 2),
+            Covering("Lib.Tests.Fail", 5, 5),
+            Covering("Lib.Tests.Pass", 4, 4),
+            Covering("Lib.Tests.Fail", 4, 4),
+        ];
+        engine.State.TestSuites =
+        [
+            new TestSuite("Lib.Tests",
+                [Result("Lib.Tests.Pass", TestStatus.Passed), Result("Lib.Tests.Fail", TestStatus.Failed)],
+                DateTimeOffset.UnixEpoch, TimeSpan.Zero),
+        ];
         var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
 
         var json = JsonNode.Parse(await tools.GetChangedLineCoverageAsync(ct: _ct))!;
 
-        Assert.Equal("piston.changed-line-coverage/v1", json["schema"]!.GetValue<string>());
-        Assert.Equal(3, json["totals"]!["executable"]!.GetValue<int>());
-        Assert.Equal(1, json["totals"]!["covered"]!.GetValue<int>());
-        Assert.Equal(1, json["totals"]!["partial"]!.GetValue<int>());
-        Assert.Equal(1, json["totals"]!["uncovered"]!.GetValue<int>());
-        var file = Assert.Single(json["files"]!.AsArray())!;
-        Assert.Equal("Measured.cs", file["path"]!.GetValue<string>());
-        Assert.Equal("3", file["uncoveredLines"]!.GetValue<string>());
-        Assert.Equal(["Stale.cs"], json["staleFiles"]!.AsArray().Select(f => f!.GetValue<string>()));
-        Assert.Equal(["New.cs"], json["notMeasuredFiles"]!.AsArray().Select(f => f!.GetValue<string>()));
+        Assert.Equal("piston.changed-line-coverage/v2", json["schema"]!.GetValue<string>());
+        var totals = json["totals"]!;
+        Assert.Equal(7, totals["changedLines"]!.GetValue<int>());
+        Assert.Equal(1, totals["coveredByPassing"]!.GetValue<int>());
+        Assert.Equal(1, totals["coveredOnlyByFailing"]!.GetValue<int>());
+        Assert.Equal(1, totals["uncovered"]!.GetValue<int>());
+        Assert.Equal(1, totals["nonExecutable"]!.GetValue<int>());
+        Assert.Equal(3, totals["unknown"]!.GetValue<int>());
+        Assert.Equal(1, json["unknownReasons"]!["mixedEvidence"]!.GetValue<int>());
+        Assert.Equal(1, json["unknownReasons"]!["noTestEvidence"]!.GetValue<int>());
+        Assert.Equal(1, json["unknownReasons"]!["notMeasured"]!.GetValue<int>());
+        Assert.Equal(0, json["unknownReasons"]!["stale"]!.GetValue<int>());
+
+        var files = json["files"]!.AsArray();
+        Assert.Equal(["Measured.cs", "New.cs"], files.Select(f => f!["path"]!.GetValue<string>()));
+        var file = files[0]!;
+        Assert.Equal("2", file["coveredByPassing"]!.GetValue<string>());
+        Assert.Equal("5", file["coveredOnlyByFailing"]!.GetValue<string>());
+        Assert.Equal("3", file["uncovered"]!.GetValue<string>());
+        Assert.Equal("6", file["nonExecutable"]!.GetValue<string>());
+        Assert.Equal(
+            [("4", "mixedEvidence"), ("7", "noTestEvidence")],
+            file["unknown"]!.AsArray().Select(u => (u!["lines"]!.GetValue<string>(), u["reason"]!.GetValue<string>())));
+        Assert.Equal(5, Assert.Single(file["partialBranches"]!.AsArray())!["line"]!.GetValue<int>());
+        Assert.Equal(["Lib.Tests.Fail"], file["failingTests"]!.AsArray().Select(t => t!.GetValue<string>()));
+        var unmeasured = files[1]!;
+        Assert.False(unmeasured["measured"]!.GetValue<bool>());
+        Assert.Equal("notMeasured", Assert.Single(unmeasured["unknown"]!.AsArray())!["reason"]!.GetValue<string>());
     }
+
+    [Fact]
+    public async Task GetChangedLineCoverage_FileEditedAfterTheRun_IsUnknownStaleNotCovered()
+    {
+        Git("init", "-q", "-b", "main");
+        var path = Path.Combine(_root, "Edited.cs");
+        await File.WriteAllLinesAsync(path, ["a", "b"], _ct);
+        Git("add", ".");
+        Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+        await File.WriteAllLinesAsync(path, ["a", "B"], _ct);
+
+        // The run measured the edit and a passing test executed it.
+        var engine = Engine();
+        engine.CoverageReport = new CoverageReportSnapshot([]);
+        engine.FileCoverage[path] = new FileCoverageSnapshot(Summary(path, 2, 2), [new(1, 1), new(2, 1)]);
+        engine.CoveringTests[path] = [Covering("Lib.Tests.Pass", 1, 2)];
+        engine.State.TestSuites =
+        [
+            new TestSuite("Lib.Tests", [Result("Lib.Tests.Pass", TestStatus.Passed)], DateTimeOffset.UnixEpoch, TimeSpan.Zero),
+        ];
+        var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
+        var before = JsonNode.Parse(await tools.GetChangedLineCoverageAsync(ct: _ct))!;
+        Assert.Equal("2", before["files"]![0]!["coveredByPassing"]!.GetValue<string>());
+
+        // Editing the line again makes the measured content stale (the engine compares content hashes) and the
+        // impact evidence outdated.
+        await File.WriteAllLinesAsync(path, ["a", "B2"], _ct);
+        engine.FileCoverage[path] = new FileCoverageSnapshot(Summary(path, 2, 2, stale: true), [new(1, 1), new(2, 1)]);
+        engine.CoveringTests[path] = [Covering("Lib.Tests.Pass", 1, 2, current: false)];
+
+        var after = JsonNode.Parse(await tools.GetChangedLineCoverageAsync(ct: _ct))!;
+
+        Assert.Equal(0, after["totals"]!["coveredByPassing"]!.GetValue<int>());
+        Assert.Equal(1, after["unknownReasons"]!["stale"]!.GetValue<int>());
+        var file = after["files"]![0]!;
+        Assert.True(file["isStale"]!.GetValue<bool>());
+        Assert.Equal("", file["coveredByPassing"]!.GetValue<string>());
+        var unknown = Assert.Single(file["unknown"]!.AsArray())!;
+        Assert.Equal(("2", "stale"), (unknown["lines"]!.GetValue<string>(), unknown["reason"]!.GetValue<string>()));
+    }
+
+    [Fact]
+    public async Task GetChangedLineCoverage_RangeWithUncommittedEdits_IsUnknownStale()
+    {
+        Git("init", "-q", "-b", "main");
+        var path = Path.Combine(_root, "A.cs");
+        var other = Path.Combine(_root, "B.cs");
+        await File.WriteAllLinesAsync(path, ["a", "b"], _ct);
+        await File.WriteAllLinesAsync(other, ["a", "b"], _ct);
+        Git("add", ".");
+        Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+        await File.WriteAllLinesAsync(path, ["a", "B"], _ct);
+        await File.WriteAllLinesAsync(other, ["a", "B"], _ct);
+        Git("add", ".");
+        Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "edit");
+
+        // A.cs gains a line above the committed change, so line 2 of HEAD is line 3 on disk.
+        await File.WriteAllLinesAsync(path, ["new", "a", "B"], _ct);
+        var engine = Engine();
+        engine.CoverageReport = new CoverageReportSnapshot([]);
+        engine.FileCoverage[path] = new FileCoverageSnapshot(Summary(path, 2, 2), [new(2, 1), new(3, 1)]);
+        engine.FileCoverage[other] = new FileCoverageSnapshot(Summary(other, 1, 1), [new(2, 1)]);
+        engine.CoveringTests[path] = [Covering("Lib.Tests.Pass", 1, 3)];
+        engine.CoveringTests[other] = [Covering("Lib.Tests.Pass", 1, 2)];
+        engine.State.TestSuites =
+        [
+            new TestSuite("Lib.Tests", [Result("Lib.Tests.Pass", TestStatus.Passed)], DateTimeOffset.UnixEpoch, TimeSpan.Zero),
+        ];
+        var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
+
+        var json = JsonNode.Parse(await tools.GetChangedLineCoverageAsync("HEAD~1..HEAD", "range", _ct))!;
+
+        var files = json["files"]!.AsArray();
+        Assert.Equal(["A.cs", "B.cs"], files.Select(f => f!["path"]!.GetValue<string>()));
+        Assert.True(files[0]!["isStale"]!.GetValue<bool>());
+        Assert.Equal("stale", Assert.Single(files[0]!["unknown"]!.AsArray())!["reason"]!.GetValue<string>());
+        Assert.Equal("2", files[1]!["coveredByPassing"]!.GetValue<string>());
+        Assert.Contains(json["warnings"]!.AsArray(), w => w!.GetValue<string>().Contains("differ between", StringComparison.Ordinal));
+    }
+
+    private static CoveringTest Covering(string fqn, int start, int end, bool current = true) =>
+        new(fqn, "/tests/Lib.Tests/Lib.Tests.csproj", "test", [new CoveredLineRange(start, end)], current);
+
+    private static TestResult Result(string fqn, TestStatus status) =>
+        new(fqn, fqn, status, TimeSpan.Zero, null, null, null, null);
 
     [Fact]
     public async Task GetChangedLineCoverage_RejectsOptionLikeBase()

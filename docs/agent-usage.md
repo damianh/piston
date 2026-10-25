@@ -200,14 +200,55 @@ changes (`base`: `working`, `branch` or `range`, with `baseRef`):
 - `plan_affected_tests` previews what Piston would build and run, and why;
 - `run_affected_tests` runs that plan and waits for it.
 
-With coverage enabled, `get_changed_line_coverage` reports which changed lines
-the tests executed. It takes no `files`: it always reads the git changes given
+With coverage enabled, `get_changed_line_coverage` gives each changed line a
+verdict (see below). It takes no `files`: it always reads the git changes given
 by `base` and `baseRef`.
 
 Selection by changed lines is a heuristic, and an affected-test result does not
 count as verification, even when the plan's scope is `full`. Finish with `verify`. See
 [Coverage and impact selection](../README.md#coverage-and-impact-selection) for
 how tests are selected and for the other tools.
+
+### Changed-line coverage verdicts
+
+`get_changed_line_coverage` (schema `piston.changed-line-coverage/v2`) classifies
+every changed line of every changed `.cs`, `.fs` or `.vb` file. The same verdicts
+are available to protocol clients as `coverage/getChangedLines`.
+
+| Verdict | Meaning |
+|---|---|
+| `coveredByPassing` | The line ran, and every current test credited with executing it passed. |
+| `coveredOnlyByFailing` | The line ran, and every current test credited with executing it failed. The file's `failingTests` names them. |
+| `uncovered` | The line is executable and no test that ran executed it. |
+| `nonExecutable` | The file was measured as it is now and the line has no sequence point, for example a blank line, a comment or most declarations. |
+| `unknown` | The evidence cannot prove anything about the line; `reason` says why. |
+
+| Unknown reason | Meaning | What to do |
+|---|---|---|
+| `stale` | The file changed after it was measured, so the coverage describes old code; or, for a `range`, the file differs between the range's last commit and the working tree, so the changed line numbers do not match the measured file. | Run the affected tests (`run_affected_tests`) and ask again. |
+| `notMeasured` | No coverage run measured the file, for example it is not compiled into a tested assembly. | Run the tests, or accept that the file is not covered by tests. |
+| `noTestEvidence` | The line ran, but the impact map has no current record of which tests executed it. | Run the affected tests. |
+| `mixedEvidence` | Passing and failing tests are both credited with the line. | Fix the failing tests, then ask again. |
+| `testsNotRun` | A credited test has no result yet (or is still running), or every credited test was skipped. | Run the affected tests. |
+| `outdatedEvidence` | Evidence recorded against older content may credit other tests with the line, and their results would change the verdict. | Run the affected tests. |
+
+Each file reports `measured`, `isStale`, `isPartial` (only a selective run measured
+it, so tests that did not run may cover more), per-verdict line ranges, `unknown`
+groups with their reason, and `partialBranches` (covered lines where some
+branches never ran). The top level has `totals` and an `unknownReasons` count for
+every reason. Warnings explain caveats, such as a run in progress.
+
+How to read the verdicts:
+
+- Only `coveredByPassing` means passing tests executed the line. Never describe
+  an `unknown` line as covered, and never treat a `stale` file's old coverage as
+  evidence about the current code.
+- The impact map records which methods each test (or test class, or whole test
+  project run) executed, not individual lines. A test can be credited with a line
+  of a method it entered without executing that line. Because of this, a line is
+  `coveredByPassing` only when every credited test passed; any mix gives `unknown`.
+- Coverage verdicts describe test reach, not correctness. They do not replace
+  `verify`.
 
 ## Custom instructions snippet
 

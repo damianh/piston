@@ -18,6 +18,11 @@ public sealed record ExportCoverageCommand(string Format, string? ExportId = nul
 /// <param name="FilePath">Absolute path, or a path relative to the solution directory.</param>
 public sealed record GetCoveringTestsCommand(string FilePath);
 
+/// <summary>Request a verdict for each changed line of the changed source files.</summary>
+/// <param name="Base"><c>working</c>, <c>branch</c> or <c>range</c>; null means working, or branch when <paramref name="BaseRef"/> is set.</param>
+/// <param name="BaseRef">For branch: the branch or commit to compare against. For range: the range or commit.</param>
+public sealed record GetChangedLineCoverageCommand(string? Base = null, string? BaseRef = null);
+
 public sealed record GetStoredRunCommand(string RunId);
 
 /// <param name="Test">Fully-qualified name; a multi-targeted test's results under every framework match.</param>

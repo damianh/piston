@@ -69,6 +69,9 @@ ARCHITECTURE describe the implementation in detail.
   changed-line test selection with per-test reasons and conservative fallback.
 - Git bases (`working`, `branch`, `range`) for affected-test planning and
   changed-line coverage.
+- A verdict for each changed line: covered by passing tests, covered only by
+  failing tests, uncovered, non-executable, or unknown with a reason (stale, not
+  measured, no or mixed test evidence), over MCP and the protocol.
 
 **Dashboard**
 - Tests tab: a virtualized tree, run strip, failure diffs, a stack-trace source
@@ -114,8 +117,6 @@ opens by hand (today's `piston-dashboard` skill).
 ## Later
 
 ### Coverage
-- A verdict for each changed line: covered by passing tests, covered only by
-  failing tests, uncovered, non-executable, or unknown/stale.
 - A coverage-aware diff view in the dashboard and canvas, with drill-down to the
   covering tests.
 - Branch-level attribution in the impact map.
