@@ -22,12 +22,12 @@ public sealed class MtpRecordedNodeTests
         var captures = document.RootElement.GetProperty("captures");
         var discoveredNodes = ActionNodes(captures.GetProperty("discover"));
         var runNodes = ActionNodes(captures.GetProperty("run"));
-        var discoveredUids = Uids(discoveredNodes);
+        var discoveredIdentities = Identities(discoveredNodes);
 
-        Assert.Equal(discoveredUids, Uids(runNodes));
-        Assert.Equal(discoveredUids, Uids(ActionNodes(captures.GetProperty("cold-rerun"))));
-        Assert.Equal(discoveredUids, Uids(ActionNodes(captures.GetProperty("warm-run"))));
-        Assert.Equal(discoveredUids, Uids(ActionNodes(captures.GetProperty("warm-rerun"))));
+        Assert.Equal(discoveredIdentities, Identities(runNodes));
+        Assert.Equal(discoveredIdentities, Identities(ActionNodes(captures.GetProperty("cold-rerun"))));
+        Assert.Equal(discoveredIdentities, Identities(ActionNodes(captures.GetProperty("warm-run"))));
+        Assert.Equal(discoveredIdentities, Identities(ActionNodes(captures.GetProperty("warm-rerun"))));
 
         var discovered = new List<TestResult>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -45,8 +45,28 @@ public sealed class MtpRecordedNodeTests
 
         var mappedRun = runNodes.Select(node => MtpTestProcessRunner.ToTestResult(node, "probe", TestStatus.NotRun)).ToArray();
         Assert.Contains(mappedRun, test => test.ErrorMessage is not null && test.StackTrace is not null);
-        Assert.Contains(runNodes, node => node.TryGetProperty("assert.expected", out _) && node.TryGetProperty("assert.actual", out _));
+        var assertion = Assert.Single(runNodes, node => Property(node, "location.method") == "AssertionFailure");
+        Assert.Equal(framework == "mstest" ? "2" : "", assertion.GetProperty("assert.expected").GetString());
+        Assert.Equal(framework == "mstest" ? "1" : "", assertion.GetProperty("assert.actual").GetString());
         Assert.Equal(runNodes.Count, runNodes.Select(node => Property(node, "uid")).Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void Identities_DetectUidsReassignedBetweenCases()
+    {
+        var discovered = Identities([Node("a", "Case(1)"), Node("b", "Case(2)")]);
+        var reassigned = Identities([Node("b", "Case(1)"), Node("a", "Case(2)")]);
+
+        Assert.NotEqual(discovered, reassigned);
+
+        static JsonElement Node(string uid, string displayName) =>
+            JsonSerializer.SerializeToElement(new Dictionary<string, string>
+            {
+                ["uid"] = uid,
+                ["location.type"] = "Probe.Tests",
+                ["location.method"] = "Case",
+                ["display-name"] = displayName,
+            });
     }
 
     private static IReadOnlyList<JsonElement> ActionNodes(JsonElement nodes) =>
@@ -58,8 +78,15 @@ public sealed class MtpRecordedNodeTests
     private static string? Property(JsonElement node, string name) =>
         node.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
 
-    private static string[] Uids(IReadOnlyList<JsonElement> nodes) =>
-        nodes.Select(node => Property(node, "uid") ?? throw new InvalidDataException("A recorded test node has no UID."))
-            .OrderBy(uid => uid, StringComparer.Ordinal)
+    private static (string Uid, string Type, string Method, string DisplayName)[] Identities(IReadOnlyList<JsonElement> nodes) =>
+        nodes.Select(node => (
+                Uid: RequiredProperty(node, "uid"),
+                Type: RequiredProperty(node, "location.type"),
+                Method: RequiredProperty(node, "location.method"),
+                DisplayName: RequiredProperty(node, "display-name")))
+            .OrderBy(identity => identity.Uid, StringComparer.Ordinal)
             .ToArray();
+
+    private static string RequiredProperty(JsonElement node, string name) =>
+        Property(node, name) ?? throw new InvalidDataException($"A recorded test node has no {name}.");
 }

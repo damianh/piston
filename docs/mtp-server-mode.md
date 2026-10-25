@@ -18,9 +18,10 @@ mode limitation is in MTP, its coverage extension, or Piston's protocol lifecycl
 
 The isolated solution at [`tests/fixtures/mtp-probe`](../tests/fixtures/mtp-probe) targets .NET 10 and uses
 MSTest 4.5.1, NUnit 5.0.0, TUnit 1.76.0 and xunit.v3.mtp-v2 4.0.2. Each project contains the same-named
-`SameName` method in two classes, two parameterized cases, a custom display name, an assertion failure, a thrown
+`SameName` method in two classes, two parameterized cases, an assertion failure, a thrown
 exception, console output and a skipped test with a reason. Each also assigns a category/trait. The MSTest project
-references `Microsoft.Testing.Extensions.CodeCoverage` 18.12.0.
+references `Microsoft.Testing.Extensions.CodeCoverage` 18.12.0. MSTest, NUnit and xUnit also set a custom display
+name; TUnit's `CustomName(1)` uses its default parameterized display name.
 
 `MtpNodeCaptureTests` is opt-in: set `PISTON_CAPTURE_MTP_NODES=1` when running the test to build and execute the
 probe. It stores normalized discovery, run, cold-rerun, warm-run and warm-rerun node arrays in
@@ -44,13 +45,16 @@ capabilities.
 
 All four adapters reported `location.type` and `location.method`. Parameterized cases had distinct UIDs and
 display names, but shared the same method location; Piston must not use `location.type + location.method` alone
-as a result key for data-driven cases. The capture tests compare UIDs across discovery, cold runs and warm-host
-reruns of this unchanged build only.
+as a result key for data-driven cases. The capture tests compare each UID together with its type, method and
+display name across discovery, cold runs and warm-host reruns of this unchanged build only.
 
 The current `ToTestResult` mapping exposes status, duration, console output (when the adapter reports it), error
-message, stack trace, method and app path. Captured failed assertions carry separate `assert.expected` and
-`assert.actual` fields, but Piston appends them to the error-message string instead of preserving them as typed
-values. Skip reasons arrive in `error.message`. Thrown exceptions have error text and a stack trace but no separate
+message, stack trace, method and app path. Only MSTest populated the failed assertion's separate `assert.expected`
+and `assert.actual` fields (`"2"` and `"1"`); NUnit, TUnit and xUnit emitted empty strings and put the values in
+`error.message`. Piston appends populated assertion fields to the error-message string instead of preserving them
+as structured values. The characterization checks these per-framework values, including the empty strings; the
+presence of the keys alone does not establish usable assertion metadata. Skip reasons arrive in `error.message`.
+Thrown exceptions have error text and a stack trace but no separate
 exception-type property in these nodes. MTP also reports source file/line and traits, which this mapping drops.
 Output capture differed: MSTest, NUnit and TUnit reported `standardOutput` for the probe; xUnit v3 did not.
 

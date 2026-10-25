@@ -27,7 +27,7 @@ public sealed class MtpNodeCaptureTests
 
         var repositoryRoot = FindRepositoryRoot();
         var probeRoot = Path.Combine(repositoryRoot, "tests", "fixtures", "mtp-probe");
-        await BuildProbeAsync(probeRoot, _ct);
+        await BuildProbeAsync(probeRoot);
 
         foreach (var (framework, projectName) in new[]
         {
@@ -103,31 +103,10 @@ public sealed class MtpNodeCaptureTests
         throw new DirectoryNotFoundException("Could not find Piston.slnx above the test output directory.");
     }
 
-    private static async Task BuildProbeAsync(string probeRoot, CancellationToken ct)
-    {
-        var startInfo = new ProcessStartInfo("dotnet")
-        {
-            WorkingDirectory = probeRoot,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-        };
-        startInfo.ArgumentList.Add("build");
-        startInfo.ArgumentList.Add("MtpProbe.slnx");
-        startInfo.ArgumentList.Add("--configuration");
-        startInfo.ArgumentList.Add("Release");
-        startInfo.ArgumentList.Add("--verbosity");
-        startInfo.ArgumentList.Add("quiet");
-
-        using var process = Process.Start(startInfo)
-            ?? throw new InvalidOperationException("Could not start dotnet build for the MTP probe.");
-        var stdout = process.StandardOutput.ReadToEndAsync(ct);
-        var stderr = process.StandardError.ReadToEndAsync(ct);
-        await process.WaitForExitAsync(ct);
-        var output = await stdout;
-        var error = await stderr;
-        Assert.True(process.ExitCode == 0, $"MTP probe build failed:{Environment.NewLine}{output}{Environment.NewLine}{error}");
-    }
+    private static Task BuildProbeAsync(string probeRoot) =>
+        TestProcess.RunDotnetAsync(
+            "build MtpProbe.slnx --configuration Release --verbosity quiet",
+            probeRoot);
 
     private static async Task WriteCaptureAsync(
         string path,
@@ -330,20 +309,42 @@ public sealed class MtpNodeCaptureTests
             }
 
             _ = ChildProcessEnvironment.Prepare(startInfo);
-            using var process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("Could not start dotnet test for the coverage fallback.");
-            var stdout = process.StandardOutput.ReadToEndAsync(ct);
-            var stderr = process.StandardError.ReadToEndAsync(ct);
-            await process.WaitForExitAsync(ct).ConfigureAwait(false);
-            var output = await stdout.ConfigureAwait(false);
-            _ = await stderr.ConfigureAwait(false);
+            startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
+            using var ownedProcess = new OwnedTestProcess(startInfo);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromMinutes(2));
+            ownedProcess.Start();
+            var process = ownedProcess.Process;
+            var stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
+            var stderr = process.StandardError.ReadToEndAsync(timeout.Token);
+            string output;
+            string error;
+            try
+            {
+                await Task.WhenAll(stdout, stderr, process.WaitForExitAsync(timeout.Token)).ConfigureAwait(false);
+                output = await stdout.ConfigureAwait(false);
+                error = await stderr.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                throw new TimeoutException("The coverage fallback did not complete within the two-minute probe timeout.");
+            }
+            finally
+            {
+                await RedirectedProcessDrain.KillAndWaitAsync(
+                    ownedProcess,
+                    CancellationToken.None,
+                    message => TestContext.Current.TestOutputHelper?.WriteLine(message)).ConfigureAwait(false);
+            }
+
             var summary = Regex.Match(
                 output,
                 @"total:\s*(\d+)\s+failed:\s*(\d+)\s+succeeded:\s*(\d+)\s+skipped:\s*(\d+)",
                 RegexOptions.CultureInvariant);
             if (!summary.Success)
             {
-                throw new InvalidOperationException("The coverage fallback did not emit a test summary.");
+                throw new InvalidOperationException(
+                    $"The coverage fallback did not emit a test summary (exit {process.ExitCode}).{Environment.NewLine}{output}{Environment.NewLine}{error}");
             }
 
             return new JsonObject
