@@ -46,7 +46,7 @@ public sealed class SourceFingerprinterTests : IDisposable
     [Fact]
     public void Compute_KnownVector()
     {
-        // Pins the algorithm so the independent measurements-harness implementation stays compatible.
+        // Pins the algorithm: fingerprints are reported to clients and persisted, so changes need a new version.
         var dir = Path.Combine(_parent, "vector");
         _ = Directory.CreateDirectory(Path.Combine(dir, "src"));
         File.WriteAllText(Path.Combine(dir, "a.txt"), "A");

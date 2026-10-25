@@ -1,14 +1,14 @@
 # Piston
 
-An agent-facing continuous test backend for .NET, with a per-session stdio MCP server (`piston mcp`), a headless daemon with HTTP MCP, and a web dashboard.
+An MCP-based continuous test runner for .NET. Coding agents use it through MCP: a per-session stdio server (`piston mcp`) or the daemon's HTTP endpoint. People use the same engine through a web dashboard.
 
-Piston watches a .NET solution, selects affected test projects, builds, runs test projects with bounded concurrency, and publishes results to connected clients. It uses standard `dotnet build` and `dotnet test` in the watched checkout.
+Piston watches a .NET solution and selects affected tests by project and, with coverage, by changed lines. It builds them, runs the test projects with bounded concurrency and keeps per-test history outside the checkout. Every result is tied to the source it ran against, so an agent can tell a current, full-scope pass from a stale or partial one (`verify`). It uses standard `dotnet build` and `dotnet test` in the watched checkout.
 
-**Current structure:** the `Piston` .NET tool owns CLI commands, daemon hosting,
-and HTTP MCP tools. `Piston.Engine` is the separate MSBuild-loading and test-execution
-boundary; `Piston.Protocol` provides shared wire contracts and transports, and
-`Piston.Web` is the existing dashboard. Desktop source and its project have been
-deleted. The hub/worker split and later UI/canvas decisions remain deferred.
+**Structure:** the `Piston` .NET tool owns CLI commands, daemon hosting and the MCP
+tools. `Piston.Engine` is the MSBuild-loading and test-execution boundary,
+`Piston.Protocol` provides shared wire contracts and transports, and `Piston.Web`
+is the dashboard. See [ARCHITECTURE.md](ARCHITECTURE.md) for details and
+[docs/ROADMAP.md](docs/ROADMAP.md) for planned work.
 
 ## Requirements
 
@@ -18,9 +18,8 @@ deleted. The hub/worker split and later UI/canvas decisions remain deferred.
 
 ## Delivery
 
-The primary surface is the CLI daemon and its test APIs, distributed as a
-framework-dependent .NET tool. Desktop trial installers and source are no longer
-maintained or shipped.
+Piston ships as a framework-dependent .NET tool that provides the stdio MCP server, the daemon (HTTP MCP and the
+dashboard) and the CLI.
 
 Build and install the local .NET tool:
 
@@ -146,7 +145,7 @@ The agent host starts one `piston mcp` process per session, with the working dir
 
 If another Piston process already owns the worktree, or the engine cannot start, the server still answers. Every tool then returns an error that ends with ``Use `dotnet test` instead.``. To uninstall, run `dotnet tool uninstall -g Piston` and remove the config entry.
 
-The daemon always exposes an HTTP MCP endpoint backed by the running engine, on port 5200 unless `--mcp-port` (or `mcpPort` in `.piston.json`) says otherwise. Connect at `http://localhost:5200` (the root endpoint, not `/mcp`). The daemon retains current state, but runs still launch `dotnet build` and fresh `dotnet test` processes; there is no prewarmed test-process pool.
+The daemon always exposes an HTTP MCP endpoint backed by the running engine, on port 5200 unless `--mcp-port` (or `mcpPort` in `.piston.json`) says otherwise. Connect at `http://localhost:5200` (the root endpoint, not `/mcp`). The daemon retains current state. Runs launch `dotnet build` and fresh test processes, unless [warm test hosts](#warm-test-hosts) are enabled for MTP projects.
 
 To set up a coding agent, follow [docs/agent-usage.md](docs/agent-usage.md). It covers setup, the verification contract and a custom-instructions snippet.
 
@@ -165,9 +164,8 @@ To set up a coding agent, follow [docs/agent-usage.md](docs/agent-usage.md). It 
 | `run_affected_tests` | Run that plan and wait for it: the same JSON plus `run` (ID, status and counts; null when nothing is affected). For example, `base: "branch"` runs the tests affected by everything since the branch left `main`. |
 | `clear_results` | Clear current test suites, last-run timestamp, coverage state, and persisted coverage in the current solution directory. A running test run may publish new results afterwards. |
 
-These are the retained test tools. `LoadWorkspace`, `GetDiagnostics`,
-`SemanticSearch`, `GetAst`, `Rename`, and `NotifyFileChanged` have been removed;
-Piston does not own Roslyn workspace synchronization.
+Piston provides no code intelligence (diagnostics, rename, semantic search); agents
+can use Roslyn-based tools alongside it.
 
 `run_tests` awaits the specific engine request with timeout/cancellation and
 returns that run's record, rather than polling an aggregate phase or reading
@@ -204,7 +202,7 @@ freshness before treating a diagnostic as evidence for their source generation.
 
 Limits:
 
-- Only the 16 most recent runs are kept, and only in memory.
+- Full run records (what `get_test_run` returns) are kept for the 16 most recent runs, in memory only. Per-test outcomes persist separately in the [run history](#run-history-and-failure-classification).
 - The fingerprint does not cover sources outside the solution directory, installed SDKs, the NuGet cache, or merged user/machine NuGet configuration.
 - `verify` reevaluates project inputs and returns `NotFullScope` for user projects, imports or declared files outside the fingerprint (including excluded directories). SDK/workload files, packages and generated restore imports remain toolchain/cache exclusions. Evaluation failure is `Faulted`; neither verdict is a pass or a hidden fallback.
 - Full runs refresh the solution graph before selecting test projects. `verify` also rejects an otherwise current run if its selected projects omit a test project from the refreshed graph.
@@ -231,7 +229,7 @@ Graceful engine disposal waits for cancelled pipelines to finish and release the
 
 Test execution and discovery use a launcher that establishes a Unix process group or Windows job before starting the test command. The launcher uses Piston's runtime installation, but resolves the target command in the original Piston process's context, preserving SDK selection. On Windows, test commands remain windowless and inherit the redirected stdout/stderr handles. After the command exits, redirected stdout/stderr get a five-second drain grace period. If descendants keep those streams open, Piston terminates the owned tree, bounds termination cleanup to ten seconds, and records that output was cut off in the run or diagnostic log.
 
-Limits: this is admission control by reservation. Piston does not cap the actual CPU or memory of builds or test processes (no cgroup or job-object resource limits). A hung but live daemon keeps its lease. Child processes orphaned by a crashed daemon are no longer counted. Daemons of different OS users do not share a budget. Solution loading at startup is not admitted. Owner `.lock` files are left in place on purpose. Local validation covers Linux; CI is configured for Linux and Windows. macOS execution has not been validated.
+Limits: this is admission control by reservation. Piston does not cap the actual CPU or memory of builds or test processes (no cgroup or job-object resource limits). A hung but live daemon keeps its lease. Child processes orphaned by a crashed daemon are no longer counted. Daemons of different OS users do not share a budget. Solution loading at startup is not admitted. Owner `.lock` files are left in place on purpose. CI builds and tests on Linux and Windows and runs the packed-tool samples smoke on Linux, Windows and macOS; the ownership and budget test suite does not run on macOS.
 
 ## Coverage and impact selection
 
@@ -244,7 +242,7 @@ Project ownership and transitive dependencies determine affected test projects (
 
 Selection by lines is a heuristic, not a proof: code reached through reflection, static state, configuration or data files can affect a test without appearing in its executed lines, and a forced or full run remains the authority. `plan_affected_tests` previews a selection with the changed lines and evidence granularity behind each test.
 
-Coverage persists in `.piston/piston.db`: the merged line and branch report (what the dashboard, `get_coverage` and the exports read), the file-level test associations and the impact map used for selection. Test-result history and the project graph do not persist. Only files under the solution directory are recorded, so code a test loads from elsewhere (such as fixture projects built in a temp directory) does not count. A full, unfiltered run replaces the report; a selective run adds hits to unchanged files and marks new or changed files it measured as partial. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, running it through `dotnet test` rather than server mode (so without live per-test progress); without it, the project runs without coverage and its run log says why.
+Coverage persists in `.piston/piston.db`: the merged line and branch report (what the dashboard, `get_coverage` and the exports read), the file-level test associations and the impact map used for selection. The project graph does not persist; test-result history is stored separately, outside the checkout (see [Run history and failure classification](#run-history-and-failure-classification)). Only files under the solution directory are recorded, so code a test loads from elsewhere (such as fixture projects built in a temp directory) does not count. A full, unfiltered run replaces the report; a selective run adds hits to unchanged files and marks new or changed files it measured as partial. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, running it through `dotnet test` rather than server mode (so without live per-test progress); without it, the project runs without coverage and its run log says why.
 
 ### Git bases
 
@@ -469,11 +467,8 @@ covers opening the dashboard in a Copilot browser canvas.
 
 The repo pins [roslynk](https://www.nuget.org/packages/roslynk) as a local .NET tool and registers it in `.mcp.json`, so Copilot CLI / agent sessions get semantic C# intelligence (diagnostics, find references, rename, code fixes) over `Piston.slnx`. Run `dotnet tool restore` once after cloning.
 
-## Proposed direction
+## Roadmap
 
-Copilot canvas/harness integrations and a per-user hub
-with isolated worktree workers remain deferred. The separate `measurements/`
-harness does not establish a measured Piston improvement; a matched comparison
-campaign remains future work. Aspire is one possible generic integration-test example, not a
-specialized backend. See [ARCHITECTURE.md](ARCHITECTURE.md) for implementation
-details and limitations.
+Planned work, including a native Copilot canvas for the dashboard and harness
+integration assets, is in [docs/ROADMAP.md](docs/ROADMAP.md). See
+[ARCHITECTURE.md](ARCHITECTURE.md) for implementation details and limitations.

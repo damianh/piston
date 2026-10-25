@@ -1,8 +1,8 @@
-# Using Piston as a coding agent's test backend
+# Using Piston as a coding agent's test runner
 
-This is the dogfood flow: one developer and one or more Linux worktrees, each with its
-own coding agent session. Every agent session runs its own `piston mcp` process over
-stdio. It is a usability step, not evidence for gate G1 or any performance claim.
+One developer with one or more worktrees, each with its own coding agent session.
+Every agent session runs its own `piston mcp` process over stdio, which keeps that
+worktree's tests running continuously and answers the agent's MCP tool calls.
 
 ## 1. Install the tool
 
@@ -190,6 +190,22 @@ A tool *error* (not a verdict) is also not a pass. Examples: ownership by anothe
 process, a deleted worktree, a startup failure, or a solution mismatch. On any of
 these, run `dotnet test` explicitly and say so. Do the same if the `piston` server
 is unavailable. Never report a Piston pass that you did not receive.
+
+## 5. Faster feedback while iterating
+
+Between edits, an agent can run just the tests its change affects instead of the
+whole suite. These tools take `files`, or git changes (`base`: `working`,
+`branch` or `range`, with `baseRef`):
+
+- `plan_affected_tests` previews what Piston would build and run, and why;
+- `run_affected_tests` runs that plan and waits for it;
+- with coverage enabled, `get_changed_line_coverage` reports which changed lines
+  the tests executed.
+
+Selection by changed lines is a heuristic, and an affected-test result does not
+count as verification, even when the plan's scope is `full`. Finish with `verify`. See
+[Coverage and impact selection](../README.md#coverage-and-impact-selection) for
+how tests are selected and for the other tools.
 
 ## Custom instructions snippet
 
