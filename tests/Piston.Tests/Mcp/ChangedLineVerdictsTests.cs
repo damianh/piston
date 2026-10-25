@@ -213,6 +213,7 @@ public sealed class ChangedLineVerdictsTests
         Covers("T.Pass", CoveringTestOutcome.Passed, lines: (1, 1));
         Covers("T.OldPass", CoveringTestOutcome.Passed, current: false, lines: (10, 12));
         Covers("T.OldSkip", CoveringTestOutcome.Skipped, current: false, lines: (10, 12));
+        Covers("T.OldDeleted", CoveringTestOutcome.NoResult, current: false, lines: (10, 12));
 
         Assert.Equal(ChangedLineVerdict.CoveredByPassing, Line(1).Verdict);
     }

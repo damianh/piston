@@ -279,7 +279,8 @@ internal static class ChangedLineVerdicts
         var verdictOutcome = hasPassed ? CoveringTestOutcome.Passed : CoveringTestOutcome.Failed;
         var creditedTests = credited.Select(e => (e.Test.ProjectPath, e.Test.TestFqn)).ToHashSet();
         var contradicted = executors.Any(e =>
-            !e.Test.IsCurrent && e.Outcome != verdictOutcome && e.Outcome != CoveringTestOutcome.Skipped
+            !e.Test.IsCurrent && e.Outcome is CoveringTestOutcome.Passed or CoveringTestOutcome.Failed
+            && e.Outcome != verdictOutcome
             && !creditedTests.Contains((e.Test.ProjectPath, e.Test.TestFqn)));
         if (contradicted)
         {
