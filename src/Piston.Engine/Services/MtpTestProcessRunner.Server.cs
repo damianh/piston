@@ -273,7 +273,11 @@ internal static partial class MtpTestProcessRunner
 
     internal static TestResult ToTestResult(JsonElement node, string appPath, TestStatus status)
     {
-        var name = DisplayName(node) ?? string.Empty;
+        var displayName = DisplayName(node) ?? string.Empty;
+        var type = StringProperty(node, "location.type");
+        var name = type is { Length: > 0 }
+            ? TestIdentity.Qualify(type, displayName)
+            : displayName;
         var duration = node.TryGetProperty("time.duration-ms", out var ms) && ms.ValueKind == JsonValueKind.Number
             ? TimeSpan.FromMilliseconds(ms.GetDouble())
             : TimeSpan.Zero;
@@ -292,7 +296,9 @@ internal static partial class MtpTestProcessRunner
 
         return new TestResult(
             name,
-            TestProcessRunner.DisplayNameOf(name),
+            name.Equals(displayName, StringComparison.Ordinal)
+                ? TestProcessRunner.DisplayNameOf(displayName)
+                : displayName,
             status,
             duration,
             output.Length == 0 ? null : output,
@@ -351,6 +357,12 @@ internal static partial class MtpTestProcessRunner
         {
             case "fullyqualifiedname":
                 Add(display);
+                var identity = type is not null && display is not null ? TestIdentity.Qualify(type, display) : null;
+                if (identity is not null && !identity.Equals(display, StringComparison.Ordinal))
+                {
+                    Add(identity);
+                }
+
                 Add(type is not null && method is not null ? $"{type}.{method}" : null);
                 break;
             case "name":
