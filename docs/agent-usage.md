@@ -194,13 +194,15 @@ is unavailable. Never report a Piston pass that you did not receive.
 ## 5. Faster feedback while iterating
 
 Between edits, an agent can run just the tests its change affects instead of the
-whole suite. These tools take `files`, or git changes (`base`: `working`,
-`branch` or `range`, with `baseRef`):
+whole suite. The affected-test tools take `files`, or, without `files`, git
+changes (`base`: `working`, `branch` or `range`, with `baseRef`):
 
 - `plan_affected_tests` previews what Piston would build and run, and why;
-- `run_affected_tests` runs that plan and waits for it;
-- with coverage enabled, `get_changed_line_coverage` reports which changed lines
-  the tests executed.
+- `run_affected_tests` runs that plan and waits for it.
+
+With coverage enabled, `get_changed_line_coverage` reports which changed lines
+the tests executed. It takes no `files`: it always reads the git changes given
+by `base` and `baseRef`.
 
 Selection by changed lines is a heuristic, and an affected-test result does not
 count as verification, even when the plan's scope is `full`. Finish with `verify`. See
