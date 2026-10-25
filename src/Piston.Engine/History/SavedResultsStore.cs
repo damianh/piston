@@ -141,6 +141,8 @@ internal sealed class SavedResultsStore : IDisposable
             && HasNoNullItems(run.FixedTests)
             && HasNoNullItems(run.NewlyFailingTests)
             && HasNoNullItems(run.FailureClassifications)
+            && run.FailureClassifications.All(f => f.Flakiness is not { } evidence ||
+                (HasNoNullItems(evidence.Outcomes) && HasNoNullItems(evidence.OtherWorktrees)))
             && (run.Context is not { } context ||
                 ((context.TestProjects is null || HasNoNullItems(context.TestProjects))
                     && (context.BuildTargets is null || HasNoNullItems(context.BuildTargets))

@@ -1642,7 +1642,10 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             }
             else
             {
-                _state.VerifiedSinceChangeCount = _state.TestSuites.SelectMany(s => s.Tests).Count();
+                _state.VerifiedSinceChangeCount = _state.TestSuites
+                    .Where(s => !s.Restored)
+                    .SelectMany(s => s.Tests)
+                    .Count();
             }
 
             List<TestRunProjectOutcome> outcomes;

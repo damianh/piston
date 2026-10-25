@@ -130,6 +130,42 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     }
 
     [Fact]
+    public async Task Selective_run_after_failed_startup_does_not_count_restored_tests_as_verified()
+    {
+        using (var writer = new SavedResultsStore(SolutionPath, _ => { }))
+        {
+            var suites = Projects.Select(project =>
+            {
+                var name = Path.GetFileNameWithoutExtension(project);
+                return new TestSuite(name,
+                    [new TestResult($"{name}.Test1", "Test1", TestStatus.Passed, TimeSpan.Zero, null, null, null, null)],
+                    DateTimeOffset.UtcNow, TimeSpan.Zero);
+            }).ToList();
+            writer.Schedule(new SavedResultsSnapshot(
+                DateTimeOffset.UtcNow, null, null, null, null, suites, null));
+        }
+
+        using var store = new SavedResultsStore(SolutionPath, _ => { });
+        _orchestrator.ResultsStore = store;
+        _build.Fail = true;
+        await StartAndWaitForStartupRunAsync();
+
+        Assert.Equal(TestRunStatus.BuildFailed, _state.LastRun!.Status);
+        Assert.All(_state.TestSuites, suite => Assert.True(suite.Restored));
+        Assert.Equal(0, _state.VerifiedSinceChangeCount);
+        Assert.Null(_state.LastFileChangeTime);
+
+        _build.Fail = false;
+        var run = await _orchestrator.RunSelectedAsync(new TestSelection(["A.Tests"]));
+
+        Assert.Equal(TestRunStatus.Completed, run.Status);
+        Assert.False(Assert.Single(_state.TestSuites, suite => suite.Name == "A.Tests").Restored);
+        Assert.True(Assert.Single(_state.TestSuites, suite => suite.Name == "B.Tests").Restored);
+        Assert.Equal(1, _state.VerifiedSinceChangeCount);
+        Assert.Null(_state.LastFileChangeTime);
+    }
+
+    [Fact]
     public async Task Restored_results_are_unknown_until_startup_run_replaces_them()
     {
         var savedStore = new SavedResultsStore(SolutionPath, _ => { });

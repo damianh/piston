@@ -41,6 +41,7 @@ public sealed class SavedResultsStoreTests : IDisposable
         Assert.Equal(expectedSuite.Name, restoredSuite.Name);
         Assert.Equivalent(Assert.Single(expectedSuite.Tests), Assert.Single(restoredSuite.Tests), strict: true);
         Assert.Equal(expected.LastRun?.RunId, restored.LastRun?.RunId);
+        Assert.Equivalent(expected.LastRun!.FailureClassifications, restored.LastRun!.FailureClassifications, strict: true);
         Assert.Equal(expected.LastBuild!.Status, restored.LastBuild!.Status);
         Assert.Equal(expected.LastBuild.Duration, restored.LastBuild.Duration);
         Assert.Equal(expected.LastBuild.Errors, restored.LastBuild.Errors);
@@ -100,6 +101,10 @@ public sealed class SavedResultsStoreTests : IDisposable
     [InlineData("LastRun/FixedTests", "[null]")]
     [InlineData("LastRun/NewlyFailingTests", "[null]")]
     [InlineData("LastRun/FailureClassifications", "[null]")]
+    [InlineData("LastRun/FailureClassifications/0/Flakiness/Outcomes", null)]
+    [InlineData("LastRun/FailureClassifications/0/Flakiness/Outcomes", "[null]")]
+    [InlineData("LastRun/FailureClassifications/0/Flakiness/OtherWorktrees", null)]
+    [InlineData("LastRun/FailureClassifications/0/Flakiness/OtherWorktrees", "[null]")]
     public void Ignores_structurally_invalid_results_before_restore(string path, string? replacement)
     {
         using (var store = Open())
@@ -280,6 +285,12 @@ public sealed class SavedResultsStoreTests : IDisposable
                 "/App.slnx", ["App.Tests"], ["App.Tests"], null, null, null, false,
                 "Debug", null, ".NET", "OS", "/"),
             Suites = [Suite],
+            FailureClassifications =
+            [
+                new("App.Tests", Result.FullyQualifiedName, FailureKind.Flaky, "Passed on retry",
+                    new FlakinessEvidence(null, 1, 1, 1, ["other-worktree"],
+                        [new("run-1", DateTimeOffset.UnixEpoch, TestStatus.Passed, 1, null)])),
+            ],
         };
         return new SavedResultsSnapshot(
             DateTimeOffset.UnixEpoch,
