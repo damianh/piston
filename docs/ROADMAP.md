@@ -125,11 +125,6 @@ opens by hand (today's `piston-dashboard` skill).
 - Method-level identity, so line shifts do not invalidate evidence. Never reuse old
   line evidence without validated remapping.
 
-### Memory
-- A declared baseline: the merge-base with a configured base ref, run in a
-  Piston-managed worktree, so "new versus pre-existing" does not depend on this
-  worktree's own history.
-
 ### Execution
 - Explore MTP server mode further for structured results and stable test
   identities; keep VSTest/TRX as the compatibility path.

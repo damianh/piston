@@ -202,7 +202,12 @@ freshness before treating a diagnostic as evidence for their source generation.
 
 Limits:
 
-- Full run records (what `get_test_run` returns) are kept for the 16 most recent runs, in memory only. Per-test outcomes persist separately in the [run history](#run-history-and-failure-classification).
+- Full run records (what `get_test_run` returns) are kept for the 16 most recent runs, in memory only. Per-test outcomes persist separately in the [run history](#run-history-and-failure-classification). Execution logs are dropped from older run records; aggregate project suites retain the latest log per project.
+- Each test result retains at most 64 Ki characters each for `Output`, `ErrorMessage` and `StackTrace`. Output keeps its beginning and end with a truncation marker; error messages and stack traces keep their beginning. This bounds those three fields to 192 Ki UTF-16 characters (about 384 KiB) per test result, independent of console-output volume. The 16 retained runs still retain their individual test results.
+- A build retains at most 500 errors and 500 warnings, with each diagnostic limited to 2,000 characters. `OmittedErrors` and `OmittedWarnings` (also in the MCP `get_test_run` build object) report how many more there were; the dashboard and `verify` report indicate omissions.
+- Each test-completion activity event retains at most 50 failures, with the test name and message each limited to 1,000 characters. Each build-completion event retains at most 50 errors of at most 1,000 characters. The event's `failed`/`errorCount` fields remain the total, and the activity timeline shows how many entries were omitted.
+- Each project execution log retains at most 2,000 entries of at most 4,000 characters. Older `RecentRuns` records drop their log copies; the latest run and aggregate project suites keep the logs needed by the dashboard.
+- `.piston/diagnostics.log` rotates at 10 MiB to one previous file, `.piston/diagnostics.log.1`; log entries are limited to 4,000 characters. Starting the daemon clears both files.
 - The fingerprint does not cover sources outside the solution directory, installed SDKs, the NuGet cache, or merged user/machine NuGet configuration.
 - `verify` reevaluates project inputs and returns `NotFullScope` for user projects, imports or declared files outside the fingerprint (including excluded directories). SDK/workload files, packages and generated restore imports remain toolchain/cache exclusions. Evaluation failure is `Faulted`; neither verdict is a pass or a hidden fallback.
 - Full runs refresh the solution graph before selecting test projects. `verify` also rejects an otherwise current run if its selected projects omit a test project from the refreshed graph.
@@ -493,7 +498,8 @@ The daemon builds the watched solution in the default (Debug) configuration, so
 its own builds never overwrite the Release binaries it runs from. Stop it before
 rebuilding Release (`dotnet src/Piston/bin/Release/net10.0/Piston.dll stop`), then
 start it again. `.piston/diagnostics.log` records what the daemon did (runner choice,
-build skips, fallbacks) and is truncated on each start. Agents should follow the
+build skips, fallbacks), rotates at 10 MiB and is truncated on each start along with
+its single rotated backup. Agents should follow the
 [`piston-dashboard` skill](.github/skills/piston-dashboard/SKILL.md), which also
 covers opening the dashboard in a Copilot browser canvas.
 

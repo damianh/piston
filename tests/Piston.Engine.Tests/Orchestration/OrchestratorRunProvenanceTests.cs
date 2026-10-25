@@ -430,6 +430,23 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     }
 
     [Fact]
+    public async Task OlderRecentRunsDropExecutionLogs_WhileLatestAggregateKeepsItsLog()
+    {
+        _runner.AttachExecutionLog = true;
+        await StartAndWaitForStartupRunAsync();
+        var older = _state.LastRun!;
+        Assert.NotNull(older.Suites.First(s => s.Name == "A.Tests").ExecutionLog);
+
+        var newer = await _orchestrator.RequestRunAsync();
+
+        Assert.NotNull(newer!.Suites.First(s => s.Name == "A.Tests").ExecutionLog);
+        Assert.Null(_state.FindRun(older.RunId)!.Suites.First(s => s.Name == "A.Tests").ExecutionLog);
+        var aggregate = _state.TestSuites.First(s => s.Name == "A.Tests");
+        Assert.NotNull(aggregate.ExecutionLog);
+        Assert.Equal(newer.RunId, aggregate.RunId);
+    }
+
+    [Fact]
     public async Task BuildDiagnosticsStayWithTheirRunAfterLaterBuilds()
     {
         await StartAndWaitForStartupRunAsync();
@@ -525,6 +542,7 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
     public string? RunningTest { get; set; }
     public TimeSpan HoldRunning { get; set; }
     public string? LastFilter { get; private set; }
+    public bool AttachExecutionLog { get; set; }
 
     /// <summary>How many more runs <see cref="FailingTest"/> fails in before it passes; null fails it every time.</summary>
     public int? FailuresRemaining { get; set; }
@@ -610,7 +628,10 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
                 tests.Add(tests[0]);
             }
 
-            var suite = new TestSuite(name, tests, DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(1));
+            var suite = new TestSuite(name, tests, DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(1))
+            {
+                ExecutionLog = AttachExecutionLog ? new ExecutionLog(path) : null,
+            };
             all.Add(suite);
             onProjectCompleted?.Invoke(new ProjectTestResult(path, [suite], null, [], Crashed: false));
         }

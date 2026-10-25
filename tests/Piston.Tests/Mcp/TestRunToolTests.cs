@@ -225,7 +225,11 @@ public sealed class TestRunToolTests
         const string diagnostic = "/w/Code.cs(15,9): error CS0103: MissingSymbol [App.csproj]";
         var failed = Run("failed-build", 1, status: TestRunStatus.BuildFailed) with
         {
-            Build = new BuildResult(BuildStatus.Failed, [diagnostic], [], TimeSpan.FromMilliseconds(12)),
+            Build = new BuildResult(BuildStatus.Failed, [diagnostic], [], TimeSpan.FromMilliseconds(12))
+            {
+                OmittedErrors = 2,
+                OmittedWarnings = 3,
+            },
             Suites = [],
             Projects = [],
         };
@@ -241,12 +245,16 @@ public sealed class TestRunToolTests
         Assert.Equal(0, root.GetProperty("tests").GetArrayLength());
         Assert.Equal("Failed", root.GetProperty("build").GetProperty("status").GetString());
         Assert.Equal(diagnostic, root.GetProperty("build").GetProperty("errors")[0].GetString());
+        Assert.Equal(2, root.GetProperty("build").GetProperty("omittedErrors").GetInt32());
+        Assert.Equal(3, root.GetProperty("build").GetProperty("omittedWarnings").GetInt32());
 
         var json = JsonSerializer.Serialize(failed.ToDto(), JsonRpcSerializer.Options);
         var dto = JsonSerializer.Deserialize<TestRunDto>(json, JsonRpcSerializer.Options)!;
         Assert.Equal(failed.RunId, dto.RunId);
         Assert.Equal(BuildStatusDto.Failed, dto.Build!.Status);
         Assert.Equal([diagnostic], dto.Build.Errors);
+        Assert.Equal(2, dto.Build.OmittedErrors);
+        Assert.Equal(3, dto.Build.OmittedWarnings);
         Assert.Equal(12, dto.Build.DurationMs);
         Assert.Null(Run("no-build", 3).ToDto().Build);
     }

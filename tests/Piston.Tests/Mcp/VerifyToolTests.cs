@@ -179,13 +179,17 @@ public sealed class VerifyToolTests
     [Fact]
     public async Task BuildFailed_ListsBuildErrorsOfThatRun()
     {
-        var build = new BuildResult(BuildStatus.Failed, ["/w/A.cs(3,5): error CS0103: The name 'x' does not exist"], [], TimeSpan.Zero);
+        var build = new BuildResult(BuildStatus.Failed, ["/w/A.cs(3,5): error CS0103: The name 'x' does not exist"], [], TimeSpan.Zero)
+        {
+            OmittedErrors = 4,
+        };
         var text = await VerifyAsync(new(VerificationVerdict.BuildFailed, "Build failed.",
             VerificationSource.Forced, 1, Run(TestRunStatus.BuildFailed, build), Source));
 
         Assert.Contains("Verdict: BuildFailed", text);
         Assert.Contains("Build errors (1):", text);
         Assert.Contains("error CS0103", text);
+        Assert.Contains("... 4 more build error(s) omitted", text);
     }
 
     [Fact]
