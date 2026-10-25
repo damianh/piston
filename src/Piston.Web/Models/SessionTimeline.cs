@@ -67,10 +67,28 @@ public sealed record SessionFailureTrace(
 /// <summary>The session's runs, with the edits between them derived from their source fingerprints.</summary>
 public sealed class SessionTimeline
 {
+    private readonly List<IndexedRun> _runs = [];
+    private readonly Dictionary<SessionTimelineRun, IndexedRun> _index = new(ReferenceEqualityComparer.Instance);
+
     private SessionTimeline(IReadOnlyList<SessionTimelineItem> items, int earlierRunsDropped)
     {
         Items = items;
         EarlierRunsDropped = earlierRunsDropped;
+        SessionTimelineEdit? lastEdit = null;
+        foreach (var item in items)
+        {
+            if (item is SessionTimelineEdit edit)
+            {
+                lastEdit = edit;
+            }
+            else if (item is SessionTimelineRun run)
+            {
+                var producedBy = run.Entry.SourceBefore is { } source && lastEdit?.ToSource == source ? lastEdit : null;
+                var indexed = new IndexedRun(run, producedBy);
+                _runs.Add(indexed);
+                _index[run] = indexed;
+            }
+        }
     }
 
     /// <summary>Edits and runs, oldest first.</summary>
@@ -155,51 +173,45 @@ public sealed class SessionTimeline
             FailureClassificationDto? introducedAs = null;
             FailureClassificationDto? latest = null;
 
-            // A listed fix means the current streak started later. An unlisted fix (a truncated fixed list) only
-            // matters if an unlisted new failure (a truncated newly failing list) could follow it. A run with no
-            // earlier results to compare with after the session already had some (results were cleared) lists no
-            // changes at all, as if both its lists were truncated.
+            // A listed fix means the current streak started later. Any later unlisted new failure (a truncated newly
+            // failing list) may have started a newer streak, so it makes the origin uncertain until a listed change.
+            // A run with no earlier results to compare with after the session already had some (results were
+            // cleared) lists no changes at all, as if its lists were truncated.
             var fixedSinceStreak = false;
-            var possiblyFixedUnlisted = false;
             var uncertain = false;
             var sawResults = EarlierRunsDropped > 0;
-            foreach (var run in Runs)
+            foreach (var (run, _, newlyFailing, fixedTests, classifications) in _runs)
             {
                 var entry = run.Entry;
-                var classification = entry.FailureClassifications.FirstOrDefault(c => Matches(c, test));
+                var classification = classifications.GetValueOrDefault(test);
                 var blind = entry.NoEarlierResults && sawResults;
-                var fixedUnlisted = blind || entry.FixedCount > entry.FixedTests.Count;
-                var failingUnlisted = blind || entry.NewlyFailingCount > entry.NewlyFailingTests.Count;
-                if (entry.FixedTests.Any(t => Matches(t, test)))
+                if (fixedTests.Contains(test))
                 {
                     introducedBy = null;
                     introducedAs = null;
                     latest = null;
                     fixedSinceStreak = true;
-                    possiblyFixedUnlisted = false;
                     uncertain = false;
                 }
-                else if (entry.NewlyFailingTests.Any(t => Matches(t, test)))
+                else if (newlyFailing.Contains(test))
                 {
                     // A new streak doesn't inherit an earlier streak's classification.
                     introducedBy = run;
                     introducedAs = classification;
                     latest = classification;
                     fixedSinceStreak = false;
-                    possiblyFixedUnlisted = false;
                     uncertain = false;
                 }
                 else
                 {
                     latest = classification ?? latest;
 
-                    // A test can't be fixed and newly fail in the same run, so only an earlier unlisted fix counts.
-                    if (failingUnlisted && (introducedBy is null || possiblyFixedUnlisted))
+                    // An unlisted new failure may start a newer streak even without a recorded fix: a test that went
+                    // from failing to skipped and back newly fails without ever being listed as fixed.
+                    if (blind || entry.NewlyFailingCount > entry.NewlyFailingTests.Count)
                     {
                         uncertain = true;
                     }
-
-                    possiblyFixedUnlisted |= fixedUnlisted;
                 }
 
                 sawResults |= entry.Passed + entry.Failed + entry.Skipped > 0;
@@ -223,29 +235,11 @@ public sealed class SessionTimeline
     }
 
     /// <summary>The latest edit before <paramref name="run"/> that produced the source it tested; null when none did.</summary>
-    public SessionTimelineEdit? EditThatProduced(SessionTimelineRun run)
-    {
-        if (run.Entry.SourceBefore is not { } source)
-        {
-            return null;
-        }
+    public SessionTimelineEdit? EditThatProduced(SessionTimelineRun run) => _index.GetValueOrDefault(run)?.ProducedBy;
 
-        var index = -1;
-        for (var i = 0; i < Items.Count && index < 0; i++)
-        {
-            index = ReferenceEquals(Items[i], run) ? i : -1;
-        }
-
-        for (var i = index - 1; i >= 0; i--)
-        {
-            if (Items[i] is SessionTimelineEdit edit)
-            {
-                return edit.ToSource == source ? edit : null;
-            }
-        }
-
-        return null;
-    }
+    /// <summary>How the run history classified <paramref name="test"/>'s failure in <paramref name="run"/>; null when it didn't.</summary>
+    public FailureClassificationDto? ClassificationIn(SessionTimelineRun run, TestReference test) =>
+        _index.GetValueOrDefault(run)?.Classifications.GetValueOrDefault(test);
 
     /// <summary>
     /// What to highlight when following a test: the runs that newly failed it, fixed it or classified its failure, and
@@ -255,10 +249,10 @@ public sealed class SessionTimeline
     {
         var runs = new HashSet<string>(StringComparer.Ordinal);
         var edits = new HashSet<SessionTimelineEdit>();
-        foreach (var run in Runs)
+        foreach (var (run, _, newlyFailing, fixedTests, classifications) in _runs)
         {
-            var changed = run.Entry.NewlyFailingTests.Any(t => Matches(t, test)) || run.Entry.FixedTests.Any(t => Matches(t, test));
-            if (changed || run.Entry.FailureClassifications.Any(c => Matches(c, test)))
+            var changed = newlyFailing.Contains(test) || fixedTests.Contains(test);
+            if (changed || classifications.ContainsKey(test))
             {
                 _ = runs.Add(run.Entry.RunId);
             }
@@ -272,11 +266,28 @@ public sealed class SessionTimeline
         return (runs, edits);
     }
 
-    /// <summary>Whether <paramref name="reference"/> is <paramref name="test"/>, matched by project ID.</summary>
-    public static bool Matches(TestOutcomeReferenceDto reference, TestReference test) =>
-        reference.ProjectId == test.Project && reference.Key == test.Key;
+    /// <summary>A run with its outcome lists indexed by test (by project ID), so tracing many failing tests stays linear.</summary>
+    private sealed record IndexedRun(
+        SessionTimelineRun Run,
+        SessionTimelineEdit? ProducedBy,
+        HashSet<TestReference> NewlyFailing,
+        HashSet<TestReference> Fixed,
+        Dictionary<TestReference, FailureClassificationDto> Classifications)
+    {
+        public IndexedRun(SessionTimelineRun run, SessionTimelineEdit? producedBy)
+            : this(
+                run,
+                producedBy,
+                [.. run.Entry.NewlyFailingTests.Select(Reference)],
+                [.. run.Entry.FixedTests.Select(Reference)],
+                [])
+        {
+            foreach (var classification in run.Entry.FailureClassifications)
+            {
+                _ = Classifications.TryAdd(new TestReference(classification.ProjectId ?? classification.Project, classification.Test), classification);
+            }
+        }
 
-    /// <summary>Whether <paramref name="classification"/> is for <paramref name="test"/>, matched by project ID.</summary>
-    public static bool Matches(FailureClassificationDto classification, TestReference test) =>
-        (classification.ProjectId ?? classification.Project) == test.Project && classification.Test == test.Key;
+        private static TestReference Reference(TestOutcomeReferenceDto reference) => new(reference.ProjectId, reference.Key);
+    }
 }

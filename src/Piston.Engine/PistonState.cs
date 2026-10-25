@@ -142,6 +142,9 @@ public sealed class PistonState
     /// <summary>How many of the session's oldest runs have been dropped from <see cref="SessionTimeline"/>.</summary>
     public int SessionTimelineDroppedRuns { get; set; }
 
+    /// <summary>Changes whenever <see cref="SessionTimeline"/> does, so clients know when to reload it.</summary>
+    public long SessionTimelineRevision { get; set; }
+
     /// <summary>Finds a retained run by ID, including the active run.</summary>
     public TestRunRecord? FindRun(string runId)
     {

@@ -446,7 +446,8 @@ public static class DtoMapper
             size += bytes;
         }
 
-        return new(state.SessionStartedAt, state.SolutionPath, entries, hasMore, dropped);
+        long? oldest = timeline.Count > 0 ? timeline.Min(e => e.Sequence) : null;
+        return new(state.SessionStartedAt, state.SolutionPath, entries, hasMore, dropped, oldest);
     }
 
     /// <summary>
@@ -592,7 +593,8 @@ public static class DtoMapper
             ProjectResourceWaits: state.ProjectResourceWaits.Count > 0
                 ? state.ProjectResourceWaits.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToDto())
                 : null,
-            RetryStatus: state.RetryStatus
+            RetryStatus: state.RetryStatus,
+            TimelineRevision: state.SessionTimelineRevision
         );
 
     public static CoverageSummaryDto ToCoverageSummaryDto(CoverageReportSnapshot? report, string? solutionDirectory) =>

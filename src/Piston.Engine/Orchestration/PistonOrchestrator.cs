@@ -1875,6 +1875,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             var skip = Math.Max(0, timeline.Count + 1 - PistonState.MaxSessionTimelineEntries);
             _state.SessionTimeline = [.. timeline.Append(SessionTimelineEntry.From(finished, inRunHistory)).OrderBy(e => e.Sequence).Skip(skip)];
             _state.SessionTimelineDroppedRuns += skip;
+            _state.SessionTimelineRevision++;
 
             if (_runWaiters.Remove(finished.RunId, out var waiter))
             {

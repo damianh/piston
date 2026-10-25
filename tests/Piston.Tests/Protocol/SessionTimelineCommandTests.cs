@@ -105,6 +105,7 @@ public sealed class SessionTimelineCommandTests
 
         Assert.Equal(["r2", "r3"], timeline.Entries.Select(e => e.RunId));
         Assert.Equal(7, timeline.EarlierRunsDropped);
+        Assert.Equal(1, timeline.OldestRetainedSequence);
     }
 
     [Fact]

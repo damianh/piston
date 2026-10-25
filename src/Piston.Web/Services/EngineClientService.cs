@@ -407,7 +407,6 @@ public sealed class EngineClientService : IAsyncDisposable
     {
         var entries = new List<SessionTimelineEntryDto>();
         DateTimeOffset? startedAt = null;
-        int? dropped = null;
         long? after = null;
         while (true)
         {
@@ -422,20 +421,18 @@ public sealed class EngineClientService : IAsyncDisposable
                 // The daemon restarted between pages; start over with the new session.
                 entries.Clear();
                 startedAt = null;
-                dropped = null;
                 after = null;
                 continue;
             }
 
-            if (dropped is { } before && page.EarlierRunsDropped > before)
+            if (page.OldestRetainedSequence is { } oldest)
             {
-                // Runs that finished between pages pushed the oldest out of the retention window; drop them here too
-                // so the entries stay the newest runs that EarlierRunsDropped describes.
-                entries.RemoveRange(0, Math.Min(entries.Count, page.EarlierRunsDropped - before));
+                // Runs that finished between pages may have pushed the oldest out of the retention window; drop them
+                // here too so the entries stay the retained runs that EarlierRunsDropped describes.
+                _ = entries.RemoveAll(e => e.Sequence < oldest);
             }
 
             startedAt = page.StartedAt;
-            dropped = page.EarlierRunsDropped;
             entries.AddRange(page.Entries);
             if (!page.HasMore || page.Entries.Count == 0)
             {

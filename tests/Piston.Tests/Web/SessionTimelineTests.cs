@@ -194,8 +194,9 @@ public sealed class SessionTimelineTests
     }
 
     [Fact]
-    public void TraceFailures_WhenResultsWereClearedAfterTheIntroduction_KeepsTheIntroducingRun()
+    public void TraceFailures_WhenResultsWereClearedAfterTheIntroduction_ReportsAnUnknownOrigin()
     {
+        // Run 3 compared with nothing, so it could have newly failed the test again after an unrecorded skip.
         var timeline = SessionTimeline.Build(
         [
             Entry(1, "aaa", noEarlierResults: true),
@@ -205,8 +206,26 @@ public sealed class SessionTimelineTests
 
         var trace = Assert.Single(timeline.TraceFailures([Broken]));
 
-        Assert.Equal(FailureOrigin.Run, trace.Origin);
-        Assert.Equal("r2", trace.IntroducedBy!.Entry.RunId);
+        Assert.Equal(FailureOrigin.Unknown, trace.Origin);
+        Assert.Null(trace.IntroducedBy);
+    }
+
+    [Fact]
+    public void TraceFailures_WhenATruncatedNewlyFailingListFollowsTheIntroduction_ReportsAnUnknownOrigin()
+    {
+        // The test may have been skipped in run 3 (not a fix) and newly failed again, unlisted, in run 4.
+        var timeline = SessionTimeline.Build(
+        [
+            Entry(1, "aaa"),
+            Entry(2, "bbb", files: ["/src/Break.cs"], newlyFailing: [Broken]),
+            Entry(3, "ccc", files: ["/src/Skip.cs"]),
+            Entry(4, "ddd", files: ["/src/Again.cs"], unlistedNewlyFailing: 1),
+        ]);
+
+        var trace = Assert.Single(timeline.TraceFailures([Broken]));
+
+        Assert.Equal(FailureOrigin.Unknown, trace.Origin);
+        Assert.Null(trace.IntroducedBy);
     }
 
     [Fact]

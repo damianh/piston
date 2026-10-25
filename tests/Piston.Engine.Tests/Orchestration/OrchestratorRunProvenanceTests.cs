@@ -297,6 +297,7 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         Assert.Equal(broken.SourceAfter, fixedEntry.SourceBefore);
         Assert.False(fixedEntry.InRunHistory);
         Assert.True(timeline.Zip(timeline.Skip(1)).All(p => p.First.Sequence < p.Second.Sequence));
+        Assert.Equal(3, _state.SessionTimelineRevision);
     }
 
     [Fact]

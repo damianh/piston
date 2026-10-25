@@ -72,7 +72,7 @@
     private SessionTimeline _timeline = SessionTimeline.Empty;
     private bool _loaded;
     private StateSnapshotNotification? _snapshot;
-    private (DateTimeOffset? Time, string? RunId) _lastRun;
+    private long _timelineRevision;
     private (string? RunId, string? Status) _activeRun;
     private IReadOnlyList<SessionFailureTrace> _failures = [];
     private HashSet<string> _relatedRuns = new(StringComparer.Ordinal);
@@ -92,7 +92,7 @@
         Client.StateChanged += OnStateChanged;
         Client.ConnectionStateChanged += OnConnectionStateChanged;
         _snapshot = Client.CurrentSnapshot;
-        _lastRun = (_snapshot?.LastRunTime, _snapshot?.LastRun?.RunId);
+        _timelineRevision = _snapshot?.TimelineRevision ?? 0;
         _activeRun = (_snapshot?.ActiveRun?.RunId, _snapshot?.ActiveRun?.Status);
         await RefreshAsync();
         if (View.TracedTest is { } traced)
@@ -113,17 +113,15 @@
     private void OnStateChanged(StateSnapshotNotification snapshot)
     {
         _snapshot = snapshot;
-        var lastRun = (snapshot.LastRunTime, snapshot.LastRun?.RunId);
         var activeRun = (snapshot.ActiveRun?.RunId, snapshot.ActiveRun?.Status);
-        var previousActive = _activeRun.RunId;
-        var lastRunChanged = lastRun != _lastRun;
+        var revisionChanged = snapshot.TimelineRevision != _timelineRevision;
         var activeChanged = activeRun != _activeRun;
-        _lastRun = lastRun;
+        _timelineRevision = snapshot.TimelineRevision;
         _activeRun = activeRun;
 
-        // An active run that ends without becoming the last run (an older run finishing cancelling after a newer one
-        // was recorded) still adds a timeline entry, so its disappearance or replacement refreshes too.
-        if (lastRunChanged || (previousActive is not null && previousActive != activeRun.RunId))
+        // Every terminal run, including a queued run cancelled without ever becoming the active or last run, changes
+        // the revision.
+        if (revisionChanged)
         {
             _ = InvokeAsync(RefreshAsync);
         }
@@ -372,7 +370,7 @@
                 var test = new TestReference(reference.ProjectId, reference.Key);
                 var followed = View.TracedTest == test;
                 var classification = classify
-                    ? run.Entry.FailureClassifications.FirstOrDefault(c => SessionTimeline.Matches(c, test))
+                    ? _timeline.ClassificationIn(run, test)
                     : null;
                 <div class="flex items-center gap-2 pl-3 @(followed ? "bg-blue-500/10" : "")">
                     <button class="truncate text-left text-gray-300 hover:underline" title="Follow @test.Project :: @test.Key in the timeline"
