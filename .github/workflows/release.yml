@@ -59,6 +59,10 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
       - name: Pack framework-dependent tool
         run: dotnet pack src/Piston/Piston.csproj -c Release -p:Version="$VERSION" -o packages
+      - name: Check package contents
+        env:
+          PISTON_PACKAGES: packages
+        run: dotnet run build.cs -- check-package
       - name: Install isolated package and check CLI, web assets and HTTP MCP
         run: |
           dotnet tool install Piston --version "$VERSION" --tool-path "$RUNNER_TEMP/piston-tool" \
