@@ -115,6 +115,11 @@ public sealed class PistonOptions
     public bool HistoryEnabled { get; init; } = true;
 
     /// <summary>
+    /// Saves the aggregate test results between daemon restarts. Default is true.
+    /// </summary>
+    public bool PersistResults { get; init; } = true;
+
+    /// <summary>
     /// Keeps each Microsoft.Testing.Platform test app running in server mode between runs, so later
     /// discoveries and runs skip host start-up. A host is replaced when its build output changes.
     /// Coverage runs always use a fresh process. Default is false.

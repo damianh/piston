@@ -109,7 +109,7 @@ public sealed class PistonState
     /// <summary>The run currently executing (after it acquired the run lock), or null.</summary>
     public TestRunRecord? CurrentRun { get; set; }
 
-    /// <summary>The most recently requested run that reached a terminal state.</summary>
+    /// <summary>The most recently requested run that reached a terminal state, possibly restored on startup.</summary>
     public TestRunRecord? LastRun { get; set; }
 
     /// <summary>Terminal runs, newest first, bounded by <see cref="MaxRecentRuns"/>.</summary>

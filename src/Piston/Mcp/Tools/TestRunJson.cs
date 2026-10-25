@@ -50,6 +50,7 @@ public static class TestRunJson
             ["freshness"] = run.Freshness.ToString(),
             ["freshnessReason"] = run.FreshnessReason,
             ["isCurrentFullResult"] = run.IsCurrentFullResult,
+            ["restored"] = run.Restored,
             ["requestedAt"] = run.RequestedAt.ToString("O"),
             ["startedAt"] = run.StartedAt?.ToString("O"),
             ["completedAt"] = run.CompletedAt?.ToString("O"),

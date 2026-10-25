@@ -9,6 +9,15 @@
         <span class="shrink-0 @(active ? "text-cyan-400" : "")" title="@(active ? "Running now" : "Last run")">@(active ? "⟳" : "◷")</span>
         <span class="min-w-0 truncate text-gray-300" title="@(summary.TriggerDetail ?? run.Trigger)">@summary.Trigger</span>
 
+        @if (!active && run.Restored)
+        {
+            <span class="shrink-0 text-yellow-400" title="@run.FreshnessReason">restored · not re-verified</span>
+        }
+        else if (Snapshot?.Suites.Any(s => s.Restored) == true)
+        {
+            <span class="shrink-0 text-yellow-400" title="Some preserved test suites have not been re-verified since restart">some results not re-verified</span>
+        }
+
         @if (summary.Build is { } build)
         {
             <span class="shrink-0" aria-hidden="true">→</span>

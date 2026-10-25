@@ -37,6 +37,7 @@ public sealed record TestRunAdmissionDto(
 /// test was selected when the impact map narrowed the run by changed lines. <see cref="ChangedFiles"/> are the files
 /// whose change triggered the run; <see cref="FixedTests"/> and <see cref="NewlyFailingTests"/> are the project-scoped result keys of
 /// tests whose outcome the run changed from failed to passed, and to failed from passed or no result.
+/// <see cref="Restored"/> identifies a saved run that has not been re-verified since daemon restart.
 /// </summary>
 public sealed record TestRunDto(
     string RunId,
@@ -70,5 +71,6 @@ public sealed record TestRunDto(
     IReadOnlyDictionary<string, IReadOnlyList<TestSelectionReasonDto>>? SelectionReasons = null,
     IReadOnlyList<string>? ChangedFiles = null,
     IReadOnlyList<TestOutcomeReferenceDto>? FixedTests = null,
-    IReadOnlyList<TestOutcomeReferenceDto>? NewlyFailingTests = null
+    IReadOnlyList<TestOutcomeReferenceDto>? NewlyFailingTests = null,
+    bool Restored = false
 );

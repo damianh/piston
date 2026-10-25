@@ -15,6 +15,9 @@ public sealed record TestSuite(
     /// <summary>Identifier of the <see cref="TestRunRecord"/> that produced this suite, when known.</summary>
     public string? RunId { get; init; }
 
+    /// <summary>True when restored from disk and not re-verified since the daemon restart.</summary>
+    public bool Restored { get; init; }
+
     /// <summary>What Piston did to run the process that produced this suite, when it was recorded.</summary>
     [JsonIgnore]
     public ExecutionLog? ExecutionLog { get; init; }

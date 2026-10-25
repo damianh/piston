@@ -48,6 +48,9 @@ public sealed class PistonConfig
     /// </summary>
     public bool? History { get; set; }
 
+    /// <summary>Save the latest test results between daemon restarts. Default true.</summary>
+    public bool? PersistResults { get; set; }
+
     /// <summary>
     /// Keep Microsoft.Testing.Platform test apps running in server mode between runs, so later runs skip
     /// host start-up. Default false.

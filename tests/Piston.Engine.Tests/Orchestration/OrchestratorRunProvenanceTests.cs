@@ -97,6 +97,65 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     }
 
     [Fact]
+    public async Task Restored_results_are_unknown_until_startup_run_replaces_them()
+    {
+        var savedStore = new SavedResultsStore(SolutionPath, _ => { });
+        savedStore.Schedule(new SavedResultsSnapshot(
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            TimeSpan.FromMilliseconds(1),
+            TimeSpan.FromMilliseconds(2),
+            new BuildResult(BuildStatus.Succeeded, [], [], TimeSpan.FromMilliseconds(1)),
+            [new TestSuite("A.Tests",
+                [new TestResult("A.Tests.Test1", "Test1", TestStatus.Failed, TimeSpan.FromMilliseconds(2), null, "failed before restart", null, null)],
+                DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(2))],
+            new TestRunRecord
+            {
+                RunId = "previous-run",
+                EngineInstanceId = "previous-engine",
+                Sequence = 7,
+                Trigger = TestRunTrigger.Startup,
+                Status = TestRunStatus.Completed,
+                Freshness = ResultFreshness.Current,
+                RequestedAt = DateTimeOffset.UtcNow,
+                CompletedAt = DateTimeOffset.UtcNow,
+                Suites = [new TestSuite("A.Tests",
+                    [new TestResult("A.Tests.Test1", "Test1", TestStatus.Failed, TimeSpan.FromMilliseconds(2), null, "failed before restart", null, null)],
+                    DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(2))],
+            }));
+        savedStore.Dispose();
+
+        using var store = new SavedResultsStore(SolutionPath, _ => { });
+        _orchestrator.ResultsStore = store;
+        var releaseGraph = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _impact.Initialization = releaseGraph.Task;
+        try
+        {
+            await _orchestrator.StartAsync(SolutionPath);
+
+            Assert.True(_state.LastRun!.Restored);
+            Assert.Equal(0, _state.LastRun.Sequence);
+            Assert.Equal(ResultFreshness.Unknown, _state.LastRun.Freshness);
+            Assert.False(_state.LastRun.IsCurrentFullResult);
+            Assert.True(Assert.Single(_state.TestSuites).Restored);
+            Assert.Equal("previous-run", _state.FindRun("previous-run")!.RunId);
+
+            _ = releaseGraph.TrySetResult();
+            await WaitForAsync(() => _state.LastRun is { RunId: not "previous-run", Status: TestRunStatus.Completed });
+
+            Assert.False(_state.LastRun!.Restored);
+            Assert.Equal(ResultFreshness.Current, _state.LastRun.Freshness);
+            Assert.Equal(1, _state.LastRun.Sequence);
+            Assert.Contains(_state.LastRun.FixedTests, result => result.Key == "A.Tests.Test1");
+            Assert.DoesNotContain(_state.TestSuites, suite => suite.Restored);
+        }
+        finally
+        {
+            _ = releaseGraph.TrySetResult();
+        }
+    }
+
+    [Fact]
     public async Task CancelledRun_CapturesPostRunFingerprintAndNotifiesTerminalState()
     {
         await StartAndWaitForStartupRunAsync();

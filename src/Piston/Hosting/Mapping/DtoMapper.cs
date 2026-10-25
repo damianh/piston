@@ -93,7 +93,8 @@ public static class DtoMapper
             suite.Tests.Select(t => t.ToDto()).ToList(),
             suite.Timestamp,
             suite.TotalDuration.TotalMilliseconds,
-            suite.RunId
+            suite.RunId,
+            suite.Restored
         );
 
     /// <summary>
@@ -288,7 +289,8 @@ public static class DtoMapper
                 StringComparer.Ordinal),
             ChangedFiles: run.ChangedFiles,
             FixedTests: [.. run.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
-            NewlyFailingTests: [.. run.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))]);
+            NewlyFailingTests: [.. run.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
+            Restored: run.Restored);
     }
 
     public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>

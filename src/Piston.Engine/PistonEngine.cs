@@ -20,13 +20,16 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     private readonly DiagnosticLog _diagnosticLog;
     private readonly IActivityEventSink _activitySink;
     private readonly string _solutionDirectory;
+    private readonly string _solutionPath;
     private readonly MachineExecutionCoordinator _executionCoordinator;
     private readonly string? _ownerHost;
     private readonly bool _historyEnabled;
     private readonly MtpWarmHostPool? _warmHosts;
     private readonly string? _historyDirectory;
+    private readonly bool _persistResults;
     private WorktreeOwnership? _ownership;
     private RunHistoryStore? _history;
+    private SavedResultsStore? _savedResults;
 
     public PistonEngine(PistonOptions options)
         : this(options, NullActivityEventSink.Instance)
@@ -39,6 +42,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         _ownerHost = options.OwnerHost;
         _historyEnabled = options.HistoryEnabled;
         _historyDirectory = options.HistoryDirectory;
+        _persistResults = options.PersistResults;
 
         // Register MSBuild before any Microsoft.Build.* types are loaded.
         // This must happen before MsBuildSolutionGraph (or any class referencing MSBuild) is JIT-compiled.
@@ -48,6 +52,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         var solutionDir = Path.GetDirectoryName(options.SolutionPath)
             ?? throw new ArgumentException("Cannot resolve solution directory.", nameof(options));
         _solutionDirectory = solutionDir;
+        _solutionPath = Path.GetFullPath(options.SolutionPath);
         _diagnosticLog = DiagnosticLog.Initialize(solutionDir);
         _diagnosticLog.Write("Engine", $"SolutionPath: {options.SolutionPath}");
         _diagnosticLog.Write("Engine", $"TestExecutionMode: {options.TestExecutionMode}");
@@ -210,6 +215,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             $"reservation: {_executionCoordinator.Reservation.CpuSlots} CPU slot(s), memory {_executionCoordinator.Reservation.MemoryMb?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}");
 
         OpenHistory(solutionPath);
+        OpenSavedResults(solutionPath);
 
         try
         {
@@ -224,6 +230,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         {
             await _orchestrator.DisposeAsync().ConfigureAwait(false);
             CloseHistory();
+            CloseSavedResults();
             _ownership.Dispose();
             _ownership = null;
             throw;
@@ -262,6 +269,33 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         _history = null;
     }
 
+    private void OpenSavedResults(string solutionPath)
+    {
+        if (!_persistResults)
+        {
+            return;
+        }
+
+        try
+        {
+            _savedResults = new SavedResultsStore(
+                solutionPath,
+                message => _diagnosticLog.Write("Results", message));
+            _orchestrator.ResultsStore = _savedResults;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            _diagnosticLog.Write("Results", $"Saved results are off: {ex.Message}");
+        }
+    }
+
+    private void CloseSavedResults()
+    {
+        _orchestrator.ResultsStore = null;
+        _savedResults?.Dispose();
+        _savedResults = null;
+    }
+
     public IReadOnlyList<TestHistory>? GetTestHistory(string test, string? project = null) => _history?.GetTestHistory(test, project);
 
     public IReadOnlyList<TestHistory>? GetFlakyTests() => _history?.GetFlakyTests();
@@ -298,7 +332,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         _state.NotifyChanged();
     }
 
-    public void ClearResults() => _orchestrator.ClearResults(_solutionDirectory);
+    public void ClearResults() => _orchestrator.ClearResults(_solutionDirectory, _solutionPath);
 
     public CoverageReportSnapshot? GetCoverageReport() => _orchestrator.GetCoverageReport();
 
@@ -333,6 +367,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             await _warmHosts.DisposeAsync().ConfigureAwait(false);
         }
 
+        CloseSavedResults();
         CloseHistory();
         _coverageStore?.Dispose();
         _pool.Dispose();

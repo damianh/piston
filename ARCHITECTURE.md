@@ -372,7 +372,7 @@ Within an engine, coverage processing and its availability-state publication
 are serialized with clearing, so a cleared commit cannot later publish a stale
 coverage indicator.
 
-The engine keeps test results, timings, and build state in memory. Coverage run
+The engine keeps most controller state in memory. Coverage run
 IDs are seeded from the database, but they do not constitute test-run history.
 
 Run history (`RunHistoryStore`) is the durable test-result record. It is a JSON
@@ -398,6 +398,19 @@ name once and runs in columns. A history failure is logged and never fails a run
 result failed its classification (`GetLatestFailures`) plus the flaky tests, for
 the Tests tab's badges and filters; `history/getTestHistory` gives one test's
 entries for its history strip.
+
+The latest aggregate test tree, last terminal run record, build result and run
+timings are also persisted to `.piston/<solution>.results.json` by
+`SavedResultsStore`. Saves are debounced and atomically replaced. Saved test
+output and errors are clipped, build diagnostics are capped, and run logs,
+`RecentRuns` history and the project graph are not included. The
+`persistResults` setting defaults to true. On startup, the saved suites and last
+run are restored with `Restored = true` and `Freshness = Unknown`; consumers
+must not treat them as verified. A later selective run can leave untouched suites
+marked restored, while a full startup run replaces them. A changed engine
+informational version, unsupported file format, different solution path or
+corrupt file is diagnosed and ignored without blocking startup. `clear_results`
+deletes the saved result file even when persistence is disabled.
 
 There is no run-metadata table, preferences table, or graph cache. Coverage persistence alone is not full
 controller-state recovery. `.piston.json` is the actual optional configuration

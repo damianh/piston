@@ -162,7 +162,7 @@ To set up a coding agent, follow [docs/agent-usage.md](docs/agent-usage.md). It 
 | `export_coverage` | Write the coverage report as LCOV or Cobertura (`format`) to `outputPath`, which must be inside the solution directory (default `.piston/coverage/lcov.info` or `cobertura.xml`). Requires coverage. |
 | `plan_affected_tests` | Preview what Piston would build and run for `files` (or git changes, see [git bases](#git-bases)) without running anything, as JSON (`piston.affected-plan/v1`): `scope` (`full`, `projects`, `tests` or `none`), an `explanation`, the projects, any `warnings`, and with coverage the selected tests with the changed lines that selected each and the granularity of that evidence (`run`, `class` or `test`). |
 | `run_affected_tests` | Run that plan and wait for it: the same JSON plus `run` (ID, status and counts; null when nothing is affected). For example, `base: "branch"` runs the tests affected by everything since the branch left `main`. |
-| `clear_results` | Clear current test suites, last-run timestamp, coverage state, and persisted coverage in the current solution directory. A running test run may publish new results afterwards. |
+| `clear_results` | Clear current test suites, last-run timestamp, saved result snapshot, coverage state, and persisted coverage in the current solution directory. A running test run may publish new results afterwards. |
 
 Piston provides no code intelligence (diagnostics, rename, semantic search); agents
 can use Roslyn-based tools alongside it.
@@ -171,7 +171,9 @@ can use Roslyn-based tools alongside it.
 returns that run's record, rather than polling an aggregate phase or reading
 results from an earlier run. `get_test_results` reads
 accumulated state without starting a run; preserved results from unaffected
-suites are not proof that every test ran after the latest edit.
+suites are not proof that every test ran after the latest edit. After a daemon
+restart, saved results are available immediately but are marked as restored and
+not re-verified; only a new run can make them current.
 
 ### Run provenance
 
@@ -202,7 +204,7 @@ freshness before treating a diagnostic as evidence for their source generation.
 
 Limits:
 
-- Full run records (what `get_test_run` returns) are kept for the 16 most recent runs, in memory only. Per-test outcomes persist separately in the [run history](#run-history-and-failure-classification).
+- Full run records (what `get_test_run` returns) are kept for the 16 most recent runs in memory. Across daemon restarts, only the latest run and aggregate result tree are restored; the remaining per-test outcomes persist separately in the [run history](#run-history-and-failure-classification).
 - The fingerprint does not cover sources outside the solution directory, installed SDKs, the NuGet cache, or merged user/machine NuGet configuration.
 - `verify` reevaluates project inputs and returns `NotFullScope` for user projects, imports or declared files outside the fingerprint (including excluded directories). SDK/workload files, packages and generated restore imports remain toolchain/cache exclusions. Evaluation failure is `Faulted`; neither verdict is a pass or a hidden fallback.
 - Full runs refresh the solution graph before selecting test projects. `verify` also rejects an otherwise current run if its selected projects omit a test project from the refreshed graph.
@@ -242,7 +244,7 @@ Project ownership and transitive dependencies determine affected test projects (
 
 Selection by lines is a heuristic, not a proof: code reached through reflection, static state, configuration or data files can affect a test without appearing in its executed lines, and a forced or full run remains the authority. `plan_affected_tests` previews a selection with the changed lines and evidence granularity behind each test.
 
-Coverage persists in `.piston/piston.db`: the merged line and branch report (what the dashboard, `get_coverage` and the exports read), the file-level test associations and the impact map used for selection. The project graph does not persist; test-result history is stored separately, outside the checkout (see [Run history and failure classification](#run-history-and-failure-classification)). Only files under the solution directory are recorded, so code a test loads from elsewhere (such as fixture projects built in a temp directory) does not count. A full, unfiltered run replaces the report; a selective run adds hits to unchanged files and marks new or changed files it measured as partial. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, running it through `dotnet test` rather than server mode (so without live per-test progress); without it, the project runs without coverage and its run log says why.
+Coverage persists in `.piston/piston.db`: the merged line and branch report (what the dashboard, `get_coverage` and the exports read), the file-level test associations and the impact map used for selection. The latest aggregate test results, last run record, last build and run timing are also saved in `.piston/<solution>.results.json`. On restart, these are shown immediately with freshness `Unknown` and explicitly marked as not re-verified until a run completes; `verify` never reuses a restored run. The saved snapshot is atomic, clips test output and diagnostics, and is ignored with a diagnostic if it is corrupt, has an unsupported format or was written by a different Piston engine version. `clear_results` removes it. Disable this feature with `"persistResults": false`. The project graph does not persist; test-run history remains separately stored outside the checkout (see [Run history and failure classification](#run-history-and-failure-classification)). Only files under the solution directory are recorded, so code a test loads from elsewhere (such as fixture projects built in a temp directory) does not count. A full, unfiltered run replaces the report; a selective run adds hits to unchanged files and marks new or changed files it measured as partial. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, running it through `dotnet test` rather than server mode (so without live per-test progress); without it, the project runs without coverage and its run log says why.
 
 ### Git bases
 
@@ -298,6 +300,7 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `hangThreshold` | `string` | How long a test runs before it is reported as possibly hanging (default `60s`). See [Slow and hanging tests](#slow-and-hanging-tests). |
 | `testTimeout` | `string` | Per-test limit; off by default. See [Slow and hanging tests](#slow-and-hanging-tests). |
 | `history` | `bool` | Keep per-test run history and classify failures (default `true`). See [Run history and failure classification](#run-history-and-failure-classification). |
+| `persistResults` | `bool` | Save and restore the latest aggregate test results across daemon restarts (default `true`). Restored results are unverified until a new run completes. |
 | `warmTestHosts` | `bool` | Keep MTP test apps running between runs to skip host start-up (default `false`). See [Warm test hosts](#warm-test-hosts). |
 | `parallelism` | `int` | Max concurrent test processes. `0` = auto: half the logical processor count, at least one. |
 | `processRecycleAfter` | `int` | Runs after which a pool slot logs a recycling warning (default 50). |
