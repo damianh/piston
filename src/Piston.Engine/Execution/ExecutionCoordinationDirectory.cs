@@ -42,6 +42,26 @@ public sealed class ExecutionCoordinationDirectory
     internal string ResourceLeasesDirectory => Path.Combine(StateDirectory, "resource-leases");
     internal string ResourceLockPath => Path.Combine(StateDirectory, "resources.lock");
 
+    internal static bool DirectoryExistsOrThrow(string path)
+    {
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(path);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+
+        if ((attributes & FileAttributes.Directory) == 0)
+        {
+            throw new IOException($"Execution coordination path '{path}' is not a directory.");
+        }
+
+        return true;
+    }
+
     /// <summary>
     /// <see cref="EnvironmentVariable"/> when set, otherwise <c>Piston/execution</c> under the per-user
     /// local application data folder (<c>%LOCALAPPDATA%</c>, <c>$XDG_DATA_HOME</c> or

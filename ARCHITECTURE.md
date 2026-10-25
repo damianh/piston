@@ -76,8 +76,10 @@ a file, with their evidence granularity and executed line ranges.
 it refuses paths that resolve (following symlinks) outside the solution
 directory, files over 1 MB and binary files.
 Clients receive state, test progress, build errors, and activity notifications.
-The dashboard presents current test/build state, run history and comparison,
-aggregate coverage with covering tests, activity, and MCP call history.
+`machine/getOverview` reads machine-wide worktree owners, budget, live leases and
+queue tickets for the dashboard. The dashboard presents current test/build state,
+run history and comparison, aggregate coverage with covering tests, activity,
+MCP call history and a Machine tab for the workspace overview.
 
 See [README.md](README.md) for executable commands and the actual configuration
 shape. The daemon's `--stdio` JSON-RPC transport is not MCP; the stdio MCP server
@@ -275,7 +277,10 @@ errors; schema errors and access denial fail immediately.
 `PistonEngine.StartAsync` validates the budget, then takes
 `WorktreeOwnership`. That is an exclusive lock on
 `owners/<sha256(canonical worktree)>.lock`, plus a JSON sidecar with PID, solution,
-worktree and acquisition time used in conflict messages. The canonical worktree is
+worktree, acquisition time, host kind and (for daemons) local dashboard URL used in
+conflict messages and the machine overview. Dashboard URLs are accepted only when
+they use HTTP on localhost or a loopback address with no path, query or credentials.
+The canonical worktree is
 the solution path with symlinks resolved, walked up to the first `.git` directory
 or file, including solution-file symlinks. Without one, it is the solution directory.
 Windows paths are case-folded; macOS uses `F_GETPATH` to preserve actual directory
@@ -315,6 +320,19 @@ and keeps its place. Stop/dispose does not. Admission errors (invalid budget,
 unrecognised held entries, IO) fault the run with an explicit reason. Only a missing
 budget file selects the default; unreadable files do not. Build/test cancellation
 waits for the killed runner to exit before the pipeline releases its lease.
+
+`MachineExecutionOverviewReader` takes `admission.lock` briefly and reads the
+same live ticket and lease names without cleaning up stale files. It reports CPU
+and memory use from held leases, FIFO queue positions, and owner-to-entry matches
+by PID. The dashboard polls `machine/getOverview` only while the Machine tab is
+open; a 500 ms lock timeout or invalid budget is returned as visible overview
+error text rather than silently inventing resource values. A failed coordination
+scan discards partial entries and marks availability false; usage and counts are
+unknown, and live owners are not labelled idle. `piston status --all`
+uses the same reader.
+Ownership scan availability is tracked separately: unreadable owner directories
+or locks produce a visible error and unknown ownership, not an empty-success list.
+Filesystem probes distinguish missing directories from access and I/O failures.
 
 **Test resources** (`MachineResourceCoordinator`, behind the internal
 `ITestResourceGate`) schedule test projects, not runs. `TestResourceInference`
