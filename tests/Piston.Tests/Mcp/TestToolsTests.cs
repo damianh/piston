@@ -119,7 +119,7 @@ public sealed class TestToolsTests
                 [
                     new("run-1", at, TestStatus.Passed, 12.4, "abcdef0123456789"),
                     new("run-2", at.AddMinutes(1), TestStatus.Failed, 3, null),
-                ], Flaky: false),
+                ], Flakiness: null),
             ],
         };
 
@@ -139,14 +139,46 @@ public sealed class TestToolsTests
         {
             Histories =
             [
-                new("A.Tests", "A.Tests.Steady", [], Flaky: false),
-                new("A.Tests", "A.Tests.Wobbly", [], Flaky: true),
+                new("A.Tests", "A.Tests.Steady", [], Flakiness: null),
+                new("A.Tests", "A.Tests.Wobbly", [], Flakiness: new FlakinessEvidence("abc", 1, 1, 0, [], [])),
             ],
         };
 
         var text = new TestTools(engine, NullRecorder).GetTestHistory();
 
-        Assert.Equal("A.Tests :: A.Tests.Wobbly (flaky)", text);
+        Assert.Equal("A.Tests :: A.Tests.Wobbly (flaky)\n  Evidence: Passed 1 and failed 1 time(s) on source abc.", text.ReplaceLineEndings("\n"));
+    }
+
+    [Fact]
+    public void GetTestHistoryShowsEvidenceRetriesAndOtherWorktreeOutcomes()
+    {
+        var at = new DateTimeOffset(2025, 3, 4, 5, 6, 7, TimeSpan.Zero);
+        var source = "abcdef0123456789";
+        var evidence = new FlakinessEvidence(source, 2, 1, 1, ["feature-x"],
+        [
+            new("run-2", at.AddMinutes(1), TestStatus.Passed, 1, null),
+            new("run-2", at.AddMinutes(1), TestStatus.Failed, 0, null),
+            new("run-9", at, TestStatus.Passed, 0, "feature-x"),
+        ]);
+        var engine = new StubEngine
+        {
+            Histories =
+            [
+                new("A.Tests", "A.Tests.One",
+                [
+                    new("run-2", at.AddMinutes(1), TestStatus.Failed, 3, source),
+                    new("run-2", at.AddMinutes(1), TestStatus.Passed, 4, source, Attempt: 1),
+                ], evidence),
+            ],
+        };
+
+        var text = new TestTools(engine, NullRecorder).GetTestHistory("A.Tests.One");
+
+        Assert.Contains("A.Tests :: A.Tests.One (flaky)", text);
+        Assert.Contains("  Evidence: Passed 2 and failed 1 time(s) on source abcdef012345 (1 from in-run retries; other worktrees: feature-x).", text);
+        Assert.Contains("  2025-03-04 05:06:07Z Passed  run run-9 in worktree feature-x", text);
+        Assert.Contains("  2025-03-04 05:07:07Z Passed         4ms run run-2 retry 1 (abcdef012345)", text);
+        Assert.Contains("  2025-03-04 05:07:07Z Failed         3ms run run-2 (abcdef012345)", text);
     }
 
     [Fact]

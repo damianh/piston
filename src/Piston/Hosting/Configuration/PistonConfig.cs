@@ -49,6 +49,12 @@ public sealed class PistonConfig
     public bool? History { get; set; }
 
     /// <summary>
+    /// How many times a run re-runs its failed tests, without rebuilding, to gather flakiness evidence: 0 to 3.
+    /// A test that passes on a retry counts as passed and is reported as passed on retry. Default 0 (off).
+    /// </summary>
+    public int? RetryFailures { get; set; }
+
+    /// <summary>
     /// Keep Microsoft.Testing.Platform test apps running in server mode between runs, so later runs skip
     /// host start-up. Default false.
     /// </summary>

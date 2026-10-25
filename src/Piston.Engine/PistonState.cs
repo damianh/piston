@@ -101,6 +101,9 @@ public sealed class PistonState
     /// <summary>The test that has been running longest in the current run, or null when none is running.</summary>
     public RunningTest? LongestRunningTest { get; set; }
 
+    /// <summary>What the current run's retries of its failed tests are doing, e.g. "Retrying 2 failed test(s): attempt 1 of 3"; null when not retrying.</summary>
+    public string? RetryStatus { get; set; }
+
     // ── Run provenance ───────────────────────────────────────────────────────
 
     /// <summary>Number of terminal runs retained in <see cref="RecentRuns"/> (in memory only).</summary>

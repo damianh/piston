@@ -1498,6 +1498,25 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 return Finish(TestRunStatus.Cancelled, "Cancelled after test execution; results discarded.");
             }
 
+            // ── Retries of failed tests (opt-in) ───────────────────────────────
+            string? retriesSkippedReason;
+            try
+            {
+                (newSuites, retriesSkippedReason) = await RetryFailedTestsAsync(
+                    solutionPath, testTargets, newSuites, projectResults, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                _state.Phase = PistonPhase.Watching;
+                _state.NotifyChanged();
+                return Finish(TestRunStatus.Cancelled, "Cancelled while retrying failed tests; results discarded.");
+            }
+
+            if (retriesSkippedReason is not null)
+            {
+                log?.Write("Orchestrator", $"Retries skipped: {retriesSkippedReason}");
+            }
+
             // ── Coverage processing ────────────────────────────────────────────
             if (_coverageEnabled && _coverageStore is not null && _coverageProcessor is not null
                 && coverageReportPaths.Count > 0 && newSuites.Count > 0)
@@ -1589,6 +1608,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 FixedTests = fixedTests,
                 NewlyFailingTests = newlyFailingTests,
                 RunnerError = runnerError,
+                RetryLimit = RetryFailedTests,
+                RetriesSkippedReason = retriesSkippedReason,
             };
 
             var incompleteReason = DescribeIncomplete(
