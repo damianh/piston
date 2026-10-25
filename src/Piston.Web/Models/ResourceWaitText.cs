@@ -8,11 +8,15 @@ namespace Piston.Web.Models;
 /// <summary>Text for test projects waiting in the machine-wide test resource queue.</summary>
 public static class ResourceWaitText
 {
-    /// <summary>Waiting test projects keyed by suite name, combining waits for projects with the same name.</summary>
-    public static Dictionary<string, TestResourceWaitDto> BySuiteName(IReadOnlyDictionary<string, TestResourceWaitDto>? waits) =>
+    /// <summary>
+    /// Waiting test projects keyed like <see cref="TestSuiteDto.ProjectId"/> (solution-relative path), or by suite
+    /// name when the solution path is unknown, so same-named projects keep separate waits.
+    /// </summary>
+    public static Dictionary<string, TestResourceWaitDto> ByProjectId(
+        IReadOnlyDictionary<string, TestResourceWaitDto>? waits, string? solutionPath) =>
         (waits ?? new Dictionary<string, TestResourceWaitDto>())
             .Where(w => w.Value.State == "Waiting")
-            .GroupBy(w => SuiteName(w.Key), StringComparer.Ordinal)
+            .GroupBy(w => solutionPath is null ? SuiteName(w.Key) : ProjectPaths.ProjectId(w.Key, solutionPath), StringComparer.Ordinal)
             .ToDictionary(g => g.Key, g => Combine(g.Select(w => w.Value).ToList()), StringComparer.Ordinal);
 
     private static string SuiteName(string project) =>

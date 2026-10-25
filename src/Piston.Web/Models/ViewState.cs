@@ -26,7 +26,7 @@ public sealed class ViewState
     public TestMarkDto? GetTestMark(string? project, string testKey) =>
         project is null ? null : TestMarks.GetValueOrDefault((project, testKey));
 
-    /// <summary>Test projects waiting for exclusive test resources, keyed by suite name.</summary>
+    /// <summary>Test projects waiting for exclusive test resources, keyed by project ID (see <see cref="ResourceWaitText.ByProjectId"/>).</summary>
     public IReadOnlyDictionary<string, TestResourceWaitDto> ResourceWaits { get; set; } =
         new Dictionary<string, TestResourceWaitDto>();
 

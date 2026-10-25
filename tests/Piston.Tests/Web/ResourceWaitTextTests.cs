@@ -15,7 +15,7 @@ public sealed class ResourceWaitTextTests
         new(state, ["port:5432"], true, blockers, 0, 2, 2, T0, null, null);
 
     [Fact]
-    public void BySuiteName_KeepsOnlyWaitingProjects()
+    public void ByProjectId_KeepsOnlyWaitingProjects()
     {
         var waits = new Dictionary<string, TestResourceWaitDto>
         {
@@ -23,8 +23,9 @@ public sealed class ResourceWaitTextTests
             ["/w/tests/Api.Tests.csproj"] = Wait("Acquired"),
         };
 
-        Assert.Equal(["Db.Tests"], ResourceWaitText.BySuiteName(waits).Keys);
-        Assert.Empty(ResourceWaitText.BySuiteName(null));
+        Assert.Equal(["Db.Tests"], ResourceWaitText.ByProjectId(waits, null).Keys);
+        Assert.Equal(["tests/Db.Tests.csproj"], ResourceWaitText.ByProjectId(waits, "/w/Piston.slnx").Keys);
+        Assert.Empty(ResourceWaitText.ByProjectId(null, "/w/Piston.slnx"));
     }
 
     [Fact]
@@ -34,24 +35,40 @@ public sealed class ResourceWaitTextTests
         var blocker = new TestResourceBlockerDto("port:5432", "Held", 42, @"C:\other", project, T0);
         var wait = Wait("Waiting", blocker);
 
-        Assert.Equal(["Db.Tests"], ResourceWaitText.BySuiteName(new Dictionary<string, TestResourceWaitDto> { [project] = wait }).Keys);
+        var waits = new Dictionary<string, TestResourceWaitDto> { [project] = wait };
+        Assert.Equal(["Db.Tests"], ResourceWaitText.ByProjectId(waits, null).Keys);
+        Assert.Equal(["tests/Db.Tests.csproj"], ResourceWaitText.ByProjectId(waits, @"C:\repo\Piston.slnx").Keys);
         Assert.StartsWith("Db.Tests waiting ", ResourceWaitText.Describe(project, wait, T0), StringComparison.Ordinal);
         Assert.Contains("held by Db.Tests in", ResourceWaitText.Blocker(blocker, wait), StringComparison.Ordinal);
     }
 
     [Fact]
-    public void SameNamedProjects_CombineAllNeedsAndBlockers()
+    public void SameNamedProjects_KeepSeparateWaitsKeyedByProjectId()
+    {
+        var waits = ResourceWaitText.ByProjectId(new Dictionary<string, TestResourceWaitDto>
+        {
+            ["/w/tests/One/Tests.csproj"] = Wait("Waiting"),
+            ["/w/tests/Two/Tests.csproj"] = Wait("Acquired"),
+        }, "/w/Piston.slnx");
+
+        Assert.Equal(["tests/One/Tests.csproj"], waits.Keys);
+        Assert.False(waits.ContainsKey("Tests"));
+        Assert.StartsWith("Tests waiting ", ResourceWaitText.Describe("tests/One/Tests.csproj", waits["tests/One/Tests.csproj"], T0), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SameNamedProjects_WithoutSolutionPath_CombineAllNeedsAndBlockers()
     {
         var first = Wait("Waiting", new TestResourceBlockerDto("port:5432", "Held", 42, "/other", "/other/A.Tests.csproj", T0));
         var second = Wait("Waiting", new TestResourceBlockerDto("port:6000", "Held", 43, "/other", "/other/B.Tests.csproj", T0))
             with
         { Keys = ["port:6000"], WaitingSince = T0.AddSeconds(1) };
 
-        var waits = ResourceWaitText.BySuiteName(new Dictionary<string, TestResourceWaitDto>
+        var waits = ResourceWaitText.ByProjectId(new Dictionary<string, TestResourceWaitDto>
         {
             ["/w/tests/A/Db.Tests.csproj"] = first,
             ["/w/tests/B/Db.Tests.csproj"] = second,
-        });
+        }, null);
 
         var merged = Assert.Single(waits).Value;
         Assert.Equal(["port:5432", "port:6000"], merged.Keys);
