@@ -316,9 +316,9 @@ internal sealed class RunHistoryStore : IDisposable
                 var results = new List<StoredTestResult>();
                 foreach (var result in run.Results)
                 {
-                    if (Resolve(result.Project) is { } id)
+                    if (Resolve(result.ProjectId) is { } id)
                     {
-                        results.Add(result with { ProjectId = id });
+                        results.Add(result with { Project = ProjectName(id), ProjectId = id });
                     }
                     else
                     {

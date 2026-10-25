@@ -2086,7 +2086,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     {
                         foreach (var match in matches)
                         {
-                            selected.Add((projectId, match));
+                            _ = selected.Add((projectId, match));
                         }
                     }
                 }

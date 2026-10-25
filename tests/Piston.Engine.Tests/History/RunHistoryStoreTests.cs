@@ -180,14 +180,31 @@ public sealed class RunHistoryStoreTests : IDisposable
         _ = Directory.CreateDirectory(location.Directory);
         File.WriteAllText(location.FilePath, LegacyFile());
 
-        using var store = Open();
-        store.ResolveLegacyProjects([Path.Combine(Path.GetDirectoryName(_solution)!, "App.Tests", "App.Tests.csproj")],
-            Path.GetDirectoryName(_solution)!);
-        store.Save();
+        using (var store = Open())
+        {
+            store.ResolveLegacyProjects([Path.Combine(Path.GetDirectoryName(_solution)!, "App.Tests", "App.Tests.csproj")],
+                Path.GetDirectoryName(_solution)!);
+            store.Save();
 
-        var history = Assert.Single(store.GetTestHistory(Test, ProjectId));
-        Assert.Equal(ProjectId, history.ProjectId);
+            var history = Assert.Single(store.GetTestHistory(Test, ProjectId));
+            Assert.Equal(ProjectId, history.ProjectId);
+            AssertLegacyRun(store);
+        }
+
+        using var reopened = Open();
+        AssertLegacyRun(reopened);
         Assert.Contains("\"Version\":2", File.ReadAllText(location.FilePath), StringComparison.Ordinal);
+
+        static void AssertLegacyRun(RunHistoryStore store)
+        {
+            var run = Assert.IsType<StoredRun>(store.GetRun("legacy-run"));
+            var result = Assert.Single(run.Results);
+            Assert.Equal(ProjectId, result.ProjectId);
+            Assert.Equal(Project, result.Project);
+            Assert.Equal(Test, result.Test);
+            Assert.Equal(TestStatus.Passed, result.Status);
+            Assert.Equal(12.5, result.DurationMs);
+        }
     }
 
     [Fact]
@@ -206,6 +223,7 @@ public sealed class RunHistoryStoreTests : IDisposable
             Path.GetDirectoryName(_solution)!);
 
         Assert.Empty(store.GetTestHistory(Test));
+        Assert.Empty(Assert.IsType<StoredRun>(store.GetRun("legacy-run")).Results);
     }
 
     [Fact]
@@ -486,7 +504,28 @@ public sealed class RunHistoryStoreTests : IDisposable
               ]
             }
           ],
-          "Runs": []
+          "Runs": [
+            {
+              "Summary": {
+                "RunId": "legacy-run",
+                "Trigger": 0,
+                "Status": 0,
+                "Scope": null,
+                "IsFullScope": true,
+                "Freshness": 0,
+                "RequestedAt": "2025-01-01T00:00:00+00:00",
+                "CompletedAt": "2025-01-01T00:00:00+00:00",
+                "Source": null,
+                "Passed": 1,
+                "Failed": 0,
+                "Skipped": 0
+              },
+              "Projects": [0],
+              "Tests": [1],
+              "Statuses": "P",
+              "DurationsMs": [12.5]
+            }
+          ]
         }
         """;
 
