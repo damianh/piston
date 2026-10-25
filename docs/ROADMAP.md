@@ -131,7 +131,8 @@ opens by hand (today's `piston-dashboard` skill).
 
 ### Execution
 - Explore MTP server mode further for structured results and stable test
-  identities; keep VSTest/TRX as the compatibility path.
+  identities; keep VSTest/TRX as the compatibility path. The investigation and
+  current decision are in [MTP server-mode investigation](mtp-server-mode.md).
 - Integration-test resources: infer likely needs (containers, exclusive
   resources) from package references, with explicit overrides, and schedule
   them within the budget. Address fixed-port and container-name conflicts
