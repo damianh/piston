@@ -67,6 +67,10 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(TestHistoryEntryDto))]
 [JsonSerializable(typeof(TestHistoryDto))]
 [JsonSerializable(typeof(TestHistoriesDto))]
+[JsonSerializable(typeof(MachineOverviewDto))]
+[JsonSerializable(typeof(MachineBudgetDto))]
+[JsonSerializable(typeof(MachineWorktreeDto))]
+[JsonSerializable(typeof(MachineExecutionEntryDto))]
 
 // ── Message records ───────────────────────────────────────────────────────
 [JsonSerializable(typeof(StateSnapshotNotification))]
@@ -126,6 +130,8 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(List<TestMarkDto>))]
 [JsonSerializable(typeof(List<TestHistoryEntryDto>))]
 [JsonSerializable(typeof(List<TestHistoryDto>))]
+[JsonSerializable(typeof(List<MachineWorktreeDto>))]
+[JsonSerializable(typeof(List<MachineExecutionEntryDto>))]
 
 internal sealed partial class PistonJsonContext : JsonSerializerContext
 {

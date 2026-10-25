@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using Piston.Engine;
 using Piston.Engine.Coverage;
+using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
@@ -27,6 +28,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
     private DaemonControl? _daemonControl;
     private ActivityHistory? _activityHistory;
     private UserSettingsStore? _userSettings;
+    private Func<CancellationToken, Task<MachineExecutionOverview>>? _machineOverviewProvider;
     private (string Id, CoverageExportDto Export, int Offset)? _pendingCoverageExport;
 
     // Even JSON's worst-case six-byte character escaping stays well below the 4 MiB pipe frame limit.
@@ -51,6 +53,9 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
 
     public void SetUserSettingsStore(UserSettingsStore store) =>
         _userSettings = store;
+
+    public void SetMachineOverviewProvider(Func<CancellationToken, Task<MachineExecutionOverview>> provider) =>
+        _machineOverviewProvider = provider;
 
     public async Task<JsonNode?> HandleCommandAsync(string method, JsonNode? @params, CancellationToken ct)
     {
@@ -266,6 +271,15 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                 {
                     var store = RequireUserSettings(method);
                     return SerializeSettings(store, store.Get());
+                }
+
+            case ProtocolMethods.MachineGetOverview:
+                {
+                    var provider = _machineOverviewProvider
+                        ?? throw new JsonRpcException(JsonRpcErrorCodes.MethodNotFound, $"Method not available in this host: {method}");
+                    var overview = await provider(ct).ConfigureAwait(false);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(overview.ToDto(), JsonRpcSerializer.Options));
                 }
 
             case ProtocolMethods.SettingsUpdate:

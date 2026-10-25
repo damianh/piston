@@ -1,0 +1,525 @@
+{
+  "framework": "nunit",
+  "captures": {
+    "discover": [
+      {
+        "uid": "NUnitProbe.AlphaTests.AssertionFailure",
+        "display-name": "AssertionFailure",
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "AssertionFailure",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "discovered"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Custom visible name",
+        "display-name": "Custom visible name",
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "CustomName(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "discovered"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Parameterized(1)",
+        "display-name": "Parameterized(1)",
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Parameterized(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "discovered"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Parameterized(2)",
+        "display-name": "Parameterized(2)",
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Parameterized(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "discovered"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.SameName",
+        "display-name": "SameName",
+        "traits": [
+          {
+            "probe-category": ""
+          }
+        ],
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "SameName",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "discovered"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Skipped",
+        "display-name": "Skipped",
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Skipped",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "discovered"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.ThrownException",
+        "display-name": "ThrownException",
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "ThrownException",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "discovered"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.WritesOutput",
+        "display-name": "WritesOutput",
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "WritesOutput",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "discovered"
+      },
+      {
+        "uid": "NUnitProbe.BetaTests.SameName",
+        "display-name": "SameName",
+        "location.type": "NUnitProbe.BetaTests",
+        "location.method": "SameName",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "discovered"
+      }
+    ],
+    "run": [
+      {
+        "uid": "NUnitProbe.AlphaTests.AssertionFailure",
+        "display-name": "AssertionFailure",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "AssertionFailure",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "failed",
+        "error.message": "  Assert.That(1, Is.EqualTo(2))\n  Expected: 2\n  But was:  1\n",
+        "error.stacktrace": "   at NUnitProbe.AlphaTests.AssertionFailure() in $PROBE/NUnitProbe/ProbeTests.cs:line 19\n\n1)    at NUnitProbe.AlphaTests.AssertionFailure() in $PROBE/NUnitProbe/ProbeTests.cs:line 19\n\n",
+        "assert.actual": "",
+        "assert.expected": ""
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Custom visible name",
+        "display-name": "Custom visible name",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "CustomName(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Parameterized(1)",
+        "display-name": "Parameterized(1)",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Parameterized(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Parameterized(2)",
+        "display-name": "Parameterized(2)",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Parameterized(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.SameName",
+        "display-name": "SameName",
+        "traits": [
+          {
+            "probe-category": ""
+          }
+        ],
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "SameName",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Skipped",
+        "display-name": "Skipped",
+        "standardOutput": "probe skip reason",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Skipped",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "skipped",
+        "error.message": "probe skip reason"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.ThrownException",
+        "display-name": "ThrownException",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "ThrownException",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "failed",
+        "error.message": "System.InvalidOperationException : probe exception",
+        "error.stacktrace": "   at NUnitProbe.AlphaTests.ThrownException() in $PROBE/NUnitProbe/ProbeTests.cs:line 22\n   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)\n   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)\n1)    at NUnitProbe.AlphaTests.ThrownException() in $PROBE/NUnitProbe/ProbeTests.cs:line 22\n   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)\n   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)\n",
+        "assert.actual": "",
+        "assert.expected": ""
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.WritesOutput",
+        "display-name": "WritesOutput",
+        "standardOutput": "probe output\n",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "WritesOutput",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.BetaTests.SameName",
+        "display-name": "SameName",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.BetaTests",
+        "location.method": "SameName",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      }
+    ],
+    "cold-rerun": [
+      {
+        "uid": "NUnitProbe.AlphaTests.AssertionFailure",
+        "display-name": "AssertionFailure",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "AssertionFailure",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "failed",
+        "error.message": "  Assert.That(1, Is.EqualTo(2))\n  Expected: 2\n  But was:  1\n",
+        "error.stacktrace": "   at NUnitProbe.AlphaTests.AssertionFailure() in $PROBE/NUnitProbe/ProbeTests.cs:line 19\n\n1)    at NUnitProbe.AlphaTests.AssertionFailure() in $PROBE/NUnitProbe/ProbeTests.cs:line 19\n\n",
+        "assert.actual": "",
+        "assert.expected": ""
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Custom visible name",
+        "display-name": "Custom visible name",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "CustomName(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Parameterized(1)",
+        "display-name": "Parameterized(1)",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Parameterized(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Parameterized(2)",
+        "display-name": "Parameterized(2)",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Parameterized(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.SameName",
+        "display-name": "SameName",
+        "traits": [
+          {
+            "probe-category": ""
+          }
+        ],
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "SameName",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Skipped",
+        "display-name": "Skipped",
+        "standardOutput": "probe skip reason",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Skipped",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "skipped",
+        "error.message": "probe skip reason"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.ThrownException",
+        "display-name": "ThrownException",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "ThrownException",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "failed",
+        "error.message": "System.InvalidOperationException : probe exception",
+        "error.stacktrace": "   at NUnitProbe.AlphaTests.ThrownException() in $PROBE/NUnitProbe/ProbeTests.cs:line 22\n   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)\n   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)\n1)    at NUnitProbe.AlphaTests.ThrownException() in $PROBE/NUnitProbe/ProbeTests.cs:line 22\n   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)\n   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)\n",
+        "assert.actual": "",
+        "assert.expected": ""
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.WritesOutput",
+        "display-name": "WritesOutput",
+        "standardOutput": "probe output\n",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "WritesOutput",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.BetaTests.SameName",
+        "display-name": "SameName",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.BetaTests",
+        "location.method": "SameName",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      }
+    ],
+    "warm-run": [
+      {
+        "uid": "NUnitProbe.AlphaTests.AssertionFailure",
+        "display-name": "AssertionFailure",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "AssertionFailure",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "failed",
+        "error.message": "  Assert.That(1, Is.EqualTo(2))\n  Expected: 2\n  But was:  1\n",
+        "error.stacktrace": "   at NUnitProbe.AlphaTests.AssertionFailure() in $PROBE/NUnitProbe/ProbeTests.cs:line 19\n\n1)    at NUnitProbe.AlphaTests.AssertionFailure() in $PROBE/NUnitProbe/ProbeTests.cs:line 19\n\n",
+        "assert.actual": "",
+        "assert.expected": ""
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Custom visible name",
+        "display-name": "Custom visible name",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "CustomName(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Parameterized(1)",
+        "display-name": "Parameterized(1)",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Parameterized(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Parameterized(2)",
+        "display-name": "Parameterized(2)",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Parameterized(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.SameName",
+        "display-name": "SameName",
+        "traits": [
+          {
+            "probe-category": ""
+          }
+        ],
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "SameName",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Skipped",
+        "display-name": "Skipped",
+        "standardOutput": "probe skip reason",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Skipped",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "skipped",
+        "error.message": "probe skip reason"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.ThrownException",
+        "display-name": "ThrownException",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "ThrownException",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "failed",
+        "error.message": "System.InvalidOperationException : probe exception",
+        "error.stacktrace": "   at NUnitProbe.AlphaTests.ThrownException() in $PROBE/NUnitProbe/ProbeTests.cs:line 22\n   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)\n   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)\n1)    at NUnitProbe.AlphaTests.ThrownException() in $PROBE/NUnitProbe/ProbeTests.cs:line 22\n   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)\n   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)\n",
+        "assert.actual": "",
+        "assert.expected": ""
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.WritesOutput",
+        "display-name": "WritesOutput",
+        "standardOutput": "probe output\n",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "WritesOutput",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.BetaTests.SameName",
+        "display-name": "SameName",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.BetaTests",
+        "location.method": "SameName",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      }
+    ],
+    "warm-rerun": [
+      {
+        "uid": "NUnitProbe.AlphaTests.AssertionFailure",
+        "display-name": "AssertionFailure",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "AssertionFailure",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "failed",
+        "error.message": "  Assert.That(1, Is.EqualTo(2))\n  Expected: 2\n  But was:  1\n",
+        "error.stacktrace": "   at NUnitProbe.AlphaTests.AssertionFailure() in $PROBE/NUnitProbe/ProbeTests.cs:line 19\n   at InvokeStub_AlphaTests.AssertionFailure(Object, Object, IntPtr*)\n\n1)    at NUnitProbe.AlphaTests.AssertionFailure() in $PROBE/NUnitProbe/ProbeTests.cs:line 19\n   at InvokeStub_AlphaTests.AssertionFailure(Object, Object, IntPtr*)\n\n",
+        "assert.actual": "",
+        "assert.expected": ""
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Custom visible name",
+        "display-name": "Custom visible name",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "CustomName(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Parameterized(1)",
+        "display-name": "Parameterized(1)",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Parameterized(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Parameterized(2)",
+        "display-name": "Parameterized(2)",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Parameterized(System.Int32)",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.SameName",
+        "display-name": "SameName",
+        "traits": [
+          {
+            "probe-category": ""
+          }
+        ],
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "SameName",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.Skipped",
+        "display-name": "Skipped",
+        "standardOutput": "probe skip reason",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "Skipped",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "skipped",
+        "error.message": "probe skip reason"
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.ThrownException",
+        "display-name": "ThrownException",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "ThrownException",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "failed",
+        "error.message": "System.InvalidOperationException : probe exception",
+        "error.stacktrace": "   at NUnitProbe.AlphaTests.ThrownException() in $PROBE/NUnitProbe/ProbeTests.cs:line 22\n   at InvokeStub_AlphaTests.ThrownException(Object, Object, IntPtr*)\n   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)\n1)    at NUnitProbe.AlphaTests.ThrownException() in $PROBE/NUnitProbe/ProbeTests.cs:line 22\n   at InvokeStub_AlphaTests.ThrownException(Object, Object, IntPtr*)\n   at System.Reflection.MethodBaseInvoker.InvokeWithNoArgs(Object obj, BindingFlags invokeAttr)\n",
+        "assert.actual": "",
+        "assert.expected": ""
+      },
+      {
+        "uid": "NUnitProbe.AlphaTests.WritesOutput",
+        "display-name": "WritesOutput",
+        "standardOutput": "probe output\n",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.AlphaTests",
+        "location.method": "WritesOutput",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      },
+      {
+        "uid": "NUnitProbe.BetaTests.SameName",
+        "display-name": "SameName",
+        "time.duration-ms": 0,
+        "location.type": "NUnitProbe.BetaTests",
+        "location.method": "SameName",
+        "location.method-arity": 0,
+        "node-type": "action",
+        "execution-state": "passed"
+      }
+    ]
+  }
+}

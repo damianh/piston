@@ -3,6 +3,7 @@
 
 using Piston.Engine;
 using Piston.Engine.Coverage;
+using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Hosting.Services;
 using Piston.Protocol.Dtos;
@@ -13,6 +14,61 @@ namespace Piston.Hosting.Mapping;
 
 public static class DtoMapper
 {
+    public static MachineOverviewDto ToDto(this MachineExecutionOverview overview)
+    {
+        var running = overview.Running
+            .Select(entry => entry.ToMachineEntryDto(overview.Owners))
+            .ToList();
+        var queue = overview.Queue
+            .Select(entry => entry.ToMachineEntryDto(overview.Owners))
+            .ToList();
+        var worktrees = overview.Owners
+            .Select(owner =>
+            {
+                var info = owner.Owner;
+                var runningHere = info is not null && running.Any(entry => entry.ProcessId == info.ProcessId);
+                var queuedHere = info is not null ? queue.FirstOrDefault(entry => entry.ProcessId == info.ProcessId) : null;
+                var state = owner.Liveness == OwnershipLiveness.Stale ? "Stale"
+                    : info is null || !overview.CoordinationAvailable ? "Unknown"
+                    : runningHere ? "Running"
+                    : queuedHere is not null ? "Queued"
+                    : "Idle";
+                return new MachineWorktreeDto(
+                    owner.Key,
+                    owner.Liveness.ToString(),
+                    info?.ProcessId,
+                    info?.SolutionPath,
+                    info?.WorktreePath,
+                    info?.AcquiredAt,
+                    info?.Host,
+                    info?.DashboardUrl,
+                    info?.ProcessId == Environment.ProcessId,
+                    state,
+                    queuedHere?.QueuePosition);
+            })
+            .OrderBy(worktree => worktree.WorktreePath, StringComparer.Ordinal)
+            .ToList();
+        var budget = overview.Budget is { } value
+            ? new MachineBudgetDto(
+                value.CpuSlots, value.MemoryMb, overview.CpuSlotsInUse, overview.MemoryMbInUse,
+                overview.CoordinationAvailable ? running.Count : null,
+                overview.CoordinationAvailable ? queue.Count : null, value.Source)
+            : null;
+
+        return new MachineOverviewDto(
+            overview.CapturedAt, budget, worktrees, running, queue, overview.Error,
+            overview.CoordinationAvailable, overview.OwnersAvailable);
+    }
+
+    private static MachineExecutionEntryDto ToMachineEntryDto(
+        this MachineExecutionEntry entry, IReadOnlyList<OwnershipRecord> owners)
+    {
+        var worktree = owners.FirstOrDefault(owner => owner.Key == entry.WorktreeKey)?.Owner?.WorktreePath;
+        return new MachineExecutionEntryDto(
+            entry.Sequence, entry.RunId, entry.ProcessId, entry.CpuSlots, entry.MemoryMb,
+            entry.WorktreeKey, worktree, entry.QueuePosition);
+    }
+
     public static ActivityEvent ToDto(this EngineActivityEvent activity)
     {
         var dto = activity switch

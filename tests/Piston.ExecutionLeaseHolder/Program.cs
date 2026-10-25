@@ -13,6 +13,7 @@ namespace Piston.ExecutionLeaseHolder;
 /// <list type="bullet">
 /// <item><c>own &lt;dir&gt; &lt;solution&gt;</c>: acquire ownership, print <c>READY</c>, wait.</item>
 /// <item><c>admit &lt;dir&gt; &lt;cpu&gt; &lt;memoryMb|0&gt;</c>: print <c>QUEUED n</c> while queued, <c>READY</c> once admitted, wait.</item>
+/// <item><c>own-admit &lt;dir&gt; &lt;solution&gt; &lt;cpu&gt; &lt;memoryMb|0&gt; &lt;host&gt; &lt;dashboardUrl|-&gt;</c>: own a worktree and hold a machine reservation.</item>
 /// <item><c>resource &lt;dir&gt; &lt;key[,key]|-&gt; &lt;containers 0|1&gt;</c>: acquire test resources for project
 /// <c>Holder.csproj</c>; print <c>WAITING n</c> while waiting, <c>READY</c> once acquired, wait.</item>
 /// <item><c>probe &lt;dir&gt;</c>: prepare the directory and exit 0, or print the error and exit 2.</item>
@@ -105,6 +106,31 @@ public static class Program
                         CancellationToken.None))
                     {
                         await ReadyAndWaitAsync();
+                    }
+                    return 0;
+
+                case "own-admit":
+                    directory.EnsureReady();
+                    using (WorktreeOwnership.Acquire(
+                        directory, args[2], args[5] == "-" ? null : args[5],
+                        dashboardUrl: args[6] == "-" ? null : args[6]))
+                    {
+                        var ownMemory = int.Parse(args[4], System.Globalization.CultureInfo.InvariantCulture);
+                        var ownCoordinator = new MachineExecutionCoordinator(
+                            directory,
+                            new ExecutionReservation(
+                                int.Parse(args[3], System.Globalization.CultureInfo.InvariantCulture),
+                                ownMemory == 0 ? null : ownMemory),
+                            TimeSpan.FromMilliseconds(20));
+                        _ = ownCoordinator.Initialize();
+                        using (await ownCoordinator.AdmitAsync(
+                            Guid.NewGuid().ToString("N"),
+                            status => Console.Out.WriteLine($"QUEUED {status.QueuedAhead}"),
+                            inheritedSequence: null,
+                            CancellationToken.None))
+                        {
+                            await ReadyAndWaitAsync();
+                        }
                     }
                     return 0;
 
