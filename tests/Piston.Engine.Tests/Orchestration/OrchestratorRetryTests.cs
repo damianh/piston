@@ -128,6 +128,24 @@ public sealed class OrchestratorRetryTests : IDisposable
     }
 
     [Fact]
+    public async Task A_retry_that_fails_a_test_not_being_retried_is_not_used()
+    {
+        _orchestrator.RetryFailedTests = 2;
+        await StartAsync();
+        _runner.FailingTest = "B.Tests.Test1";
+        _runner.FailuresRemaining = 1;
+        _runner.DuringRun = () => _runner.ExtraFailures = _runner.LastFilter is null ? 0 : 1;
+
+        var run = await RunAsync();
+
+        var test = Test(run, "B.Tests.Test1");
+        Assert.Equal(TestStatus.Failed, test.Status);
+        Assert.Empty(test.Attempts);
+        Assert.Equal(2, _runner.Calls.Count);
+        Assert.Contains("not being retried", run.RetriesSkippedReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task A_retry_that_crashes_is_not_used_and_says_why()
     {
         _orchestrator.RetryFailedTests = 2;

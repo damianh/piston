@@ -149,6 +149,16 @@ public sealed partial class PistonOrchestrator
                         continue;
                     }
 
+                    // A filter selects whole methods, so a retry can also run cases that passed; if one of those
+                    // fails now, keeping only the retried cases' results would hide that failure.
+                    var retriedKeys = failed.Select(f => (f.Suite, f.Test.ResultKey)).ToHashSet();
+                    if (result.Suites.Any(s => s.Tests.Any(t => t.Status == TestStatus.Failed && !retriedKeys.Contains((s.Name, t.ResultKey)))))
+                    {
+                        unretriable.UnionWith(failed.Select(f => f.Test));
+                        AddReason(reasons, "A retry failed tests that were not being retried, so its results were not used and its tests were not retried again.");
+                        continue;
+                    }
+
                     // Only a result that alone matches the failed test's suite, name and framework counts: a retry
                     // reporting the test twice, or without the framework of a multi-targeted test, is ambiguous.
                     var byKey = result.Suites
