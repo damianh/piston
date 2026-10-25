@@ -145,6 +145,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             _ => null,
         };
         _orchestrator.HangThreshold = options.HangThreshold;
+        _orchestrator.RetryFailedTests = Math.Clamp(options.RetryFailedTests, 0, PistonOptions.MaxRetryFailedTests);
         _orchestrator.SdkVersionProvider = serviceOverrides?.SdkVersionProvider
             ?? (dir => sdkVersions.GetOrAdd(dir, d => new Lazy<string?>(() => ProbeSdkVersion(d))).Value);
     }
