@@ -12,10 +12,7 @@ namespace Piston.Hosting.Services;
 /// so clients that connect late (e.g. a freshly loaded dashboard) can backfill the timeline.
 /// </summary>
 /// <param name="capacity">Most events retained.</param>
-/// <param name="byteBudget">
-/// Most serialized bytes <see cref="Snapshot"/> returns; build errors and failure messages are retained in full,
-/// so a count alone does not keep the <c>activity/getLog</c> response within the message limits.
-/// </param>
+/// <param name="byteBudget">Most serialized bytes <see cref="Snapshot"/> returns.</param>
 public sealed class ActivityHistory(int capacity = ActivityHistory.DefaultCapacity, long byteBudget = ActivityHistory.DefaultByteBudget)
 {
     public const int DefaultCapacity = 500;

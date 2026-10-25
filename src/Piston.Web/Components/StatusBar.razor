@@ -80,6 +80,14 @@
             </span>
         }
 
+        @if (Snapshot.RetryStatus is { } retrying)
+        {
+            <span class="flex items-center gap-1.5 min-w-0 text-yellow-400" data-testid="retry-status" title="@retrying">
+                <span class="shrink-0">↻</span>
+                <span class="truncate">@retrying</span>
+            </span>
+        }
+
         @if (Snapshot.ImpactBackfill is { } backfill)
         {
             var unit = backfill.CurrentUnit is { } key ? key[(key.LastIndexOf('.') + 1)..] : null;

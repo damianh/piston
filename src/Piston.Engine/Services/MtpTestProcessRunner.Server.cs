@@ -295,9 +295,11 @@ internal static partial class MtpTestProcessRunner
             TestProcessRunner.DisplayNameOf(name),
             status,
             duration,
-            output.Length == 0 ? null : output,
-            message,
-            StringProperty(node, "error.stacktrace"),
+            output.Length == 0
+                ? null
+                : RetentionLimits.TruncateHeadTail(output, RetentionLimits.MaxTestTextLength),
+            RetentionLimits.TruncateHead(message, RetentionLimits.MaxTestTextLength),
+            RetentionLimits.TruncateHead(StringProperty(node, "error.stacktrace"), RetentionLimits.MaxTestTextLength),
             appPath)
         {
             Method = MethodOf(node),
