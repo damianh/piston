@@ -73,5 +73,8 @@ public sealed record TestRunDto(
     IReadOnlyList<string>? ChangedFiles = null,
     IReadOnlyList<TestOutcomeReferenceDto>? FixedTests = null,
     IReadOnlyList<TestOutcomeReferenceDto>? NewlyFailingTests = null,
-    IReadOnlyList<TestProjectResourcesDto>? ProjectResources = null
+    IReadOnlyList<TestProjectResourcesDto>? ProjectResources = null,
+    int RetryLimit = 0,
+    string? RetriesSkippedReason = null,
+    int PassedOnRetry = 0
 );

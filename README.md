@@ -154,7 +154,7 @@ To set up a coding agent, follow [docs/agent-usage.md](docs/agent-usage.md). It 
 | `verify` | Get current full verification (optional `expectedSolution` guard; the reply names the `Solution:`). Reuses the latest run if it is a current, full-scope, unfiltered result for the present source fingerprint; otherwise awaits an active full run or forces one, retrying at most twice when the source changes mid-run, then reporting `Stale`. Returns a compact verdict (`Passed`, `TestsFailed`, `BuildFailed`, `Incomplete`, `Stale`, `Cancelled`, `Faulted`, `TimedOut`, `NotFullScope`) with run ID, fingerprint, counts, capped failing tests / build errors and queue info. Only `Passed` is proof. |
 | `run_tests` | Request a full build + test run; returns a textual summary plus a `Run:` line with the run ID, status, scope, freshness and source fingerprint. |
 | `get_test_run` | Read one run's solution path, provenance, build diagnostics and per-test results as JSON (`piston.test-run/v1`): `runId` = an ID, `latest` (default) or `active`. |
-| `get_test_history` | Recorded results of one test (`test`, optional `project`) across runs in this worktree, newest first, with run ID, time, status, duration and source fingerprint. Empty `test` lists flaky tests. See [Run history and failure classification](#run-history-and-failure-classification). |
+| `get_test_history` | Recorded results of one test (`test`, optional `project`) across runs in this worktree, newest first, with run ID, time, status, duration, source fingerprint and retry attempt; a flaky test has an `Evidence:` line. Empty `test` lists flaky tests with their evidence. See [Run history and failure classification](#run-history-and-failure-classification). |
 | `get_test_results` | Read current accumulated test results (may combine several runs; each suite shows its run ID). |
 | `set_test_filter` | Apply a test name filter. |
 | `get_coverage` | Line and branch coverage as JSON (`piston.coverage/v1`). Without `file`: solution and per-module totals plus the files with the most uncovered lines (`maxFiles`, default 50). With `file`: its totals and its uncovered and partly covered line ranges. Requires coverage. |
@@ -202,7 +202,12 @@ freshness before treating a diagnostic as evidence for their source generation.
 
 Limits:
 
-- Full run records (what `get_test_run` returns) are kept for the 16 most recent runs, in memory only. Per-test outcomes persist separately in the [run history](#run-history-and-failure-classification).
+- Full run records (what `get_test_run` returns) are kept for the 16 most recent runs, in memory only. Per-test outcomes persist separately in the [run history](#run-history-and-failure-classification). Execution logs are dropped from older run records; aggregate project suites retain the latest log per project.
+- Each test result retains at most 64 Ki characters each for `Output`, `ErrorMessage` and `StackTrace`. Output keeps its beginning and end with a truncation marker; error messages and stack traces keep their beginning. This bounds those three fields to 192 Ki UTF-16 characters (about 384 KiB) per test result, independent of console-output volume. The 16 retained runs still retain their individual test results.
+- A build retains at most 500 errors and 500 warnings, with each diagnostic limited to 2,000 characters. `OmittedErrors` and `OmittedWarnings` (also in the MCP `get_test_run` build object) report how many more there were; the dashboard and `verify` report indicate omissions.
+- Each test-completion activity event retains at most 50 failures, with the test name and message each limited to 1,000 characters. Each build-completion event retains at most 50 errors of at most 1,000 characters. The event's `failed`/`errorCount` fields remain the total, and the activity timeline shows how many entries were omitted.
+- Each project execution log retains at most 2,000 entries of at most 4,000 characters. Older `RecentRuns` records drop their log copies; the latest run and aggregate project suites keep the logs needed by the dashboard.
+- `.piston/diagnostics.log` rotates at 10 MiB to one previous file, `.piston/diagnostics.log.1`; log entries are limited to 4,000 characters. Starting the daemon clears both files.
 - The fingerprint does not cover sources outside the solution directory, installed SDKs, the NuGet cache, or merged user/machine NuGet configuration.
 - `verify` reevaluates project inputs and returns `NotFullScope` for user projects, imports or declared files outside the fingerprint (including excluded directories). SDK/workload files, packages and generated restore imports remain toolchain/cache exclusions. Evaluation failure is `Faulted`; neither verdict is a pass or a hidden fallback.
 - Full runs refresh the solution graph before selecting test projects. `verify` also rejects an otherwise current run if its selected projects omit a test project from the refreshed graph.
@@ -333,6 +338,7 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `hangThreshold` | `string` | How long a test runs before it is reported as possibly hanging (default `60s`). See [Slow and hanging tests](#slow-and-hanging-tests). |
 | `testTimeout` | `string` | Per-test limit; off by default. See [Slow and hanging tests](#slow-and-hanging-tests). |
 | `history` | `bool` | Keep per-test run history and classify failures (default `true`). See [Run history and failure classification](#run-history-and-failure-classification). |
+| `retryFailures` | `int` | Re-run a run's failed tests up to this many times (`0` to `3`, default `0`: off). See [Retrying failed tests](#retrying-failed-tests). |
 | `warmTestHosts` | `bool` | Keep MTP test apps running between runs to skip host start-up (default `false`). See [Warm test hosts](#warm-test-hosts). |
 | `parallelism` | `int` | Max concurrent test processes. `0` = auto: half the logical processor count, at least one. |
 | `processRecycleAfter` | `int` | Runs after which a pool slot logs a recycling warning (default 50). |
@@ -372,13 +378,43 @@ Each failed test in a run is classified against that worktree's earlier results:
 
 - **new**: the test's previous recorded result was a pass;
 - **pre-existing**: it was already failing (the evidence names the first failing run and the last pass, if any);
-- **flaky**: within its recorded window it both passed and failed on the same source fingerprint. Only `Current`
-  runs carry a fingerprint, so an edit-break-fix loop is not mistaken for flakiness;
+- **flaky**: within its recorded window it both passed and failed on the same source fingerprint, counting the
+  results other worktrees of the same repository recorded on that fingerprint, or it both passed and failed across
+  [retries](#retrying-failed-tests) within one run. Only `Current` runs carry a fingerprint, so an edit-break-fix loop
+  is not mistaken for flakiness;
 - **unknown**: there is no earlier pass or fail. Missing history is not proof that a failure is new.
 
-`verify` lists failures with their class, new ones first, after a `Failure history:` count line.
-`get_test_run` includes `failureClassifications` (project, test, kind, evidence), and `get_test_history` shows the
-evidence. The dashboard's **Runs** tab browses and compares the kept runs, and the **Tests** tab marks and filters new failures and flaky tests. Set `"history": false` to turn this off.
+Every flaky label carries its evidence: how many times the test passed and failed, on which source (or within which
+run, for retries), how many of those outcomes came from retries, and which other worktrees contributed, with the
+newest outcomes listed. Other worktrees' history files are read, never written.
+
+`verify` lists failures with their class, new ones first, after a `Failure history:` count line; a flaky failure's
+tag gives its evidence in brief. `get_test_run` includes `failureClassifications` (project, test, kind, evidence and,
+for flaky tests, `flakiness`), and `get_test_history` prints an `Evidence:` line and the other worktrees' outcomes.
+The dashboard's **Runs** tab browses and compares the kept runs, and the **Tests** tab marks and filters new failures
+and flaky tests; the flaky badge's tooltip and the test's history strip show the evidence. Set `"history": false` to
+turn this off.
+
+### Retrying failed tests
+
+With `"retryFailures": n` (1 to 3), a run re-runs its failed tests up to `n` times against the same build, without
+coverage, before it finishes; each test stops being retried once it passes. A test that passes on a retry ends
+`Passed`, so `verify` can pass, but it is never hidden:
+
+- `verify` lists it under `Passed on retry`, with its last failure message and flakiness evidence, and a test that
+  failed every attempt is tagged `(failed all n attempts)`;
+- `get_test_run` gives each retried test's earlier `attempts`, the run's `retryLimit`, `summary.passedOnRetry` and
+  `retriesSkippedReason`;
+- the run history records every attempt (so a pass after a failure marks the test flaky), and `get_test_history`
+  marks them `retry n`;
+- the dashboard shows a **retried** badge, the attempts in the test's details, retry counts in the **Runs** tab and
+  the retry in progress in the status bar.
+
+Retries are skipped, with the reason reported, when more than 20 tests failed (likely a real breakage) and for the
+tests of a project that timed out. A retry that crashes, times out, reports no results or fails a test that was not
+being retried (such as another case of a parameterized test) is not used, and a retry that does not report a failed
+test exactly once (for example without the framework it failed under) does not clear that failure; those tests keep
+their failure and the reason is reported too. Retries are off by default.
 
 ### Warm test hosts
 
@@ -501,7 +537,8 @@ The daemon builds the watched solution in the default (Debug) configuration, so
 its own builds never overwrite the Release binaries it runs from. Stop it before
 rebuilding Release (`dotnet src/Piston/bin/Release/net10.0/Piston.dll stop`), then
 start it again. `.piston/diagnostics.log` records what the daemon did (runner choice,
-build skips, fallbacks) and is truncated on each start. Agents should follow the
+build skips, fallbacks), rotates at 10 MiB and is truncated on each start along with
+its single rotated backup. Agents should follow the
 [`piston-dashboard` skill](.github/skills/piston-dashboard/SKILL.md), which also
 covers opening the dashboard in a Copilot browser canvas.
 

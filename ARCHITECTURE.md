@@ -423,7 +423,18 @@ tests, classifies each failure against the earlier entries (`New`,
 `PreExisting`, `Flaky` or `Unknown`) and attaches the result to the
 `TestRunRecord` as `FailureClassifications`. A test is flaky only when it passed
 and failed on the same `SourceAfter` fingerprint, and only `Current` runs record a
-fingerprint. Saves are debounced and atomic (temp file then rename); each test
+fingerprint. Outcomes on that fingerprint recorded by other worktrees of the
+repository count too: `SiblingHistories` reads the sibling history files in the
+repository folder (read-only, shared, cached by write time) outside the store's
+lock. A test that both passed and failed across in-run retries is flaky even
+without a fingerprint, since every attempt used the same build. Each flaky
+classification carries `FlakinessEvidence` (counts, source, retry outcomes, other
+worktrees and the newest outcomes). With `retryFailures` set, the orchestrator
+re-runs a run's failed tests (`PistonOrchestrator.Retries.cs`) after test
+execution and before coverage processing and the post-run fingerprint, filtered
+to those tests and without coverage; the final attempt is the result and the
+earlier ones are `TestResult.Attempts`. The store writes one entry per attempt,
+and per-test entry limits count attempts. Saves are debounced and atomic (temp file then rename); each test
 keeps 20 entries, the file keeps 50 runs with per-test results and clipped errors,
 and tests unseen for 30 days are pruned. The file stores each project and test
 name once and runs in columns. A history failure is logged and never fails a run.

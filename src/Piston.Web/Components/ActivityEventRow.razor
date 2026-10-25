@@ -88,16 +88,19 @@
     private string DetailText => Event.Type switch
     {
         ActivityEventTypes.BuildCompleted when Event.Data?["errors"] is JsonArray errs && errs.Count > 0
-            => string.Join("\n", errs.Select(e => e?.ToString() ?? "")),
+            => AddOmittedDetails(string.Join("\n", errs.Select(e => e?.ToString() ?? "")), errs.Count, Int("errorCount"), "error(s)"),
         ActivityEventTypes.TestRunCompleted when Event.Data?["failures"] is JsonArray fails && fails.Count > 0
-            => string.Join("\n\n", fails.Select(f =>
-                $"{f?["fullyQualifiedName"]?.GetValue<string>()}\n  {f?["message"]?.GetValue<string>()}")),
+            => AddOmittedDetails(string.Join("\n\n", fails.Select(f =>
+                $"{f?["fullyQualifiedName"]?.GetValue<string>()}\n  {f?["message"]?.GetValue<string>()}")), fails.Count, Int("failed"), "failure(s)"),
         ActivityEventTypes.FileChangesDetected when Event.Data?["changedFiles"] is JsonArray files && files.Count > 0
             => string.Join("\n", files.Select(f => f?.ToString() ?? "")),
         ActivityEventTypes.McpToolCall
             => FormatMcpDetail(),
         _ => string.Empty,
     };
+
+    private static string AddOmittedDetails(string text, int shown, int total, string kind) =>
+        total > shown ? $"{text}\n… and {total - shown} more {kind} omitted" : text;
 
     private void ToggleExpand()
     {

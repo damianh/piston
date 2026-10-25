@@ -108,14 +108,44 @@ public sealed class BuildService : IBuildService
         return Aggregate(results, ct.IsCancellationRequested);
     }
 
-    private static BuildResult Aggregate(IReadOnlyList<BuildResult> results, bool cancelled)
+    internal static BuildResult Aggregate(IReadOnlyList<BuildResult> results, bool cancelled)
     {
         var failed = cancelled || results.Any(r => r.Status == BuildStatus.Failed);
+        var (errors, omittedErrors) = AggregateDiagnostics(results, errors: true);
+        var (warnings, omittedWarnings) = AggregateDiagnostics(results, errors: false);
         return new BuildResult(
             failed ? BuildStatus.Failed : BuildStatus.Succeeded,
-            results.SelectMany(r => r.Errors).ToList(),
-            results.SelectMany(r => r.Warnings).ToList(),
-            results.Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration));
+            errors,
+            warnings,
+            results.Aggregate(TimeSpan.Zero, (sum, r) => sum + r.Duration))
+        {
+            OmittedErrors = omittedErrors,
+            OmittedWarnings = omittedWarnings,
+        };
+    }
+
+    private static (IReadOnlyList<string> Items, int Omitted) AggregateDiagnostics(
+        IReadOnlyList<BuildResult> results, bool errors)
+    {
+        List<string> items = [];
+        var omitted = 0;
+        foreach (var result in results)
+        {
+            omitted += errors ? result.OmittedErrors : result.OmittedWarnings;
+            foreach (var item in errors ? result.Errors : result.Warnings)
+            {
+                if (items.Count == RetentionLimits.MaxBuildDiagnostics)
+                {
+                    omitted++;
+                }
+                else
+                {
+                    items.Add(item);
+                }
+            }
+        }
+
+        return (items, omitted);
     }
 
     /// <param name="workingDirectory">

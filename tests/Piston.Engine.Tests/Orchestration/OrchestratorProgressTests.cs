@@ -49,6 +49,32 @@ public sealed class OrchestratorProgressTests
     }
 
     [Fact]
+    public async Task TestRunCompletedActivity_CapsFailuresAndMessagesButKeepsTotal()
+    {
+        var projects = new[] { "a.csproj" };
+        var sink = new RecordingActivitySink();
+        var runner = new StubTestRunnerService(projects, TimeSpan.Zero)
+        {
+            FailureCount = RetentionLimits.MaxActivityFailures + 7,
+        };
+        await using var orchestrator = new PistonOrchestrator(
+            new StubFileWatcherService(), new StubBuildService(), runner,
+            new StubImpactAnalyzer(projects), new PistonState(), null, null, false, sink);
+
+        await orchestrator.StartAsync("/fake/solution.slnx");
+        await sink.Completed.Task.WaitAsync(TimeSpan.FromSeconds(5), _ct);
+
+        var activity = Assert.Single(sink.Events.OfType<TestRunCompletedActivityEvent>());
+        Assert.Equal(RetentionLimits.MaxActivityFailures + 7, activity.Failed);
+        Assert.Equal(RetentionLimits.MaxActivityFailures, activity.Failures.Count);
+        Assert.All(activity.Failures, f =>
+        {
+            Assert.InRange(f.Message!.Length, 1, RetentionLimits.MaxActivityMessageLength);
+            Assert.Contains("characters truncated", f.Message, StringComparison.Ordinal);
+        });
+    }
+
+    [Fact]
     public async Task SupersededBuild_IsNotReportedAsBuildFailure()
     {
         var projects = new[] { "a.csproj" };
@@ -321,6 +347,7 @@ internal sealed class StubImpactAnalyzer : IImpactAnalyzer
 
 internal sealed class StubTestRunnerService : ITestRunnerService
 {
+    public int FailureCount { get; set; }
     private readonly IReadOnlyList<string> _projectPaths;
     private readonly TimeSpan _delay;
     private readonly TaskCompletionSource _completionSource = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -368,11 +395,12 @@ internal sealed class StubTestRunnerService : ITestRunnerService
                 await Task.Delay(_delay, ct).ConfigureAwait(false);
             }
 
-            var suite = new TestSuite(
-                path,
-                [new TestResult(path + ".Test1", "Test1", TestStatus.Passed, TimeSpan.Zero, null, null, null, null)],
-                DateTimeOffset.UtcNow,
-                TimeSpan.Zero);
+            var tests = FailureCount > 0
+                ? Enumerable.Range(0, FailureCount).Select(i => new TestResult(
+                    $"{path}.Test{i}", $"Test{i}", TestStatus.Failed, TimeSpan.Zero, null,
+                    new string('x', RetentionLimits.MaxActivityMessageLength * 2), null, null)).ToList()
+                : [new TestResult(path + ".Test1", "Test1", TestStatus.Passed, TimeSpan.Zero, null, null, null, null)];
+            var suite = new TestSuite(path, tests, DateTimeOffset.UtcNow, TimeSpan.Zero);
 
             allSuites.Add(suite);
 

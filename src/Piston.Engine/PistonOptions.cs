@@ -119,6 +119,17 @@ public sealed class PistonOptions
     /// </summary>
     public bool HistoryEnabled { get; init; } = true;
 
+    /// <summary>Most retries a run makes of each failed test, from 0 to this.</summary>
+    public const int MaxRetryFailedTests = 3;
+
+    /// <summary>
+    /// How many times a run re-runs its failed tests, without rebuilding, to gather flakiness evidence: 0 (default)
+    /// turns retries off; at most <see cref="MaxRetryFailedTests"/>. A test that passes on a retry counts as passed
+    /// and is reported as passed on retry; its earlier attempts are kept. A run with more than
+    /// <see cref="Orchestration.PistonOrchestrator.MaxRetriedFailures"/> failed tests is not retried.
+    /// </summary>
+    public int RetryFailedTests { get; init; }
+
     /// <summary>
     /// Keeps each Microsoft.Testing.Platform test app running in server mode between runs, so later
     /// discoveries and runs skip host start-up. A host is replaced when its build output changes.

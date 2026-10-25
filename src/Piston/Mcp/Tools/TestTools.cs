@@ -141,6 +141,11 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
             }
         }
 
+        if (state.RetryStatus is { } retrying)
+        {
+            _ = sb.AppendLine(retrying);
+        }
+
         _ = sb.AppendLine("Note: these aggregate results may combine several runs; use GetTestRun for run-bound provenance.");
 
         foreach (var suite in state.TestSuites)
@@ -211,9 +216,11 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
 
     [McpServerTool(Name = GetTestHistoryTool), Description(
         "Get the recorded results of a test across runs in this worktree (kept outside the checkout, up to the 20 most recent " +
-        "per test), newest first, with run ID, time, status, duration and source fingerprint. Use it to decide whether a " +
-        "failure is new, pre-existing or flaky. Pass a fully-qualified test name (a target framework suffix such as " +
-        "' [net10.0]' is optional); pass empty to list tests that passed and failed on the same source (flaky).")]
+        "per test, retries included), newest first, with run ID, time, status, duration and source fingerprint. Use it to decide " +
+        "whether a failure is new, pre-existing or flaky. A flaky test (passed and failed on the same source, in this or another " +
+        "worktree of the repository, or across retries in one run) has an Evidence line: the counts, the source, retries and " +
+        "the other worktrees' outcomes. Pass a fully-qualified test name (a target framework suffix such as ' [net10.0]' is " +
+        "optional); pass empty to list flaky tests with their evidence.")]
     public string GetTestHistory(
         [Description("Fully-qualified test name; empty lists flaky tests.")] string test = "",
         [Description("Optional test project name to disambiguate.")] string? project = null)
@@ -237,11 +244,21 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
             foreach (var history in histories)
             {
                 _ = sb.AppendLine($"{history.Project} :: {history.Test}{(history.Flaky ? " (flaky)" : "")}");
+                if (history.Flakiness is { } evidence)
+                {
+                    _ = sb.AppendLine($"  Evidence: {evidence.Describe()}");
+                    foreach (var outcome in evidence.Outcomes.Where(o => o.Worktree is not null))
+                    {
+                        _ = sb.AppendLine(System.FormattableString.Invariant(
+                            $"  {outcome.At.UtcDateTime:yyyy-MM-dd HH:mm:ss}Z {outcome.Status,-7} run {outcome.RunId}{Retry(outcome.Attempt)} in worktree {outcome.Worktree}"));
+                    }
+                }
+
                 foreach (var entry in history.Runs.Reverse())
                 {
                     var source = entry.Source is { } s ? s[..Math.Min(12, s.Length)] : "unknown source";
                     _ = sb.AppendLine(System.FormattableString.Invariant(
-                        $"  {entry.At.UtcDateTime:yyyy-MM-dd HH:mm:ss}Z {entry.Status,-7} {entry.DurationMs,8:F0}ms run {entry.RunId} ({source})"));
+                        $"  {entry.At.UtcDateTime:yyyy-MM-dd HH:mm:ss}Z {entry.Status,-7} {entry.DurationMs,8:F0}ms run {entry.RunId}{Retry(entry.Attempt)} ({source})"));
                 }
             }
 
@@ -252,6 +269,8 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         recorder.Record(GetTestHistoryTool, key, histories is null ? "history off" : $"{histories.Count} test(s)", sw.Elapsed.TotalMilliseconds, histories is not null);
         return result;
     }
+
+    private static string Retry(int attempt) => attempt > 0 ? $" retry {attempt}" : "";
 
     private string GuardSolution(string? expectedSolution)
     {
