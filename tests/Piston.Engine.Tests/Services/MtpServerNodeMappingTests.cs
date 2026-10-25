@@ -99,8 +99,16 @@ public sealed class MtpServerNodeMappingTests
         Assert.Equal("Mt.SecondTests.Passes", second.FullyQualifiedName);
         Assert.NotEqual(first.ResultKey, second.ResultKey);
         Assert.Equal("Passes", first.DisplayName);
-        Assert.Contains("Mt.FirstTests.Passes", MtpTestProcessRunner.FilterValues(
-            ClassNode("FirstTests", "Passes", "Passes()"), "FullyQualifiedName"));
+    }
+
+    [Fact]
+    public void FilterValues_IncludesClassQualifiedParameterizedDisplayName()
+    {
+        var node = ClassNode("DataTests", "Add (1, 2)", "Add(System.Int32, System.Int32)");
+
+        Assert.Equal(
+            ["Add (1, 2)", "Mt.DataTests.Add (1, 2)", "Mt.DataTests.Add"],
+            MtpTestProcessRunner.FilterValues(node, "FullyQualifiedName"));
     }
 
     [Fact]
