@@ -23,17 +23,20 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
     private readonly Func<string, bool> _isMultiTargeted;
     private readonly string _solutionDirectory;
     private readonly MtpWarmHostPool? _warmHosts;
+    private readonly Func<string, bool> _requiresResources;
 
     public MtpTestExecutionStrategy(
         Func<string, string?> getMtpOutputPath,
         string solutionDirectory,
         Func<string, bool>? isMultiTargeted = null,
-        MtpWarmHostPool? warmHosts = null)
+        MtpWarmHostPool? warmHosts = null,
+        Func<string, bool>? requiresResources = null)
     {
         _getMtpOutputPath = getMtpOutputPath;
         _solutionDirectory = solutionDirectory;
         _isMultiTargeted = isMultiTargeted ?? (_ => false);
         _warmHosts = warmHosts;
+        _requiresResources = requiresResources ?? (_ => false);
     }
 
     /// <summary>
@@ -61,7 +64,11 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
             onProgress,
             ct,
             CoverageFor(request),
-            _warmHosts);
+            WarmHostsFor(request.ProjectPath));
+
+    // A successful warm host outlives the resource lease; coordinated projects must exit with it.
+    internal MtpWarmHostPool? WarmHostsFor(string projectPath) =>
+        _requiresResources(projectPath) ? null : _warmHosts;
 
     private MtpCoverage CoverageFor(ProjectTestRequest request)
     {
@@ -89,7 +96,7 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
         string? filter,
         Action<IReadOnlyList<TestResult>>? onPartial,
         CancellationToken ct) =>
-        MtpTestProcessRunner.DiscoverAsync(projectPath, ServerAppPath(projectPath), _solutionDirectory, filter, onPartial, ct, _warmHosts);
+        MtpTestProcessRunner.DiscoverAsync(projectPath, ServerAppPath(projectPath), _solutionDirectory, filter, onPartial, ct, WarmHostsFor(projectPath));
 }
 
 /// <summary>Whether, and why not, an MTP test run collects code coverage.</summary>

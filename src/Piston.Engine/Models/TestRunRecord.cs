@@ -173,6 +173,15 @@ public sealed record TestRunProjectOutcome(
     TestTimeout? TimedOut = null)
 {
     public string ProjectId { get; init; } = ProjectPath;
+
+    /// <summary>The exclusive test resources the project held and how long it waited, when it needed any.</summary>
+    public TestProjectResources? Resources { get; init; }
+
+    /// <summary>
+    /// Set when a failed project's output looks like a port or container name conflict, with the evidence
+    /// and a hint to declare the resource in <c>testResources</c>.
+    /// </summary>
+    public string? SuspectedResourceConflict { get; init; }
 }
 
 /// <summary>

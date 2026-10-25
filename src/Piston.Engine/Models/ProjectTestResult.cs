@@ -15,4 +15,7 @@ public sealed record ProjectTestResult(
 
     /// <summary>Set when a test ran longer than the test timeout and the project's run was cancelled.</summary>
     public TestTimeout? TimedOut { get; init; }
+
+    /// <summary>The exclusive test resources the run held, when it needed any.</summary>
+    public TestProjectResources? Resources { get; init; }
 }

@@ -3,4 +3,15 @@
 
 namespace Piston.Engine.Models;
 
-public enum ProjectRunStatus { Pending, Running, Completed, Failed, Crashed, TimedOut }
+public enum ProjectRunStatus
+{
+    Pending,
+    Running,
+    Completed,
+    Failed,
+    Crashed,
+    TimedOut,
+
+    /// <summary>Queued for exclusive test resources (ports, containers…) held by another run on the machine.</summary>
+    WaitingForResources,
+}

@@ -26,6 +26,10 @@ public sealed class ViewState
     public TestMarkDto? GetTestMark(string? project, string testKey) =>
         project is null ? null : TestMarks.GetValueOrDefault((project, testKey));
 
+    /// <summary>Test projects waiting for exclusive test resources, keyed by suite name.</summary>
+    public IReadOnlyDictionary<string, TestResourceWaitDto> ResourceWaits { get; set; } =
+        new Dictionary<string, TestResourceWaitDto>();
+
     /// <summary>Show only failing tests whose previous result passed (with <see cref="OnlyFlaky"/>, either kind).</summary>
     public bool OnlyNewFailures { get; set; }
 
