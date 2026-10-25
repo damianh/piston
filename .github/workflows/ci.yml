@@ -32,11 +32,9 @@ jobs:
         with:
           global-json-file: global.json
       - name: Build
-        run: dotnet build Piston.slnx -c Release
+        run: dotnet run build.cs -- build
       - name: Test
-        run: dotnet test Piston.slnx -c Release --no-build
-      - name: Test dashboard scripts
-        run: node --test eng/status.test.mjs
+        run: dotnet run build.cs -- test --skip-dependencies
 
   smoke:
     name: Smoke test samples (${{ matrix.os }})
@@ -45,29 +43,25 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-      - name: Pack the tool
-        run: dotnet pack src/Piston/Piston.csproj -c Release -o artifacts
-      - name: Install the packed tool
-        run: dotnet tool install Piston --tool-path .tools --source artifacts
+      - name: Pack and install the tool
+        run: dotnet run build.cs -- install-tool
       - name: Test macOS worktree identity
         if: runner.os == 'macOS'
         run: dotnet test --project tests/Piston.Engine.Tests -c Release --filter-class Piston.Engine.Tests.Execution.WorktreeOwnershipTests
-      - name: Run the samples through Piston
+      - name: Run the samples through piston daemon
         # samples/Samples.slnx: MSTest, NUnit, xUnit v3 and TUnit on Microsoft.Testing.Platform, 3 tests each
-        # (1 passing, 1 deliberately failing, 1 skipped). The daemon builds, discovers and runs them; the startup
-        # run's counts must match exactly.
-        shell: bash
-        run: >-
-          node eng/smoke-test.mjs
-          --tool ${{ runner.os == 'Windows' && '.tools/piston.exe' || '.tools/piston' }}
-          --total 12 --failed 4 --skipped 4 --projects 4
-          -- samples/Samples.slnx
+        # (1 passing, 1 deliberately failing, 1 skipped). The startup run's counts must match exactly.
+        run: dotnet run build.cs -- smoke-daemon --skip-dependencies
+      - name: Verify the samples through piston mcp
+        # An MCP client calls verify over stdio; it must report TestsFailed for a completed full-scope run with the
+        # same counts.
+        run: dotnet run build.cs -- smoke-mcp --skip-dependencies
 
   check-formatting:
     name: Check formatting
@@ -78,7 +72,5 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           global-json-file: global.json
-      - name: Restore
-        run: dotnet restore Piston.slnx
       - name: Check formatting
-        run: dotnet format Piston.slnx --verify-no-changes --no-restore
+        run: dotnet run build.cs -- check-formatting

@@ -1,0 +1,3 @@
+# Stops the build reading the repository's .editorconfig, which is outside the samples' source fingerprint
+# (verify would then report NotFullScope).
+root = true

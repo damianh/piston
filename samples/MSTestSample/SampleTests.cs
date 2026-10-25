@@ -8,14 +8,14 @@ namespace MSTestSample;
 public sealed class SampleTests
 {
     [TestMethod]
-    public void Passes() => Assert.AreEqual(2, Add(1, 1));
+    public void MSTestPasses() => Assert.AreEqual(2, Add(1, 1));
 
     [TestMethod]
-    public void Fails() => Assert.AreEqual(3, Add(1, 1), "Deliberate failure for the smoke test.");
+    public void MSTestFails() => Assert.AreEqual(3, Add(1, 1), "Deliberate failure for the smoke test.");
 
     [TestMethod]
     [Ignore("Deliberately skipped for the smoke test.")]
-    public void Skipped() { }
+    public void MSTestSkipped() { }
 
     private static int Add(int a, int b) => a + b;
 }

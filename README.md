@@ -424,6 +424,9 @@ Run tests:
 dotnet test Piston.slnx
 ```
 
+[`build.cs`](build.cs) is a file-based build script (Bullseye) that CI runs: `dotnet run build.cs` builds, tests and
+checks formatting; `dotnet run build.cs -- --list-targets` lists the other targets.
+
 Engine-test setup `dotnet restore`/`build` helpers have a 90-second timeout,
 drain both output streams, and fail with command, PID, directory, and recent
 output diagnostics. On timeout they terminate the
@@ -432,18 +435,21 @@ outlive their parent. Setup
 commands and engine builds disable MSBuild node reuse in their child environment
 to prevent persistent nodes retaining redirected output pipes after `dotnet` exits.
 
-### Framework smoke test
+### Framework smoke tests
 
 [`samples/Samples.slnx`](samples/README.md) holds an MSTest, NUnit, xUnit v3 and TUnit project, each with one passing,
-one deliberately failing and one skipped test. CI packs the tool, installs it and runs
-`node eng/smoke-test.mjs`, which starts `piston daemon` on the samples, waits for the startup run and checks its
-counts (12 tests: 4 passed, 4 failed, 4 skipped) on Linux, Windows and macOS. To run it locally (with no other Piston
-process owning this worktree):
+one deliberately failing and one skipped test. CI packs the tool, installs it and runs two smoke tests on Linux,
+Windows and macOS:
+
+- `smoke-daemon` starts `piston daemon` on the samples, waits for the startup run and checks its counts (12 tests:
+  4 passed, 4 failed, 4 skipped, across 4 suites).
+- `smoke-mcp` starts `piston mcp` on the samples as an MCP client over stdio and calls `verify`. It must report
+  `TestsFailed` for a completed full-scope run with the same counts.
+
+To run them locally (with no other Piston process owning this worktree):
 
 ```sh
-dotnet build Piston.slnx -c Release
-node eng/smoke-test.mjs --tool src/Piston/bin/Release/net10.0/Piston.dll \
-  --total 12 --failed 4 --skipped 4 --projects 4 -- samples/Samples.slnx
+dotnet run build.cs -- smoke
 ```
 
 ### Dogfooding Piston on itself

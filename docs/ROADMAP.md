@@ -81,8 +81,9 @@ ARCHITECTURE describe the implementation in detail.
 **Distribution and CI**
 - A framework-dependent .NET tool (`Piston` package, `piston` command) attached
   to GitHub Releases.
-- CI on Linux and Windows. A packed-tool smoke test runs the MSTest, NUnit,
-  xUnit v3 and TUnit samples on Linux, Windows and macOS.
+- CI on Linux and Windows, driven by a file-based `build.cs`. Packed-tool smoke
+  tests run the MSTest, NUnit, xUnit v3 and TUnit samples through `piston daemon`
+  and through `verify` over `piston mcp` on Linux, Windows and macOS.
 
 ## Near-term
 
