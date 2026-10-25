@@ -399,6 +399,13 @@ public sealed class EngineClientService : IAsyncDisposable
         return result?.Deserialize<StoredRunsDto>(JsonRpcSerializer.Options);
     }
 
+    /// <summary>The terminal runs of the engine's lifetime, oldest first; null when the daemon is unreachable.</summary>
+    public async Task<SessionTimelineDto?> GetSessionTimelineAsync()
+    {
+        var result = await SendRequestAsync(ProtocolMethods.SessionGetTimeline).ConfigureAwait(false);
+        return result?.Deserialize<SessionTimelineDto>(JsonRpcSerializer.Options);
+    }
+
     /// <summary>One stored run with its per-test results; null when it is not kept or the daemon is unreachable.</summary>
     public async Task<StoredRunDto?> GetStoredRunAsync(string runId)
     {

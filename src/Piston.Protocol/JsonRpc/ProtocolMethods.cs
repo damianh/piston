@@ -54,6 +54,9 @@ public static class ProtocolMethods
     /// <summary>Request the recorded results of a test.</summary>
     public const string HistoryGetTestHistory = "history/getTestHistory";
 
+    /// <summary>Request the session timeline: every terminal run since the engine started, with its edits and outcome changes.</summary>
+    public const string SessionGetTimeline = "session/getTimeline";
+
     // Notifications (server → client, no response)
 
     /// <summary>Full state snapshot — sent on connect and after every state change.</summary>

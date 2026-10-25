@@ -404,6 +404,42 @@ public static class DtoMapper
             AcquiredAt: wait.AcquiredAt,
             WaitedMs: wait.Waited?.TotalMilliseconds);
 
+    public static SessionTimelineDto ToSessionTimelineDto(this PistonState state) => new(
+        state.SessionStartedAt,
+        state.SolutionPath,
+        [.. state.SessionTimeline.Select(ToDto)]);
+
+    public static SessionTimelineEntryDto ToDto(this SessionTimelineEntry entry) => new(
+        entry.RunId,
+        entry.Sequence,
+        entry.Trigger.ToString(),
+        entry.Status.ToString(),
+        entry.StatusReason,
+        entry.Scope?.ToString(),
+        entry.IsFullScope,
+        entry.IsFiltered,
+        entry.Freshness.ToString(),
+        entry.FreshnessReason,
+        entry.RequestedAt,
+        entry.StartedAt,
+        entry.CompletedAt,
+        entry.SourceBefore,
+        entry.SourceAfter,
+        entry.SourceChangeObserved,
+        entry.ChangedFiles,
+        entry.ChangedFileCount,
+        entry.BuildStatus?.ToString(),
+        entry.BuildErrorCount,
+        entry.Passed,
+        entry.Failed,
+        entry.Skipped,
+        [.. entry.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
+        entry.NewlyFailingCount,
+        [.. entry.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
+        entry.FixedCount,
+        [.. entry.FailureClassifications.Select(c => new FailureClassificationDto(c.Project, c.Test, c.Kind.ToString(), c.Evidence))],
+        entry.InRunHistory);
+
     public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
         new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath);
 

@@ -251,6 +251,38 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     }
 
     [Fact]
+    public async Task SessionTimeline_KeepsEveryTerminalRunWithItsEditsAndOutcomeChanges()
+    {
+        await StartAndWaitForStartupRunAsync();
+        var code = Path.Combine(_root, "Code.cs");
+
+        File.WriteAllText(code, "class Code { int X; }");
+        _runner.FailingTest = "A.Tests.Test1";
+        _watcher.TriggerChange(new FileChangeBatch(
+            [new FileChangeEvent(code, WatcherChangeTypes.Changed, DateTimeOffset.UtcNow)], DateTimeOffset.UtcNow));
+        await WaitForAsync(() => _state.LastRun is { Trigger: TestRunTrigger.FileChange });
+        _runner.FailingTest = null;
+        var fixedRun = await _orchestrator.RequestRunAsync();
+
+        var timeline = _state.SessionTimeline;
+        Assert.Equal(3, timeline.Count);
+        var (startup, broken, fixedEntry) = (timeline[0], timeline[1], timeline[2]);
+        Assert.Equal(TestRunTrigger.Startup, startup.Trigger);
+        Assert.Equal(TestRunTrigger.FileChange, broken.Trigger);
+        Assert.Equal([code], broken.ChangedFiles);
+        Assert.Equal(1, broken.ChangedFileCount);
+        Assert.NotEqual(startup.SourceAfter, broken.SourceBefore);
+        Assert.Equal([new("A.Tests", "A.Tests.Test1")], broken.NewlyFailingTests);
+        Assert.Equal(1, broken.Failed);
+        Assert.Equal(BuildStatus.Succeeded, broken.BuildStatus);
+        Assert.Equal(fixedRun!.RunId, fixedEntry.RunId);
+        Assert.Equal([new("A.Tests", "A.Tests.Test1")], fixedEntry.FixedTests);
+        Assert.Equal(broken.SourceAfter, fixedEntry.SourceBefore);
+        Assert.False(fixedEntry.InRunHistory);
+        Assert.True(timeline.Zip(timeline.Skip(1)).All(p => p.First.Sequence < p.Second.Sequence));
+    }
+
+    [Fact]
     public async Task StartupRun_RunsTestProjectsFoundOnlyOnceTheBuildRestoredTheirPackages()
     {
         // A fresh clone: xUnit v3 / TUnit projects are recognized through properties their packages set.
@@ -429,6 +461,8 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         }, classification);
         Assert.Equal(FailureKind.Flaky, Assert.Single(flaky!.FailureClassifications).Kind);
         Assert.Equal(4, history.GetRuns().Count);
+        Assert.All(_state.SessionTimeline, e => Assert.True(e.InRunHistory));
+        Assert.Equal(FailureKind.New, Assert.Single(_state.SessionTimeline.Single(e => e.RunId == broken.RunId).FailureClassifications).Kind);
         _orchestrator.RunHistory = null;
         history.Dispose();
         Directory.Delete(historyDirectory, recursive: true);

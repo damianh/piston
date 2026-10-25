@@ -1,4 +1,5 @@
 @inject EngineClientService Client
+@inject ViewState View
 @implements IDisposable
 
 <div class="flex flex-col h-full overflow-hidden text-xs">
@@ -184,8 +185,13 @@
     {
         _runs = await Client.GetStoredRunsAsync();
         var latest = _runs?.Runs.FirstOrDefault();
+        var revealed = View.TakeRevealedRun();
+        if (revealed is not null && _runs?.Runs.Any(r => r.RunId == revealed) == true)
+        {
+            await SelectRunAsync(revealed);
+        }
         // Follow the newest run unless the user picked an older one.
-        if (latest is not null && (_selectedId is null || _selectedId == PreviousLatest))
+        else if (latest is not null && (_selectedId is null || _selectedId == PreviousLatest))
         {
             await SelectRunAsync(latest.RunId);
         }

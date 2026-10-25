@@ -1832,6 +1832,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             FreshnessReason = freshnessReason,
         };
 
+        var inRunHistory = false;
         if (RunHistory is { } history)
         {
             try
@@ -1841,6 +1842,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 {
                     finished = finished with { FailureClassifications = failures };
                 }
+
+                inRunHistory = history.GetRun(finished.RunId) is not null;
             }
             catch (Exception ex)
             {
@@ -1863,6 +1866,10 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             var recent = new List<TestRunRecord>(_state.RecentRuns.Count + 1) { finished };
             recent.AddRange(_state.RecentRuns.Take(PistonState.MaxRecentRuns - 1).Select(DropExecutionLogs));
             _state.RecentRuns = recent;
+
+            var timeline = _state.SessionTimeline;
+            var skip = Math.Max(0, timeline.Count + 1 - PistonState.MaxSessionTimelineEntries);
+            _state.SessionTimeline = [.. timeline.Skip(skip), SessionTimelineEntry.From(finished, inRunHistory)];
 
             if (_runWaiters.Remove(finished.RunId, out var waiter))
             {
