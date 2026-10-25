@@ -587,12 +587,19 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
         }
 
         var all = new List<TestSuite>();
+        var projects = new List<ProjectTestResult>();
+        void Complete(ProjectTestResult project)
+        {
+            projects.Add(project);
+            onProjectCompleted?.Invoke(project);
+        }
+
         foreach (var path in testProjectPaths ?? [])
         {
             var name = Path.GetFileNameWithoutExtension(path);
             if (CrashedProjects.Contains(path))
             {
-                onProjectCompleted?.Invoke(new ProjectTestResult(path, [], "crashed", [], Crashed: true));
+                Complete(new ProjectTestResult(path, [], "crashed", [], Crashed: true));
                 continue;
             }
             if (TimedOutProjects.TryGetValue(path, out var timeout))
@@ -600,12 +607,12 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
                 var timedOutTest = new TestResult(timeout.Test, timeout.Test, TestStatus.Failed, timeout.Limit, null, "Timed out", null, null);
                 var timedOutSuite = new TestSuite(name, [timedOutTest], DateTimeOffset.UtcNow, timeout.Limit);
                 all.Add(timedOutSuite);
-                onProjectCompleted?.Invoke(new ProjectTestResult(path, [timedOutSuite], null, [], Crashed: false) { TimedOut = timeout });
+                Complete(new ProjectTestResult(path, [timedOutSuite], null, [], Crashed: false) { TimedOut = timeout });
                 continue;
             }
             if (ProjectsWithoutResults.Contains(path))
             {
-                onProjectCompleted?.Invoke(new ProjectTestResult(path, [], null, [], Crashed: false));
+                Complete(new ProjectTestResult(path, [], null, [], Crashed: false));
                 continue;
             }
 
@@ -633,9 +640,9 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
                 ExecutionLog = AttachExecutionLog ? new ExecutionLog(path) : null,
             };
             all.Add(suite);
-            onProjectCompleted?.Invoke(new ProjectTestResult(path, [suite], null, [], Crashed: false));
+            Complete(new ProjectTestResult(path, [suite], null, [], Crashed: false));
         }
 
-        return new TestRunResult(all, null, []);
+        return new TestRunResult(all, null, []) { Projects = projects };
     }
 }

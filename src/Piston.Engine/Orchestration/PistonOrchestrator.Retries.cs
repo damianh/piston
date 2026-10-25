@@ -44,7 +44,12 @@ public sealed partial class PistonOrchestrator
                 .Select(p => (Targets: string.Equals(p.ProjectPath, solutionPath, StringComparison.Ordinal) ? null : (IReadOnlyList<string>)[p.ProjectPath], p.Suites))
                 .ToList()
             : [(Targets: targets, Suites: suites)];
-        var timedOut = projects.Any(p => p.TimedOut is not null);
+        // Every reason some failed tests were not retried; a run can be partly retried for several reasons.
+        var reasons = new List<string>();
+        if (projects.Any(p => p.TimedOut is not null && p.Suites.SelectMany(s => s.Tests).Any(t => t.Status == TestStatus.Failed)))
+        {
+            reasons.Add("Tests of a project that timed out are not retried.");
+        }
 
         var failing = groups
             .Select(g => (g.Targets, g.Suites, Failed: g.Suites
@@ -58,14 +63,13 @@ public sealed partial class PistonOrchestrator
         var failedCount = failing.Sum(g => g.Failed.Count);
         if (failedCount == 0)
         {
-            return (suites, timedOut && suites.SelectMany(s => s.Tests).Any(t => t.Status == TestStatus.Failed)
-                ? "Tests of a project that timed out are not retried."
-                : null);
+            return (suites, Join(reasons));
         }
 
         if (failedCount > MaxRetriedFailures)
         {
-            return (suites, $"{failedCount} tests failed; runs with more than {MaxRetriedFailures} failed tests are not retried.");
+            reasons.Insert(0, $"{failedCount} tests failed; runs with more than {MaxRetriedFailures} failed tests are not retried.");
+            return (suites, Join(reasons));
         }
 
         var log = DiagnosticLog.Instance;
@@ -117,42 +121,54 @@ public sealed partial class PistonOrchestrator
                     if (filter is null)
                     {
                         unretriable.UnionWith(failed.Select(f => f.Test));
+                        AddReason(reasons, "Some failed tests could not be selected by a filter, so they were not retried.");
                         continue;
                     }
 
+                    var completed = new List<ProjectTestResult>();
+                    var callbacks = new TestRunCallbacks
+                    {
+                        OnProjectCompleted = p =>
+                        {
+                            lock (completed)
+                            {
+                                completed.Add(p);
+                            }
+                        },
+                    };
                     var result = await _testRunner.RunTestsAsync(
-                        solutionPath, groupTargets, filter, collectCoverage: false, new TestRunCallbacks(), ct).ConfigureAwait(false);
+                        solutionPath, groupTargets, filter, collectCoverage: false, callbacks, ct).ConfigureAwait(false);
                     ct.ThrowIfCancellationRequested();
 
-                    var retried = result.Suites
+                    // A retry that crashed, timed out or failed to run proves nothing, even about the tests it passed.
+                    if (result.RunnerError is not null
+                        || completed.Concat(result.Projects).Any(p => p.Crashed || p.TimedOut is not null || p.RunnerError is not null))
+                    {
+                        unretriable.UnionWith(failed.Select(f => f.Test));
+                        AddReason(reasons, "A retry crashed, timed out or did not run, so its results were not used and its tests were not retried again.");
+                        continue;
+                    }
+
+                    // Only a result that alone matches the failed test's suite, name and framework counts: a retry
+                    // reporting the test twice, or without the framework of a multi-targeted test, is ambiguous.
+                    var byKey = result.Suites
                         .SelectMany(s => s.Tests.Select(t => (Suite: s.Name, Test: t)))
-                        .Where(r => r.Test.Status is TestStatus.Passed or TestStatus.Failed)
-                        .ToList();
-                    var byKey = retried
                         .GroupBy(r => (r.Suite, r.Test.ResultKey))
-                        .ToDictionary(g => g.Key, g => g.Last().Test);
-                    // A retry that saw only one framework reports no framework, so match its results by name when
-                    // only one failed test of that name was retried.
-                    var byName = retried
-                        .Where(r => r.Test.TargetFramework is null)
-                        .GroupBy(r => (r.Suite, r.Test.FullyQualifiedName))
-                        .ToDictionary(g => g.Key, g => g.Last().Test);
-                    var uniqueNames = failed
-                        .GroupBy(f => (f.Suite, f.Test.FullyQualifiedName))
-                        .Where(g => g.Count() == 1)
-                        .Select(g => g.Key)
-                        .ToHashSet();
+                        .Where(g => g.Count() == 1 && g.First().Test.Status is TestStatus.Passed or TestStatus.Failed)
+                        .ToDictionary(g => g.Key, g => g.First().Test);
                     foreach (var (suite, original) in failed)
                     {
-                        if (byKey.TryGetValue((suite, original.ResultKey), out var next)
-                            || (uniqueNames.Contains((suite, original.FullyQualifiedName))
-                                && byName.TryGetValue((suite, original.FullyQualifiedName), out next)))
+                        if (!byKey.TryGetValue((suite, original.ResultKey), out var next))
                         {
-                            var previous = current[original];
-                            (earlier.TryGetValue(original, out var list) ? list : earlier[original] = [])
-                                .Add(new TestAttempt(previous.Status, previous.Duration, previous.ErrorMessage, previous.StackTrace));
-                            current[original] = next with { TargetFramework = original.TargetFramework };
+                            _ = unretriable.Add(original);
+                            AddReason(reasons, "A retry did not report some failed tests unambiguously, so they were not retried again.");
+                            continue;
                         }
+
+                        var previous = current[original];
+                        (earlier.TryGetValue(original, out var list) ? list : earlier[original] = [])
+                            .Add(new TestAttempt(previous.Status, previous.Duration, previous.ErrorMessage, previous.StackTrace));
+                        current[original] = next;
                     }
                 }
             }
@@ -160,6 +176,7 @@ public sealed partial class PistonOrchestrator
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             log?.Write("Orchestrator", $"Retrying failed tests stopped: {ex.GetType().Name}: {ex.Message}");
+            AddReason(reasons, $"Retrying stopped after an error: {ex.Message}");
         }
         finally
         {
@@ -169,7 +186,7 @@ public sealed partial class PistonOrchestrator
 
         if (earlier.Count == 0)
         {
-            return (suites, unretriable.Count > 0 ? "The failed tests could not be selected by a filter." : null);
+            return (suites, Join(reasons));
         }
 
         return ([.. suites.Select(s => s with
@@ -177,6 +194,16 @@ public sealed partial class PistonOrchestrator
             Tests = [.. s.Tests.Select(t => earlier.TryGetValue(t, out var attempts)
                 ? current[t] with { Attempts = attempts }
                 : t)],
-        })], null);
+        })], Join(reasons));
     }
+
+    private static void AddReason(List<string> reasons, string reason)
+    {
+        if (!reasons.Contains(reason, StringComparer.Ordinal))
+        {
+            reasons.Add(reason);
+        }
+    }
+
+    private static string? Join(List<string> reasons) => reasons.Count == 0 ? null : string.Join(" ", reasons);
 }

@@ -375,7 +375,9 @@ coverage, before it finishes; each test stops being retried once it passes. A te
   the retry in progress in the status bar.
 
 Retries are skipped, with the reason reported, when more than 20 tests failed (likely a real breakage) and for the
-tests of a project that timed out. Retries are off by default.
+tests of a project that timed out. A retry that crashes, times out or reports no results is not used, and a retry
+that does not report a failed test exactly once (for example without the framework it failed under) does not clear
+that failure; those tests keep their failure and the reason is reported too. Retries are off by default.
 
 ### Warm test hosts
 

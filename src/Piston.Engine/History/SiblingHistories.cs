@@ -45,7 +45,6 @@ internal sealed class SiblingHistories
             var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var path in Candidates())
             {
-                _ = seen.Add(path);
                 FileInfo info;
                 try
                 {
@@ -59,6 +58,9 @@ internal sealed class SiblingHistories
                 {
                     continue;
                 }
+
+                // Only a file that still exists keeps its cached results; a deleted one is evicted below.
+                _ = seen.Add(path);
 
                 if (_files.TryGetValue(path, out var cached) && cached.WriteTime == info.LastWriteTimeUtc && cached.Length == info.Length)
                 {

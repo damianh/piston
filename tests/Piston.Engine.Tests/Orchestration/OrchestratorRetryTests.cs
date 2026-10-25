@@ -93,9 +93,9 @@ public sealed class OrchestratorRetryTests : IDisposable
     }
 
     [Fact]
-    public async Task A_retry_that_reports_no_framework_matches_the_failed_tests_framework()
+    public async Task A_retry_that_reports_no_framework_does_not_clear_a_framework_specific_failure()
     {
-        _orchestrator.RetryFailedTests = 1;
+        _orchestrator.RetryFailedTests = 2;
         await StartAsync();
         _runner.FailingTest = "B.Tests.Test1";
         _runner.FailingTestFramework = "net10.0";
@@ -104,8 +104,66 @@ public sealed class OrchestratorRetryTests : IDisposable
         var run = await RunAsync();
 
         var test = Test(run, "B.Tests.Test1");
-        Assert.Equal((TestStatus.Passed, "B.Tests.Test1 [net10.0]"), (test.Status, test.ResultKey));
-        Assert.Equal(TestStatus.Failed, Assert.Single(test.Attempts).Status);
+        Assert.Equal((TestStatus.Failed, "B.Tests.Test1 [net10.0]"), (test.Status, test.ResultKey));
+        Assert.Empty(test.Attempts);
+        Assert.Equal(2, _runner.Calls.Count);
+        Assert.Contains("unambiguously", run.RetriesSkippedReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_retry_that_reports_the_test_twice_does_not_clear_the_failure()
+    {
+        _orchestrator.RetryFailedTests = 1;
+        await StartAsync();
+        _runner.FailingTest = "B.Tests.Test1";
+        _runner.FailuresRemaining = 1;
+        _runner.DuringRun = () => _runner.DuplicateFirstTest = _runner.LastFilter is not null;
+
+        var run = await RunAsync();
+
+        var test = Test(run, "B.Tests.Test1");
+        Assert.Equal(TestStatus.Failed, test.Status);
+        Assert.Empty(test.Attempts);
+        Assert.Contains("unambiguously", run.RetriesSkippedReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_retry_that_crashes_is_not_used_and_says_why()
+    {
+        _orchestrator.RetryFailedTests = 2;
+        await StartAsync();
+        _runner.FailingTest = "B.Tests.Test1";
+        _runner.FailuresRemaining = 1;
+        _runner.DuringRun = () =>
+        {
+            if (_runner.LastFilter is not null)
+            {
+                _ = _runner.CrashedProjects.Add(Projects[1]);
+            }
+        };
+
+        var run = await RunAsync();
+
+        var test = Test(run, "B.Tests.Test1");
+        Assert.Equal(TestStatus.Failed, test.Status);
+        Assert.Empty(test.Attempts);
+        Assert.Equal(2, _runner.Calls.Count);
+        Assert.Contains("crashed", run.RetriesSkippedReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_timed_out_project_is_reported_as_not_retried_while_other_failures_are_retried()
+    {
+        _orchestrator.RetryFailedTests = 1;
+        await StartAsync();
+        _runner.FailingTest = "B.Tests.Test1";
+        _runner.FailuresRemaining = 1;
+        _runner.TimedOutProjects[Projects[0]] = new TestTimeout("A.Tests.Slow", TimeSpan.FromSeconds(30));
+
+        var run = await RunAsync();
+
+        Assert.Equal(TestStatus.Passed, Test(run, "B.Tests.Test1").Status);
+        Assert.Contains("timed out", run.RetriesSkippedReason, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -327,6 +327,23 @@ public sealed class RunHistoryStoreTests : IDisposable
     }
 
     [Fact]
+    public void Outcomes_of_a_deleted_history_of_another_worktree_stop_counting()
+    {
+        var other = CreateLinkedWorktree("feature");
+        using (var sibling = RunHistoryStore.Open(BaseDirectory, other, time: _time))
+        {
+            _ = sibling.Record(Run("same", TestStatus.Passed));
+        }
+
+        using var store = Open();
+        Assert.Equal(FailureKind.Flaky, Assert.Single(store.Record(Run("same", TestStatus.Failed))).Kind);
+
+        File.Delete(HistoryLocation.Resolve(BaseDirectory, other).FilePath);
+
+        Assert.NotEqual(FailureKind.Flaky, Assert.Single(store.Record(Run("same", TestStatus.Failed))).Kind);
+    }
+
+    [Fact]
     public void Another_worktree_with_a_different_source_is_not_flaky_evidence()
     {
         var other = CreateLinkedWorktree("feature");
