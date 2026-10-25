@@ -1,12 +1,11 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
-using Piston.Engine.Execution;
 using System.Text.Json;
+using Piston.Engine.Execution;
 using Piston.Hosting.Protocol;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
-using Piston.Protocol.Messages;
 using Piston.Tests.Mcp;
 using Xunit;
 

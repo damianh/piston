@@ -2,8 +2,8 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine;
-using Piston.Engine.Execution;
 using Piston.Engine.Coverage;
+using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Hosting.Services;
 using Piston.Protocol.Dtos;

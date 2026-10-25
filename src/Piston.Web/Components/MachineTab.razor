@@ -200,8 +200,12 @@
 
     protected override async Task OnInitializedAsync()
     {
-        await RefreshAsync(_disposeCts.Token);
-        _ = PollAsync(_disposeCts.Token);
+        var cancellationToken = _disposeCts.Token;
+        await RefreshAsync(cancellationToken);
+        if (!cancellationToken.IsCancellationRequested)
+        {
+            _ = PollAsync(cancellationToken);
+        }
     }
 
     private async Task PollAsync(CancellationToken cancellationToken)

@@ -326,11 +326,10 @@ public sealed class EngineClientService : IAsyncDisposable
         }
 
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(timeoutCts.Token, cancellationToken);
-        _ = timeoutCts.Token.Register(() => tcs.TrySetResult(null));
+        using var timeoutRegistration = timeoutCts.Token.Register(() => tcs.TrySetResult(null));
         try
         {
-            return await tcs.Task.WaitAsync(linkedCts.Token).ConfigureAwait(false);
+            return await tcs.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

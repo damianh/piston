@@ -47,9 +47,9 @@ public sealed class MachineExecutionOverviewTests : IDisposable
         Assert.Equal(512L, overview.MemoryMbInUse);
         var records = overview.Owners.Where(owner => owner.Liveness == OwnershipLiveness.Live).ToList();
         Assert.Equal(2, records.Count);
-        Assert.Single(overview.Running);
+        _ = Assert.Single(overview.Running);
         Assert.Equal(running.ProcessId, overview.Running[0].ProcessId);
-        Assert.Single(overview.Queue);
+        _ = Assert.Single(overview.Queue);
         Assert.Equal(queued.ProcessId, overview.Queue[0].ProcessId);
         Assert.Equal(1, overview.Queue[0].QueuePosition);
         Assert.Equal(queued.ProcessId, Assert.Single(records, record => record.Owner!.Host == "mcp").Owner!.ProcessId);
