@@ -95,7 +95,11 @@ public sealed class TestResourceInferenceTests : IDisposable
         Assert.True(needs.UsesContainers);
         var key = Assert.Single(needs.Keys);
         Assert.StartsWith("project:repo-", key, StringComparison.Ordinal);
-        Assert.EndsWith("/tests/Db.Tests/Db.Tests.csproj", key, StringComparison.Ordinal);
+        // Worktree paths are case-folded on Windows, where the file system is case-insensitive.
+        Assert.EndsWith(
+            "/tests/Db.Tests/Db.Tests.csproj",
+            key,
+            OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
         Assert.Contains(needs.Reasons, r => r.Contains("Testcontainers.PostgreSql", StringComparison.Ordinal));
     }
 
