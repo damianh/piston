@@ -302,8 +302,10 @@ public sealed class RunHistoryStoreTests : IDisposable
 
         using var reopened = Open();
         var history = Assert.Single(reopened.GetTestHistory(Test));
+        Assert.Equal(ProjectId, history.ProjectId);
         Assert.Equal([0, 1, 2], history.Runs.Select(e => e.Attempt));
         var result = Assert.Single(Assert.IsType<StoredRun>(reopened.GetRun(run.RunId)).Results);
+        Assert.Equal(ProjectId, result.ProjectId);
         Assert.Equal(TestStatus.Passed, result.Status);
         var attempts = Assert.IsType<IReadOnlyList<StoredAttempt>>(result.Attempts, exactMatch: false);
         Assert.Equal([TestStatus.Failed, TestStatus.Failed], attempts.Select(a => a.Status));
@@ -379,6 +381,28 @@ public sealed class RunHistoryStoreTests : IDisposable
         using var store = Open();
 
         Assert.Equal(FailureKind.Unknown, Assert.Single(store.Record(Run("same", TestStatus.Failed))).Kind);
+    }
+
+    [Fact]
+    public void Another_project_with_the_same_name_in_another_worktree_is_not_flaky_evidence()
+    {
+        var other = CreateLinkedWorktree("feature");
+        using (var sibling = RunHistoryStore.Open(BaseDirectory, other, time: _time))
+        {
+            var run = Run("same", TestStatus.Passed);
+            _ = sibling.Record(run with
+            {
+                Suites = [Assert.Single(run.Suites) with { ProjectId = "Other/App.Tests.csproj" }],
+            });
+        }
+
+        using var store = Open();
+        var classification = Assert.Single(store.Record(Run("same", TestStatus.Failed)));
+
+        Assert.Equal(ProjectId, classification.ProjectId);
+        Assert.Equal(FailureKind.Unknown, classification.Kind);
+        Assert.Null(classification.Flakiness);
+        Assert.Empty(store.GetFlakyTests());
     }
 
     [Fact]

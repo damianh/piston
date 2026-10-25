@@ -243,10 +243,10 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         var fixedRun = _state.LastRun!;
 
         Assert.Empty(broken!.ChangedFiles);
-        Assert.Equal([new("A.Tests", "A.Tests.Test1")], broken.NewlyFailingTests);
+        Assert.Equal([new("A.Tests", "A.Tests.Test1") { ProjectId = TestProjectNames.ProjectId(_root, Projects[0]) }], broken.NewlyFailingTests);
         Assert.Empty(broken.FixedTests);
         Assert.Equal([code], fixedRun.ChangedFiles);
-        Assert.Equal([new("A.Tests", "A.Tests.Test1")], fixedRun.FixedTests);
+        Assert.Equal([new("A.Tests", "A.Tests.Test1") { ProjectId = TestProjectNames.ProjectId(_root, Projects[0]) }], fixedRun.FixedTests);
         Assert.Empty(fixedRun.NewlyFailingTests);
     }
 
@@ -423,7 +423,10 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         var flaky = await _orchestrator.RequestRunAsync();
 
         var classification = Assert.Single(broken!.FailureClassifications);
-        Assert.Equal(new FailureClassification("B.Tests", "B.Tests.Test1", FailureKind.New, classification.Evidence), classification);
+        Assert.Equal(new FailureClassification("B.Tests", "B.Tests.Test1", FailureKind.New, classification.Evidence)
+        {
+            ProjectId = TestProjectNames.ProjectId(_root, Projects[1]),
+        }, classification);
         Assert.Equal(FailureKind.Flaky, Assert.Single(flaky!.FailureClassifications).Kind);
         Assert.Equal(4, history.GetRuns().Count);
         _orchestrator.RunHistory = null;

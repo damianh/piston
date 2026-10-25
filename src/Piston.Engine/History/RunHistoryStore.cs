@@ -762,6 +762,7 @@ internal sealed class RunHistoryStore : IDisposable
 
         return (model.WorktreePath, tests);
     }
+
     private static string ProjectName(string projectId) => Path.GetFileNameWithoutExtension(projectId);
 
     private static char Code(TestStatus status) => status switch
