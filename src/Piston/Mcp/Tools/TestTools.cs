@@ -128,6 +128,24 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
             _ = sb.AppendLine($"Longest running: {running.Name} ({elapsed}{(running.PossiblyHanging ? ", possibly hanging" : "")})");
         }
 
+        foreach (var (project, wait) in state.ProjectResourceWaits)
+        {
+            _ = sb.AppendLine(DescribeResourceWait(project, wait, DateTimeOffset.UtcNow));
+        }
+
+        if (state.LastRun is { } lastRun)
+        {
+            foreach (var note in DescribeResourceNotes(lastRun, ResourceWaitWorthReporting))
+            {
+                _ = sb.AppendLine($"Test resources: {note}");
+            }
+        }
+
+        if (state.RetryStatus is { } retrying)
+        {
+            _ = sb.AppendLine(retrying);
+        }
+
         _ = sb.AppendLine("Note: these aggregate results may combine several runs; use GetTestRun for run-bound provenance.");
 
         foreach (var suite in state.TestSuites)
@@ -160,6 +178,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         "Get provenance and per-test results for exactly one test run as JSON (schema piston.test-run/v1): " +
         "run ID, status, full/selective scope, filters, freshness, source fingerprints captured before and after the run, " +
         "build/runner context, machine-wide execution admission (queue position and CPU/memory reservations), " +
+        "per-project exclusive test resources (keys, wait, warnings, suspected port/container conflicts), " +
         "and every test's fully-qualified name and status. " +
         "Pass a run ID, \"latest\" or empty for the most recent finished run, or \"active\" for the run in progress. " +
         "A result is trustworthy for a full-scope oracle only when isCurrentFullResult is true and sourceAfter matches the expected source.")]
@@ -197,9 +216,11 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
 
     [McpServerTool(Name = GetTestHistoryTool), Description(
         "Get the recorded results of a test across runs in this worktree (kept outside the checkout, up to the 20 most recent " +
-        "per test), newest first, with run ID, time, status, duration and source fingerprint. Use it to decide whether a " +
-        "failure is new, pre-existing or flaky. Pass a fully-qualified test name (a target framework suffix such as " +
-        "' [net10.0]' is optional); pass empty to list tests that passed and failed on the same source (flaky).")]
+        "per test, retries included), newest first, with run ID, time, status, duration and source fingerprint. Use it to decide " +
+        "whether a failure is new, pre-existing or flaky. A flaky test (passed and failed on the same source, in this or another " +
+        "worktree of the repository, or across retries in one run) has an Evidence line: the counts, the source, retries and " +
+        "the other worktrees' outcomes. Pass a fully-qualified test name (a target framework suffix such as ' [net10.0]' is " +
+        "optional); pass empty to list flaky tests with their evidence.")]
     public string GetTestHistory(
         [Description("Fully-qualified test name; empty lists flaky tests.")] string test = "",
         [Description("Optional test project name to disambiguate.")] string? project = null)
@@ -223,11 +244,21 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
             foreach (var history in histories)
             {
                 _ = sb.AppendLine($"{history.Project} :: {history.Test}{(history.Flaky ? " (flaky)" : "")}");
+                if (history.Flakiness is { } evidence)
+                {
+                    _ = sb.AppendLine($"  Evidence: {evidence.Describe()}");
+                    foreach (var outcome in evidence.Outcomes.Where(o => o.Worktree is not null))
+                    {
+                        _ = sb.AppendLine(System.FormattableString.Invariant(
+                            $"  {outcome.At.UtcDateTime:yyyy-MM-dd HH:mm:ss}Z {outcome.Status,-7} run {outcome.RunId}{Retry(outcome.Attempt)} in worktree {outcome.Worktree}"));
+                    }
+                }
+
                 foreach (var entry in history.Runs.Reverse())
                 {
                     var source = entry.Source is { } s ? s[..Math.Min(12, s.Length)] : "unknown source";
                     _ = sb.AppendLine(System.FormattableString.Invariant(
-                        $"  {entry.At.UtcDateTime:yyyy-MM-dd HH:mm:ss}Z {entry.Status,-7} {entry.DurationMs,8:F0}ms run {entry.RunId} ({source})"));
+                        $"  {entry.At.UtcDateTime:yyyy-MM-dd HH:mm:ss}Z {entry.Status,-7} {entry.DurationMs,8:F0}ms run {entry.RunId}{Retry(entry.Attempt)} ({source})"));
                 }
             }
 
@@ -238,6 +269,8 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         recorder.Record(GetTestHistoryTool, key, histories is null ? "history off" : $"{histories.Count} test(s)", sw.Elapsed.TotalMilliseconds, histories is not null);
         return result;
     }
+
+    private static string Retry(int attempt) => attempt > 0 ? $" retry {attempt}" : "";
 
     private string GuardSolution(string? expectedSolution)
     {
@@ -316,6 +349,60 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
                     $"Skipped: {tests.Count(t => t.Status == TestStatus.Skipped)})";
         }
         return text;
+    }
+
+    /// <summary>Shorter resource waits are not worth mentioning.</summary>
+    internal static readonly TimeSpan ResourceWaitWorthReporting = TimeSpan.FromSeconds(1);
+
+    /// <summary>"Tests.Integration waiting 12s for test resources: port:5432 held by Tests.Integration in /wt/other (pid 42)".</summary>
+    internal static string DescribeResourceWait(string project, TestResourceWait wait, DateTimeOffset now)
+    {
+        var blockers = wait.BlockedBy.Count == 0
+            ? "checking"
+            : string.Join("; ", wait.BlockedBy.Select(b =>
+            {
+                var resource = b.Resource == TestResourceBlocker.ContainerSlots
+                    ? $"container slots ({wait.ContainerSlotsInUse}/{wait.ContainerSlotBudget} in use)"
+                    : b.Resource;
+                var how = b.Kind == TestResourceBlockerKind.Held ? "held by" : "queued ahead for";
+                var who = b.Project is { } other ? Path.GetFileNameWithoutExtension(other) : "a test project";
+                var where = b.Worktree is { } worktree ? $" in {worktree}" : "";
+                return $"{resource} {how} {who}{where} (pid {b.ProcessId})";
+            }));
+        return $"{Path.GetFileNameWithoutExtension(project)} waiting {Durations.Format(now - wait.WaitingSince)} for test resources: {blockers}";
+    }
+
+    /// <summary>
+    /// One line per notable test resource fact of a run: waits of at least <paramref name="minimumWait"/>,
+    /// warnings such as a declared port bound outside Piston, and failures that look like resource conflicts.
+    /// </summary>
+    internal static IReadOnlyList<string> DescribeResourceNotes(TestRunRecord run, TimeSpan minimumWait)
+    {
+        var notes = new List<string>();
+        foreach (var project in run.Projects)
+        {
+            var name = Path.GetFileNameWithoutExtension(project.ProjectPath);
+            if (project.Resources is { } resources)
+            {
+                if (resources.Wait?.Waited is { } waited && waited >= minimumWait)
+                {
+                    var needed = resources.Needs.Keys.ToList();
+                    if (resources.Needs.UsesContainers && resources.Wait.ContainerSlotBudget is not null)
+                    {
+                        needed.Add("a container slot");
+                    }
+                    notes.Add($"{name} waited {Durations.Format(waited)} for {(needed.Count > 0 ? string.Join(", ", needed) : "test resources")}");
+                }
+
+                notes.AddRange(resources.Warnings.Select(w => $"{name}: {w}"));
+            }
+
+            if (project.SuspectedResourceConflict is { } conflict)
+            {
+                notes.Add($"{name}: {conflict}");
+            }
+        }
+        return notes;
     }
 
     internal static string DescribeAdmission(TestRunAdmission a)

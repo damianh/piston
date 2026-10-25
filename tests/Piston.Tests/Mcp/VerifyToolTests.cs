@@ -101,6 +101,54 @@ public sealed class VerifyToolTests
     }
 
     [Fact]
+    public async Task Passed_ListsTestsThatPassedOnRetryWithTheirEvidence()
+    {
+        var retried = Test("A.Wobbly", TestStatus.Passed) with
+        {
+            Attempts = [new TestAttempt(TestStatus.Failed, TimeSpan.Zero, "first try\nmore", null)],
+        };
+        var evidence = new FlakinessEvidence(null, 1, 1, 1, [], [new("run-7", DateTimeOffset.UnixEpoch, TestStatus.Failed, 0, null)]);
+        var run = Run(tests: [retried, Test("A.Steady", TestStatus.Passed)]) with
+        {
+            FailureClassifications = [new("T", "A.Wobbly", FailureKind.Flaky, evidence.Describe(), evidence)],
+            RetryLimit = 2,
+        };
+
+        var text = await VerifyAsync(new(VerificationVerdict.Passed, null, VerificationSource.Forced, 1, run, Source));
+
+        Assert.StartsWith("Verdict: Passed", text);
+        Assert.Contains("Passed on retry (1):", text);
+        Assert.Contains("  - A.Wobbly: passed on attempt 2 after 1 failure(s) [flaky: 1 passed/1 failed in retries of one run]: first try", text);
+        Assert.DoesNotContain("A.Steady:", text);
+        Assert.DoesNotContain("Failure history", text);
+    }
+
+    [Fact]
+    public async Task TestsFailed_TagsRetriedFailuresAndFlakyEvidenceAndSkippedRetries()
+    {
+        var failed = Test("A.Broken", TestStatus.Failed, "still") with
+        {
+            Attempts = [new TestAttempt(TestStatus.Failed, TimeSpan.Zero, "first", null)],
+        };
+        var evidence = new FlakinessEvidence(new string('b', 64), 3, 2, 0, ["feature-x"], []);
+        var run = Run(tests: [failed, Test("A.Other", TestStatus.Failed, "nope")]) with
+        {
+            FailureClassifications =
+            [
+                new("T", "A.Broken", FailureKind.PreExisting, "failed before"),
+                new("T", "A.Other", FailureKind.Flaky, evidence.Describe(), evidence),
+            ],
+            RetriesSkippedReason = "Too many failures to retry.",
+        };
+
+        var text = await VerifyAsync(new(VerificationVerdict.TestsFailed, "2 test(s) failed.", VerificationSource.Forced, 1, run, Source));
+
+        Assert.Contains("  - A.Broken [pre-existing] (failed all 2 attempts): still", text);
+        Assert.Contains("  - A.Other [flaky: 3 passed/2 failed on bbbbbbbbbbbb, other worktrees: feature-x]: nope", text);
+        Assert.Contains("Retries skipped: Too many failures to retry.", text);
+    }
+
+    [Fact]
     public async Task TestsFailed_WithoutHistory_HasNoHistoryLine()
     {
         var text = await VerifyAsync(new(VerificationVerdict.TestsFailed, "1 test(s) failed.", VerificationSource.Forced, 1,
@@ -131,13 +179,17 @@ public sealed class VerifyToolTests
     [Fact]
     public async Task BuildFailed_ListsBuildErrorsOfThatRun()
     {
-        var build = new BuildResult(BuildStatus.Failed, ["/w/A.cs(3,5): error CS0103: The name 'x' does not exist"], [], TimeSpan.Zero);
+        var build = new BuildResult(BuildStatus.Failed, ["/w/A.cs(3,5): error CS0103: The name 'x' does not exist"], [], TimeSpan.Zero)
+        {
+            OmittedErrors = 4,
+        };
         var text = await VerifyAsync(new(VerificationVerdict.BuildFailed, "Build failed.",
             VerificationSource.Forced, 1, Run(TestRunStatus.BuildFailed, build), Source));
 
         Assert.Contains("Verdict: BuildFailed", text);
         Assert.Contains("Build errors (1):", text);
         Assert.Contains("error CS0103", text);
+        Assert.Contains("... 4 more build error(s) omitted", text);
     }
 
     [Fact]
