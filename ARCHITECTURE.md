@@ -212,7 +212,7 @@ warm hosts are enabled for MTP), each under `Piston.ProcessHost`:
 | Backend | Current mechanism |
 |---|---|
 | VSTest | `dotnet test` on the project/solution target, `--no-build`, normal verbosity, TRX results. The `PistonLive` data collector streams per-test start/end events; stdout is parsed for progress as well. |
-| Microsoft.Testing.Platform (MTP) | Runs the built test app in MTP server mode (JSON-RPC), which reports each test as it starts and finishes. Falls back to `dotnet test --project <csproj> --no-build` with stdout parsing when the app is not found or server mode fails, and always uses `dotnet test` for coverage. The fallback needs the MTP runner configured in the solution's `global.json`. |
+| Microsoft.Testing.Platform (MTP) | Runs the built test app in MTP server mode (JSON-RPC), which reports each test as it starts and finishes. Falls back to `dotnet test --project <csproj> --no-build` with stdout parsing when the app is not found or server mode fails, and always uses `dotnet test` for coverage. The fallback needs the MTP runner configured in the solution's `global.json`. See the [MTP server-mode investigation](docs/mtp-server-mode.md) for identity and coverage findings. |
 
 When the graph identifies an MTP output path, the composite strategy selects
 MTP; otherwise it selects VSTest. `Auto` and the currently named `Process` mode
@@ -365,7 +365,10 @@ path passes `--coverage --coverage-output-format cobertura` when the test app
 references `Microsoft.Testing.Extensions.CodeCoverage`, running it through
 `dotnet test` rather than server mode. Both produce Cobertura XML, which
 `CoverageProcessor` parses and merges across reports, dropping files outside the
-solution directory.
+solution directory. A probe of the current MTP coverage extension stalled in
+server mode without producing test updates or a report; see the
+[MTP server-mode investigation](docs/mtp-server-mode.md) before changing this
+fallback.
 
 When enabled, `SqliteCoverageStore` creates `<solution-directory>/.piston/piston.db`
 and uses WAL mode. Its tables are:

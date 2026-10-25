@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="MSTestProbe/MSTestProbe.csproj" />
+  <Project Path="NUnitProbe/NUnitProbe.csproj" />
+  <Project Path="TUnitProbe/TUnitProbe.csproj" />
+  <Project Path="XUnitV3Probe/XUnitV3Probe.csproj" />
+</Solution>

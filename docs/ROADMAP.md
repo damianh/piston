@@ -132,7 +132,8 @@ opens by hand (today's `piston-dashboard` skill).
 
 ### Execution
 - Explore MTP server mode further for structured results and stable test
-  identities; keep VSTest/TRX as the compatibility path.
+  identities; keep VSTest/TRX as the compatibility path. The investigation and
+  current decision are in [MTP server-mode investigation](mtp-server-mode.md).
 - Per-test output and relevant artifacts in the MCP tools and the dashboard.
 
 ### Dashboard
