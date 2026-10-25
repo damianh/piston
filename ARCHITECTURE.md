@@ -212,7 +212,7 @@ warm hosts are enabled for MTP), each under `Piston.ProcessHost`:
 | Backend | Current mechanism |
 |---|---|
 | VSTest | `dotnet test` on the project/solution target, `--no-build`, normal verbosity, TRX results. The `PistonLive` data collector streams per-test start/end events; stdout is parsed for progress as well. |
-| Microsoft.Testing.Platform (MTP) | Runs the built test app in MTP server mode (JSON-RPC), which reports each test as it starts and finishes. Falls back to `dotnet test --project <csproj> --no-build` with stdout parsing when the app is not found or server mode fails, and always uses `dotnet test` for coverage. The fallback needs the MTP runner configured in the solution's `global.json`. |
+| Microsoft.Testing.Platform (MTP) | Runs the built test app in MTP server mode (JSON-RPC), which reports each test as it starts and finishes. Falls back to `dotnet test --project <csproj> --no-build` with stdout parsing when the app is not found or server mode fails. Coverage runs stay in server mode: the coverage extension's test host controller connects first as a passive node (`multipleConnectionProvider`) and the test host it relaunches connects next and serves the run. The fallback needs the MTP runner configured in the solution's `global.json`. |
 
 When the graph identifies an MTP output path, the composite strategy selects
 MTP; otherwise it selects VSTest. `Auto` and the currently named `Process` mode

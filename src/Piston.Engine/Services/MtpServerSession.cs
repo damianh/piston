@@ -19,10 +19,24 @@ namespace Piston.Engine.Services;
 /// per test, including <c>in-progress</c> while a test runs. By default each discovery or run uses its own
 /// process; <see cref="MtpWarmHostPool"/> keeps hosts alive to serve later requests over the same connection.
 /// </summary>
+/// <remarks>
+/// A test app with a test host controller (for example Microsoft.Testing.Extensions.CodeCoverage under
+/// <c>--coverage</c>) relaunches itself: the controller connects first as a passive node that only pushes
+/// attachments (<c>multipleConnectionProvider</c>), then the child test host connects and serves requests.
+/// See <see cref="ServerLink"/>.
+/// </remarks>
 internal static class MtpServerSession
 {
     private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(30);
     internal static readonly TimeSpan ExitTimeout = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// How long a host with a test host controller gets to exit after its request: the controller finishes
+    /// its extensions' work (such as writing coverage reports) after the test host exits.
+    /// </summary>
+    internal static readonly TimeSpan ControllerExitTimeout = TimeSpan.FromMinutes(2);
+
+    private const int MaxPassiveNodes = 4;
     private const int MaxStderrLines = 200;
 
     internal const string DiscoverMethod = "testing/discoverTests";
@@ -67,6 +81,8 @@ internal static class MtpServerSession
     /// nodes is passed to <paramref name="onNodes"/>; nodes are cloned and remain valid after the callback.
     /// Diagnostics and the host's console output go to <paramref name="runLog"/> when given, otherwise to the diagnostics log.
     /// With <paramref name="warmHosts"/>, the request is sent to a kept-alive host for the app when one is free.
+    /// <paramref name="hostArguments"/> (such as coverage options) are appended to the host's command line; a
+    /// request with them always runs in a host started for it alone.
     /// </summary>
     internal static Task<Result> RunAsync(
         string appPath,
@@ -76,9 +92,10 @@ internal static class MtpServerSession
         Action<IReadOnlyList<JsonElement>> onNodes,
         CancellationToken ct,
         ExecutionLog? runLog = null,
-        MtpWarmHostPool? warmHosts = null) =>
-        warmHosts is null
-            ? RunColdAsync(appPath, workingDirectory, method, tests, onNodes, ct, runLog)
+        MtpWarmHostPool? warmHosts = null,
+        string? hostArguments = null) =>
+        warmHosts is null || !string.IsNullOrWhiteSpace(hostArguments)
+            ? RunColdAsync(appPath, workingDirectory, method, tests, onNodes, ct, runLog, hostArguments)
             : warmHosts.RunAsync(appPath, workingDirectory, method, tests, onNodes, ct, runLog);
 
     /// <summary>As <see cref="RunAsync"/>, in a host process started for this request alone.</summary>
@@ -89,11 +106,12 @@ internal static class MtpServerSession
         IReadOnlyList<JsonElement>? tests,
         Action<IReadOnlyList<JsonElement>> onNodes,
         CancellationToken ct,
-        ExecutionLog? runLog = null)
+        ExecutionLog? runLog = null,
+        string? hostArguments = null)
     {
         var log = ResolveLog(runLog);
         var output = new HostOutput(log);
-        var (host, failure) = await StartHostAsync(appPath, workingDirectory, method, output, warm: false, ct).ConfigureAwait(false);
+        var (host, failure) = await StartHostAsync(appPath, workingDirectory, method, output, warm: false, ct, hostArguments).ConfigureAwait(false);
         if (host is null)
         {
             return failure!;
@@ -101,17 +119,19 @@ internal static class MtpServerSession
 
         using var processLifetime = host.Process;
         using var client = host.Client;
+        using var listener = host.Listener;
+        using var link = host.CreateLink(log);
         var processCleanedUp = false;
         try
         {
-            var (outcome, error) = await ExchangeAsync(client.GetStream(), method, tests, onNodes, StageTimeouts.Default, ct).ConfigureAwait(false);
+            var (outcome, error) = await ExchangeAsync(link, method, tests, onNodes, StageTimeouts.Default, ct).ConfigureAwait(false);
             if (error is not null)
             {
                 log?.Invoke("MtpServer", $"Session {outcome}: {error}");
             }
 
             processCleanedUp = true;
-            return await EndAsync(host.Process, outcome, error, output, log).ConfigureAwait(false);
+            return await EndAsync(host.Process, outcome, error, output, log, link.ExitTimeout).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -144,12 +164,13 @@ internal static class MtpServerSession
     /// time to exit, an unresponsive or unwanted one is killed, and a failed one is drained for its stderr.
     /// </summary>
     internal static async Task<Result> EndAsync(
-        OwnedTestProcess process, Outcome outcome, string? error, HostOutput output, Action<string, string>? log)
+        OwnedTestProcess process, Outcome outcome, string? error, HostOutput output, Action<string, string>? log,
+        TimeSpan? exitTimeout = null)
     {
         switch (outcome)
         {
             case Outcome.Completed:
-                await WaitForExitOrKillAsync(process, ExitTimeout, log).ConfigureAwait(false);
+                await WaitForExitOrKillAsync(process, exitTimeout ?? ExitTimeout, log).ConfigureAwait(false);
                 break;
             case Outcome.Cancelled:
             case Outcome.TimedOut:
@@ -166,28 +187,61 @@ internal static class MtpServerSession
         return new Result(outcome, error, output.Snapshot());
     }
 
-    /// <summary>A started host connected in server mode. The caller owns the process and the client.</summary>
-    internal sealed record StartedHost(OwnedTestProcess Process, TcpClient Client);
+    /// <summary>
+    /// A started host connected in server mode. The caller owns the process, the client and the listener,
+    /// which stays open for the further connections of a host with a test host controller.
+    /// </summary>
+    internal sealed record StartedHost(OwnedTestProcess Process, TcpClient Client, TcpListener Listener)
+    {
+        /// <summary>A link over the first connection that accepts later ones on <see cref="Listener"/>.</summary>
+        public ServerLink CreateLink(Action<string, string>? log) =>
+            new(Client.GetStream(), async ct => await AcceptAsync(Listener, Process.Process, ct).ConfigureAwait(false) is { } next
+                ? next.GetStream()
+                : null, log);
+    }
 
     /// <summary>
     /// Starts the host and waits for it to connect. On failure the process is cleaned up and the
     /// <see cref="Result"/> to report is returned instead.
     /// </summary>
     internal static async Task<(StartedHost? Host, Result? Failure)> StartHostAsync(
-        string appPath, string workingDirectory, string method, HostOutput output, bool warm, CancellationToken ct)
+        string appPath, string workingDirectory, string method, HostOutput output, bool warm, CancellationToken ct,
+        string? hostArguments = null)
     {
-        var log = output.Log;
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        var listener = new TcpListener(IPAddress.Loopback, 0);
+        var started = false;
         try
         {
             listener.Start();
         }
         catch (SocketException ex)
         {
+            listener.Dispose();
             return (null, new Result(Outcome.NotStarted, $"Could not listen for the test host: {ex.Message}", []));
         }
 
-        var psi = CreateStartInfo(appPath, workingDirectory, ((IPEndPoint)listener.LocalEndpoint).Port, out var removedEnvironment);
+        try
+        {
+            var (host, failure) = await StartHostAsync(appPath, workingDirectory, method, output, warm, listener, hostArguments, ct)
+                .ConfigureAwait(false);
+            started = host is not null;
+            return (host, failure);
+        }
+        finally
+        {
+            if (!started)
+            {
+                listener.Dispose();
+            }
+        }
+    }
+
+    private static async Task<(StartedHost? Host, Result? Failure)> StartHostAsync(
+        string appPath, string workingDirectory, string method, HostOutput output, bool warm, TcpListener listener,
+        string? hostArguments, CancellationToken ct)
+    {
+        var log = output.Log;
+        var psi = CreateStartInfo(appPath, workingDirectory, ((IPEndPoint)listener.LocalEndpoint).Port, hostArguments, out var removedEnvironment);
         if (warm)
         {
             psi.Environment[WarmHostVariable] = "1";
@@ -231,7 +285,7 @@ internal static class MtpServerSession
             var client = await AcceptAsync(listener, process, ct).ConfigureAwait(false);
             if (client is not null)
             {
-                return (new StartedHost(ownedProcess, client), null);
+                return (new StartedHost(ownedProcess, client, listener), null);
             }
 
             await KillAndWaitAsync(ownedProcess, log).ConfigureAwait(false);
@@ -325,13 +379,18 @@ internal static class MtpServerSession
     /// The host process. It starts in <paramref name="workingDirectory"/> (the solution directory), as
     /// <c>dotnet test</c> starts it in the fallback, so relative paths resolve the same on either path.
     /// </summary>
-    internal static ProcessStartInfo CreateStartInfo(string appPath, string workingDirectory, int port) =>
-        CreateStartInfo(appPath, workingDirectory, port, out _);
+    internal static ProcessStartInfo CreateStartInfo(string appPath, string workingDirectory, int port, string? hostArguments = null) =>
+        CreateStartInfo(appPath, workingDirectory, port, hostArguments, out _);
 
     private static ProcessStartInfo CreateStartInfo(
-        string appPath, string workingDirectory, int port, out IReadOnlyList<string> removedEnvironment)
+        string appPath, string workingDirectory, int port, string? hostArguments, out IReadOnlyList<string> removedEnvironment)
     {
         var serverArgs = $"--server --client-host 127.0.0.1 --client-port {port.ToString(CultureInfo.InvariantCulture)}";
+        if (!string.IsNullOrWhiteSpace(hostArguments))
+        {
+            serverArgs += " " + hostArguments.Trim();
+        }
+
         var isDll = appPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
         var psi = new ProcessStartInfo(isDll ? "dotnet" : appPath, isDll ? $"exec \"{appPath}\" {serverArgs}" : serverArgs)
         {
@@ -360,15 +419,29 @@ internal static class MtpServerSession
         IReadOnlyList<JsonElement>? tests,
         Action<IReadOnlyList<JsonElement>> onNodes,
         StageTimeouts timeouts,
+        CancellationToken ct,
+        Func<CancellationToken, Task<Stream?>>? acceptNext = null)
+    {
+        using var link = new ServerLink(stream, acceptNext, log: null);
+        return await ExchangeAsync(link, method, tests, onNodes, timeouts, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>As <see cref="ExchangeAsync(Stream, string, IReadOnlyList{JsonElement}?, Action{IReadOnlyList{JsonElement}}, StageTimeouts, CancellationToken, Func{CancellationToken, Task{Stream?}}?)"/>, over <paramref name="link"/>.</summary>
+    internal static async Task<(Outcome Outcome, string? Error)> ExchangeAsync(
+        ServerLink link,
+        string method,
+        IReadOnlyList<JsonElement>? tests,
+        Action<IReadOnlyList<JsonElement>> onNodes,
+        StageTimeouts timeouts,
         CancellationToken ct)
     {
-        using var connection = new Connection(stream);
-        var initialized = await connection.InitializeAsync(timeouts.Initialize, ct).ConfigureAwait(false);
+        var initialized = await link.OpenAsync(timeouts.Initialize, ct).ConfigureAwait(false);
         if (initialized.Outcome != Outcome.Completed)
         {
             return initialized;
         }
 
+        var connection = link.Active!;
         var request = await connection.RequestAsync(method, tests, onNodes, timeouts, ct).ConfigureAwait(false);
         if (request.Outcome == Outcome.Completed)
         {
@@ -376,6 +449,126 @@ internal static class MtpServerSession
         }
 
         return request;
+    }
+
+    /// <summary>
+    /// The connections to one host. The first connection is initialized; when it is a passive node
+    /// (<c>multipleConnectionProvider</c>, as a test host controller connects), its pushed messages are drained
+    /// in the background and the next connection, from the test host it launches, becomes <see cref="Active"/>.
+    /// Passive connections stay open until the link is disposed: the controller may push attachments until it exits.
+    /// </summary>
+    internal sealed class ServerLink(Stream first, Func<CancellationToken, Task<Stream?>>? acceptNext, Action<string, string>? log)
+        : IDisposable
+    {
+        private readonly List<Stream> _streams = [first];
+        private readonly List<Connection> _connections = [];
+        private Connection? _active;
+        private Stream? _activeStream;
+
+        /// <summary>The connection that serves requests, once <see cref="OpenAsync"/> has initialized it.</summary>
+        public Connection? Active => _active?.Initialized == true ? _active : null;
+
+        /// <summary>Whether the host connected passive nodes, i.e. runs under a test host controller.</summary>
+        public bool HasPassiveNodes { get; private set; }
+
+        /// <summary>How long the host gets to exit after a completed request.</summary>
+        public TimeSpan ExitTimeout => HasPassiveNodes ? ControllerExitTimeout : MtpServerSession.ExitTimeout;
+
+        /// <summary>
+        /// Initializes the first connection and, while it is a passive node, the next. Bounded by
+        /// <paramref name="initializeTimeout"/> per connection, and by the connect timeout while waiting for one.
+        /// </summary>
+        public async Task<(Outcome Outcome, string? Error)> OpenAsync(TimeSpan initializeTimeout, CancellationToken ct)
+        {
+            var stream = first;
+            for (var passiveNodes = 0; ; passiveNodes++)
+            {
+                var connection = new Connection(stream);
+                _connections.Add(connection);
+                _active = connection;
+                _activeStream = stream;
+                var initialized = await connection.InitializeAsync(initializeTimeout, ct).ConfigureAwait(false);
+                if (initialized.Outcome != Outcome.Completed || !connection.MultipleConnectionProvider)
+                {
+                    return initialized;
+                }
+
+                if (acceptNext is null || passiveNodes >= MaxPassiveNodes)
+                {
+                    return (Outcome.NotStarted, "The test host connected as a passive node, but no further connection could be accepted.");
+                }
+
+                HasPassiveNodes = true;
+                log?.Invoke("MtpServer", "A test host controller connected as a passive node; waiting for its test host to connect");
+                _ = DrainPassiveAsync(connection);
+
+                Stream? next;
+                try
+                {
+                    next = await acceptNext(ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    return (Outcome.Cancelled, null);
+                }
+                catch (Exception ex) when (ex is IOException or SocketException or ObjectDisposedException)
+                {
+                    return (Outcome.NotStarted, $"Lost connection to the test host: {ex.Message}");
+                }
+
+                if (next is null)
+                {
+                    return (Outcome.NotStarted, "The test host did not connect after its test host controller.");
+                }
+
+                _streams.Add(next);
+                stream = next;
+            }
+        }
+
+        /// <summary>Closes the active connection, leaving passive nodes open until the link is disposed.</summary>
+        public void CloseActive() => _activeStream?.Dispose();
+
+        public void Dispose()
+        {
+            foreach (var stream in _streams)
+            {
+                stream.Dispose();
+            }
+
+            foreach (var connection in _connections)
+            {
+                connection.Dispose();
+            }
+        }
+
+        private async Task DrainPassiveAsync(Connection connection)
+        {
+            try
+            {
+                await connection.DrainAsync(message =>
+                {
+                    if (message.TryGetProperty("method", out var method)
+                        && method.GetString() == "testing/testUpdates/attachments"
+                        && message.TryGetProperty("params", out var parameters)
+                        && parameters.TryGetProperty("attachments", out var attachments)
+                        && attachments.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var attachment in attachments.EnumerateArray())
+                        {
+                            if (attachment.TryGetProperty("uri", out var uri))
+                            {
+                                log?.Invoke("MtpServer", $"Attachment from the test host controller: {uri.GetString()}");
+                            }
+                        }
+                    }
+                }).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or SocketException or JsonException or ObjectDisposedException or FormatException or OverflowException)
+            {
+                // The link is closing, or the controller went away.
+            }
+        }
     }
 
     /// <summary>
@@ -394,6 +587,12 @@ internal static class MtpServerSession
         /// <summary>Whether the current (or last) request has reported any test node.</summary>
         public bool ReportedNodes { get; private set; }
 
+        /// <summary>
+        /// Whether the host answered <c>initialize</c> as a passive node (<c>multipleConnectionProvider</c>):
+        /// it only pushes attachments, and requests go to another connection.
+        /// </summary>
+        public bool MultipleConnectionProvider { get; private set; }
+
         public Task<(Outcome Outcome, string? Error)> InitializeAsync(TimeSpan timeout, CancellationToken ct) =>
             GuardAsync("initialization", timeout, ct, async token =>
             {
@@ -411,7 +610,13 @@ internal static class MtpServerSession
                     },
                 }, token).ConfigureAwait(false);
 
-                var (ended, error) = await ReadResponseAsync(id, onNodes: null, token).ConfigureAwait(false);
+                var (ended, error) = await ReadResponseAsync(id, onNodes: null, token, result =>
+                    MultipleConnectionProvider = result.TryGetProperty("capabilities", out var capabilities)
+                        && capabilities.ValueKind == JsonValueKind.Object
+                        && capabilities.TryGetProperty("testing", out var testing)
+                        && testing.ValueKind == JsonValueKind.Object
+                        && testing.TryGetProperty("multipleConnectionProvider", out var multiple)
+                        && multiple.ValueKind == JsonValueKind.True).ConfigureAwait(false);
                 if (ended)
                 {
                     return (Outcome.NotStarted, "The test host disconnected before initializing.");
@@ -524,10 +729,11 @@ internal static class MtpServerSession
 
         /// <summary>
         /// Reads messages until the response to request <paramref name="id"/>, passing test node updates to
-        /// <paramref name="onNodes"/>. Returns <c>Ended</c> when the stream closes first.
+        /// <paramref name="onNodes"/> and a successful response's result to <paramref name="onResult"/>.
+        /// Returns <c>Ended</c> when the stream closes first.
         /// </summary>
         private async Task<(bool Ended, string? Error)> ReadResponseAsync(
-            int id, Action<IReadOnlyList<JsonElement>>? onNodes, CancellationToken ct)
+            int id, Action<IReadOnlyList<JsonElement>>? onNodes, CancellationToken ct, Action<JsonElement>? onResult = null)
         {
             while (true)
             {
@@ -584,9 +790,35 @@ internal static class MtpServerSession
                     continue;
                 }
 
-                return (false, root.TryGetProperty("error", out var errorElement)
-                    ? errorElement.TryGetProperty("message", out var msg) ? msg.GetString() : errorElement.GetRawText()
-                    : null);
+                if (root.TryGetProperty("error", out var errorElement))
+                {
+                    return (false, errorElement.TryGetProperty("message", out var msg) ? msg.GetString() : errorElement.GetRawText());
+                }
+
+                if (onResult is not null && root.TryGetProperty("result", out var result) && result.ValueKind == JsonValueKind.Object)
+                {
+                    onResult(result);
+                }
+
+                return (false, null);
+            }
+        }
+
+        /// <summary>
+        /// Reads a passive node's pushed messages, passing each to <paramref name="onMessage"/>, until the
+        /// stream closes.
+        /// </summary>
+        public async Task DrainAsync(Action<JsonElement> onMessage)
+        {
+            while (true)
+            {
+                using var message = await _reader.ReadAsync(CancellationToken.None).ConfigureAwait(false);
+                if (message is null)
+                {
+                    return;
+                }
+
+                onMessage(message.RootElement);
             }
         }
     }

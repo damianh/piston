@@ -326,9 +326,9 @@ public sealed class MtpExecutionTests : IAsyncLifetime
     }
 
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task RunAsync_WithCoverage_WritesCoberturaReports(bool serverMode)
+    [InlineData(true, "MTP server")]
+    [InlineData(false, "MTP dotnet test")]
+    public async Task RunAsync_WithCoverage_WritesCoberturaReports(bool serverMode, string runner)
     {
         if (!_available)
         {
@@ -340,10 +340,49 @@ public sealed class MtpExecutionTests : IAsyncLifetime
         try
         {
             Assert.Equal(2, result.Suites.SelectMany(s => s.Tests).Count());
-            Assert.Equal("MTP dotnet test", Assert.Single(result.Suites).ExecutionLog!.Runner);
+            Assert.Equal(runner, Assert.Single(result.Suites).ExecutionLog!.Runner);
             var report = Assert.Single(result.CoverageReportPaths);
             Assert.Contains("<coverage", await File.ReadAllTextAsync(report, _ct), StringComparison.Ordinal);
             Assert.NotNull(PistonOrchestrator.CoverageResultsDirectory(report));
+        }
+        finally
+        {
+            foreach (var dir in result.CoverageReportPaths.Select(PistonOrchestrator.CoverageResultsDirectory).OfType<string>().Distinct())
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { /* ignore */ }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_WithCoverage_ServerModeStreamsProgress()
+    {
+        if (!_available)
+        {
+            return; // packages unavailable — skip gracefully
+        }
+
+        var snapshots = new List<IReadOnlyList<TestResult>>();
+        var result = await MtpTestProcessRunner.RunAsync(
+            projectPath: _testCsproj,
+            appPath: AppPath,
+            solutionDirectory: _root,
+            filter: null,
+            onProgress: suites =>
+            {
+                lock (snapshots)
+                {
+                    snapshots.Add([.. suites.SelectMany(s => s.Tests)]);
+                }
+            },
+            ct: CancellationToken.None,
+            MtpCoverage.Collect);
+        try
+        {
+            Assert.Equal("MTP server", Assert.Single(result.Suites).ExecutionLog!.Runner);
+            Assert.Contains(snapshots, s => s.Count > 0);
+            Assert.All(snapshots[^1], t => Assert.NotEqual(TestStatus.Running, t.Status));
+            _ = Assert.Single(result.CoverageReportPaths);
         }
         finally
         {
