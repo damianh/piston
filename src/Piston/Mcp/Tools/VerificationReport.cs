@@ -57,6 +57,10 @@ internal static class VerificationReport
         if (result.Verdict == VerificationVerdict.BuildFailed && run.Build is { } build)
         {
             AppendList(sb, "Build errors", build.Errors, e => e, CapBuildError);
+            if (build.OmittedErrors > 0)
+            {
+                _ = sb.AppendLine($"  ... {build.OmittedErrors} more build error(s) omitted");
+            }
         }
 
         if (result.Verdict is VerificationVerdict.TestsFailed)

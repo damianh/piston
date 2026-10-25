@@ -38,6 +38,8 @@ internal sealed class BuildOutputCollector
     private readonly List<string> _warnings = [];
     private readonly Queue<string> _tail = new();
     private readonly int _maxTailLines;
+    private int _omittedErrors;
+    private int _omittedWarnings;
 
     public BuildOutputCollector(int maxTailLines = DefaultMaxTailLines) =>
         _maxTailLines = Math.Max(1, maxTailLines);
@@ -63,11 +65,11 @@ internal sealed class BuildOutputCollector
             AppendTail(trimmed);
             if (ErrorPattern.IsMatch(trimmed))
             {
-                _errors.Add(trimmed);
+                AddDiagnostic(_errors, trimmed, ref _omittedErrors);
             }
             else if (WarningPattern.IsMatch(trimmed))
             {
-                _warnings.Add(trimmed);
+                AddDiagnostic(_warnings, trimmed, ref _omittedWarnings);
             }
         }
     }
@@ -83,7 +85,7 @@ internal sealed class BuildOutputCollector
         lock (_gate)
         {
             AppendTail(trimmed);
-            _errors.Add(trimmed);
+            AddDiagnostic(_errors, trimmed, ref _omittedErrors);
         }
     }
 
@@ -92,7 +94,11 @@ internal sealed class BuildOutputCollector
     {
         lock (_gate)
         {
-            return new BuildResult(BuildStatus.Failed, _errors.ToList(), _warnings.ToList(), duration);
+            return new BuildResult(BuildStatus.Failed, _errors.ToList(), _warnings.ToList(), duration)
+            {
+                OmittedErrors = _omittedErrors,
+                OmittedWarnings = _omittedWarnings,
+            };
         }
     }
 
@@ -108,10 +114,16 @@ internal sealed class BuildOutputCollector
             var status = exitCode == 0 && errors.Count == 0 ? BuildStatus.Succeeded : BuildStatus.Failed;
             if (status == BuildStatus.Failed && errors.Count == 0)
             {
-                errors.Add(DescribeUnrecognizedFailure(exitCode, _tail.ToList()));
+                errors.Add(RetentionLimits.TruncateHead(
+                    DescribeUnrecognizedFailure(exitCode, _tail.ToList()),
+                    RetentionLimits.MaxBuildDiagnosticLength)!);
             }
 
-            return new BuildResult(status, errors, _warnings.ToList(), duration);
+            return new BuildResult(status, errors, _warnings.ToList(), duration)
+            {
+                OmittedErrors = _omittedErrors,
+                OmittedWarnings = _omittedWarnings,
+            };
         }
     }
 
@@ -133,6 +145,17 @@ internal sealed class BuildOutputCollector
         }
 
         return sb.ToString();
+    }
+
+    private static void AddDiagnostic(List<string> diagnostics, string line, ref int omitted)
+    {
+        if (diagnostics.Count >= RetentionLimits.MaxBuildDiagnostics)
+        {
+            omitted++;
+            return;
+        }
+
+        diagnostics.Add(RetentionLimits.TruncateHead(line, RetentionLimits.MaxBuildDiagnosticLength)!);
     }
 
     private void AppendTail(string line)

@@ -65,6 +65,7 @@ public sealed class BuildOutputCollectorTests
         Assert.Contains("Last 3 line(s) of output:", error);
         Assert.EndsWith("line 3\nThe process cannot access the file because it is being used.\nBuild FAILED.", error);
         Assert.DoesNotContain("line 2", error);
+        Assert.InRange(error.Length, 1, RetentionLimits.MaxBuildDiagnosticLength);
     }
 
     [Fact]
@@ -87,6 +88,27 @@ public sealed class BuildOutputCollectorTests
 
         Assert.DoesNotContain(new string('x', BuildOutputCollector.MaxTailLineLength + 1), error);
         Assert.EndsWith("…", error);
+    }
+
+    [Fact]
+    public void Diagnostics_AreBoundedInCountAndLength()
+    {
+        var collector = new BuildOutputCollector();
+        collector.AddOutputLine($"/w/A.csproj : error : {new string('x', RetentionLimits.MaxBuildDiagnosticLength * 2)}");
+        for (var i = 0; i <= RetentionLimits.MaxBuildDiagnostics; i++)
+        {
+            collector.AddOutputLine($"/w/A.csproj : error : error {i}");
+            collector.AddOutputLine($"/w/A.csproj : warning : warning {i}");
+        }
+
+        var result = collector.ToResult(1, TimeSpan.Zero);
+
+        Assert.Equal(RetentionLimits.MaxBuildDiagnostics, result.Errors.Count);
+        Assert.Equal(2, result.OmittedErrors);
+        Assert.Equal(RetentionLimits.MaxBuildDiagnostics, result.Warnings.Count);
+        Assert.Equal(1, result.OmittedWarnings);
+        Assert.All(result.Errors, e => Assert.InRange(e.Length, 1, RetentionLimits.MaxBuildDiagnosticLength));
+        Assert.Contains("characters truncated", result.Errors[0], StringComparison.Ordinal);
     }
 
     [Fact]
