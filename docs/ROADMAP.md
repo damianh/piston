@@ -123,9 +123,6 @@ opens by hand (today's `piston-dashboard` skill).
   line evidence without validated remapping.
 
 ### Memory
-- A declared baseline: the merge-base with a configured base ref, run in a
-  Piston-managed worktree, so "new versus pre-existing" does not depend on this
-  worktree's own history.
 - Richer flakiness evidence (retries, repeated outcomes across worktrees of one
   repository).
 

@@ -22,7 +22,7 @@ public static class DtoMapper
             FileChangesDetectedActivityEvent changed =>
                 ActivityEventFactory.FileChangesDetected(changed.SolutionPath, changed.ChangedFiles),
             BuildCompletedActivityEvent build =>
-                ActivityEventFactory.BuildCompleted(build.SolutionPath, build.Succeeded, build.DurationMs, build.Errors),
+                ActivityEventFactory.BuildCompleted(build.SolutionPath, build.Succeeded, build.DurationMs, build.Errors, build.ErrorCount),
             TestRunCompletedActivityEvent tests =>
                 ActivityEventFactory.TestRunCompleted(tests.SolutionPath, tests.Passed, tests.Failed, tests.Skipped,
                     tests.DurationMs, tests.Failures.Select(f => new TestFailureData(f.FullyQualifiedName, f.Message)).ToList()),
@@ -323,7 +323,9 @@ public static class DtoMapper
             result.Status.ToDto(),
             result.Errors,
             result.Warnings,
-            result.Duration.TotalMilliseconds
+            result.Duration.TotalMilliseconds,
+            result.OmittedErrors,
+            result.OmittedWarnings
         );
 
     public static StateSnapshotNotification ToSnapshot(this PistonState state) =>

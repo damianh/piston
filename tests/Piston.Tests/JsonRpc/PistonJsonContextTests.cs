@@ -194,7 +194,9 @@ public sealed class PistonJsonContextTests
             BuildStatusDto.Failed,
             new List<string> { "Error CS0001", "Error CS0002" },
             new List<string> { "Warning CS0612" },
-            123.4);
+            123.4,
+            OmittedErrors: 7,
+            OmittedWarnings: 3);
 
         var bytes = JsonSerializer.SerializeToUtf8Bytes(build, JsonRpcSerializer.Options);
         var result = JsonSerializer.Deserialize<BuildResultDto>(bytes, JsonRpcSerializer.Options);
@@ -204,6 +206,8 @@ public sealed class PistonJsonContextTests
         Assert.Equal(2, result.Errors.Count);
         Assert.Equal("Error CS0001", result.Errors[0]);
         _ = Assert.Single(result.Warnings);
+        Assert.Equal(7, result.OmittedErrors);
+        Assert.Equal(3, result.OmittedWarnings);
         Assert.Equal(BuildStatusDto.Failed, result.Status);
     }
 

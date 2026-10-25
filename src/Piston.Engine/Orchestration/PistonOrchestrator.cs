@@ -1123,7 +1123,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     solutionPath,
                     buildResult.Status == BuildStatus.Succeeded,
                     buildResult.Duration.TotalMilliseconds,
-                    buildResult.Errors));
+                    [.. buildResult.Errors.Take(RetentionLimits.MaxActivityBuildErrors)
+                        .Select(e => RetentionLimits.TruncateHead(e, RetentionLimits.MaxActivityMessageLength)!)])
+                {
+                    ErrorCount = buildResult.Errors.Count + buildResult.OmittedErrors,
+                });
 
                 if (buildResult.Status == BuildStatus.Failed)
                 {
@@ -1131,7 +1135,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     _state.NotifyChanged();
                     ScheduleGraphRebuildIfNeeded(impactResult);
                     return Finish(TestRunStatus.BuildFailed,
-                        $"Build failed with {buildResult.Errors.Count} error(s).", computeAfter: true);
+                        $"Build failed with {buildResult.Errors.Count + buildResult.OmittedErrors} error(s).", computeAfter: true);
                 }
 
                 // The build restored packages the graph was evaluated without (a fresh clone): reload it, so test
@@ -1762,7 +1766,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             }
 
             var recent = new List<TestRunRecord>(_state.RecentRuns.Count + 1) { finished };
-            recent.AddRange(_state.RecentRuns.Take(PistonState.MaxRecentRuns - 1));
+            recent.AddRange(_state.RecentRuns.Take(PistonState.MaxRecentRuns - 1).Select(DropExecutionLogs));
             _state.RecentRuns = recent;
 
             if (_runWaiters.Remove(finished.RunId, out var waiter))
@@ -1774,6 +1778,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         _state.NotifyChanged();
         return finished;
     }
+
+    private static TestRunRecord DropExecutionLogs(TestRunRecord run) =>
+        run.Suites.All(s => s.ExecutionLog is null)
+            ? run
+            : run with { Suites = [.. run.Suites.Select(s => s with { ExecutionLog = null })] };
 
     private static string? DescribeIncomplete(
         IReadOnlyList<TestRunProjectOutcome> outcomes,
@@ -1824,7 +1833,10 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
         var failures = allTests
             .Where(t => t.Status == TestStatus.Failed)
-            .Select(t => new TestFailure(t.ResultKey, t.ErrorMessage))
+            .Take(RetentionLimits.MaxActivityFailures)
+            .Select(t => new TestFailure(
+                RetentionLimits.TruncateHead(t.ResultKey, RetentionLimits.MaxActivityMessageLength)!,
+                RetentionLimits.TruncateHead(t.ErrorMessage, RetentionLimits.MaxActivityMessageLength)))
             .ToList();
 
         _activitySink.Emit(new TestRunCompletedActivityEvent(
@@ -1952,8 +1964,19 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             || rerunAnyFramework.Contains(t.FullyQualifiedName)
             || (t.TargetFramework is null && rerunNames.Contains(t.FullyQualifiedName));
 
+        var updatedLogProjects = newResults
+            .Where(s => s.ExecutionLog is not null)
+            .Select(s => s.ExecutionLog!.ProjectPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         var merged = existing
-            .Select(s => s with { Tests = s.Tests.Where(t => !Rerun(t)).ToList() })
+            .Select(s => s with
+            {
+                Tests = s.Tests.Where(t => !Rerun(t)).ToList(),
+                ExecutionLog = s.ExecutionLog is { } log && updatedLogProjects.Contains(log.ProjectPath)
+                    ? null
+                    : s.ExecutionLog,
+            })
             .Where(s => s.Tests.Count > 0)
             .ToList();
 
