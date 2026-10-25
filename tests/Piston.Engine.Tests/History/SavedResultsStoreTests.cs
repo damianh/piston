@@ -59,7 +59,7 @@ public sealed class SavedResultsStoreTests : IDisposable
         var json = JsonNode.Parse(File.ReadAllText(FilePath))!;
         var run = json["LastRun"]!.AsObject();
         Assert.False(run.ContainsKey("Tests"));
-        Assert.Single(run["Suites"]![0]!["Tests"]!.AsArray());
+        _ = Assert.Single(run["Suites"]![0]!["Tests"]!.AsArray());
         using var reader = Open();
         Assert.Equal(Result, Assert.Single(reader.TryLoad()!.LastRun!.Tests));
     }
