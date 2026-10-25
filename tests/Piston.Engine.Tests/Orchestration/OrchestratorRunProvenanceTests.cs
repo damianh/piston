@@ -289,11 +289,11 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         Assert.Equal([code], broken.ChangedFiles);
         Assert.Equal(1, broken.ChangedFileCount);
         Assert.NotEqual(startup.SourceAfter, broken.SourceBefore);
-        Assert.Equal([new("A.Tests", "A.Tests.Test1")], broken.NewlyFailingTests);
+        Assert.Equal([new("A.Tests", "A.Tests.Test1") { ProjectId = TestProjectNames.ProjectId(_root, Projects[0]) }], broken.NewlyFailingTests);
         Assert.Equal(1, broken.Failed);
         Assert.Equal(BuildStatus.Succeeded, broken.BuildStatus);
         Assert.Equal(fixedRun!.RunId, fixedEntry.RunId);
-        Assert.Equal([new("A.Tests", "A.Tests.Test1")], fixedEntry.FixedTests);
+        Assert.Equal([new("A.Tests", "A.Tests.Test1") { ProjectId = TestProjectNames.ProjectId(_root, Projects[0]) }], fixedEntry.FixedTests);
         Assert.Equal(broken.SourceAfter, fixedEntry.SourceBefore);
         Assert.False(fixedEntry.InRunHistory);
         Assert.True(timeline.Zip(timeline.Skip(1)).All(p => p.First.Sequence < p.Second.Sequence));

@@ -162,7 +162,7 @@
     private void Recompute()
     {
         var failing = (_snapshot?.Suites ?? [])
-            .SelectMany(s => s.Tests.Where(t => t.Status == TestStatusDto.Failed).Select(t => new TestReference(s.Name, t.Key)));
+            .SelectMany(s => s.Tests.Where(t => t.Status == TestStatusDto.Failed).Select(t => new TestReference(s.ProjectId ?? s.Name, t.Key)));
         _failures = _timeline.TraceFailures(failing);
         (_relatedRuns, _relatedEdits) = View.TracedTest is { } traced
             ? _timeline.Related(traced)
@@ -369,10 +369,10 @@
             <span class="@color">@title</span> <span class="tabular-nums text-gray-500">@count</span>
             @foreach (var reference in shown)
             {
-                var test = new TestReference(reference.Project, reference.Key);
+                var test = new TestReference(reference.ProjectId, reference.Key);
                 var followed = View.TracedTest == test;
                 var classification = classify
-                    ? run.Entry.FailureClassifications.FirstOrDefault(c => c.Project == test.Project && c.Test == test.Key)
+                    ? run.Entry.FailureClassifications.FirstOrDefault(c => SessionTimeline.Matches(c, test))
                     : null;
                 <div class="flex items-center gap-2 pl-3 @(followed ? "bg-blue-500/10" : "")">
                     <button class="truncate text-left text-gray-300 hover:underline" title="Follow @test.Project :: @test.Key in the timeline"

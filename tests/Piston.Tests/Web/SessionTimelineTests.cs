@@ -112,7 +112,47 @@ public sealed class SessionTimelineTests
     {
         var timeline = SessionTimeline.Build([Entry(501, "aaa"), Entry(502, "bbb", files: ["/src/A.cs"])], earlierRunsDropped: 500);
 
-        Assert.Equal([501, 502], timeline.Runs.Select(r => r.Number));
+        Assert.Equal([501L, 502L], timeline.Runs.Select(r => r.Number));
+    }
+
+    [Fact]
+    public void Build_NumbersRunsByRequest_HoweverTheyFinish()
+    {
+        // r2, a queued run, was cancelled and finished while r1 was still stopping.
+        var whileR1Stops = SessionTimeline.Build([Entry(2, null, files: ["/src/A.cs"], status: "Cancelled", freshness: "Unknown")]);
+        var afterR1 = SessionTimeline.Build([Entry(2, null, files: ["/src/A.cs"], status: "Cancelled", freshness: "Unknown"), Entry(1, "aaa")]);
+
+        Assert.Equal([2L], whileR1Stops.Runs.Select(r => r.Number));
+        Assert.Equal([1L, 2L], afterR1.Runs.Select(r => r.Number));
+    }
+
+    [Fact]
+    public void TraceFailures_MatchesTestsByProjectId()
+    {
+        var reference = new TestOutcomeReferenceDto("A.Tests", "A.Broken") { ProjectId = "src/A/A.Tests.csproj" };
+        var timeline = SessionTimeline.Build([Entry(1, "aaa"), Entry(2, "bbb", files: ["/src/A.cs"]) with { NewlyFailingTests = [reference], NewlyFailingCount = 1 }]);
+
+        var traces = timeline.TraceFailures([new TestReference("src/A/A.Tests.csproj", "A.Broken"), new TestReference("A.Tests", "A.Broken")]);
+
+        Assert.Equal("r2", traces[0].IntroducedBy?.Entry.RunId);
+        Assert.Null(traces[1].IntroducedBy);
+    }
+
+    [Fact]
+    public void TraceFailures_ANewStreakDoesNotInheritAnEarlierStreaksClassification()
+    {
+        var preExisting = new FailureClassificationDto("A.Tests", "A.Broken", "PreExisting", "Also failed in 3 earlier run(s).");
+        var timeline = SessionTimeline.Build(
+        [
+            Entry(1, "aaa", classifications: [preExisting]),
+            Entry(2, "bbb", files: ["/src/Fix.cs"], fixedTests: [Broken]),
+            Entry(3, "ccc", files: ["/src/Break.cs"], newlyFailing: [Broken]),
+        ]);
+
+        var trace = Assert.Single(timeline.TraceFailures([Broken]));
+
+        Assert.Equal("r3", trace.IntroducedBy!.Entry.RunId);
+        Assert.Null(trace.Classification);
     }
 
     [Fact]

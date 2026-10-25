@@ -26,9 +26,9 @@ public sealed record SessionTimelineEdit(
     string NextRunId) : SessionTimelineItem(At);
 
 /// <summary>A terminal run of the session.</summary>
-/// <param name="Number">Position of the run in the session, from 1, counting runs no longer retained.</param>
+/// <param name="Number">The engine's request sequence for the run, from 1; stable however the runs finish or are retained.</param>
 /// <param name="EditedDuringRun">The source changed while the run executed, so its results are not current.</param>
-public sealed record SessionTimelineRun(SessionTimelineEntryDto Entry, int Number, bool EditedDuringRun)
+public sealed record SessionTimelineRun(SessionTimelineEntryDto Entry, long Number, bool EditedDuringRun)
     : SessionTimelineItem(Entry.RequestedAt)
 {
     public bool Started => Entry.SourceBefore is not null || Entry.StartedAt is not null;
@@ -93,7 +93,6 @@ public sealed class SessionTimeline
         var pendingSeen = new HashSet<string>(StringComparer.Ordinal);
         var pendingUnlisted = 0;
         DateTimeOffset? pendingAt = null;
-        var number = earlierRunsDropped;
 
         foreach (var entry in entries.OrderBy(e => e.Sequence))
         {
@@ -135,7 +134,7 @@ public sealed class SessionTimeline
 
             var editedDuring = entry.Freshness == "Stale"
                 || (entry.SourceAfter is not null && entry.SourceBefore is not null && entry.SourceAfter != entry.SourceBefore);
-            items.Add(new SessionTimelineRun(entry, ++number, editedDuring));
+            items.Add(new SessionTimelineRun(entry, entry.Sequence, editedDuring));
         }
 
         return new SessionTimeline(items, earlierRunsDropped);
@@ -167,8 +166,7 @@ public sealed class SessionTimeline
             foreach (var run in Runs)
             {
                 var entry = run.Entry;
-                var classification = entry.FailureClassifications.FirstOrDefault(c => c.Project == test.Project && c.Test == test.Key);
-                latest = classification ?? latest;
+                var classification = entry.FailureClassifications.FirstOrDefault(c => Matches(c, test));
                 var blind = entry.NoEarlierResults && sawResults;
                 var fixedUnlisted = blind || entry.FixedCount > entry.FixedTests.Count;
                 var failingUnlisted = blind || entry.NewlyFailingCount > entry.NewlyFailingTests.Count;
@@ -176,20 +174,25 @@ public sealed class SessionTimeline
                 {
                     introducedBy = null;
                     introducedAs = null;
+                    latest = null;
                     fixedSinceStreak = true;
                     possiblyFixedUnlisted = false;
                     uncertain = false;
                 }
                 else if (entry.NewlyFailingTests.Any(t => Matches(t, test)))
                 {
+                    // A new streak doesn't inherit an earlier streak's classification.
                     introducedBy = run;
                     introducedAs = classification;
+                    latest = classification;
                     fixedSinceStreak = false;
                     possiblyFixedUnlisted = false;
                     uncertain = false;
                 }
                 else
                 {
+                    latest = classification ?? latest;
+
                     // A test can't be fixed and newly fail in the same run, so only an earlier unlisted fix counts.
                     if (failingUnlisted && (introducedBy is null || possiblyFixedUnlisted))
                     {
@@ -255,7 +258,7 @@ public sealed class SessionTimeline
         foreach (var run in Runs)
         {
             var changed = run.Entry.NewlyFailingTests.Any(t => Matches(t, test)) || run.Entry.FixedTests.Any(t => Matches(t, test));
-            if (changed || run.Entry.FailureClassifications.Any(c => c.Project == test.Project && c.Test == test.Key))
+            if (changed || run.Entry.FailureClassifications.Any(c => Matches(c, test)))
             {
                 _ = runs.Add(run.Entry.RunId);
             }
@@ -269,6 +272,11 @@ public sealed class SessionTimeline
         return (runs, edits);
     }
 
-    private static bool Matches(TestOutcomeReferenceDto reference, TestReference test) =>
-        reference.Project == test.Project && reference.Key == test.Key;
+    /// <summary>Whether <paramref name="reference"/> is <paramref name="test"/>, matched by project ID.</summary>
+    public static bool Matches(TestOutcomeReferenceDto reference, TestReference test) =>
+        reference.ProjectId == test.Project && reference.Key == test.Key;
+
+    /// <summary>Whether <paramref name="classification"/> is for <paramref name="test"/>, matched by project ID.</summary>
+    public static bool Matches(FailureClassificationDto classification, TestReference test) =>
+        (classification.ProjectId ?? classification.Project) == test.Project && classification.Test == test.Key;
 }

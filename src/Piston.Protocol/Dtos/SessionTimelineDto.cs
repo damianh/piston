@@ -6,7 +6,7 @@ namespace Piston.Protocol.Dtos;
 /// <summary>How one failed test relates to the worktree's run history.</summary>
 /// <param name="Kind">New, PreExisting, Flaky or Unknown.</param>
 /// <param name="Evidence">The earlier runs the kind rests on.</param>
-public sealed record FailureClassificationDto(string Project, string Test, string Kind, string Evidence);
+public sealed record FailureClassificationDto(string Project, string Test, string Kind, string Evidence, string? ProjectId = null);
 
 /// <summary>
 /// Compact provenance of one terminal run in the daemon's session. Enum-like fields are strings so new

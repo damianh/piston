@@ -74,7 +74,7 @@ public sealed class SessionTimelineCommandTests
         Assert.Equal(["/repo/Code.cs"], entry.ChangedFiles);
         Assert.Equal(new TestOutcomeReferenceDto("A.Tests", "A.Broke"), Assert.Single(entry.NewlyFailingTests));
         Assert.Equal(new TestOutcomeReferenceDto("A.Tests", "A.Healed"), Assert.Single(entry.FixedTests));
-        Assert.Equal(new FailureClassificationDto("A.Tests", "A.Broke", "New", "Passed in run r0."), Assert.Single(entry.FailureClassifications));
+        Assert.Equal(new FailureClassificationDto("A.Tests", "A.Broke", "New", "Passed in run r0.", "A.Tests"), Assert.Single(entry.FailureClassifications));
         Assert.True(entry.InRunHistory);
     }
 

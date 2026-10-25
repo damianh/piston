@@ -499,11 +499,11 @@ public static class DtoMapper
         entry.Passed,
         entry.Failed,
         entry.Skipped,
-        [.. entry.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
+        [.. entry.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key) { ProjectId = t.ProjectId })],
         entry.NewlyFailingCount,
-        [.. entry.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
+        [.. entry.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key) { ProjectId = t.ProjectId })],
         entry.FixedCount,
-        [.. entry.FailureClassifications.Select(c => new FailureClassificationDto(c.Project, c.Test, c.Kind.ToString(), c.Evidence))],
+        [.. entry.FailureClassifications.Select(c => new FailureClassificationDto(c.Project, c.Test, c.Kind.ToString(), c.Evidence, c.ProjectId))],
         entry.InRunHistory,
         entry.NoEarlierResults);
 

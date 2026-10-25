@@ -79,7 +79,7 @@ public sealed record SessionTimelineEntry(
             [.. run.ChangedFiles.Take(MaxListItems)],
             run.ChangedFiles.Count,
             run.Build?.Status,
-            run.Build?.Errors.Count ?? 0,
+            run.Build is { } build ? build.Errors.Count + build.OmittedErrors : 0,
             tests.Count(t => t.Status == TestStatus.Passed),
             tests.Count(t => t.Status == TestStatus.Failed),
             tests.Count(t => t.Status == TestStatus.Skipped),

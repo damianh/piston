@@ -1869,9 +1869,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             recent.AddRange(_state.RecentRuns.Take(PistonState.MaxRecentRuns - 1).Select(DropExecutionLogs));
             _state.RecentRuns = recent;
 
+            // Runs can finish out of request order (a queued run cancelled while an older one stops), so keep the
+            // timeline sorted by request so that trimming always drops the oldest requests.
             var timeline = _state.SessionTimeline;
             var skip = Math.Max(0, timeline.Count + 1 - PistonState.MaxSessionTimelineEntries);
-            _state.SessionTimeline = [.. timeline.Skip(skip), SessionTimelineEntry.From(finished, inRunHistory)];
+            _state.SessionTimeline = [.. timeline.Append(SessionTimelineEntry.From(finished, inRunHistory)).OrderBy(e => e.Sequence).Skip(skip)];
             _state.SessionTimelineDroppedRuns += skip;
 
             if (_runWaiters.Remove(finished.RunId, out var waiter))
