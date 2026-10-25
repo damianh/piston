@@ -130,4 +130,7 @@ public sealed class PistonOptions
     /// Recorded in the worktree ownership details so tools can tell a <c>piston mcp</c> session from a daemon.
     /// </summary>
     public string? OwnerHost { get; init; }
+
+    /// <summary>The local dashboard URL recorded in the worktree ownership details, when hosted.</summary>
+    public string? OwnerDashboardUrl { get; init; }
 }

@@ -77,6 +77,8 @@ ARCHITECTURE describe the implementation in detail.
 - Coverage tab: a grouped file list, highlighted source with hit counts,
   covering tests per file and line, and backfill progress.
 - MCP call history, user settings, keyboard shortcuts and theme-aware styling.
+- Machine tab: owned worktrees and dashboard links, budget use, running work and
+  the FIFO queue; `piston status --all` prints the same machine overview.
 
 **Distribution and CI**
 - A framework-dependent .NET tool (`Piston` package, `piston` command) attached
@@ -140,8 +142,6 @@ opens by hand (today's `piston-dashboard` skill).
 
 ### Dashboard
 - A session timeline: edits, runs, outcomes, freshness and failure classification.
-- A workspace overview: owned worktrees on the machine, queued and running work,
-  and budget use.
 
 ## Risks and open questions
 

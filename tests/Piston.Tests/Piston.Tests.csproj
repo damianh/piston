@@ -34,6 +34,7 @@
     <Compile Include="..\..\src\Piston.Web\Models\StackTraceParser.cs" Link="Web\StackTraceParser.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\CSharpHighlighter.cs" Link="Web\CSharpHighlighter.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\WatchStrip.cs" Link="Web\WatchStrip.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\MachineOverviewView.cs" Link="Web\MachineOverviewView.cs" />
   </ItemGroup>
 
   <ItemGroup>

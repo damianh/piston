@@ -1,0 +1,74 @@
+// Copyright (c) Damian Hickey. All rights reserved.
+// See LICENSE in the project root for license information.
+
+using Piston.Engine.Execution;
+
+namespace Piston.Hosting;
+
+public static class StatusAllFormatter
+{
+    public static string Format(MachineExecutionOverview overview)
+    {
+        var lines = new List<string>();
+        var live = overview.Owners.Where(owner => owner.Liveness == OwnershipLiveness.Live).ToList();
+        var stale = overview.Owners.Where(owner => owner.Liveness == OwnershipLiveness.Stale).ToList();
+        if (live.Count == 0)
+        {
+            lines.Add("No Piston process owns a worktree.");
+        }
+
+        foreach (var record in live)
+        {
+            var owner = record.Owner;
+            var running = owner is not null && overview.Running.Any(entry => entry.ProcessId == owner.ProcessId);
+            var queued = owner is not null
+                ? overview.Queue.FirstOrDefault(entry => entry.ProcessId == owner.ProcessId)
+                : null;
+            var state = running ? "Running"
+                : queued is not null ? $"Queued #{queued.QueuePosition}"
+                : owner is null ? "Unknown"
+                : "Idle";
+            var dashboard = owner?.DashboardUrl is { } url ? $" | dashboard {url}" : "";
+            lines.Add($"Live : [{state}] {OwnerLookup.Describe(record)}{dashboard}");
+        }
+
+        foreach (var record in stale)
+        {
+            lines.Add($"Stale: {OwnerLookup.Describe(record)} (owner exited without cleanup; harmless)");
+        }
+
+        if (overview.Budget is { } budget)
+        {
+            var memory = budget.MemoryMb is { } maxMemory
+                ? $"{overview.MemoryMbInUse.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)}/{maxMemory.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} MiB"
+                : $"{overview.MemoryMbInUse.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} MiB (not budgeted)";
+            lines.Add(
+                $"Budget: CPU {overview.CpuSlotsInUse}/{budget.CpuSlots} slot(s); memory {memory}; " +
+                $"{overview.Running.Count} running, {overview.Queue.Count} queued ({budget.Source})");
+        }
+
+        foreach (var entry in overview.Running)
+        {
+            lines.Add(
+                $"Running: PID {entry.ProcessId} | run {entry.RunId} | {entry.CpuSlots} CPU slot(s), " +
+                $"memory {entry.MemoryMb?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"} MiB" +
+                (entry.WorktreeKey is { } key ? $" | worktree {key}" : " | unknown worktree"));
+        }
+
+        foreach (var entry in overview.Queue)
+        {
+            lines.Add(
+                $"Queue #{entry.QueuePosition}: PID {entry.ProcessId} | run {entry.RunId} | " +
+                $"{entry.CpuSlots} CPU slot(s), " +
+                $"memory {entry.MemoryMb?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"} MiB" +
+                (entry.WorktreeKey is { } key ? $" | worktree {key}" : " | unknown worktree"));
+        }
+
+        if (overview.Error is { Length: > 0 } error)
+        {
+            lines.Add($"Overview error: {error}");
+        }
+
+        return string.Join(Environment.NewLine, lines) + Environment.NewLine;
+    }
+}

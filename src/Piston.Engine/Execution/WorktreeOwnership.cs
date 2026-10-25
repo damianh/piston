@@ -38,8 +38,14 @@ public sealed class WorktreeOwnership : IDisposable
     /// <param name="contentionRetry">Retry window while the lock is held; defaults to <see cref="DefaultContentionRetry"/>.</param>
     /// <exception cref="WorktreeOwnershipConflictException">Another live process owns the worktree.</exception>
     public static WorktreeOwnership Acquire(
-        ExecutionCoordinationDirectory directory, string solutionPath, string? host = null, TimeSpan? contentionRetry = null)
+        ExecutionCoordinationDirectory directory, string solutionPath, string? host = null,
+        TimeSpan? contentionRetry = null, string? dashboardUrl = null)
     {
+        if (dashboardUrl is not null && !TryValidateDashboardUrl(dashboardUrl, out dashboardUrl))
+        {
+            throw new ArgumentException("Dashboard URL must be an HTTP URL on localhost or a loopback IP.", nameof(dashboardUrl));
+        }
+
         var worktree = WorktreeIdentity.FromSolutionPath(solutionPath);
         var lockPath = Path.Combine(directory.OwnersDirectory, worktree.Key + ".lock");
         var infoPath = Path.Combine(directory.OwnersDirectory, worktree.Key + ".json");
@@ -65,7 +71,7 @@ public sealed class WorktreeOwnership : IDisposable
         }
 
         var owner = new ExecutionOwnerInfo(
-            Environment.ProcessId, Path.GetFullPath(solutionPath), worktree.RootPath, DateTimeOffset.UtcNow, host);
+            Environment.ProcessId, Path.GetFullPath(solutionPath), worktree.RootPath, DateTimeOffset.UtcNow, host, dashboardUrl);
         try
         {
             WriteInfo(infoPath, owner);
@@ -174,13 +180,36 @@ public sealed class WorktreeOwnership : IDisposable
                 root.GetProperty("solutionPath").GetString() ?? "",
                 root.GetProperty("worktreePath").GetString() ?? "",
                 root.GetProperty("acquiredAt").GetDateTimeOffset(),
-                root.TryGetProperty("host", out var host) && host.ValueKind == JsonValueKind.String ? host.GetString() : null);
+                root.TryGetProperty("host", out var host) && host.ValueKind == JsonValueKind.String ? host.GetString() : null,
+                root.TryGetProperty("dashboardUrl", out var dashboardUrl)
+                && dashboardUrl.ValueKind == JsonValueKind.String
+                && TryValidateDashboardUrl(dashboardUrl.GetString(), out var safeDashboardUrl)
+                    ? safeDashboardUrl
+                    : null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException
                                        or KeyNotFoundException or InvalidOperationException or FormatException)
         {
             return null;
         }
+    }
+
+    private static bool TryValidateDashboardUrl(string? value, out string safeUrl)
+    {
+        safeUrl = "";
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || !string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            || !uri.IsLoopback
+            || uri.UserInfo.Length > 0
+            || (uri.AbsolutePath is not "" and not "/")
+            || uri.Query.Length > 0
+            || uri.Fragment.Length > 0)
+        {
+            return false;
+        }
+
+        safeUrl = uri.GetLeftPart(UriPartial.Authority);
+        return true;
     }
 
     private static void WriteInfo(string infoPath, ExecutionOwnerInfo owner)
@@ -197,6 +226,10 @@ public sealed class WorktreeOwnership : IDisposable
             if (owner.Host is not null)
             {
                 writer.WriteString("host", owner.Host);
+            }
+            if (owner.DashboardUrl is not null)
+            {
+                writer.WriteString("dashboardUrl", owner.DashboardUrl);
             }
             writer.WriteEndObject();
         }
