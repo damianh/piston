@@ -2,7 +2,6 @@
 // See LICENSE in the project root for license information.
 
 using System.Security.Cryptography;
-using Piston.Engine.Impact;
 
 namespace Piston.Engine.Coverage;
 

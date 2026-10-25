@@ -563,7 +563,7 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
 
         if (currentContent is null)
         {
-            return ReadLines(filePath, transaction: null);
+            return [];
         }
 
         var currentHash = ImpactContent.Hash(currentContent);
@@ -652,7 +652,7 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
         var currentContent = ImpactContent.TryRead(file.FilePath);
         if (currentContent is null)
         {
-            return file;
+            return file with { IsStale = true };
         }
 
         var currentHash = ImpactContent.Hash(currentContent);

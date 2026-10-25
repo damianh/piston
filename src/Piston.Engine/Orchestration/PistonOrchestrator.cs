@@ -708,12 +708,19 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     private const string RunUnitKey = "run";
 
     /// <summary>Flags a file stale when its content no longer matches what was measured, e.g. after edits while stopped.</summary>
-    private static CoverageFileSummary WithCurrentStaleness(CoverageFileSummary file) =>
-        file.ContentHash is null
-            || (file.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && !file.IsStale)
-            || string.Equals(file.ContentHash, CoverageReportFile.ComputeContentHash(file.FilePath), StringComparison.Ordinal)
+    private static CoverageFileSummary WithCurrentStaleness(CoverageFileSummary file)
+    {
+        var content = ImpactContent.TryRead(file.FilePath);
+        if (content is null)
+        {
+            return file with { IsStale = true };
+        }
+
+        return (file.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && !file.IsStale)
+            || string.Equals(file.SnapshotHash ?? file.ContentHash, ImpactContent.Hash(content), StringComparison.Ordinal)
             ? file
             : file with { IsStale = true };
+    }
 
     internal async Task ProcessCoverageAsync(
         long runId,

@@ -118,7 +118,7 @@ internal sealed class SourceMembers
                         lineMap[oldMember.TokenLines[index]] = mappedTargets = [];
                     }
 
-                    mappedTargets.Add(newMember.TokenLines[index]);
+                    _ = mappedTargets.Add(newMember.TokenLines[index]);
                 }
             }
         }
@@ -159,7 +159,7 @@ internal sealed class SourceMembers
                     mapping[oldMember.TokenLines[index]] = newLines = [];
                 }
 
-                newLines.Add(newMember.TokenLines[index]);
+                _ = newLines.Add(newMember.TokenLines[index]);
             }
         }
 

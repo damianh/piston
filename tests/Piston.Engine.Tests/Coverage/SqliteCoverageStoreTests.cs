@@ -353,22 +353,25 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
     [Fact]
     public async Task StoreReportAsync_FullRun_ReplacesWholeReportWithTotals()
     {
+        var path = Path.Combine(_tempDir, "A.cs");
+        const string content = "class C {}";
+        File.WriteAllText(path, content);
         await _sut.StoreReportAsync(_sut.CreateRunId(), [ReportFile("/repo/Old.cs", "h0", new LineCoverage(1, 1))], isFullRun: true);
         var run = _sut.CreateRunId();
 
         await _sut.StoreReportAsync(run, [
-            ReportFile("/repo/A.cs", "h1", new LineCoverage(1, 3, 1, 2), new LineCoverage(2, 0), new LineCoverage(5, 1)),
+            ReportFileWithContent(path, content, new LineCoverage(1, 3, 1, 2), new LineCoverage(2, 0), new LineCoverage(5, 1)),
         ], isFullRun: true);
 
         var file = Assert.Single(_sut.GetReportFiles());
-        Assert.Equal("/repo/A.cs", file.FilePath);
+        Assert.Equal(path, file.FilePath);
         Assert.Equal("Lib", file.Module);
         Assert.Equal((3, 2, 2, 1), (file.LinesTotal, file.LinesCovered, file.BranchesTotal, file.BranchesCovered));
         Assert.False(file.IsStale);
         Assert.False(file.IsPartial);
-        Assert.Equal("h1", file.ContentHash);
+        Assert.Equal(ImpactContent.Hash(content), file.ContentHash);
         Assert.Equal(run, file.RunId);
-        Assert.Equal(new LineCoverage(1, 3, 1, 2), _sut.GetReportLines("/repo/A.cs")[0]);
+        Assert.Equal(new LineCoverage(1, 3, 1, 2), _sut.GetReportLines(path)[0]);
         Assert.Null(_sut.GetReportFile("/repo/Old.cs"));
     }
 
@@ -407,17 +410,20 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
     [Fact]
     public async Task StoreReportAsync_SelectiveRunOnUnchangedFile_MergesHigherCounts()
     {
+        var path = Path.Combine(_tempDir, "A.cs");
+        const string content = "class C {}";
+        File.WriteAllText(path, content);
         await _sut.StoreReportAsync(_sut.CreateRunId(), [
-            ReportFile("/repo/A.cs", "h1", new LineCoverage(1, 5), new LineCoverage(2, 0, 0, 2)),
+            ReportFileWithContent(path, content, new LineCoverage(1, 5), new LineCoverage(2, 0, 0, 2)),
             ReportFile("/repo/B.cs", "h2", new LineCoverage(1, 1)),
         ], isFullRun: true);
 
         await _sut.StoreReportAsync(_sut.CreateRunId(), [
-            ReportFile("/repo/A.cs", "h1", new LineCoverage(1, 1), new LineCoverage(2, 2, 1, 2)),
+            ReportFileWithContent(path, content, new LineCoverage(1, 1), new LineCoverage(2, 2, 1, 2)),
         ], isFullRun: false);
 
-        Assert.Equal([new LineCoverage(1, 5), new LineCoverage(2, 2, 1, 2)], _sut.GetReportLines("/repo/A.cs"));
-        var a = _sut.GetReportFile("/repo/A.cs")!;
+        Assert.Equal([new LineCoverage(1, 5), new LineCoverage(2, 2, 1, 2)], _sut.GetReportLines(path));
+        var a = _sut.GetReportFile(path)!;
         Assert.Equal((2, 2, 1), (a.LinesCovered, a.BranchesTotal, a.BranchesCovered));
         Assert.False(a.IsPartial);
         Assert.NotNull(_sut.GetReportFile("/repo/B.cs"));
@@ -426,21 +432,26 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
     [Fact]
     public async Task StoreReportAsync_SelectiveRunOnChangedFile_ReplacesAndFlagsPartial()
     {
+        var path = Path.Combine(_tempDir, "A.cs");
+        const string original = "class C {}";
+        const string edited = "class C { int x; }";
+        File.WriteAllText(path, original);
         await _sut.StoreReportAsync(_sut.CreateRunId(), [
-            ReportFile("/repo/A.cs", "h1", new LineCoverage(1, 5), new LineCoverage(9, 1)),
+            ReportFileWithContent(path, original, new LineCoverage(1, 5), new LineCoverage(9, 1)),
         ], isFullRun: true);
-        await _sut.MarkFileStaleAsync("/repo/A.cs");
-        Assert.True(_sut.GetReportFile("/repo/A.cs")!.IsStale);
+        File.WriteAllText(path, edited);
+        await _sut.MarkFileStaleAsync(path);
+        Assert.True(_sut.GetReportFile(path)!.IsStale);
 
         await _sut.StoreReportAsync(_sut.CreateRunId(), [
-            ReportFile("/repo/A.cs", "h2", new LineCoverage(1, 1)),
+            ReportFileWithContent(path, edited, new LineCoverage(1, 1)),
         ], isFullRun: false);
 
-        Assert.Equal([new LineCoverage(1, 1)], _sut.GetReportLines("/repo/A.cs"));
-        var a = _sut.GetReportFile("/repo/A.cs")!;
+        Assert.Equal([new LineCoverage(1, 1)], _sut.GetReportLines(path));
+        var a = _sut.GetReportFile(path)!;
         Assert.False(a.IsStale);
         Assert.True(a.IsPartial);
-        Assert.Equal("h2", a.ContentHash);
+        Assert.Equal(ImpactContent.Hash(edited), a.ContentHash);
     }
 
     [Fact]

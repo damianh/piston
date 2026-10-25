@@ -140,7 +140,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                     : MembersForSpans(sourceMembers, file.Spans).ToHashSet(StringComparer.Ordinal);
                 if (sourceMembers.Members.Count > 0 && HasLooseSpans(sourceMembers, file.Spans))
                 {
-                    memberKeys.Add("*");
+                    _ = memberKeys.Add("*");
                 }
                 IEnumerable<LineSpan> spans = file.Spans;
 
@@ -169,7 +169,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                             if (oldMembers.ResidualHash != sourceMembers.ResidualHash
                                 || earlierKeys.Any(key => key != "*" && !unchanged.Contains(key)))
                             {
-                                memberKeys.Add("*");
+                                _ = memberKeys.Add("*");
                             }
 
                             memberKeys.UnionWith(earlierKeys.Where(key => key == "*" || unchanged.Contains(key)));
@@ -178,13 +178,13 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                     }
                     else
                     {
-                        memberKeys.Add("*");
+                        _ = memberKeys.Add("*");
                     }
                 }
 
                 if (sourceMembers.Members.Count > 0 && memberKeys.Count == 0 && file.Spans.Count > 0)
                 {
-                    memberKeys.Add("*");
+                    _ = memberKeys.Add("*");
                 }
 
                 pSnapshotHash.Value = hash;
@@ -447,21 +447,21 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                     var snapshotHash = reader.GetString(1);
                     if (change.Content is null || current is null)
                     {
-                        shouldDirty.Add(unitId);
+                        _ = shouldDirty.Add(unitId);
                         continue;
                     }
 
                     var oldContent = reader.IsDBNull(3) ? null : reader.GetString(3);
                     if (oldContent is null)
                     {
-                        shouldDirty.Add(unitId);
+                        _ = shouldDirty.Add(unitId);
                         continue;
                     }
 
                     var old = SourceMembers.Parse(oldContent);
                     if (old.ResidualHash != current.ResidualHash)
                     {
-                        shouldDirty.Add(unitId);
+                        _ = shouldDirty.Add(unitId);
                         continue;
                     }
 
@@ -473,7 +473,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                             || !newByKey.TryGetValue(key, out var newMember)
                             || oldMember.BodyHash != newMember.BodyHash))
                     {
-                        shouldDirty.Add(unitId);
+                        _ = shouldDirty.Add(unitId);
                     }
                 }
             }
@@ -633,7 +633,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             var snapshotHash = reader.GetString(4);
             var snapshotContent = reader.IsDBNull(6) ? null : reader.GetString(6);
             var contentIsCurrent = string.Equals(snapshotHash, currentHash, StringComparison.Ordinal);
-            IReadOnlyList<LineSpan> spans = LineSpan.Parse(reader.GetString(5));
+            var spans = LineSpan.Parse(reader.GetString(5));
             if (!contentIsCurrent && currentMembers is { Members.Count: > 0 } && snapshotContent is not null)
             {
                 var oldMembers = SourceMembers.Parse(snapshotContent);
