@@ -212,6 +212,29 @@ public sealed class HostHelpersTests : IDisposable
         Assert.Equal(expected, HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config).HistoryEnabled);
     }
 
+    [Theory]
+    [InlineData(null, 0)]
+    [InlineData(0, 0)]
+    [InlineData(3, 3)]
+    public void RetryFailuresIsOffUnlessConfigured(int? configured, int expected)
+    {
+        var config = new Piston.Hosting.Configuration.PistonConfig { RetryFailures = configured };
+
+        Assert.Equal(expected, HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config).RetryFailedTests);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(4)]
+    public void RetryFailuresOutOfRangeIsRejected(int configured)
+    {
+        var config = new Piston.Hosting.Configuration.PistonConfig { RetryFailures = configured };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config));
+
+        Assert.Contains("retryFailures", ex.Message);
+    }
+
     [Fact]
     public void InvalidTestTimeoutIsRejected()
     {

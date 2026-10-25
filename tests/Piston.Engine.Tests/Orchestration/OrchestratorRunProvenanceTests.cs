@@ -526,6 +526,18 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
     public TimeSpan HoldRunning { get; set; }
     public string? LastFilter { get; private set; }
 
+    /// <summary>How many more runs <see cref="FailingTest"/> fails in before it passes; null fails it every time.</summary>
+    public int? FailuresRemaining { get; set; }
+
+    /// <summary>The framework unfiltered runs report for <see cref="FailingTest"/>, as a multi-targeted project's would.</summary>
+    public string? FailingTestFramework { get; set; }
+
+    /// <summary>Extra failing tests each project reports.</summary>
+    public int ExtraFailures { get; set; }
+
+    /// <summary>Every call: its targets, filter and whether it collected coverage.</summary>
+    public List<(IReadOnlyList<string>? Targets, string? Filter, bool Coverage)> Calls { get; } = [];
+
     public Task<TestRunResult> RunTestsAsync(
         string solutionPath, string? filter, Action<IReadOnlyList<TestSuite>>? onProgress, CancellationToken ct) =>
         RunTestsAsync(solutionPath, null, filter, false, onProgress, null, ct);
@@ -540,7 +552,13 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
         Action<IReadOnlyList<TestSuite>>? onProgress, Action<ProjectTestResult>? onProjectCompleted, CancellationToken ct)
     {
         LastFilter = filter;
+        Calls.Add((testProjectPaths, filter, collectCoverage));
         DuringRun?.Invoke();
+        var failing = FailingTest is not null && FailuresRemaining is not <= 0;
+        if (failing && FailuresRemaining is { } remaining && testProjectPaths?.Any(p => FailingTest!.StartsWith(Path.GetFileNameWithoutExtension(p) + ".", StringComparison.Ordinal)) == true)
+        {
+            FailuresRemaining = remaining - 1;
+        }
 
         if (RunningTest is { } running)
         {
@@ -576,9 +594,17 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
             var fqn = $"{name}.Test1";
             var tests = new List<TestResult>
             {
-                new(fqn, "Test1", fqn == FailingTest ? TestStatus.Failed : TestStatus.Passed,
-                    TimeSpan.FromMilliseconds(1), null, null, null, null),
+                new(fqn, "Test1", failing && fqn == FailingTest ? TestStatus.Failed : TestStatus.Passed,
+                    TimeSpan.FromMilliseconds(1), null, failing && fqn == FailingTest ? "boom" : null, null, null)
+                {
+                    TargetFramework = filter is null && fqn == FailingTest ? FailingTestFramework : null,
+                },
             };
+            for (var i = 0; i < ExtraFailures; i++)
+            {
+                tests.Add(new($"{name}.Extra{i}", $"Extra{i}", TestStatus.Failed, TimeSpan.FromMilliseconds(1), null, "boom", null, null));
+            }
+
             if (DuplicateFirstTest && all.Count == 0)
             {
                 tests.Add(tests[0]);
