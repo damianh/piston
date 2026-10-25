@@ -16,6 +16,7 @@ namespace Piston.Engine.Tests.Orchestration;
 /// </summary>
 public sealed class OrchestratorRunProvenanceTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
     private static readonly string[] Projects = ["/src/A.Tests/A.Tests.csproj", "/src/B.Tests/B.Tests.csproj"];
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"piston-provenance-{Guid.NewGuid():N}");
@@ -127,6 +128,71 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
 
         Assert.Equal(TestRunStatus.Completed, _state.LastRun!.Status);
         Assert.DoesNotContain(_state.TestSuites, suite => suite.Restored);
+    }
+
+    [Fact]
+    public async Task ClearResults_waits_for_snapshot_capture_and_discards_the_pending_save()
+    {
+        await StartAndWaitForStartupRunAsync();
+        using var store = new SavedResultsStore(SolutionPath, _ => { })
+        {
+            SaveDelay = Timeout.InfiniteTimeSpan,
+        };
+        _orchestrator.ResultsStore = store;
+        var capturing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseCapture = new ManualResetEventSlim();
+        var runRecordsLock = typeof(PistonOrchestrator)
+            .GetField("_runRecordsLock", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(_orchestrator)!;
+        _state.TestSuites = new SnapshotCaptureSuites(_state.TestSuites, () =>
+        {
+            capturing.SetResult();
+            Assert.True(Monitor.IsEntered(runRecordsLock), "Snapshot capture must share ClearResults' run-record lock.");
+            Assert.True(releaseCapture.Wait(TimeSpan.FromSeconds(10), _ct));
+        });
+        _build.Fail = true;
+        var completion = Task.Run(() => _orchestrator.RequestRunAsync(), _ct);
+        Task? clear = null;
+        try
+        {
+            await capturing.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            var clearing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            clear = Task.Run(() =>
+            {
+                clearing.SetResult();
+                _orchestrator.ClearResults(_root);
+            }, _ct);
+            await clearing.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+            Assert.NotSame(clear, await Task.WhenAny(clear, Task.Delay(TimeSpan.FromMilliseconds(200), _ct)));
+        }
+        finally
+        {
+            releaseCapture.Set();
+            _ = await completion.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            if (clear is not null)
+            {
+                await clear.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            }
+        }
+
+        store.Dispose();
+        Assert.Empty(_state.TestSuites);
+        Assert.Null(store.TryLoad());
+    }
+
+    private sealed class SnapshotCaptureSuites(IReadOnlyList<TestSuite> suites, Action onEnumerate) : IReadOnlyList<TestSuite>
+    {
+        public int Count => suites.Count;
+        public TestSuite this[int index] => suites[index];
+
+        public IEnumerator<TestSuite> GetEnumerator()
+        {
+            onEnumerate();
+            return suites.GetEnumerator();
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     [Fact]

@@ -574,22 +574,19 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         _coverageLock.Wait();
         try
         {
-            if (ResultsStore is { } savedResultsStore)
-            {
-                savedResultsStore.Clear();
-            }
-            else if ((solutionPath ?? _solutionPath) is { } resultsSolutionPath)
-            {
-                SavedResultsStore.Delete(resultsSolutionPath, message => DiagnosticLog.Instance?.Write("Results", message));
-            }
-
-            SqliteCoverageStore.Clear(solutionDirectory);
-            _state.TestSuites = [];
-            _state.LastRunTime = null;
-            _state.HasCoverageData = false;
-            _state.CoverageImpactDetail = null;
             lock (_runRecordsLock)
             {
+                if (ResultsStore is { } savedResultsStore)
+                {
+                    savedResultsStore.Clear();
+                }
+                else if ((solutionPath ?? _solutionPath) is { } resultsSolutionPath)
+                {
+                    SavedResultsStore.Delete(resultsSolutionPath, message => DiagnosticLog.Instance?.Write("Results", message));
+                }
+
+                _state.TestSuites = [];
+                _state.LastRunTime = null;
                 if (_state.LastRun?.Restored == true)
                 {
                     _state.LastRun = null;
@@ -597,6 +594,10 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
                 _state.RecentRuns = _state.RecentRuns.Where(run => !run.Restored).ToList();
             }
+
+            SqliteCoverageStore.Clear(solutionDirectory);
+            _state.HasCoverageData = false;
+            _state.CoverageImpactDetail = null;
         }
         finally
         {
@@ -1859,16 +1860,16 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             {
                 _ = waiter.TrySetResult(finished);
             }
-        }
 
-        ResultsStore?.Schedule(new SavedResultsSnapshot(
-            DateTimeOffset.UtcNow,
-            _state.LastRunTime,
-            _state.LastBuildDuration,
-            _state.LastTestDuration,
-            _state.LastBuild,
-            _state.TestSuites,
-            _state.LastRun));
+            ResultsStore?.Schedule(new SavedResultsSnapshot(
+                DateTimeOffset.UtcNow,
+                _state.LastRunTime,
+                _state.LastBuildDuration,
+                _state.LastTestDuration,
+                _state.LastBuild,
+                _state.TestSuites,
+                _state.LastRun));
+        }
 
         _state.NotifyChanged();
         return finished;
