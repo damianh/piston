@@ -2,34 +2,36 @@
 
 ## Scope and status
 
-Piston is an agent-facing continuous test backend for .NET, with a CLI daemon,
-HTTP MCP test tools, and a web dashboard. It builds and tests in the watched
-checkout using standard `dotnet` commands, not shadow workspaces or IL rewriting.
+Piston is an MCP-based continuous test runner for .NET. Agents reach it through a
+per-session stdio MCP server (`piston mcp`) or the daemon's HTTP MCP endpoint;
+people use the same engine through the web dashboard. It builds and tests in the
+watched checkout using standard `dotnet` commands, not shadow workspaces or IL
+rewriting.
 
-This document separates implemented behavior from proposed work. Phase 0 build
-correctness, surface reduction, and .NET tool packaging have landed. The project
-structure is consolidated below; it does not introduce a hub/worker split,
-change runtime scheduling, or select a new UI/canvas architecture.
+This document describes implemented behavior and its limits. Planned work is in
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Components
 
 | Project | Responsibility |
 |---|---|
-| `Piston` | .NET tool: CLI launch/attach, browser, foreground daemon, stop/status; daemon composition, protocol routing, web hosting, configuration, HTTP MCP tools and call tracking. |
+| `Piston` | .NET tool: CLI launch/attach, browser, foreground daemon, stop/status, stdio MCP server (`piston mcp`); daemon composition, protocol routing, web hosting, configuration, MCP tools and call tracking. |
 | `Piston.Engine` | Watcher, impact analysis, builds, test execution, current state, coverage processing. |
 | `Piston.Protocol` | JSON-RPC contracts, DTOs, framing, named-pipe and stdio transports. |
 | `Piston.Web` | Blazor WebAssembly dashboard connected over WebSocket. |
+| `Piston.LiveCollector` | VSTest data collector, deployed with the engine, that streams per-test start/end events to the engine over loopback (`PISTON_LIVE_PORT`). |
+| `Piston.ProcessHost` | Small launcher that puts a test process in its own Unix session or Windows job, so the engine can terminate the test process and its descendants together (`OwnedTestProcess`). |
 
 Hosting and MCP source live in `src/Piston/Hosting` and `src/Piston/Mcp`.
 Their `Piston.Hosting` and `Piston.Mcp` namespaces remain, but they are not
-separate projects or assemblies. Desktop source and its project are deleted.
-The Roslyn worker/tools, diagnostic polling/UI, and VS Code extension have also
-been removed. Clients can use their own code intelligence alongside Piston.
+separate projects or assemblies.
 
 The production dependency shape is:
 
 ```text
-Piston (CLI + host + MCP) ------> Piston.Engine
+Piston (CLI + host + MCP) ------> Piston.Engine ------> Piston.ProcessHost
+         |                                |
+         |                                +---- deploys Piston.LiveCollector (not loaded in-process)
          |
          +---------------------> Piston.Protocol <----- Piston.Web
          |
@@ -46,10 +48,14 @@ MCP call-log data remains a host/protocol concern.
 `Piston.Tests` combines tool/hosting, protocol, and MCP tests.
 `Piston.Engine.Tests` retains `Piston.TestProcessHost` and
 `Piston.ExecutionLeaseHolder` for process-tree cleanup and cross-process lease
-coverage. The measurement solution and its locked dependencies remain separate.
+coverage. `tests/fixtures/` holds the small solution the opt-in dogfood and stdio
+MCP smoke tests copy. `samples/` holds one sample project per test framework,
+outside `Piston.slnx`, for the packed-tool smoke tests that `build.cs` runs.
 
-The CLI runs the daemon in a separate process. `piston daemon` hosts `DaemonHost`
-in that process; it is not a per-user hub with isolated worktree workers.
+The CLI runs the daemon in a separate process; `piston daemon` hosts `DaemonHost`
+in that process. `piston mcp` (`McpStdioHost`) instead runs an in-process engine
+for one agent session, selecting the worktree from its working directory and
+holding that worktree's ownership lock until the session ends.
 
 ## Transports and clients
 
@@ -70,11 +76,12 @@ a file, with their evidence granularity and executed line ranges.
 it refuses paths that resolve (following symlinks) outside the solution
 directory, files over 1 MB and binary files.
 Clients receive state, test progress, build errors, and activity notifications.
-The dashboard presents current test/build state, aggregate coverage, activity,
-and MCP call history; there is no diagnostic view.
+The dashboard presents current test/build state, run history and comparison,
+aggregate coverage with covering tests, activity, and MCP call history.
 
 See [README.md](README.md) for executable commands and the actual configuration
-shape. The protocol's stdio transport is not an MCP stdio server.
+shape. The daemon's `--stdio` JSON-RPC transport is not MCP; the stdio MCP server
+is the separate `piston mcp` command.
 
 ## Engine pipeline
 
@@ -197,15 +204,15 @@ A selective run with no affected test projects builds only and skips tests.
 Startup/manual runs and full-run fallbacks use the original solution, then all
 test projects available from the graph. Selective result merging uses
 test FQN rather than timestamp-dependent TRX suite names, avoiding stale
-duplicates from that merge path. Neither selective building nor this merge fix
-establishes fine-grained coverage correctness or a measured latency budget.
+duplicates from that merge path.
 
-Both execution backends launch new `dotnet test` processes:
+Both execution backends start a new process per test project and run (unless
+warm hosts are enabled for MTP), each under `Piston.ProcessHost`:
 
 | Backend | Current mechanism |
 |---|---|
-| VSTest | Project/solution target, `--no-build`, normal verbosity, TRX results; stdout progress parsing. |
-| Microsoft.Testing.Platform (MTP) | `--project`, `--no-build`, detailed output; results parsed from stdout. Requires the appropriate SDK runner configuration in the solution's `global.json`. |
+| VSTest | `dotnet test` on the project/solution target, `--no-build`, normal verbosity, TRX results. The `PistonLive` data collector streams per-test start/end events; stdout is parsed for progress as well. |
+| Microsoft.Testing.Platform (MTP) | Runs the built test app in MTP server mode (JSON-RPC), which reports each test as it starts and finishes. Falls back to `dotnet test --project <csproj> --no-build` with stdout parsing when the app is not found or server mode fails, and always uses `dotnet test` for coverage. The fallback needs the MTP runner configured in the solution's `global.json`. |
 
 When the graph identifies an MTP output path, the composite strategy selects
 MTP; otherwise it selects VSTest. `Auto` and the currently named `Process` mode
@@ -312,8 +319,8 @@ waits for the killed runner to exit before the pipeline releases its lease.
 Limits: budgets are admission reservations, not OS resource caps. Liveness
 means "process alive", so a hung daemon keeps its lease. Orphaned children of a
 crashed daemon are not counted. Coordination is per OS user and needs a local
-filesystem. Graph loading at startup is not admitted. Local validation covers Linux;
-CI is configured for Linux and Windows. macOS execution has not been validated.
+filesystem. Graph loading at startup is not admitted. CI runs the test suite on
+Linux and Windows, and the packed-tool samples smoke on macOS as well.
 
 ## Coverage and persistence
 
@@ -409,17 +416,21 @@ excluded by a physical file provider.
 
 ## MCP behavior and limitations
 
-The MCP wire names are `verify`, `run_tests`, `get_test_run`, `get_test_results`,
-`get_test_history`, `set_test_filter`, and `clear_results` (implemented by the corresponding
-PascalCase methods in `TestTools`). They use the same engine state and pipeline
-as other clients; MCP does not bypass builds or provide prewarmed test processes.
+The same tools are served over stdio (`piston mcp`) and the daemon's HTTP endpoint.
+Test tools (`TestTools`): `verify`, `run_tests`, `get_test_run`, `get_test_results`,
+`get_test_history`, `set_test_filter` and `clear_results`. Coverage and selection
+tools (`CoverageTools`): `get_coverage`, `get_changed_line_coverage`,
+`export_coverage`, `plan_affected_tests` and `run_affected_tests`. They use the same
+engine state and pipeline as other clients; MCP does not bypass builds. Test
+processes are fresh unless `warmTestHosts` is enabled (see
+[Builds and execution](#builds-and-execution)).
 
 `run_tests` requests a full run, awaits that specific engine request with
 timeout/cancellation, and returns a textual summary and its run ID. Completion
 does not depend on polling the aggregate phase or prior results. `get_test_results` reads
 current accumulated state without initiating a run.
 
-Run provenance (Phase 1a): `PistonOrchestrator` creates a `TestRunRecord` for every
+Run provenance: `PistonOrchestrator` creates a `TestRunRecord` for every
 run request and publishes it as `PistonState.CurrentRun`. When the run finishes, the
 record becomes `LastRun` and is kept in a bounded in-memory `RecentRuns` list. Each record holds:
 
@@ -442,9 +453,11 @@ A build failure uses the same source-freshness computation as test completion;
 `set_test_filter` changes the active filter but does not itself run tests.
 `clear_results` clears in-memory suites, the last-run timestamp, coverage state,
 and persisted coverage in the current solution directory. It does not cancel an
-active pipeline; a subsequent completion can publish fresh results. Structured
-agent APIs and durable history beyond the implemented run provenance remain
-future backend work.
+active pipeline; a subsequent completion can publish fresh results. It does not
+clear [run history](#coverage-and-persistence), which `get_test_history` and
+`verify`'s failure classification read.
+
+## Build processes and engine test setup
 
 Engine-test setup process helpers drain both stdout and stderr and enforce a
 90-second deadline. A small test-only process host establishes a Unix session or
@@ -465,23 +478,15 @@ reuse for reliable process completion; it does not shut down shared build server
 or disable concurrency within a build. The timeout remains a guard for other
 setup stalls, including restore/network or filesystem locking.
 
-## Proposed direction (not implemented)
+## Non-goals and direction
 
-The focus is a reliable test backend that agents can combine with independent
-code-intelligence tools, not a replacement IDE or a Roslyn service.
+Piston is a test runner that agents combine with independent code-intelligence
+tools; it is not a replacement IDE or a Roslyn service. Each worktree has one
+owning process (a `piston mcp` session or a daemon); there is no shared per-user
+hub. Machine-wide coordination is limited to the file-lock ownership and
+admission budget described above.
 
-The separate measurement harness and run/freshness contracts exist.
-A matched current-Piston comparison, fine-grained coverage experiments, and
-Copilot canvas/harness integrations remain deferred. Performance budgets are
-hypotheses until measured against representative solutions and correctness checks.
-
-A per-user hub with an isolated worker per worktree is also proposed. Current
-pipe names are derived from solution paths and each daemon builds in its watched
-checkout. The separate engine assembly is an ownership boundary, not an
-implemented worker process or shared hub. The existing Blazor UI remains until
-a later UI/canvas decision.
-
-Aspire is one possible integration-test example for the generic backend. There
-is no implemented Aspire-specific lifecycle, service orchestration, or dedicated
-integration contract. Implementation priorities and approval gates belong in the
-separately maintained roadmap.
+Aspire is one possible integration-test example for the generic runner. There
+is no Aspire-specific lifecycle, service orchestration, or dedicated
+integration contract. Planned work, including a native Copilot canvas for the
+dashboard, is in [docs/ROADMAP.md](docs/ROADMAP.md).

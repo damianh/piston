@@ -24,7 +24,7 @@ public sealed class DogfoodSmokeFactAttribute : FactAttribute
     {
         if (Environment.GetEnvironmentVariable("PISTON_DOGFOOD_SMOKE") != "1")
         {
-            Skip = "Set PISTON_DOGFOOD_SMOKE=1 to run the real-daemon dogfood smoke (builds measurements/fixtures/unit).";
+            Skip = "Set PISTON_DOGFOOD_SMOKE=1 to run the real-daemon dogfood smoke (builds tests/fixtures/unit).";
         }
     }
 }
@@ -280,7 +280,7 @@ public sealed partial class DogfoodSmokeTests : IDisposable
 
     internal static void CopyFixture(string destination)
     {
-        var fixtures = Path.Combine(FindRepoRoot(), "measurements", "fixtures");
+        var fixtures = Path.Combine(FindRepoRoot(), "tests", "fixtures");
         _ = Directory.CreateDirectory(destination);
         foreach (var file in new[] { "Directory.Build.props", "Directory.Packages.props", "global.json" })
         {

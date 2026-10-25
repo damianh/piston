@@ -40,3 +40,7 @@ Thumbs.db
 .piston/
 
 publish/
+
+# Build script outputs
+artifacts/
+.tools/

@@ -7,6 +7,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="Jint" />
     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" />
     <PackageReference Include="xunit.analyzers" />
     <PackageReference Include="xunit.v3.assert" />
@@ -33,6 +34,10 @@
     <Compile Include="..\..\src\Piston.Web\Models\StackTraceParser.cs" Link="Web\StackTraceParser.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\CSharpHighlighter.cs" Link="Web\CSharpHighlighter.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\WatchStrip.cs" Link="Web\WatchStrip.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\src\Piston.Web\wwwroot\js\status.js" Link="Web\status.js" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

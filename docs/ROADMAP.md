@@ -1,432 +1,154 @@
-# Piston: test backend for coding agents
+# Piston roadmap
 
 ## Direction
 
-Piston is moving toward a session-aware .NET test backend for coding agents.
-Its value should come from remembering results, coordinating execution across
-worktrees, and showing which changed code tests exercised -- not simply wrapping
-`dotnet test`.
+Piston is an MCP-based continuous test runner for .NET. A coding agent connects
+to it over MCP, normally one `piston mcp` process per session and worktree. It
+keeps that worktree's tests running as files change and answers with results
+tied to the source they ran against. People use the same engine through the web
+dashboard, which is an equal surface rather than an afterthought.
 
-Humans inspect the same evidence through a Copilot app canvas or browser UI.
-Other harnesses connect through MCP and lightweight integration hooks. Aspire is
-one integration-test use case, alongside Testcontainers, WebApplicationFactory,
-and Playwright; it does not determine the architecture.
+Its value comes from three things:
 
-This document describes **proposed work**, not currently available functionality.
-README and ARCHITECTURE describe the implementation. Later phases are conditional
-on evidence from the measurement gates.
+- **Trustworthy answers:** `verify` reports a pass only for a current, full-scope
+  result; everything else is labelled stale, partial or failed.
+- **Memory:** per-test history that separates new failures from pre-existing
+  and flaky ones.
+- **Targeting:** running only the tests a change affects, down to changed lines
+  when coverage is enabled.
 
-### Current project structure
+Piston does not assign work to agents, coordinate their conversations or provide
+code intelligence; agents combine it with their own Roslyn tools. It is not an
+IDE test-runner extension.
 
-The production solution now has four projects: `Piston` (the .NET tool, CLI,
-daemon hosting, and HTTP MCP tools), `Piston.Engine` (MSBuild loading and test
-execution), `Piston.Protocol` (shared wire contracts/transports), and
-`Piston.Web` (the existing Blazor dashboard). Hosting and MCP source are folders
-in the tool project. Engine activity contracts belong to Engine and are mapped
-to wire DTOs by the host; Engine does not reference Protocol.
+This document lists shipped capabilities and planned work. README and
+ARCHITECTURE describe the implementation in detail.
 
-Desktop source and its project have been deleted, rather than retained frozen.
-The existing .NET tool release flow remains. `Piston.Tests` combines tool/host,
-protocol, and MCP tests; Engine tests retain both process-isolation helpers.
-This is a project-structure refactor only: hub/worker decomposition and the
-later UI/canvas decision remain deferred. It adds no scheduling changes,
-comparison campaign, or performance claims.
+## Shipped
 
-## Product boundaries
+**Agent interface (MCP)**
+- `piston mcp`: a per-session stdio MCP server with an in-process engine. The
+  session's working directory selects the worktree. The server exits with the
+  session or when the worktree is deleted, and fails safe ("use `dotnet test`")
+  when another process owns the worktree or the engine cannot start.
+- The daemon's HTTP MCP endpoint, sharing one engine with the dashboard.
+- Twelve tools: `verify`, `run_tests`, `get_test_run`, `get_test_results`,
+  `get_test_history`, `set_test_filter`, `clear_results`, `get_coverage`,
+  `get_changed_line_coverage`, `export_coverage`, `plan_affected_tests` and
+  `run_affected_tests`.
+- The `verify` contract: it reuses, awaits or forces a full run for the present
+  source fingerprint and retries when edits supersede a run. Verdicts are
+  `Passed`, `TestsFailed`, `BuildFailed`, `Incomplete`, `Stale`, `NotFullScope`
+  and others. An `expectedSolution` guard checks that the right tree was verified,
+  and build inputs outside the fingerprint are reported as not covered.
+- An agent setup guide and custom-instructions snippet
+  ([agent-usage](agent-usage.md)).
 
-- **Memory:** distinguish newly observed failures from baseline failures and
-  suspected flakiness, with persistent run history.
-- **Coordination:** prioritize requested verification over speculative runs and
-  background work; share CPU, memory, and integration-test resource budgets.
-- **Change coverage:** relate changed executable lines to individual tests,
-  outcomes, and the source version actually exercised.
-- **Visualization:** session timelines, test detail, workspace activity, and a
-  coverage-aware diff, available in a harness canvas and browser.
+**Run provenance and execution**
+- Every run has a run ID, a trigger, a scope (full, selective or filtered),
+  before and after source fingerprints (`piston-source-v2`), `Current`/`Stale`
+  freshness, its own build diagnostics, and fixed and newly failing tests.
+- One owner per worktree through OS file locks, and a machine-wide CPU/memory
+  admission budget (`budget.json`) with visible FIFO queueing.
+- Correct selective builds: one solution-filter build of the affected projects,
+  then no-build test execution.
+- VSTest and Microsoft.Testing.Platform routing, with opt-in warm MTP test hosts.
+- Slow and possibly hanging test reporting, and an optional per-test timeout.
+- A sanitized child-process environment and process-tree cleanup on Unix and
+  Windows.
 
-Piston does not assign tasks to agents or coordinate their conversations. It is
-not a replacement for an IDE's Roslyn tools or an NCrunch-style IDE extension.
-Test selection is an optimization, not the primary differentiator.
+**Memory**
+- Persistent per-worktree run history outside the checkout, grouped by repository.
+- Failures classified as new, pre-existing, flaky (same fingerprint, both
+  outcomes) or unknown, in `verify`, `get_test_run` and `get_test_history`.
 
-## Proposed architecture
+**Coverage and selection**
+- Solution line and branch coverage stored in `.piston/piston.db`, with LCOV and
+  Cobertura export over MCP, HTTP, the protocol and the CLI.
+- An impact map with idle per-test (default) or per-class backfill, and
+  changed-line test selection with per-test reasons and conservative fallback.
+- Git bases (`working`, `branch`, `range`) for affected-test planning and
+  changed-line coverage.
 
-Use a small **per-user hub** with isolated **per-worktree worker processes**:
+**Dashboard**
+- Tests tab: a virtualized tree, run strip, failure diffs, a stack-trace source
+  view, a history strip and new/flaky filters.
+- Runs tab: browse and compare kept runs.
+- Coverage tab: a grouped file list, highlighted source with hit counts,
+  covering tests per file and line, and backfill progress.
+- MCP call history, user settings, keyboard shortcuts and theme-aware styling.
 
-- The hub owns workspace/session registration, scheduling, history, and the UI.
-  It does not load MSBuild.
-- Workers own solution evaluation, file watching, builds, and test execution.
-  Isolation accommodates different SDKs and contains evaluation failures.
-- A stdio MCP shim connects each harness client to the hub; hooks supply explicit
-  session identity where available. MCP roots or an explicit workspace take
-  precedence over a working-directory fallback.
-- Store history outside checkouts, under a per-user Piston directory, grouped by
-  repository identity. Worktree deletion must not delete shared history.
-- Reuse the browser visualization in a thin Copilot canvas extension rather than
-  building a separate UI for each harness.
+**Distribution and CI**
+- A framework-dependent .NET tool (`Piston` package, `piston` command) attached
+  to GitHub Releases.
+- CI on Linux and Windows, driven by a file-based `build.cs`. Packed-tool smoke
+  tests run the MSTest, NUnit, xUnit v3 and TUnit samples through `piston daemon`
+  and through `verify` over `piston mcp` on Linux, Windows and macOS.
 
-Worker SDK selection needs explicit validation against `global.json`, supported
-MSBuild versions, and runtime compatibility. Runtime roll-forward alone does not
-choose the correct MSBuild installation.
+## Near-term
 
-### Lifecycle and ownership
+### Native Copilot canvas
+Show the dashboard as a Copilot app canvas rather than a browser tab the agent
+opens by hand (today's `piston-dashboard` skill).
 
-Use leases from live connections or renewable registrations, not session-end
-hooks alone. Hooks can be missed when a harness is killed.
+- Ship a thin canvas extension that hosts the existing web UI. Do not build a
+  second UI.
+- Decide how a stdio `piston mcp` session, which opens no ports today, exposes the
+  dashboard: an opt-in loopback web port, or attaching to a daemon.
+- Validate canvas reload/resume, the disconnected state, actions such as run and
+  run failed, theme integration and accessibility.
+- Opening the canvas only inspects state. It must not start continuous test
+  execution on its own.
 
-- Start the hub on demand, guarded against simultaneous startup.
-- Start a worker when a workspace gains an execution lease.
-- Release watchers and process trees when the last execution lease expires.
-  Keep durable results accessible without continuing to run tests.
-- Separate workspace leases, session identities, and run subscriptions. A
-  long-lived IDE connection is not necessarily one agent session.
-- A shared run must survive until its remaining subscribers no longer need it;
-  cancelling one session must not cancel another session's verification.
-- Recover connections after a hub restart; mark interrupted runs explicitly.
-- Ensure worker and test descendants cannot outlive shutdown indefinitely or
-  block worktree removal. Validate this on Windows as well as Unix.
-
-Idle limits, heartbeat expiry, restart draining, and explicit shutdown behavior
-will be chosen and tested during Phase 1, rather than treated as existing
-guarantees. Baseline work is independently owned, but still consumes scheduled
-resources and must not keep an otherwise idle service alive indefinitely.
+### Harness integration assets
+- Ship Copilot assets with the tool: an MCP config snippet, a skill or custom
+  instructions for the `verify` contract, and the canvas registration.
+- Document Claude Code and generic MCP clients.
+- Never edit harness configuration without explicit opt-in.
 
 ### Distribution
+- Publish to NuGet.org: reserve the package ID and use the opt-in release path.
+- Validate `dnx` invocation and MCP registry metadata before documenting them.
+- Validate tool upgrades while sessions are running, including Windows file locks.
 
-Prefer a **.NET tool on NuGet**, provisionally named `Piston`. A package lookup is
-not a reservation or confirmation of ownership.
+## Later
 
-- Support an installed `piston` command and, where supported, `dnx` invocation.
-- Start hub and workers on demand: no installer or privileged OS service.
-- Keep role executables and contracts version-compatible; validate upgrade and
-  file-lock behavior before relying on side-by-side launch paths.
-- Ship harness integration assets with the tool. Installation should preserve
-  user configuration and make changes explicit.
-- Tool packaging has replaced desktop-installer release automation.
-  Desktop source has been deleted following the project-structure decision;
-  do not revive its installer workflow.
-
-The tool requires an appropriate .NET runtime/SDK installation. Building a target
-repository may require additional SDK versions pinned by that repository.
-MCP registry/package metadata and `dnx` command syntax must be validated before
-documenting them as supported installation paths.
-
-## Phase 0: correctness, simplification, and baseline
-
-1. **Build correctness:** rebuild affected test projects and dependencies before
-   running tests with `--no-build`. Avoid whole-solution builds for test-only
-   edits. Preserve solution formats, runner routing, and coverage behavior.
-   Add a real regression proving that changing a referenced library changes the
-   executed test result. Prefer one filtered build where SDK support permits it.
-2. **Remove obsolete surfaces:** remove the Roslyn worker, Roslyn MCP tools,
-   diagnostic polling/UI, and VS Code extension. Clean their references and
-   dependencies. Capture relevant supervision lessons before deleting code.
-3. **Tool distribution:** create a working tool package and replace the
-   Velopack-based installer release workflow. Validate isolated installation and
-   CLI execution. Actual NuGet publication and package-name reservation are
-   separate release actions, not implicit implementation steps.
-4. **Documentation:** distinguish implemented behavior from future proposals,
-   especially persistence, coverage attribution, prewarming, and build strategy.
-5. **Measurement:** propose repeatable unit-heavy and container-backed workloads.
-   Measure edit-to-result latency, agent test-wait time, effort spent on existing
-   failures, contention, and resource use. Distinguish synthetic concurrency
-   tests from real multi-agent sessions.
-
-**Status:** items 1–5 landed in #7 (build correctness), #4 (removal and tool
-packaging), #5 (documentation) and #6 (measurement harness and methodology).
-No package has been published. Approved local unit/PostgreSQL campaigns and
-container cleanup/telemetry validation are now recorded in the
-[G0 evidence report](../measurements/results/g0-local.md). Real-agent sessions
-and a provenance-valid current-Piston comparison were not performed.
-
-**Gate G0:** decide whether these costs are meaningful enough to justify a service.
-The [local evidence](../measurements/results/g0-local.md) recommends **proceed
-with narrowed scope**: investigate fresh full-scope results and bounded execution
-before expanding the service architecture. Regression median latency rose from
-2.734 to 6.214 seconds for the unit fixture and 6.869 to 13.814 seconds for
-PostgreSQL at concurrency 1 versus 4. These are scripted, shared-host baseline
-costs, not measured Piston improvement or agent waiting/effort. Container telemetry
-gaps and synthetic workload scope limit the conclusion; G1 remains unproven.
-
-## Phase 1: hub, workers, identity, and memory
-
-Following the narrowed G0 recommendation, Phase 1 starts with a bounded
-proof-of-value step (1a). The broader hub and memory work (1b) proceeds only if
-1a's comparison shows a benefit.
-
-### Phase 1a: fresh results and bounded execution (proof of value)
-
-- **Generation-bound results:** every reported result identifies the source
-  generation (content fingerprint plus build context) it executed against, and
-  covers the full requested test scope with stable test identities. Results for
-  an older generation are reported as stale, never as current.
-- **Explicit execution ownership:** one owner per worktree builds and runs tests.
-  It accepts explicit run requests, cancels or supersedes outdated runs, and
-  cleans up child processes and containers it started.
-- **Bounded resource budget:** cap concurrent build/test work across worktrees
-  with a configurable CPU/memory budget, and expose queueing explicitly.
-- **Comparator:** add a current-Piston condition to the `measurements/` harness
-  that meets its generation-bound, full-scope oracle. Compare it against plain
-  `dotnet test` on the same unit and PostgreSQL fixtures at concurrency 1, 2 and
-  4. Also measure telemetry overhead and include at least one larger,
-  representative repository before drawing conclusions.
-
-**Status:** generation-bound result provenance has landed (run IDs, the
-`piston-source-v2` fingerprint before and after each started run, run context, explicit
-full/selective/filtered scope, terminal status, and `Current`/`Stale` freshness via
-`get_test_run`). A harness oracle that validates this has landed too
-(`measurements/Runner/PistonOracle.cs`), with an opt-in end-to-end smoke.
-
-Machine-wide execution ownership and admission budgeting have landed too. Daemons of one OS
-user coordinate through OS file locks in a per-user directory:
-- One daemon owns each canonical worktree. A conflicting daemon fails at startup, naming the owner.
-  Crashed owners are recovered automatically.
-- Each build/test run reserves its test-process parallelism in CPU slots, plus optional
-  `execution.memoryMb`, against `budget.json` (`cpuSlots`, `memoryMb`; default: logical processors).
-  Recommended updates write complete JSON to a temporary file in the same directory, then
-  atomically rename it over `budget.json` without deleting the old file first.
-- Runs are admitted strictly FIFO. Waiting runs are visible as `Queued` with queue position and
-  budget usage in `get_test_run`, `get_test_results` and the state snapshot.
-- Leases are released on completion, cancellation, faults, exit and crash.
-- Graceful disposal drains active and pending pipelines before releasing worktree ownership.
-- Invalid or unreadable budgets, unsatisfiable reservations and unenforced file locking fail explicitly.
-
-This is admission by reservation, not OS-level CPU/memory capping. A hung but live daemon keeps
-its lease. Local validation covers Linux; CI is configured for Linux and Windows, while macOS
-execution remains unvalidated. See the README and `ARCHITECTURE.md` for the exact
-behavior and limits.
-
-Still to do in 1a:
-- the PostgreSQL Piston trial condition and pairing;
-- approved matched comparison campaigns, a larger representative repository,
-  and telemetry-overhead quantification.
-
-The unit Piston trial condition landed in #12 and counterbalanced paired mode
-landed in #19; neither is still to do. The harness now also supports the unit
-CS0103 compile-diagnostic trial and compile-error pairing. `get_test_run` and
-protocol snapshots expose each run's own build output, bound to its source
-fingerprints. The compile oracle requires a current full-solution build failure
-for the returned forced run ID and exact workspace, carrying the expected
-diagnostic ID/file/line, not aggregate or stale errors. Wrong/missing diagnostics
-and provenance are rejected; `isCurrentFullResult` remains a test-result claim.
-Validation includes the opt-in real-daemon compile trial and one single-pair,
-concurrency-1 compile correctness smoke. This unblocks unit compile pairing, not
-PostgreSQL, performance claims or G1; no campaign/pilot or real-agent experiment
-was run for this addition. See [harness validation](../measurements/validation.md).
-
-**Dogfood MVP (usability step, not G1 evidence).** A coding agent can use one
-Linux single-worktree daemon as its test backend through the `verify` MCP tool.
-`verify` reuses a current, full-scope, unfiltered run for the present source
-fingerprint, or awaits or forces a full run. It retries at most twice when edits
-supersede that run, then reports `Stale`; it never reports a non-current result
-as passing. `piston status` reports the PID and endpoints. `piston stop` waits for
-the daemon process to exit. Endpoints bind before the startup run, so endpoint
-conflicts fail at startup with a clear error and start no run. There is an opt-in
-real-daemon smoke on the unit fixture (`PISTON_DOGFOOD_SMOKE=1`; transcript kept
-only in `PISTON_SMOKE_EVIDENCE_DIR` if set). See [agent usage](agent-usage.md). This adds no
-measurement, harness change, hub/worker split, persistent history or performance
-claim; real dogfooding is a separate, explicit user action.
-
-**Exit 1a:** the comparator is unblocked and records valid, matched samples.
-Decide from that evidence whether to continue to 1b, narrow further, or stop.
-Agent waiting time and known-failure effort still require separately authorized
-real-agent experiments.
-
-### Phase 1b: hub, workers and memory (conditional on 1a)
-
-- Split the existing daemon into worker execution and hub responsibilities.
-- Implement registration, leases, idle cleanup, supervised process shutdown, and
-  protocol-version negotiation.
-- Add scheduling: requested verification, speculative file-change runs, baseline
-  work, then coverage backfill. Coalesce work and avoid starvation.
-- Persist workspace/session identity, source fingerprints, build context, runs,
-  test identities, and outcomes.
-- Establish a declared baseline, typically the merge-base with a configured base
-  ref, in a Piston-managed worktree.
-- Explore MTP server mode for structured results and stable test identities.
-  Keep VSTest/TRX as a compatibility path.
-- Classify failures as new relative to known baseline evidence, pre-existing,
-  suspected flaky, or unknown. Missing baseline evidence is not proof a failure
-  is new.
-
-  Status: per-worktree run history is implemented in the daemon, before the hub
-  split. It is stored outside checkouts under a per-user directory grouped by
-  repository identity, and classifies failures against the worktree's own
-  earlier runs (flaky = passed and failed on the same source fingerprint). A
-  declared merge-base baseline in a Piston-managed worktree is still open.
-
-Source content alone cannot prove freshness or flakiness. Include SDK/runtime,
-target framework, build configuration, relevant inputs/environment, and selected
-tests; reject or mark results stale if inputs change during execution. Identical
-source with different outcomes is evidence of nondeterminism, not a diagnosis.
-
-**Exit 1b:** two worktrees share scheduling and history while execution remains
-isolated; ownership, cleanup, interruption, and baseline behavior have tests.
-
-## Phase 2: agent API and harness integrations
-
-- **Done (dogfood stop-gap, pre-hub):** `piston mcp` serves the MCP tools over
-  stdio with an in-process engine, one process per agent session.
-  - The session's working directory selects the worktree, and the process holds
-    that worktree's ownership lock. It exits on stdin EOF, SIGTERM, parent death,
-    or worktree deletion, killing the build and test process trees.
-  - If the worktree is already owned, or startup fails, every tool returns an
-    error ending in "use `dotnet test`".
-  - Replies name the solution, and an optional `expectedSolution` guards against
-    verifying the wrong tree.
-  - The HTTP daemon now also exits when its worktree is deleted. `status --all`
-    and `stop --force` handle owners that the pipe cannot reach.
-  - This replaces the single global HTTP MCP URL, which could not route sessions
-    to their own worktrees. It does not yet provide shared scheduling or history.
-- Evolve `piston mcp` into a stdio bridge that discovers/starts the hub and
-  resolves the workspace without loading MSBuild in the client.
-- Provide concise verification, status, test-detail, explicit-run, and history
-  operations. Report selection scope, freshness, incomplete runs, and failures
-  before verbose detail. Selective verification is not full-suite verification.
-- Normalize session and edit events through harness adapters.
-- Ship a Copilot extension for registration, guidance, and the canvas; add Claude
-  Code integration and documentation for generic MCP clients.
-- Avoid duplicate triggering from hooks plus file watching. Do not intercept
-  arbitrary test commands or modify harness settings without explicit opt-in.
-
-**Gate G1:** compare against plain `dotnet test` with equivalent workloads.
-Proposed goals are 30% lower verified-result latency, 50% less agent effort on
-pre-existing failures where present, and no observed resource-contention failures.
-Record raw results and limitations; these goals do not override correctness.
-
-## Phase 3: canvas and browser visualization
-
-- Session timeline: edits, runs, outcomes, freshness, and failure classification.
-- Workspace overview: active sessions, queued/running work, and resource use.
-- Repository health: baseline evidence and repeated-outcome history.
-- Test detail: errors, captured output, history, and relevant artifacts.
-- Serve the same UI on loopback for the browser and a Copilot canvas.
-- Reuse the existing web UI where practical; only replace its technology if
-  measured behavior warrants it.
-
-Validate canvas reload/resume, disconnected state, actions, accessibility,
-theme integration, and ownership of durable state. Read-only inspection should
-not silently activate continuous test execution.
-
-## Phase 4: fine-grained coverage
-
-### Collection spike
-
-Verify available collectors and APIs against reproducible fixtures rather than
-assuming standard reports contain per-test attribution.
-
-1. Prefer existing coverage tooling, investigating `dotnet-coverage` snapshots
-   and reset between serial test requests, with dynamic or static instrumentation
-   according to platform support.
-2. Use isolated per-test runs as a correctness reference. Per-class runs are
-   explicitly coarser and must not be labeled per-test.
-3. Consider Piston-owned instrumentation only if existing approaches cannot meet
-   correctness and overhead requirements.
-
-Measure attribution bleed, async/background work, fixtures, parameterized tests,
-runner identity, platform support, and overhead. Proposed backfill goal: at most
-twice the comparable workload cost, with no observed attribution bleed in the
-serial validation fixtures. Cross-process service coverage is not an initial
-acceptance requirement.
-
-### Spike results
-
-Measured on `tests/Piston.Tests` (33 classes, 239 methods, 314 test cases;
-Linux, 16 cores, Microsoft.Testing.Extensions.CodeCoverage and
-`dotnet-coverage` 18.12):
-
-| Approach | Wall time | vs. one coverage run | Attribution |
-|----------|-----------|----------------------|-------------|
-| One run, no coverage | 4.9 s | 0.5× | none |
-| One run with `--coverage` | 9.1 s | 1× | run (shared) |
-| One `dotnet test --coverage` process per class, serial | 112 s | 12× | class, no bleed |
-| One process per test method, serial (25 sampled, extrapolated) | ~725 s | ~80× | test, no bleed |
-| Per-class processes, 4 or 8 concurrent | ~95 s | — | invalid: reports came back empty (line rate 0) and some tests failed |
-| `dotnet-coverage` server session, `snapshot --reset` at boundaries seen in the runner's live output | 11 s | 1.2× | unusable: see below |
-
-- A `dotnet-coverage snapshot --reset` costs about 200 ms and resets cleanly,
-  but the test host does not wait for it. With serial execution
-  (`-parallelMode none`) and boundaries taken from the verbose reporter, only
-  18 snapshots landed for 33 classes (8 spanned several classes), and
-  single-class snapshots had about 4× extra lines and missed 44% of the lines
-  from isolated runs. Per-test boundaries were worse (28 snapshots for 240
-  tests). Accurate snapshots need a blocking in-process hook. The MTP coverage
-  extension exposes no per-test hook (Labcoat reached the same conclusion), and
-  MTP server mode allows only one request per process, so Piston cannot request
-  one class at a time from a warm host.
-- Class-level sets over-select about 4× compared with isolated per-test runs on
-  the sample (mean 225 lines per test; 869 per class), and missed no line.
-  Run-level sets over-select about 350×.
-- Tests that drive child processes (stdio smoke tests) record only the in-process
-  lines; cross-process coverage stays out of scope.
-
-The original implementation used **class** granularity by default because a
-complete per-test backfill measured about 80× one coverage run. Following the
-user's choice, the default is now **test** granularity: it measures one test
-method per process while idle. It remains cancellable, incremental (only tests
-whose recorded files changed, or that have no map entry, are re-measured) and
-never concurrent with another coverage run of the same test app. Users can
-choose `"class"` for a faster, coarser map or `"off"` to disable backfill. The
-blocking in-process hook remains deferred because it would require changes to
-the user's test project and framework-specific integration.
-
-### Status
-
-Implemented:
-
-- An impact map of `run` units recorded by every coverage run and `test` (or,
-  with `impactBackfill: "class"`, `class`) units measured by the idle backfill, each
-  with executed line spans and a content snapshot. Aggregate line coverage is
-  stored separately and labelled as aggregate.
-- Changed-line selection (Tier 3) diffing changed files against the snapshots,
-  with per-test reasons, conservative fallback to project selection, and a
-  `plan_affected_tests` preview. C# syntax tokens are compared so ordinary
-  comments and whitespace do not trigger tests or invalidate measurements.
-  Spans merged after an edit are remapped with a line diff; class and test units
-  of an edited file are treated as outdated until remeasured.
-- Dashboard: a covering-tests panel per file and per line with evidence
-  granularity and outdated markers, drill-down to the test, "Why it ran" in test
-  details, backfill progress and the last run's scope in the status bar.
-
-Not yet done: branch-level attribution, the passing/failing/uncovered verdict per
-changed line, a coverage-aware diff view, and method-level identity.
-
-### Implementation
-
-- Persist genuine per-test executable-line and, where available, branch hits,
-  tied to test identities and source/build versions.
-- Store aggregate coverage separately; never assign an aggregate report to every
-  test as if it demonstrated individual attribution.
-- Run detailed coverage as scheduled backfill without blocking ordinary
-  verification. Display pending/unknown/stale explicitly.
-- Show changed executable lines as covered by passing tests, covered only by
+### Coverage
+- A verdict for each changed line: covered by passing tests, covered only by
   failing tests, uncovered, non-executable, or unknown/stale.
-- Add a coverage-aware diff to the canvas with drill-down to covering tests.
-- Investigate method-level identity to handle line shifts, but do not reuse old
-  line evidence after edits without validated remapping.
-- Use trustworthy maps for selective execution with conservative fallback.
-  Track upstream affected-test selection work before building competing
-  infrastructure; availability and compatibility must be checked at integration.
+- A coverage-aware diff view in the dashboard and canvas, with drill-down to the
+  covering tests.
+- Branch-level attribution in the impact map.
+- Method-level identity, so line shifts do not invalidate evidence. Never reuse old
+  line evidence without validated remapping.
 
-## Phase 5: integration-test resources
+### Memory
+- A declared baseline: the merge-base with a configured base ref, run in a
+  Piston-managed worktree, so "new versus pre-existing" does not depend on this
+  worktree's own history.
+- Richer flakiness evidence (retries, repeated outcomes across worktrees of one
+  repository).
 
-Build only the resource constraints demonstrated by G0/G1.
+### Execution
+- Explore MTP server mode further for structured results and stable test
+  identities; keep VSTest/TRX as the compatibility path.
+- Integration-test resources: infer likely needs (containers, exclusive
+  resources) from package references, with explicit overrides, and schedule
+  them within the budget. Address fixed-port and container-name conflicts
+  conservatively.
+- Per-test output and relevant artifacts in the MCP tools and the dashboard.
 
-- Infer likely resource needs from package references, with explicit overrides;
-  package presence alone is not proof every test needs exclusive resources.
-- Schedule container, memory, or explicitly named exclusive-resource budgets.
-- Address demonstrated fixed-port/container-name conflicts conservatively.
-- Surface per-test output and relevant artifacts in the API and canvas.
+### Dashboard
+- A session timeline: edits, runs, outcomes, freshness and failure classification.
+- A workspace overview: owned worktrees on the machine, queued and running work,
+  and budget use.
 
-Aspire-specific telemetry, out-of-process coverage, and warm AppHost reuse remain
-optional future work, not dependencies of the core product.
+## Risks and open questions
 
-## Deferred work and risks
-
-- PR verdict/change-coverage reporting; remote/cloud-host transport and isolation.
-- Desktop revival; deeper VSTest per-test attribution.
-- Build-output contention with commands outside Piston's scheduler.
-- Attribution ambiguity when several sessions edit the same worktree.
-- SDK compatibility and harness hook/API changes.
-- Upgrade/file-lock behavior and complete descendant process cleanup.
-- Cost of baseline and coverage backfill; honest stale/partial evidence.
-
-Later phases are not authorized merely by landing the roadmap.
+- Build-output contention with commands run outside Piston (an agent's own
+  `dotnet build`).
+- Attribution ambiguity when several sessions edit one worktree.
+- SDK compatibility, and harness MCP/hook behaviour changes.
+- Complete cleanup of descendant processes on every platform.
+- The cost of coverage backfill on large solutions, and honest reporting of
+  stale or partial evidence.
