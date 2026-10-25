@@ -63,6 +63,21 @@
             </span>
         }
 
+        @if (phase == PistonPhaseDto.Testing && WaitingProjects(Snapshot) is { Count: > 0 } waiting)
+        {
+            var now = DateTimeOffset.UtcNow;
+            var first = waiting[0];
+            var summary = first.Wait.BlockedBy.Count > 0
+                ? ResourceWaitText.Blocker(first.Wait.BlockedBy[0], first.Wait)
+                : "checking";
+            <span class="flex items-center gap-1.5 min-w-0 text-amber-400"
+                  data-testid="resource-wait"
+                  title="@string.Join(Environment.NewLine + Environment.NewLine, waiting.Select(w => ResourceWaitText.Describe(w.Project, w.Wait, now)))">
+                <span class="shrink-0">⏸</span>
+                <span class="truncate">@waiting.Count waiting for resources: @Path.GetFileNameWithoutExtension(first.Project) (@summary)</span>
+            </span>
+        }
+
         @if (phase == PistonPhaseDto.Testing && Snapshot.LongestRunningTest is { } longest)
         {
             var elapsed = TestNode.FormatDuration(Math.Max(0, (DateTimeOffset.UtcNow - longest.StartedAt).TotalMilliseconds));
@@ -77,6 +92,14 @@
                 {
                     <span class="shrink-0">possibly hanging</span>
                 }
+            </span>
+        }
+
+        @if (Snapshot.RetryStatus is { } retrying)
+        {
+            <span class="flex items-center gap-1.5 min-w-0 text-yellow-400" data-testid="retry-status" title="@retrying">
+                <span class="shrink-0">↻</span>
+                <span class="truncate">@retrying</span>
             </span>
         }
 
@@ -156,7 +179,7 @@
         Snapshot = Client.CurrentSnapshot;
         _tick = new Timer(_ =>
         {
-            if (Snapshot?.LongestRunningTest is not null)
+            if (Snapshot?.LongestRunningTest is not null || Snapshot?.ProjectResourceWaits is { Count: > 0 })
             {
                 _ = InvokeAsync(StateHasChanged);
             }
@@ -180,6 +203,13 @@
             .Where(p => p.Value == ProjectRunStatusDto.Running)
             .Select(p => Path.GetFileNameWithoutExtension(p.Key))
             .Order(StringComparer.Ordinal)
+            .ToList() ?? [];
+
+    private static List<(string Project, TestResourceWaitDto Wait)> WaitingProjects(StateSnapshotNotification snapshot) =>
+        snapshot.ProjectResourceWaits?
+            .Where(p => p.Value.State == "Waiting")
+            .OrderBy(p => p.Value.WaitingSince)
+            .Select(p => (p.Key, p.Value))
             .ToList() ?? [];
 
     private static (string icon, string color) PhaseDisplay(PistonPhaseDto phase) =>

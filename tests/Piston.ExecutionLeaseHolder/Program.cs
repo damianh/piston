@@ -13,6 +13,8 @@ namespace Piston.ExecutionLeaseHolder;
 /// <list type="bullet">
 /// <item><c>own &lt;dir&gt; &lt;solution&gt;</c>: acquire ownership, print <c>READY</c>, wait.</item>
 /// <item><c>admit &lt;dir&gt; &lt;cpu&gt; &lt;memoryMb|0&gt;</c>: print <c>QUEUED n</c> while queued, <c>READY</c> once admitted, wait.</item>
+/// <item><c>resource &lt;dir&gt; &lt;key[,key]|-&gt; &lt;containers 0|1&gt;</c>: acquire test resources for project
+/// <c>Holder.csproj</c>; print <c>WAITING n</c> while waiting, <c>READY</c> once acquired, wait.</item>
 /// <item><c>probe &lt;dir&gt;</c>: prepare the directory and exit 0, or print the error and exit 2.</item>
 /// <item><c>run[-raw] &lt;command&gt; [args]</c>: launch an owned test command and forward its output and exit code.</item>
 /// <item><c>discover</c>: run best-effort test discovery and print the number of results.</item>
@@ -101,6 +103,19 @@ public static class Program
                         status => Console.Out.WriteLine($"QUEUED {status.QueuedAhead}"),
                         inheritedSequence: null,
                         CancellationToken.None))
+                    {
+                        await ReadyAndWaitAsync();
+                    }
+                    return 0;
+
+                case "resource":
+                    directory.EnsureReady();
+                    var keys = args[2] == "-" ? [] : args[2].Split(',');
+                    var needs = new TestResourceNeeds("Holder.csproj", keys, args[3] == "1", []);
+                    var resources = new MachineResourceCoordinator(
+                        directory, _ => needs, "holder-worktree", TimeSpan.FromMilliseconds(20), _ => false);
+                    using (await resources.AcquireAsync(
+                        needs, status => Console.Out.WriteLine($"WAITING {status.BlockedBy.Count}"), CancellationToken.None))
                     {
                         await ReadyAndWaitAsync();
                     }

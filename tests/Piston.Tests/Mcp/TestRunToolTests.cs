@@ -74,6 +74,50 @@ public sealed class TestRunToolTests
     }
 
     [Fact]
+    public void RetriesAndFlakyEvidenceAppearInMcpAndProtocolJson()
+    {
+        var retried = new TestResult("Ns.C.Third", "Third", TestStatus.Passed, TimeSpan.FromMilliseconds(4), null, null, null, null)
+        {
+            Attempts = [new TestAttempt(TestStatus.Failed, TimeSpan.FromMilliseconds(5), "first", "at Third()")],
+        };
+        var evidence = new FlakinessEvidence(Source.Value, 1, 1, 1, ["feature-x"],
+            [new("retries", DateTimeOffset.UnixEpoch, TestStatus.Failed, 0, null), new("run-9", DateTimeOffset.UnixEpoch, TestStatus.Passed, 0, "feature-x")]);
+        var baseRun = Run("retries", 1);
+        var run = baseRun with
+        {
+            Suites = [baseRun.Suites[0] with { Tests = [.. baseRun.Suites[0].Tests, retried] }],
+            FailureClassifications = [new("T", "Ns.B.Second", FailureKind.Flaky, evidence.Describe(), evidence)],
+            RetryLimit = 2,
+            RetriesSkippedReason = "skipped for a reason",
+        };
+        var engine = new StubEngine();
+        engine.State.RecentRuns = [run];
+
+        using var mcp = JsonDocument.Parse(new TestTools(engine, NullMcpCallRecorder.Instance).GetTestRun(run.RunId));
+        var root = mcp.RootElement;
+        Assert.Equal(2, root.GetProperty("retryLimit").GetInt32());
+        Assert.Equal("skipped for a reason", root.GetProperty("retriesSkippedReason").GetString());
+        Assert.Equal(1, root.GetProperty("summary").GetProperty("passedOnRetry").GetInt32());
+        var third = root.GetProperty("tests").EnumerateArray().Single(t => t.GetProperty("fullyQualifiedName").GetString() == "Ns.C.Third");
+        var attempt = Assert.Single(third.GetProperty("attempts").EnumerateArray());
+        Assert.Equal("Failed", attempt.GetProperty("status").GetString());
+        Assert.Equal("first", attempt.GetProperty("errorMessage").GetString());
+        var flakiness = root.GetProperty("failureClassifications")[0].GetProperty("flakiness");
+        Assert.Equal(Source.Value, flakiness.GetProperty("source").GetString());
+        Assert.Equal(1, flakiness.GetProperty("retryOutcomes").GetInt32());
+        Assert.Equal("feature-x", flakiness.GetProperty("otherWorktrees")[0].GetString());
+        Assert.Equal("feature-x", flakiness.GetProperty("outcomes")[1].GetProperty("worktree").GetString());
+
+        var restored = JsonSerializer.Deserialize(JsonSerializer.Serialize(run.ToDto(), PistonJsonContext.Default.TestRunDto), PistonJsonContext.Default.TestRunDto)!;
+        Assert.Equal(2, restored.RetryLimit);
+        Assert.Equal("skipped for a reason", restored.RetriesSkippedReason);
+        Assert.Equal(1, restored.PassedOnRetry);
+        var resultDto = Assert.Single(retried.ToDto().Attempts!);
+        Assert.Equal(new TestAttemptDto(TestStatusDto.Failed, 5, "first", "at Third()"), resultDto);
+        Assert.Null(baseRun.Suites[0].Tests[0].ToDto().Attempts);
+    }
+
+    [Fact]
     public async Task RunTestsReportsTheRequestedRunsProvenance()
     {
         var engine = new StubEngine { NextRun = Run("run-1", 2) };
