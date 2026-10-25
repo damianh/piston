@@ -24,7 +24,10 @@ public sealed record BuildCompletedActivityEvent(
     bool Succeeded,
     double DurationMs,
     IReadOnlyList<string> Errors
-) : EngineActivityEvent(SolutionPath);
+) : EngineActivityEvent(SolutionPath)
+{
+    public int ErrorCount { get; init; } = Errors.Count;
+}
 
 public sealed record TestFailure(
     string FullyQualifiedName,
