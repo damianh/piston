@@ -62,8 +62,9 @@ public sealed class TestOverlayCompositionTests
     [Fact]
     public void ProjectsWithTheSameFileNameKeepTheirOwnTestsAndIdentity()
     {
-        const string first = "/repo/One/Tests.csproj";
-        const string second = "/repo/Two/Tests.csproj";
+        var solutionDirectory = Path.Combine(Path.GetTempPath(), "piston-overlay");
+        var first = Path.Combine(solutionDirectory, "One", "Tests.csproj");
+        var second = Path.Combine(solutionDirectory, "Two", "Tests.csproj");
         var overlay = PistonOrchestrator.ComposeTestOverlay(
             [
                 new TestSuite("Tests", [Test("Shared.Test", TestStatus.Passed)], DateTimeOffset.UnixEpoch, TimeSpan.Zero)
@@ -84,7 +85,7 @@ public sealed class TestOverlayCompositionTests
             filtered: false,
             out _,
             out _,
-            solutionDirectory: "/repo");
+            solutionDirectory: solutionDirectory);
 
         Assert.Equal(["One/Tests.csproj", "Two/Tests.csproj"], overlay.Select(s => s.ProjectId));
         Assert.Equal(

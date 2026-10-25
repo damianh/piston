@@ -135,6 +135,24 @@ public sealed class RunHistoryStoreTests : IDisposable
     }
 
     [Fact]
+    public void HistoryOfRemovedProjects_RemainsQueryableByItsStoredId()
+    {
+        using (var store = Open())
+        {
+            _ = store.Record(Run("s1", TestStatus.Passed));
+        }
+
+        using var reopened = Open();
+        reopened.ResolveLegacyProjects(
+            [Path.Combine(Path.GetDirectoryName(_solution)!, "Renamed", "Tests.csproj")],
+            Path.GetDirectoryName(_solution)!);
+
+        Assert.Equal(ProjectId, Assert.Single(reopened.GetTestHistory(Test, ProjectId)).ProjectId);
+        Assert.Empty(reopened.GetTestHistory(Test, "Renamed/Tests.csproj"));
+        _ = Assert.Throws<ArgumentException>(() => reopened.GetTestHistory(Test, "Unknown/Tests.csproj"));
+    }
+
+    [Fact]
     public void Entries_per_test_and_stored_runs_are_capped()
     {
         using var store = Open();

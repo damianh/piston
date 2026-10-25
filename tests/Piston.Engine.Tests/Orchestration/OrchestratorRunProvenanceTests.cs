@@ -495,6 +495,31 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     }
 
     [Fact]
+    public async Task IdenticalTestsInDifferentProjects_AreNotDuplicateIdentities()
+    {
+        _impact.TestProjects =
+        [
+            Path.Combine(_root, "One", "Tests.csproj"),
+            Path.Combine(_root, "Two", "Tests.csproj"),
+        ];
+        await StartAndWaitForStartupRunAsync();
+
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(TestRunStatus.Completed, run!.Status);
+        Assert.Equal(["One/Tests.csproj", "Two/Tests.csproj"], run.Suites.Select(s => s.ProjectId));
+        Assert.All(run.Tests, test => Assert.Equal("Tests.Test1", test.ResultKey));
+        Assert.Empty(run.DuplicateTestIds);
+        Assert.True(run.IsCurrentFullResult);
+
+        _runner.DuplicateFirstTest = true;
+        var duplicated = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(["Tests.Test1"], duplicated!.DuplicateTestIds);
+        Assert.False(duplicated.IsCurrentFullResult);
+    }
+
+    [Fact]
     public async Task DuplicateTestIdentities_AreReportedAndNotCurrentFullResult()
     {
         await StartAndWaitForStartupRunAsync();

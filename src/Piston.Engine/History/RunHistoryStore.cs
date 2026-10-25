@@ -206,7 +206,8 @@ internal sealed class RunHistoryStore : IDisposable
         var siblings = SiblingSnapshot();
         lock (_gate)
         {
-            if (projectId is not null && _knownProjectIds.Count > 0 && !_knownProjectIds.Contains(projectId))
+            if (projectId is not null && _knownProjectIds.Count > 0 && !_knownProjectIds.Contains(projectId)
+                && !_tests.Keys.Any(key => string.Equals(key.Project, projectId, StringComparison.Ordinal)))
             {
                 throw new ArgumentException($"'{projectId}' is not a test project ID in this solution.", nameof(projectId));
             }

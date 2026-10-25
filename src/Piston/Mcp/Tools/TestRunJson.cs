@@ -19,7 +19,7 @@ public static class TestRunJson
     public static JsonObject ToJson(TestRunRecord run)
     {
         var tests = run.Suites
-            .SelectMany(suite => suite.Tests.Select(test => (ProjectId: suite.ProjectId, Test: test)))
+            .SelectMany(suite => suite.Tests.Select(test => (ProjectId: suite.Key, Test: test)))
             .ToList();
         var testArray = new JsonArray();
         foreach (var (projectId, t) in tests

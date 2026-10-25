@@ -67,7 +67,7 @@
         {
             var elapsed = TestNode.FormatDuration(Math.Max(0, (DateTimeOffset.UtcNow - longest.StartedAt).TotalMilliseconds));
             var shortName = WatchStrip.ShortTestName(longest.Name);
-            var projectName = ProjectLabel(longest.ProjectPath, Snapshot.ProjectStatuses?.Keys ?? [], Snapshot.SolutionPath);
+            var projectName = ProjectLabels.For(longest.ProjectPath, Snapshot.ProjectStatuses?.Keys ?? [], Snapshot.SolutionPath);
             <span class="flex items-center gap-1.5 min-w-0 @(longest.PossiblyHanging ? "text-amber-400" : "text-gray-400")"
                   data-testid="longest-running-test"
                   title="@($"Running longest: {longest.Name}{Environment.NewLine}{projectName}{(longest.PossiblyHanging ? $"{Environment.NewLine}Running longer than the hang threshold: possibly hanging" : "")}")">
@@ -190,24 +190,9 @@
         var projectPaths = snapshot.ProjectStatuses?.Keys.ToList() ?? [];
         return snapshot.ProjectStatuses?
             .Where(p => p.Value == ProjectRunStatusDto.Running)
-            .Select(p => ProjectLabel(p.Key, projectPaths, snapshot.SolutionPath))
+            .Select(p => ProjectLabels.For(p.Key, projectPaths, snapshot.SolutionPath))
             .Order(StringComparer.Ordinal)
             .ToList() ?? [];
-    }
-
-    private static string ProjectLabel(string projectPath, IEnumerable<string> projectPaths, string? solutionPath)
-    {
-        var shortName = Path.GetFileNameWithoutExtension(projectPath);
-        if (!projectPaths.Any(path =>
-                !string.Equals(path, projectPath, StringComparison.Ordinal)
-                && string.Equals(Path.GetFileNameWithoutExtension(path), shortName, StringComparison.Ordinal)))
-        {
-            return shortName;
-        }
-
-        var solutionDirectory = solutionPath is null ? null : Path.GetDirectoryName(solutionPath);
-        var projectId = solutionDirectory is null ? projectPath : Path.GetRelativePath(solutionDirectory, projectPath);
-        return $"{shortName} ({projectId.Replace('\\', '/')})";
     }
 
     private static (string icon, string color) PhaseDisplay(PistonPhaseDto phase) =>

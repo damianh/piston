@@ -1614,10 +1614,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             }
 
             var duplicates = newSuites
-                .SelectMany(s => s.Tests)
-                .GroupBy(t => t.ResultKey, StringComparer.Ordinal)
+                .SelectMany(s => s.Tests.Select(t => (Project: s.Key, t.ResultKey)))
+                .GroupBy(t => (t.Project, t.ResultKey))
                 .Where(g => g.Count() > 1)
-                .Select(g => g.Key)
+                .Select(g => g.Key.ResultKey)
+                .Distinct(StringComparer.Ordinal)
                 .Order(StringComparer.Ordinal)
                 .ToList();
 

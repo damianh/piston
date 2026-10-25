@@ -221,7 +221,7 @@ public static class DtoMapper
     {
         // A selective run leaves the project's untouched results in the previous suite, so take the latest.
         var latest = state.TestSuites
-            .Where(s => s.ExecutionLog is not null && string.Equals(s.ProjectId, projectId, StringComparison.Ordinal))
+            .Where(s => s.ExecutionLog is not null && string.Equals(s.Key, projectId, StringComparison.Ordinal))
             .MaxBy(s => s.Timestamp);
 
         return latest?.ExecutionLog!.ToDto(latest.RunId);

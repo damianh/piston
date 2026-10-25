@@ -467,7 +467,12 @@ project-file extension (for example, `tests/One/Tests.csproj`). The ID is the
 key for `engine/runTests`, `tests/getRunLog`, history, and dashboard selection;
 short names are not accepted for targeted requests. The dashboard displays the
 short name unless another project shares it, in which case it adds the relative
-path. Run history format v2 stores project IDs. On loading v1 history, a short
+path; labels normalize daemon path separators regardless of the browser's platform.
+Duplicate test IDs are detected within each project, not across projects. When
+the runner falls back to a solution target without project IDs, suite names remain
+the fallback identities for logs and flattened test results.
+Run history format v2 stores project IDs, and retained history remains queryable
+by ID after a project is renamed or removed. On loading v1 history, a short
 name is migrated only when it identifies exactly one current test project,
 after a successful build and post-restore graph refresh. While project discovery
 is incomplete, legacy data is left unchanged and new runs are not recorded in

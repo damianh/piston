@@ -59,6 +59,22 @@ public sealed class RunLogTests
     }
 
     [Fact]
+    public void FindRunLog_SolutionFallbackUsesTheSuiteName()
+    {
+        var state = new PistonState
+        {
+            TestSuites =
+            [
+                Suite("One", Log("All.slnx", "first"), "run-1", Test("Shared.Test", null)) with { ProjectId = null },
+                Suite("Two", Log("All.slnx", "second"), "run-1", Test("Shared.Test", null)) with { ProjectId = null },
+            ],
+        };
+
+        Assert.Equal("first", Assert.Single(state.FindRunLog("One")!.Entries).Message);
+        Assert.Equal("second", Assert.Single(state.FindRunLog("Two")!.Entries).Message);
+    }
+
+    [Fact]
     public void FindRunLog_AfterASelectiveRun_ReturnsTheLatestSuitesLog()
     {
         // A selective run keeps the project's untouched results in the earlier suite and appends its own.

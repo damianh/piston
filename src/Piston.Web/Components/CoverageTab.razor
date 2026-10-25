@@ -446,22 +446,8 @@
 
     private static string Indent(int depth) => $"padding-left: {12 + (Math.Max(depth, 0) * 14)}px";
 
-    private string ProjectLabel(string projectPath, IEnumerable<string> projectPaths)
-    {
-        var shortName = Path.GetFileNameWithoutExtension(projectPath);
-        if (!projectPaths.Any(path =>
-                !string.Equals(path, projectPath, StringComparison.Ordinal)
-                && string.Equals(Path.GetFileNameWithoutExtension(path), shortName, StringComparison.Ordinal)))
-        {
-            return shortName;
-        }
-
-        var solutionDirectory = Client.CurrentSnapshot?.SolutionPath is { } solutionPath
-            ? Path.GetDirectoryName(solutionPath)
-            : null;
-        var projectId = solutionDirectory is null ? projectPath : Path.GetRelativePath(solutionDirectory, projectPath);
-        return $"{shortName} ({projectId.Replace('\\', '/')})";
-    }
+    private string ProjectLabel(string projectPath, IEnumerable<string> projectPaths) =>
+        ProjectLabels.For(projectPath, projectPaths, Client.CurrentSnapshot?.SolutionPath);
 
     private RenderFragment SortHeader(CoverageSort sort, string label, string classes) =>
         @<text>

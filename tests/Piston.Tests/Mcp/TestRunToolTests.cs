@@ -167,6 +167,28 @@ public sealed class TestRunToolTests
     }
 
     [Fact]
+    public void GetTestRunPreservesSolutionFallbackSuiteIdentities()
+    {
+        var run = Run("fallback", 1);
+        var test = run.Suites[0].Tests[0] with { FullyQualifiedName = "Shared.Test" };
+        run = run with
+        {
+            Suites =
+            [
+                run.Suites[0] with { Name = "One", ProjectId = null, Tests = [test] },
+                run.Suites[0] with { Name = "Two", ProjectId = null, Tests = [test] },
+            ],
+        };
+        var engine = new StubEngine();
+        engine.State.RecentRuns = [run];
+
+        using var doc = JsonDocument.Parse(new TestTools(engine, NullMcpCallRecorder.Instance).GetTestRun(run.RunId));
+
+        Assert.Equal(["One", "Two"], doc.RootElement.GetProperty("tests").EnumerateArray()
+            .Select(t => t.GetProperty("projectId").GetString()));
+    }
+
+    [Fact]
     public void GetTestRunKeepsIdenticalTestNamesSeparateByProjectId()
     {
         var run = Run("duplicate-tests", 1) with
