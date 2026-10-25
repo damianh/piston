@@ -222,6 +222,58 @@ public sealed class HostHelpersTests : IDisposable
         Assert.Contains("testTimeout", ex.Message);
     }
 
+    [Fact]
+    public void TestResourcesAreLoadedAndNormalized()
+    {
+        File.WriteAllText(Path.Combine(_root, ".piston.json"), """
+            {
+              "testResources": [
+                { "projects": " tests/**/*.IntegrationTests.csproj ", "exclusive": ["Port:5432", "container:pg"], "isolation": "None" },
+                { "projects": "tests/Unit.Tests.csproj", "containers": false }
+              ]
+            }
+            """);
+
+        var config = HostHelpers.LoadConfig(_root);
+        var rules = HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config).TestResourceRules;
+
+        Assert.Equal(2, rules.Count);
+        Assert.Equal("tests/**/*.IntegrationTests.csproj", rules[0].Projects);
+        Assert.Equal(["port:5432", "container:pg"], rules[0].Exclusive);
+        Assert.Equal(Piston.Engine.Execution.TestResourceIsolation.None, rules[0].Isolation);
+        Assert.Null(rules[0].Containers);
+        Assert.Equal(false, rules[1].Containers);
+        Assert.Empty(rules[1].Exclusive);
+        Assert.Empty(HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, new()).TestResourceRules);
+    }
+
+    [Theory]
+    [InlineData("""{ "testResources": { "projects": "a" } }""", "expected an array")]
+    [InlineData("""{ "testResources": [ { "projects": "a", "exclusiv": ["port:1"] } ] }""", "unknown property 'exclusiv'")]
+    public void MalformedTestResourcesAreRejectedOnLoad(string json, string expected)
+    {
+        File.WriteAllText(Path.Combine(_root, ".piston.json"), json);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => HostHelpers.LoadConfig(_root));
+
+        Assert.Contains(expected, ex.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("""{ "testResources": [ { "exclusive": ["port:1"] } ] }""", "testResources[0]' in .piston.json: 'projects'")]
+    [InlineData("""{ "testResources": [ { "projects": "a", "exclusive": ["port:99999"] } ] }""", "testResources[0].exclusive")]
+    [InlineData("""{ "testResources": [ { "projects": "a", "exclusive": ["db"] } ] }""", "testResources[0].exclusive")]
+    [InlineData("""{ "testResources": [ { "projects": "a" }, { "projects": "b", "isolation": "machine" } ] }""", "testResources[1].isolation")]
+    public void InvalidTestResourcesAreRejected(string json, string expected)
+    {
+        File.WriteAllText(Path.Combine(_root, ".piston.json"), json);
+        var config = HostHelpers.LoadConfig(_root);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config));
+
+        Assert.Contains(expected, ex.Message, StringComparison.Ordinal);
+    }
+
     private string WriteSolution(string relativePath)
     {
         var path = Path.Combine(_root, relativePath);

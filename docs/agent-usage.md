@@ -171,6 +171,13 @@ source builds and all tests pass. Every other verdict is not a pass:
 An `Admission:` line means the run waited for the machine execution budget (queue
 position and wait time). That is expected under load, not a failure.
 
+A `Test resources:` list reports test projects that waited for exclusive test
+resources (containers, fixed ports) held by runs in other worktrees, which is
+also expected, plus warnings and failures that look like port or container name
+conflicts. For a suspected conflict, declare the resource in `testResources` in
+`.piston.json` (see the README's *Integration-test resources*) rather than
+retrying in a loop.
+
 Do not treat these as verification:
 - `get_test_results`: accumulated state that may combine several runs;
 - filtered or selective runs;

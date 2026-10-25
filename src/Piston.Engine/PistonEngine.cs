@@ -112,7 +112,17 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             coordinationDirectory,
             new ExecutionReservation(effectivePoolSize, options.ExecutionMemoryReservationMb));
 
-        var testRunner = new TestRunnerService(strategy, _pool);
+        // Test projects that share ports, container names or containers wait for each other machine-wide.
+        var resourceResolver = new TestResourceResolver(
+            new TestResourceInference(options.SolutionPath, options.TestResourceRules, impactAnalyzer.GetTestProjectFacts),
+            impactAnalyzer.GetAllTestProjectPaths,
+            message => _diagnosticLog.Write("Resources", message));
+        var resourceGate = new MachineResourceCoordinator(
+            coordinationDirectory,
+            resourceResolver.Resolve,
+            WorktreeIdentity.FromSolutionPath(options.SolutionPath).RootPath);
+
+        var testRunner = new TestRunnerService(strategy, _pool, resourceGate);
 
         _orchestrator = new PistonOrchestrator(
             fileWatcher,

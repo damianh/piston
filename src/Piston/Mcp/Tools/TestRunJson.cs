@@ -73,6 +73,8 @@ public static class TestRunJson
                     ["noTestsReason"] = p.NoTestsReason,
                     ["timedOutTest"] = p.TimedOut?.Test,
                     ["testTimeoutMs"] = p.TimedOut is { } timeout ? Math.Round(timeout.Limit.TotalMilliseconds, 3) : null,
+                    ["resources"] = Resources(p.Resources),
+                    ["suspectedResourceConflict"] = p.SuspectedResourceConflict,
                 })
                 .ToArray()),
             ["runnerError"] = run.RunnerError,
@@ -132,6 +134,41 @@ public static class TestRunJson
             ["memoryMbInUse"] = a.MemoryMbInUse,
             ["queuedAt"] = a.QueuedAt.ToString("O"),
             ["admittedAt"] = a.AdmittedAt?.ToString("O"),
+        };
+
+    private static JsonObject? Resources(TestProjectResources? r) => r is null
+        ? null
+        : new JsonObject
+        {
+            ["keys"] = Strings(r.Needs.Keys),
+            ["usesContainers"] = r.Needs.UsesContainers,
+            ["reasons"] = Strings(r.Needs.Reasons),
+            ["wait"] = ResourceWait(r.Wait),
+            ["warnings"] = Strings(r.Warnings),
+        };
+
+    internal static JsonObject? ResourceWait(TestResourceWait? w) => w is null
+        ? null
+        : new JsonObject
+        {
+            ["state"] = w.State.ToString(),
+            ["keys"] = Strings(w.Keys),
+            ["usesContainers"] = w.UsesContainers,
+            ["blockedBy"] = new JsonArray(w.BlockedBy.Select(b => (JsonNode)new JsonObject
+            {
+                ["resource"] = b.Resource,
+                ["kind"] = b.Kind.ToString(),
+                ["processId"] = b.ProcessId,
+                ["worktree"] = b.Worktree,
+                ["project"] = b.Project,
+                ["since"] = b.Since.ToString("O"),
+            }).ToArray()),
+            ["queuedAhead"] = w.QueuedAhead,
+            ["containerSlotsInUse"] = w.ContainerSlotsInUse,
+            ["containerSlotBudget"] = w.ContainerSlotBudget,
+            ["waitingSince"] = w.WaitingSince.ToString("O"),
+            ["acquiredAt"] = w.AcquiredAt?.ToString("O"),
+            ["waitedMs"] = w.Waited is { } waited ? Math.Round(waited.TotalMilliseconds, 3) : null,
         };
 
     private static JsonObject? Context(TestRunContext? c) => c is null

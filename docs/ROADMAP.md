@@ -50,6 +50,11 @@ ARCHITECTURE describe the implementation in detail.
   freshness, its own build diagnostics, and fixed and newly failing tests.
 - One owner per worktree through OS file locks, and a machine-wide CPU/memory
   admission budget (`budget.json`) with visible FIFO queueing.
+- Integration-test resource scheduling: container use inferred from package
+  references, per-repository isolation of container test projects, exclusive
+  `port:`/`container:`/`resource:` keys and overrides in `testResources`, an
+  optional `containerSlots` budget, visible waits, and port-probe and
+  conflict-signature hints.
 - Correct selective builds: one solution-filter build of the affected projects,
   then no-build test execution.
 - VSTest and Microsoft.Testing.Platform routing, with opt-in warm MTP test hosts.
@@ -132,10 +137,6 @@ opens by hand (today's `piston-dashboard` skill).
 ### Execution
 - Explore MTP server mode further for structured results and stable test
   identities; keep VSTest/TRX as the compatibility path.
-- Integration-test resources: infer likely needs (containers, exclusive
-  resources) from package references, with explicit overrides, and schedule
-  them within the budget. Address fixed-port and container-name conflicts
-  conservatively.
 - Per-test output and relevant artifacts in the MCP tools and the dashboard.
 
 ### Dashboard
