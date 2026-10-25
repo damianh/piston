@@ -468,8 +468,11 @@ key for `engine/runTests`, `tests/getRunLog`, history, and dashboard selection;
 short names are not accepted for targeted requests. The dashboard displays the
 short name unless another project shares it, in which case it adds the relative
 path. Run history format v2 stores project IDs. On loading v1 history, a short
-name is migrated only when it identifies exactly one current test project;
-ambiguous or removed projects are dropped.
+name is migrated only when it identifies exactly one current test project,
+after a successful build and post-restore graph refresh. While project discovery
+is incomplete, legacy data is left unchanged and new runs are not recorded in
+history, with a diagnostic explaining why. Ambiguous or removed projects are dropped only once
+the complete project list is available.
 
 `set_test_filter` changes the active filter but does not itself run tests.
 `clear_results` clears in-memory suites, the last-run timestamp, coverage state,

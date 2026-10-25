@@ -132,6 +132,12 @@ internal sealed class RunHistoryStore : IDisposable
 
         lock (_gate)
         {
+            if (_legacyProjects)
+            {
+                _log?.Invoke("Run history migration is waiting for complete project discovery; this run is not recorded.");
+                return [];
+            }
+
             if (!_recordedRunIds.Add(run.RunId))
             {
                 return [];
@@ -705,7 +711,8 @@ internal sealed class RunHistoryStore : IDisposable
                 var attempts = run.Attempts?.GetValueOrDefault(i.ToString(CultureInfo.InvariantCulture));
                 var project = names[run.Projects[i]];
                 results.Add(new StoredTestResult(
-                    ProjectName(project), names[run.Tests[i]], Status(run.Statuses[i]), run.DurationsMs[i], error?.Message, error?.StackTrace,
+                    model.Version == 1 ? project : ProjectName(project),
+                    names[run.Tests[i]], Status(run.Statuses[i]), run.DurationsMs[i], error?.Message, error?.StackTrace,
                     attempts is null ? null : [.. attempts.Select(a => new StoredAttempt(Status(a.Status), a.DurationMs, a.Message))])
                 {
                     ProjectId = project,

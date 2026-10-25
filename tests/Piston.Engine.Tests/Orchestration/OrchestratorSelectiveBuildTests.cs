@@ -49,12 +49,12 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
 
         var existing = new[]
         {
-            new TestSuite("@machine 10:00:00", [T("Lib.T.A", TestStatus.Passed), T("Lib.T.B", TestStatus.Passed)], DateTimeOffset.UtcNow, TimeSpan.Zero),
+            new TestSuite("@machine 10:00:00", [T("Lib.T.A", TestStatus.Passed), T("Lib.T.B", TestStatus.Passed)], DateTimeOffset.UtcNow, TimeSpan.Zero) { ProjectId = LibTestsId },
             new TestSuite("@machine 10:00:01", [T("Other.T.C", TestStatus.Passed)], DateTimeOffset.UtcNow, TimeSpan.Zero),
         };
         var rerun = new[]
         {
-            new TestSuite("@machine 10:05:00", [T("Lib.T.A", TestStatus.Failed)], DateTimeOffset.UtcNow, TimeSpan.Zero),
+            new TestSuite("@machine 10:05:00", [T("Lib.T.A", TestStatus.Failed)], DateTimeOffset.UtcNow, TimeSpan.Zero) { ProjectId = LibTestsId },
         };
 
         var merged = PistonOrchestrator.MergeTestSuites(existing, rerun).SelectMany(s => s.Tests).ToList();
@@ -77,6 +77,7 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         [
             new TestSuite("original", [T("Lib.T.A"), T("Lib.T.B"), untouched], DateTimeOffset.UtcNow, TimeSpan.Zero)
             {
+                ProjectId = LibTestsId,
                 ExecutionLog = new ExecutionLog(LibTests),
             },
             new TestSuite("Other.Tests", [T("Other.T.C")], DateTimeOffset.UtcNow, TimeSpan.Zero)
@@ -90,7 +91,7 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
             var latestLog = new ExecutionLog(LibTests);
             merged = PistonOrchestrator.MergeTestSuites(merged,
                 [new TestSuite($"partial-{i}", [T(i % 2 == 0 ? "Lib.T.A" : "Lib.T.B")],
-                    DateTimeOffset.UtcNow, TimeSpan.Zero) { ExecutionLog = latestLog }]);
+                    DateTimeOffset.UtcNow, TimeSpan.Zero) { ProjectId = LibTestsId, ExecutionLog = latestLog }]);
 
             var retainedLog = Assert.Single(merged, s => s.ExecutionLog?.ProjectPath == LibTests);
             Assert.Same(latestLog, retainedLog.ExecutionLog);
@@ -123,6 +124,91 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
             [new TestSuite("Lib.Tests", [T("Lib.T.A", null, TestStatus.Failed)], DateTimeOffset.UtcNow, TimeSpan.Zero)])
             .SelectMany(s => s.Tests).ToList();
         Assert.Equal(TestStatus.Failed, Assert.Single(anyFramework).Status);
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("net10.0", "net10.0")]
+    [InlineData("net10.0", null)]
+    [InlineData(null, "net10.0")]
+    public void MergeTestSuites_SharedTestNamesOnlyReplaceResultsInTheirOwnProject(string? oldFramework, string? newFramework)
+    {
+        var oldResult = new TestResult("Shared.Test", "Shared.Test", TestStatus.Passed, TimeSpan.Zero, null, null, null, null)
+        {
+            TargetFramework = oldFramework,
+        };
+        var first = new TestSuite("Tests", [oldResult], DateTimeOffset.UnixEpoch, TimeSpan.Zero)
+        {
+            ProjectId = "One/Tests.csproj",
+        };
+        var second = first with { ProjectId = "Two/Tests.csproj", RunId = "untouched" };
+        var rerun = first with { Tests = [oldResult with { Status = TestStatus.Failed, TargetFramework = newFramework }] };
+
+        var merged = PistonOrchestrator.MergeTestSuites([first, second], [rerun]);
+
+        Assert.Equal(2, merged.Count);
+        var untouched = Assert.Single(merged, s => s.Key == second.Key);
+        Assert.Equal(second.Tests, untouched.Tests);
+        Assert.Equal(second.RunId, untouched.RunId);
+        Assert.Equal(TestStatus.Failed, Assert.Single(Assert.Single(merged, s => s.Key == first.Key).Tests).Status);
+    }
+
+    [Fact]
+    public async Task RunSelected_PreservesTheOtherProjectsSharedTestAndRunLog()
+    {
+        const string firstPath = "/repo/One/Tests.csproj";
+        const string secondPath = "/repo/Two/Tests.csproj";
+        var result = new TestResult("Shared.Test", "Shared.Test", TestStatus.Passed, TimeSpan.Zero, null, null, null, null);
+        var suite = new TestSuite("Tests", [result], DateTimeOffset.UnixEpoch, TimeSpan.Zero);
+        var runner = new RecordingTestRunner
+        {
+            ResultsByProject = new() { [firstPath] = [suite], [secondPath] = [suite] },
+        };
+        var state = new PistonState();
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), new RecordingBuildService(), runner,
+            new FixedImpactAnalyzer(new([], [], false, false)) { TestProjects = [firstPath, secondPath] }, state);
+        await orchestrator.StartAsync("/repo/All.slnx");
+        await WaitForAsync(() => state.LastRun is not null);
+        var untouched = Assert.Single(state.TestSuites, s => s.Key == "Two/Tests.csproj");
+
+        var run = await orchestrator.RunSelectedAsync(new TestSelection(["One/Tests.csproj"], ["Shared.Test"]));
+
+        Assert.Equal(2, state.TestSuites.Count);
+        var preserved = Assert.Single(state.TestSuites, s => s.Key == "Two/Tests.csproj");
+        Assert.Equal(untouched.Tests, preserved.Tests);
+        Assert.Equal(untouched.RunId, preserved.RunId);
+        Assert.NotEqual(run.RunId, untouched.RunId);
+        Assert.NotNull(state.FindRun(untouched.RunId!));
+    }
+
+    [Fact]
+    public async Task SolutionFallback_PreservesDistinctSuiteIdentitiesDuringAndAfterTheRun()
+    {
+        var test = new TestResult("Shared.Test", "Shared.Test", TestStatus.Passed, TimeSpan.Zero, null, null, null, null);
+        TestSuite[] suites =
+        [
+            new("One", [test], DateTimeOffset.UnixEpoch, TimeSpan.Zero),
+            new("Two", [test], DateTimeOffset.UnixEpoch, TimeSpan.Zero),
+        ];
+        var state = new PistonState();
+        var overlays = new List<IReadOnlyList<TestSuite>>();
+        state.StateChanged += () =>
+        {
+            if (state.InProgressSuites.Count > 0)
+            {
+                overlays.Add(state.InProgressSuites);
+            }
+        };
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), new RecordingBuildService(),
+            new RecordingTestRunner { ResultsByProject = new() { ["/repo/All.slnx"] = suites } },
+            new FixedImpactAnalyzer(new([], [], false, false)) { TestProjects = [] }, state);
+
+        await orchestrator.StartAsync("/repo/All.slnx");
+        await WaitForAsync(() => state.LastRun is not null);
+
+        Assert.Equal(["One", "Two"], state.LastRun!.Suites.Select(s => s.Key));
+        Assert.NotEmpty(overlays);
+        Assert.All(overlays, overlay => Assert.Equal(["One", "Two"], overlay.Select(s => s.Key)));
     }
 
     [Theory]
@@ -497,6 +583,7 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
         public List<string?> Filters { get; } = [];
         public TaskCompletionSource? Gate { get; init; }
         public CancellationToken LastToken { get; private set; }
+        public Dictionary<string, IReadOnlyList<TestSuite>> ResultsByProject { get; init; } = [];
 
         public Task WaitForCallsAsync(int count) => _counter.WaitForAsync(count);
 
@@ -520,6 +607,19 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
             }
 
             _counter.Increment();
+            if (ResultsByProject.Count > 0)
+            {
+                var projects = (testProjectPaths ?? [solutionPath])
+                    .Select(path => new ProjectTestResult(path, ResultsByProject[path], null, [], Crashed: false)).ToList();
+                var suites = projects.SelectMany(p => p.Suites).ToList();
+                onProgress?.Invoke(suites);
+                foreach (var project in projects)
+                {
+                    onProjectCompleted?.Invoke(project);
+                }
+                return Task.FromResult(new TestRunResult(suites, null, []) { Projects = projects });
+            }
+
             return Gate is { } gate
                 ? gate.Task.ContinueWith(_ => new TestRunResult([], null, []), TaskScheduler.Default)
                 : Task.FromResult(new TestRunResult([], null, []));

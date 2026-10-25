@@ -986,12 +986,6 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 testTargets = impactResult.AffectedTestProjectPaths;
             }
 
-            var allIdentityProjects = _impactAnalyzer.GetAllTestProjectPaths();
-            if (allIdentityProjects.Count > 0)
-            {
-                RunHistory?.ResolveLegacyProjects(allIdentityProjects, solutionDir);
-            }
-
             Dictionary<string, string> TestWorkingDirectories(IReadOnlyList<string>? targets) =>
                 (targets ?? [Path.GetFullPath(solutionPath)])
                     .ToDictionary(
@@ -1169,6 +1163,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                         buildTargets?.Select(Path.GetFullPath).ToHashSet(StringComparer.Ordinal),
                         changeGenerationAtStart);
                 }
+            }
+
+            if (_impactAnalyzer.GetRestoredTestProjectPaths() is { } identityProjects)
+            {
+                RunHistory?.ResolveLegacyProjects(identityProjects, solutionDir);
             }
 
             // ── Test ──────────────────────────────────────────────────────────
@@ -1356,8 +1355,9 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             void OnProjectProgress(string projectPath, IReadOnlyList<TestSuite> liveSuites) =>
                 UpdateOverlay(() =>
                 {
-                    var projectId = TestProjectNames.ProjectId(solutionDirectory, projectPath);
-                    liveByProject[projectPath] = liveSuites.Select(s => s with { ProjectId = projectId }).ToList();
+                    var projectId = TestProjectNames.IsProjectFile(projectPath)
+                        ? TestProjectNames.ProjectId(solutionDirectory, projectPath) : null;
+                    liveByProject[projectPath] = liveSuites.Select(s => s with { ProjectId = projectId ?? s.ProjectId }).ToList();
                     runningClock.Observe(projectPath, liveSuites);
                 }, throttle: true);
 
@@ -1396,8 +1396,9 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
                 if (result.Suites.Count > 0)
                 {
-                    var projectId = TestProjectNames.ProjectId(solutionDirectory, result.ProjectPath);
-                    liveByProject[result.ProjectPath] = result.Suites.Select(s => s with { ProjectId = projectId }).ToList();
+                    var projectId = TestProjectNames.IsProjectFile(result.ProjectPath)
+                        ? TestProjectNames.ProjectId(solutionDirectory, result.ProjectPath) : null;
+                    liveByProject[result.ProjectPath] = result.Suites.Select(s => s with { ProjectId = projectId ?? s.ProjectId }).ToList();
 
                     // The project's final results are the authority on what ran: drop its discovery
                     // placeholders, whose listed names may not match the final identities.
@@ -1486,7 +1487,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 newSuites = result.Projects.Count > 0
                     ? result.Projects.SelectMany(project => project.Suites.Select(s => s with
                     {
-                        ProjectId = TestProjectNames.ProjectId(solutionDirectory, project.ProjectPath),
+                        ProjectId = TestProjectNames.IsProjectFile(project.ProjectPath)
+                            ? TestProjectNames.ProjectId(solutionDirectory, project.ProjectPath) : s.ProjectId,
                         RunId = run.RunId,
                     })).ToList()
                     : result.Suites.Select(s => s with { RunId = run.RunId }).ToList();
@@ -1978,18 +1980,18 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             return newResults;
         }
 
-        var rerunTests = newResults.SelectMany(s => s.Tests).ToList();
-        var rerunKeys = rerunTests.Select(t => t.ResultKey).ToHashSet(StringComparer.Ordinal);
-        var rerunNames = rerunTests.Select(t => t.FullyQualifiedName).ToHashSet(StringComparer.Ordinal);
+        var rerunTests = newResults.SelectMany(s => s.Tests.Select(t => (Project: s.Key, Test: t))).ToList();
+        var rerunKeys = rerunTests.Select(t => (t.Project, t.Test.ResultKey)).ToHashSet();
+        var rerunNames = rerunTests.Select(t => (t.Project, t.Test.FullyQualifiedName)).ToHashSet();
         var rerunAnyFramework = rerunTests
-            .Where(t => t.TargetFramework is null)
-            .Select(t => t.FullyQualifiedName)
-            .ToHashSet(StringComparer.Ordinal);
+            .Where(t => t.Test.TargetFramework is null)
+            .Select(t => (t.Project, t.Test.FullyQualifiedName))
+            .ToHashSet();
 
-        bool Rerun(TestResult t) =>
-            rerunKeys.Contains(t.ResultKey)
-            || rerunAnyFramework.Contains(t.FullyQualifiedName)
-            || (t.TargetFramework is null && rerunNames.Contains(t.FullyQualifiedName));
+        bool Rerun(string project, TestResult t) =>
+            rerunKeys.Contains((project, t.ResultKey))
+            || rerunAnyFramework.Contains((project, t.FullyQualifiedName))
+            || (t.TargetFramework is null && rerunNames.Contains((project, t.FullyQualifiedName)));
 
         var updatedLogProjects = newResults
             .Where(s => s.ExecutionLog is not null)
@@ -1999,7 +2001,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         var merged = existing
             .Select(s => s with
             {
-                Tests = s.Tests.Where(t => !Rerun(t)).ToList(),
+                Tests = s.Tests.Where(t => !Rerun(s.Key, t)).ToList(),
                 ExecutionLog = s.ExecutionLog is { } log && updatedLogProjects.Contains(log.ProjectPath)
                     ? null
                     : s.ExecutionLog,

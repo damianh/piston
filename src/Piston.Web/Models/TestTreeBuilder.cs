@@ -27,12 +27,11 @@ public static class TestTreeBuilder
         }
 
         var live = inProgressSuites
-            .SelectMany(s => s.Tests)
-            .Select(t => t.FullyQualifiedName)
-            .ToHashSet(StringComparer.Ordinal);
+            .SelectMany(s => s.Tests.Select(t => (Project: s.ProjectId ?? s.Name, t.FullyQualifiedName)))
+            .ToHashSet();
 
         var untouched = suites
-            .Select(s => s with { Tests = s.Tests.Where(t => !live.Contains(t.FullyQualifiedName)).ToList() })
+            .Select(s => s with { Tests = s.Tests.Where(t => !live.Contains((s.ProjectId ?? s.Name, t.FullyQualifiedName))).ToList() })
             .Where(s => s.Tests.Count > 0);
 
         return [.. inProgressSuites, .. untouched];

@@ -62,10 +62,13 @@ public sealed class ViewStateTests
         Assert.Equal(new TestReference("B.Tests", "Shared.Test"),
             TestReference.FromProjectPath(projectPath, "Shared.Test"));
 
-    [Fact]
-    public void CoverageReferenceUsesSolutionRelativeProjectIdWhenAvailable() =>
+    [Theory]
+    [InlineData("/repo/Two/Tests.csproj", "/repo/All.slnx")]
+    [InlineData(@"C:\repo\Two\Tests.csproj", @"C:\repo\All.slnx")]
+    [InlineData(@"C:\repo\Two\Tests.csproj", "C:/repo/All.slnx")]
+    public void CoverageReferenceUsesSolutionRelativeProjectIdWhenAvailable(string project, string solution) =>
         Assert.Equal(new TestReference("Two/Tests.csproj", "Shared.Test"),
-            TestReference.FromProjectPath("/repo/Two/Tests.csproj", "Shared.Test", "/repo/All.slnx"));
+            TestReference.FromProjectPath(project, "Shared.Test", solution));
 
     [Fact]
     public void CoverageSplitLayoutIsIndependentAndRetainedAcrossOrientations()

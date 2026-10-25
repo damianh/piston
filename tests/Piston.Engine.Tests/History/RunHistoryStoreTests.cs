@@ -182,6 +182,7 @@ public sealed class RunHistoryStoreTests : IDisposable
 
         using (var store = Open())
         {
+            Assert.Equal(Project, Assert.Single(Assert.IsType<StoredRun>(store.GetRun("legacy-run")).Results).Project);
             store.ResolveLegacyProjects([Path.Combine(Path.GetDirectoryName(_solution)!, "App.Tests", "App.Tests.csproj")],
                 Path.GetDirectoryName(_solution)!);
             store.Save();
