@@ -168,9 +168,10 @@ plus a content-addressed snapshot of the file as measured.
   includes the member identity in its `TestSelectionReason`; edits outside
   recorded members conservatively select every test that executed the file.
   Current finer evidence about a test overrides coarser evidence. A line insertion
-  that leaves member identity and body unchanged remaps its spans without dirtying
-  the class/test units. Analyzing a change dirties units only when their executed
-  member or non-member syntax changes.
+  that leaves member identities and bodies unchanged remaps its spans without
+  dirtying the class/test units. Analyzing a change dirties units when their
+  executed member or non-member syntax changes, or declarations are added or
+  removed: even unchanged callers can bind differently after an overload is added.
 - **Abstaining.** A changed test file, a changed file with no recording, or more
   than `ImpactAnalysisResult.MaxFilteredTests` (100) selected tests falls back to
   project selection, and the run records why (`SelectionExplanation`). Without an
@@ -355,7 +356,9 @@ and uses WAL mode. Its tables are:
 The report tables answer the dashboard, `get_coverage`, changed-line coverage and
 exports. A full, unfiltered run replaces them. A selective run merges its hits
 into files whose source is unchanged, or remaps earlier hits through unchanged
-C# members when source has moved. Hits from edited members are dropped. Unvalidated
+C# members when source has moved, provided non-member syntax is unchanged. Only
+one-to-one line mappings preserve counts; ambiguous split or joined lines remain
+stale until remeasured. Hits from edited members are dropped. Unvalidated
 current lines are returned as stale ranges; changed-line coverage can still report
 lines whose member identity and body are unchanged. Exports continue to omit stale
 files.

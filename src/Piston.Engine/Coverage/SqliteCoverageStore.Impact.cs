@@ -154,10 +154,8 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                         if (oldMembers.Members.Count == 0 || sourceMembers.Members.Count == 0)
                         {
                             var oldLines = LineSpan.Parse(existing.Spans);
-                            if (SnapshotDiff.Compute(SnapshotDiff.SplitLines(oldContent), SnapshotDiff.SplitLines(file.Content)) is { } diff)
-                            {
-                                spans = spans.Concat(diff.Remap(oldLines));
-                            }
+                            var diff = SnapshotDiff.Compute(SnapshotDiff.SplitLines(oldContent), SnapshotDiff.SplitLines(file.Content));
+                            spans = spans.Concat(diff is { } changed ? changed.Remap(oldLines) : oldLines);
                         }
                         else
                         {
@@ -287,14 +285,14 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                             .Select(member => member.Key));
                     if (residualChanged || changedKeys.Any(key => !recordedMemberKeys.Contains(key)))
                     {
-                        touched.Add((row, new ImpactReason(change.FilePath, new LineSpan(1, Math.Max(1, SnapshotDiff.SplitLines(oldContent).Length)), null, row.Granularity, row.ProjectPath)));
+                        hits.Add((row, new ImpactReason(change.FilePath, new LineSpan(1, Math.Max(1, SnapshotDiff.SplitLines(oldContent).Length)), null, row.Granularity, row.ProjectPath)));
                         continue;
                     }
 
                     var rowKeys = row.MemberKeys;
                     if (rowKeys.Contains("*", StringComparer.Ordinal))
                     {
-                        touched.Add((row, new ImpactReason(change.FilePath, new LineSpan(1, Math.Max(1, SnapshotDiff.SplitLines(oldContent).Length)), null, row.Granularity, row.ProjectPath)));
+                        hits.Add((row, new ImpactReason(change.FilePath, new LineSpan(1, Math.Max(1, SnapshotDiff.SplitLines(oldContent).Length)), null, row.Granularity, row.ProjectPath)));
                         continue;
                     }
 
@@ -468,7 +466,9 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                     var keys = DeserializeMemberKeys(reader.GetString(2));
                     var oldByKey = old.Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
                     var newByKey = current.Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
-                    if (keys.Contains("*", StringComparer.Ordinal)
+                    // Added or removed declarations can change binding in an unchanged caller.
+                    if (!oldByKey.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(newByKey.Keys)
+                        || keys.Contains("*", StringComparer.Ordinal)
                         || keys.Any(key => !oldByKey.TryGetValue(key, out var oldMember)
                             || !newByKey.TryGetValue(key, out var newMember)
                             || oldMember.BodyHash != newMember.BodyHash))
@@ -641,6 +641,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                 var oldByKey = oldMembers.Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
                 var newByKey = currentMembers.Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
                 contentIsCurrent = oldMembers.ResidualHash == currentMembers.ResidualHash
+                    && oldByKey.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(newByKey.Keys)
                     && !keys.Contains("*", StringComparer.Ordinal)
                     && keys.All(key => oldByKey.TryGetValue(key, out var oldMember)
                         && newByKey.TryGetValue(key, out var newMember)

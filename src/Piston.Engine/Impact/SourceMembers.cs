@@ -103,40 +103,32 @@ internal sealed class SourceMembers
 
     public IReadOnlyList<LineSpan> RemapUnchangedSpans(SourceMembers current, IEnumerable<LineSpan> spans)
     {
+        var sourceSpans = spans.ToArray();
+        return LineSpan.Normalize(MapLinesTo(current)
+            .Where(entry => sourceSpans.Any(span => span.Start <= entry.Key && entry.Key <= span.End))
+            .SelectMany(entry => entry.Value)
+            .Select(line => new LineSpan(line, line)));
+    }
+
+    public IReadOnlyDictionary<int, int> MapCoverageLinesTo(SourceMembers current)
+    {
+        var mapping = MapLinesTo(current);
+        var oldByKey = Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
         var currentByKey = current.Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
-        var lineMap = new Dictionary<int, HashSet<int>>();
-        foreach (var oldMember in Members)
-        {
-            if (currentByKey.TryGetValue(oldMember.Key, out var newMember)
-                && oldMember.BodyHash == newMember.BodyHash
-                && oldMember.TokenLines.Count == newMember.TokenLines.Count)
-            {
-                for (var index = 0; index < oldMember.TokenLines.Count; index++)
-                {
-                    if (!lineMap.TryGetValue(oldMember.TokenLines[index], out var mappedTargets))
-                    {
-                        lineMap[oldMember.TokenLines[index]] = mappedTargets = [];
-                    }
-
-                    _ = mappedTargets.Add(newMember.TokenLines[index]);
-                }
-            }
-        }
-
-        var mapped = new List<LineSpan>();
-        foreach (var span in spans)
-        {
-            var mappedLines = lineMap
-                .Where(entry => span.Start <= entry.Key && entry.Key <= span.End)
-                .SelectMany(entry => entry.Value)
-                .ToArray();
-            if (mappedLines.Length > 0)
-            {
-                mapped.Add(new LineSpan(mappedLines.Min(), mappedLines.Max()));
-            }
-        }
-
-        return LineSpan.Normalize(mapped);
+        var changedSources = Members
+            .Where(member => !currentByKey.TryGetValue(member.Key, out var target) || member.BodyHash != target.BodyHash)
+            .Select(member => member.Lines).ToArray();
+        var changedTargets = current.Members
+            .Where(member => !oldByKey.TryGetValue(member.Key, out var source) || member.BodyHash != source.BodyHash)
+            .Select(member => member.Lines).ToArray();
+        var targetCounts = mapping.Values.SelectMany(lines => lines)
+            .GroupBy(line => line)
+            .ToDictionary(group => group.Key, group => group.Count());
+        return mapping
+            .Where(pair => pair.Value.Count == 1 && targetCounts[pair.Value[0]] == 1
+                && !changedSources.Any(span => span.Start <= pair.Key && pair.Key <= span.End)
+                && !changedTargets.Any(span => span.Start <= pair.Value[0] && pair.Value[0] <= span.End))
+            .ToDictionary(pair => pair.Key, pair => pair.Value[0]);
     }
 
     public IReadOnlyDictionary<int, IReadOnlyList<int>> MapLinesTo(SourceMembers current)
@@ -251,6 +243,7 @@ internal sealed class SourceMembers
         declarations.Any(item => item.Key == key && item.Node switch
         {
             FieldDeclarationSyntax field => field.Declaration.Variables.Any(variable => variable.Initializer is not null),
+            EventFieldDeclarationSyntax field => field.Declaration.Variables.Any(variable => variable.Initializer is not null),
             PropertyDeclarationSyntax property => property.Initializer is not null,
             _ => false,
         });

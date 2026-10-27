@@ -620,10 +620,17 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
         }
 
         var oldByKey = oldMembers.Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
+        var lineMap = oldMembers.MapLinesTo(currentMembers);
+        var coverageMap = oldMembers.MapCoverageLinesTo(currentMembers);
+        var ambiguousTargets = ReadLines(filePath, transaction: null)
+            .Where(line => !coverageMap.ContainsKey(line.LineNumber))
+            .SelectMany(line => lineMap.TryGetValue(line.LineNumber, out var targets) ? targets : [])
+            .Select(line => new LineSpan(line, line));
         return LineSpan.Normalize(currentMembers.Members
             .Where(member => !oldByKey.TryGetValue(member.Key, out var oldMember)
                 || oldMember.BodyHash != member.BodyHash)
-            .Select(member => member.Lines));
+            .Select(member => member.Lines)
+            .Concat(ambiguousTargets));
     }
 
     private const string SelectFileColumns = """
@@ -662,10 +669,18 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
         }
 
         var oldContent = file.SnapshotHash is null ? null : ReadSnapshot(file.SnapshotHash, null);
-        var sameCode = oldContent is not null
-            && file.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
-            && SourceMembers.Parse(oldContent).HasSameCode(SourceMembers.Parse(currentContent));
-        return file with { IsStale = !sameCode };
+        if (oldContent is null || !file.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+        {
+            return file with { IsStale = true };
+        }
+
+        var oldMembers = SourceMembers.Parse(oldContent);
+        var currentMembers = SourceMembers.Parse(currentContent);
+        var coverageMap = oldMembers.MapCoverageLinesTo(currentMembers);
+        var canReuse = oldMembers.Members.Count > 0
+            && oldMembers.HasSameCode(currentMembers)
+            && ReadLines(file.FilePath, transaction: null).All(line => coverageMap.ContainsKey(line.LineNumber));
+        return file with { IsStale = !canReuse };
     }
 
     private CoverageFileSummary? ReadFile(string filePath, SqliteTransaction? transaction)
@@ -703,21 +718,22 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
     {
         var oldMembers = SourceMembers.Parse(oldContent);
         var currentMembers = SourceMembers.Parse(currentContent);
-        if (oldMembers.Members.Count == 0 || currentMembers.Members.Count == 0)
+        if (oldMembers.Members.Count == 0 || currentMembers.Members.Count == 0
+            || oldMembers.ResidualHash != currentMembers.ResidualHash)
         {
             return [];
         }
 
-        var lineMap = oldMembers.MapLinesTo(currentMembers);
+        var lineMap = oldMembers.MapCoverageLinesTo(currentMembers);
         var result = new List<LineCoverage>();
         foreach (var line in lines)
         {
-            if (!lineMap.TryGetValue(line.LineNumber, out var newLines))
+            if (!lineMap.TryGetValue(line.LineNumber, out var newLine))
             {
                 continue;
             }
 
-            result.AddRange(newLines.Select(lineNumber => line with { LineNumber = lineNumber }));
+            result.Add(line with { LineNumber = newLine });
         }
 
         return MergeLines([], result);

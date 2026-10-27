@@ -86,4 +86,54 @@ public sealed class SourceMembersTests
         Assert.Equal(first.BodyHash, second.BodyHash);
     }
 
+    [Fact]
+    public void Parse_ReorderingEventInitializersChangesResidualIdentity()
+    {
+        const string original = """
+            class C
+            {
+                event Action A = Create("A");
+                event Action B = Create("B");
+            }
+            """;
+        const string reordered = """
+            class C
+            {
+                event Action B = Create("B");
+                event Action A = Create("A");
+            }
+            """;
+
+        var oldMembers = SourceMembers.Parse(original);
+        var newMembers = SourceMembers.Parse(reordered);
+
+        Assert.False(oldMembers.HasSameCode(newMembers));
+        Assert.NotEqual(oldMembers.ResidualHash, newMembers.ResidualHash);
+    }
+
+    [Fact]
+    public void RemapUnchangedSpans_MovedMethodsDoNotIncludeAnUnexecutedMethodBetweenThem()
+    {
+        const string original = "class C\n{\nvoid A() { }\nvoid B() { }\nvoid Cc() { }\n}";
+        const string reordered = "class C\n{\nvoid A() { }\nvoid Cc() { }\nvoid B() { }\n}";
+
+        var mapped = SourceMembers.Parse(original).RemapUnchangedSpans(SourceMembers.Parse(reordered), [new(3, 4)]);
+
+        Assert.Equal([new LineSpan(3, 3), new LineSpan(5, 5)], mapped);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void MapCoverageLinesTo_SplitOrJoinedLinesAreNotReusable(bool reverse)
+    {
+        const string singleLine = "class C\n{\nint M(bool value) { if (value) return 1; return 2; }\n}";
+        const string multipleLines = "class C\n{\nint M(bool value)\n{\nif (value) return 1;\nreturn 2;\n}\n}";
+        var oldMembers = SourceMembers.Parse(reverse ? multipleLines : singleLine);
+        var currentMembers = SourceMembers.Parse(reverse ? singleLine : multipleLines);
+
+        Assert.True(oldMembers.HasSameCode(currentMembers));
+        Assert.Empty(oldMembers.MapCoverageLinesTo(currentMembers));
+    }
+
 }

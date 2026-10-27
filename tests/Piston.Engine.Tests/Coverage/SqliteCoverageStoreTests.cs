@@ -408,6 +408,78 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task StoreReportAsync_ChangedUsingAliasDoesNotMergeEarlierHits()
+    {
+        const string original = "using Value = A;\nclass C\n{\nint M() => Value.Number;\n}";
+        const string updated = "using Value = B;\nclass C\n{\nint M() => Value.Number;\n}";
+        var path = Path.Combine(_tempDir, "Alias.cs");
+        File.WriteAllText(path, original);
+        await _sut.StoreReportAsync(_sut.CreateRunId(),
+            [ReportFileWithContent(path, original, new LineCoverage(4, 5, 1, 2))], isFullRun: true);
+        File.WriteAllText(path, updated);
+
+        Assert.Empty(_sut.GetReportLines(path));
+        Assert.True(_sut.GetReportFile(path)!.IsStale);
+        await _sut.StoreReportAsync(_sut.CreateRunId(),
+            [ReportFileWithContent(path, updated, new LineCoverage(4, 0, 0, 2))], isFullRun: false);
+
+        Assert.Equal([new LineCoverage(4, 0, 0, 2)], _sut.GetReportLines(path));
+        Assert.True(_sut.GetReportFile(path)!.IsPartial);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetReportLines_AmbiguousFormattingDoesNotFabricateCoverage(bool reverse)
+    {
+        const string singleLine = "class C\n{\nint M(bool value) { if (value) return 1; return 2; }\n}";
+        const string multipleLines = "class C\n{\nint M(bool value)\n{\nif (value) return 1;\nreturn 2;\n}\n}";
+        var original = reverse ? multipleLines : singleLine;
+        var updated = reverse ? singleLine : multipleLines;
+        var path = Path.Combine(_tempDir, "Formatting.cs");
+        File.WriteAllText(path, original);
+        await _sut.StoreReportAsync(_sut.CreateRunId(),
+            [ReportFileWithContent(path, original, new LineCoverage(reverse ? 5 : 3, 1, 1, 2))], isFullRun: true);
+        File.WriteAllText(path, updated);
+
+        Assert.Empty(_sut.GetReportLines(path));
+        Assert.True(_sut.GetReportFile(path)!.IsStale);
+        Assert.Equal([reverse ? new LineSpan(3, 3) : new LineSpan(3, 7)], _sut.GetReportStaleLines(path));
+    }
+
+    [Fact]
+    public async Task GetReportLines_TopLevelCommentInsertionKeepsUnmappableEvidenceStale()
+    {
+        const string original = "Console.WriteLine(1);";
+        const string updated = "// comment\nConsole.WriteLine(1);";
+        var path = Path.Combine(_tempDir, "Program.cs");
+        File.WriteAllText(path, original);
+        await _sut.StoreReportAsync(_sut.CreateRunId(),
+            [ReportFileWithContent(path, original, new LineCoverage(1, 1))], isFullRun: true);
+        File.WriteAllText(path, updated);
+
+        Assert.Empty(_sut.GetReportLines(path));
+        Assert.True(_sut.GetReportFile(path)!.IsStale);
+        Assert.True(Assert.Single(_sut.GetReportFiles()).IsStale);
+        Assert.Equal([new LineSpan(1, 2)], _sut.GetReportStaleLines(path));
+    }
+
+    [Fact]
+    public async Task GetReportLines_CoverageSharedWithAnEditedMemberCannotBeReused()
+    {
+        const string original = "class C\n{\nint A() => 1; int B() => 2;\n}";
+        const string updated = "class C\n{\nint A() => 1;\nint B() => 3;\n}";
+        var path = Path.Combine(_tempDir, "Shared.cs");
+        File.WriteAllText(path, original);
+        await _sut.StoreReportAsync(_sut.CreateRunId(),
+            [ReportFileWithContent(path, original, new LineCoverage(3, 1))], isFullRun: true);
+        File.WriteAllText(path, updated);
+
+        Assert.Empty(_sut.GetReportLines(path));
+        Assert.Equal([new LineSpan(3, 4)], _sut.GetReportStaleLines(path));
+    }
+
+    [Fact]
     public async Task StoreReportAsync_SelectiveRunOnUnchangedFile_MergesHigherCounts()
     {
         var path = Path.Combine(_tempDir, "A.cs");
