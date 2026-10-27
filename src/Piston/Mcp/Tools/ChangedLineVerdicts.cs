@@ -257,8 +257,8 @@ internal static class ChangedLineVerdicts
     private static async Task<ChangedLineCoverageResult?> ReadAsync(
         IEngine engine, ChangedLinesResult changes, DateTimeOffset deadline, CancellationToken ct)
     {
-        var outcomes = OutcomeLookup(engine.State, engine.GetTestProjectPaths());
-        var read = Task.Run(() => Classify(changes, engine.GetFileCoverage, engine.GetCoveringTests, outcomes), ct);
+        var read = Task.Run(() => Classify(changes, engine.GetFileCoverage, engine.GetCoveringTests,
+            OutcomeLookup(engine.State, engine.GetTestProjectPaths())), ct);
         var remaining = deadline - DateTimeOffset.UtcNow;
         try
         {
@@ -365,6 +365,7 @@ internal static class ChangedLineVerdicts
 
         var byLine = coverage.Lines.ToDictionary(l => l.LineNumber);
         IReadOnlyList<(CoveringTest Test, CoveringTestOutcome Outcome)>? executors = null;
+        var failingLists = new Dictionary<int[], IReadOnlyList<string>>(IndexSetComparer.Instance);
         var results = new List<ChangedLineResult>();
         foreach (var n in lines)
         {
@@ -379,7 +380,7 @@ internal static class ChangedLineVerdicts
             else
             {
                 executors ??= [.. (getCoveringTests(path) ?? []).Select(t => (t, getOutcome(t)))];
-                results.Add(ClassifyExecuted(line, executors));
+                results.Add(ClassifyExecuted(line, executors, failingLists));
             }
         }
 
@@ -389,14 +390,25 @@ internal static class ChangedLineVerdicts
     /// <summary>
     /// A line that ran is proven by the tests the impact map credits with it: current evidence whose executed
     /// ranges contain the line. Evidence recorded against other content cannot be placed on the line, so it may
-    /// only confirm a verdict, never decide one.
+    /// only confirm a verdict, never decide one. Lines credited to the same executors share one failing-test list
+    /// from <paramref name="failingLists"/>, so memory grows with the distinct sets rather than with the lines.
     /// </summary>
     private static ChangedLineResult ClassifyExecuted(
-        LineCoverage line, IReadOnlyList<(CoveringTest Test, CoveringTestOutcome Outcome)> executors)
+        LineCoverage line,
+        IReadOnlyList<(CoveringTest Test, CoveringTestOutcome Outcome)> executors,
+        Dictionary<int[], IReadOnlyList<string>> failingLists)
     {
-        var credited = executors
-            .Where(e => e.Test.IsCurrent && e.Test.ExecutedLines.Any(r => r.Start <= line.LineNumber && line.LineNumber <= r.End))
-            .ToList();
+        var creditedIndices = new List<int>();
+        for (var i = 0; i < executors.Count; i++)
+        {
+            var test = executors[i].Test;
+            if (test.IsCurrent && test.ExecutedLines.Any(r => r.Start <= line.LineNumber && line.LineNumber <= r.End))
+            {
+                creditedIndices.Add(i);
+            }
+        }
+
+        var credited = creditedIndices.Select(i => executors[i]).ToList();
         if (credited.Count == 0)
         {
             return new ChangedLineResult(line.LineNumber, ChangedLineVerdict.Unknown, UnknownReason.NoTestEvidence, line);
@@ -431,10 +443,40 @@ internal static class ChangedLineVerdicts
             return new ChangedLineResult(line.LineNumber, ChangedLineVerdict.Unknown, UnknownReason.OutdatedEvidence, line);
         }
 
-        return hasPassed
-            ? new ChangedLineResult(line.LineNumber, ChangedLineVerdict.CoveredByPassing, Coverage: line)
-            : new ChangedLineResult(line.LineNumber, ChangedLineVerdict.CoveredOnlyByFailing, Coverage: line,
-                FailingTests: [.. credited.Select(e => e.Test.TestFqn).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]);
+        if (hasPassed)
+        {
+            return new ChangedLineResult(line.LineNumber, ChangedLineVerdict.CoveredByPassing, Coverage: line);
+        }
+
+        // Every credited executor that was not skipped failed, so the failing tests follow from the credited set.
+        var key = creditedIndices.ToArray();
+        if (!failingLists.TryGetValue(key, out var failing))
+        {
+            failingLists[key] = failing =
+                [.. credited.Select(e => e.Test.TestFqn).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)];
+        }
+
+        return new ChangedLineResult(line.LineNumber, ChangedLineVerdict.CoveredOnlyByFailing, Coverage: line,
+            FailingTests: failing);
+    }
+
+    /// <summary>Compares sets of executor indices, listed in ascending order, by content.</summary>
+    private sealed class IndexSetComparer : IEqualityComparer<int[]>
+    {
+        public static readonly IndexSetComparer Instance = new();
+
+        public bool Equals(int[]? x, int[]? y) => x.AsSpan().SequenceEqual(y);
+
+        public int GetHashCode(int[] obj)
+        {
+            var hash = new HashCode();
+            foreach (var i in obj)
+            {
+                hash.Add(i);
+            }
+
+            return hash.ToHashCode();
+        }
     }
 
     /// <summary>

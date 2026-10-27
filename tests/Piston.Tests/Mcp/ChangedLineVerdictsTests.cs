@@ -57,6 +57,22 @@ public sealed class ChangedLineVerdictsTests
     }
 
     [Fact]
+    public void LinesCreditedToTheSameFailingTests_ShareOneFailingTestList()
+    {
+        Measure();
+        Covers("T.Fail1", CoveringTestOutcome.Failed, lines: (1, 2));
+        Covers("T.Fail2", CoveringTestOutcome.Failed, lines: [(1, 2), (4, 4)]);
+        Covers("T.Fail3", CoveringTestOutcome.Failed, lines: (4, 4));
+
+        var lines = Assert.Single(Classify(1, 2, 4).Files).Lines;
+
+        Assert.All(lines, l => Assert.Equal(ChangedLineVerdict.CoveredOnlyByFailing, l.Verdict));
+        Assert.Same(lines[0].FailingTests, lines[1].FailingTests);
+        Assert.Equal(["T.Fail1", "T.Fail2"], lines[0].FailingTests!);
+        Assert.Equal(["T.Fail2", "T.Fail3"], lines[2].FailingTests!);
+    }
+
+    [Fact]
     public void LineExecutedOnlyByFailingTests_IsCoveredOnlyByFailing_AndNamesThem()
     {
         Measure();
