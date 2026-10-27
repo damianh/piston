@@ -405,7 +405,7 @@ public static class DtoMapper
             WaitedMs: wait.Waited?.TotalMilliseconds);
 
     public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
-        new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath);
+        new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath, reason.Member);
 
     private static string ProjectId(string solutionPath, string projectPath)
     {
@@ -535,5 +535,8 @@ public static class DtoMapper
                 coverage.File.FilePath,
                 [.. coverage.Lines.Select(l => l.ToDto())],
                 coverage.File.ToDto(solutionDirectory),
-                includeSource ? SourceFileReader.Read(coverage.File.FilePath, solutionDirectory).Lines : null);
+                includeSource ? SourceFileReader.Read(coverage.File.FilePath, solutionDirectory).Lines : null)
+            {
+                StaleLines = [.. coverage.StaleLines.Select(range => new LineRangeDto(range.Start, range.End))],
+            };
 }

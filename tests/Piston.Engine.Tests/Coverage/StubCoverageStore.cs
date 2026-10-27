@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Coverage;
+using Piston.Engine.Impact;
 
 namespace Piston.Engine.Tests.Coverage;
 
@@ -58,6 +59,8 @@ internal sealed class StubCoverageStore : ICoverageStore
     public CoverageFileSummary? GetReportFile(string filePath) => null;
 
     public IReadOnlyList<LineCoverage> GetReportLines(string filePath) => [];
+
+    public IReadOnlyList<LineSpan> GetReportStaleLines(string filePath) => [];
 
     public void Dispose() { }
 }

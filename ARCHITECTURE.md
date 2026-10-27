@@ -154,21 +154,26 @@ plus a content-addressed snapshot of the file as measured.
 
 - **Recording.** After a coverage run, the orchestrator records one `run` unit per
   test project from that project's reports. A full run in which all the project's
-  tests ran cleanly replaces the unit; other runs merge into it, first remapping
-  earlier spans onto the new content with a line diff.
+  tests ran cleanly replaces the unit; other runs merge it by C# member identity.
+  Each executed member is keyed by its containing namespace/type, signature and
+  token hash. Earlier spans are carried forward only through unchanged members;
+  evidence that cannot be validated becomes file-level rather than being shifted
+  by an unvalidated line diff.
 - **Backfill.** `run` evidence credits every executed line to every test of the
   project. When the daemon is idle, `ImpactBackfill` plans class (or test) units
   that are missing or outdated, and the orchestrator runs each with a name filter
   and coverage, recording a `class`/`test` unit. A unit is skipped when not every
   planned test ran. Any new run cancels the backfill; progress is published as
   `ImpactBackfill` in the state snapshot.
-- **Selection.** `SelectTests` diffs each changed file against each unit's
-  snapshot. A unit whose executed spans overlap the changed lines selects its tests,
-  with a `TestSelectionReason` (changed lines, executed span, granularity); a change
-  outside every span selects every test that executed the file. Current finer
-  evidence about a test overrides coarser evidence. Analyzing a change marks the
-  file's class and test units dirty, so the `run` unit decides until they are
-  remeasured.
+- **Selection.** `SelectTests` compares member keys and body hashes against each
+  unit's snapshot. A changed or removed executed member selects its tests and
+  includes the member identity in its `TestSelectionReason`; edits outside
+  recorded members conservatively select every test that executed the file.
+  Current finer evidence about a test overrides coarser evidence. A line insertion
+  that leaves member identities and bodies unchanged remaps its spans without
+  dirtying the class/test units. Analyzing a change dirties units when their
+  executed member or non-member syntax changes, or declarations are added or
+  removed: even unchanged callers can bind differently after an overload is added.
 - **Abstaining.** A changed test file, a changed file with no recording, or more
   than `ImpactAnalysisResult.MaxFilteredTests` (100) selected tests falls back to
   project selection, and the run records why (`SelectionExplanation`). Without an
@@ -393,7 +398,7 @@ and uses WAL mode. Its tables are:
 
 | Table | Stored data |
 |---|---|
-| `coverage_files` | Per-file line/branch totals, module, content hash, stale and partial flags. |
+| `coverage_files` | Per-file line/branch totals, module, content and snapshot hashes, stale and partial flags. |
 | `coverage_lines` | Per-line hits and branch counts: the merged report. |
 | `coverage_sets` | One row per file-level attribution set: run ID and granularity (always `run`). |
 | `coverage_set_tests` | The tests credited with a set. |
@@ -401,14 +406,18 @@ and uses WAL mode. Its tables are:
 | `coverage_summary` | File path, last run ID, last-updated timestamp. |
 | `impact_units` | One row per impact unit: test project, granularity, unit key, run ID, dirty flag. |
 | `impact_unit_tests` | The tests a unit measured. |
-| `impact_unit_files` | Per unit and file: the executed line spans and the snapshot they are numbered against. |
-| `impact_snapshots` | File content by hash, so later edits can be diffed against what was measured. |
+| `impact_unit_files` | Per unit and file: executed member keys, fallback spans and the snapshot they were measured against. |
+| `impact_snapshots` | Deduplicated file content by hash, shared by the report and impact map. |
 
 The report tables answer the dashboard, `get_coverage`, changed-line coverage and
 exports. A full, unfiltered run replaces them. A selective run merges its hits
-into files whose content hash is unchanged, and replaces (and marks partial) files
-that are new or changed. A file whose content no longer matches its hash is
-reported stale.
+into files whose source is unchanged, or remaps earlier hits through unchanged
+C# members when source has moved, provided non-member syntax is unchanged. Only
+one-to-one line mappings preserve counts; ambiguous split or joined lines remain
+stale until remeasured. Hits from edited members are dropped. Unvalidated
+current lines are returned as stale ranges; changed-line coverage can still report
+lines whose member identity and body are unchanged. Exports continue to omit stale
+files.
 
 The set tables hold coarse file-level attribution: every covered line of a run is credited to every test of that run. Tests that share one
 line list share one set, so a run stores its covered lines once rather than once
@@ -416,7 +425,8 @@ per test. Processing replaces old associations for files present in new coverage
 data and prunes sets left without lines. Hit counts are association values, not
 independently measured per-test execution counts. Databases from older versions
 held a per-test `coverage_map` table; it is dropped on startup and refilled by the
-next coverage run. The store serializes all use of its connection, since the
+next coverage run. A schema-version change drops these derived coverage caches;
+the next coverage run and idle backfill rebuild them. The store serializes all use of its connection, since the
 orchestrator and the impact analyzer call it from different threads.
 
 Clearing results deletes every coverage table's rows transactionally using a
