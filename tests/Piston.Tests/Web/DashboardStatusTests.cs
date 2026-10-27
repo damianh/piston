@@ -26,7 +26,7 @@ public class DashboardStatusTests
         var command = DashboardStatus.RunFailed(Suites);
 
         Assert.NotNull(command);
-        Assert.Equal(["Alpha.Tests", "Beta.Tests"], command.Projects);
+        Assert.Equal(["Alpha.Tests", "Beta.Tests"], command.ProjectIds);
         Assert.Equal(["A.One", "B.One"], command.Tests!);
         Assert.Equal(2, DashboardStatus.FailedCount(Suites));
     }
@@ -38,6 +38,18 @@ public class DashboardStatusTests
 
         Assert.Null(DashboardStatus.RunFailed(suites));
         Assert.Equal(0, DashboardStatus.FailedCount(suites));
+    }
+
+    [Fact]
+    public void RunFailed_KeepsFailedProjectsWithDuplicateNamesDistinct()
+    {
+        TestSuiteDto[] suites =
+        [
+            Suite("Tests", Test("Shared.Test", TestStatusDto.Failed)) with { ProjectId = "One/Tests.csproj" },
+            Suite("Tests", Test("Shared.Test", TestStatusDto.Failed)) with { ProjectId = "Two/Tests.csproj" },
+        ];
+
+        Assert.Equal(["One/Tests.csproj", "Two/Tests.csproj"], DashboardStatus.RunFailed(suites)!.ProjectIds);
     }
 
     [Fact]

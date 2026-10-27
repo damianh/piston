@@ -35,14 +35,14 @@ public sealed class TestRunToolTests
             Context = new TestRunContext("/w/App.slnx", ["/w/T/T.csproj"], null, filter, filter, null, false,
             "Debug", "10.0.401", ".NET 10", "Linux", "/daemon",
             new Dictionary<string, string> { ["/w/T/T.csproj"] = "/w" }),
-            Projects = [new TestRunProjectOutcome("/w/T/T.csproj", ProjectRunStatus.Completed, 2)],
+            Projects = [new TestRunProjectOutcome("/w/T/T.csproj", ProjectRunStatus.Completed, 2) { ProjectId = "T/T.csproj" }],
             Suites =
         [
             new TestSuite("T",
             [
                 new TestResult("Ns.B.Second", "Second", TestStatus.Failed, TimeSpan.FromMilliseconds(2), null, "boom", null, null),
                 new TestResult("Ns.A.First", "First", TestStatus.Passed, TimeSpan.FromMilliseconds(1), null, null, null, null),
-            ], DateTimeOffset.UnixEpoch, TimeSpan.FromMilliseconds(3)) { RunId = id },
+            ], DateTimeOffset.UnixEpoch, TimeSpan.FromMilliseconds(3)) { RunId = id, ProjectId = "T/T.csproj" },
         ],
         };
 
@@ -67,6 +67,7 @@ public sealed class TestRunToolTests
         Assert.Equal("C.Tests", mcp.RootElement.GetProperty("newlyFailingTests")[0].GetProperty("project").GetString());
 
         var dto = run.ToDto();
+        Assert.Equal("T/T.csproj", Assert.Single(dto.Projects!).ProjectId);
         var json = JsonSerializer.Serialize(dto, PistonJsonContext.Default.TestRunDto);
         var restored = JsonSerializer.Deserialize(json, PistonJsonContext.Default.TestRunDto)!;
         Assert.Equal([new("A.Tests", "Shared.Test"), new("B.Tests", "Shared.Test")], restored.FixedTests!);
@@ -154,14 +155,62 @@ public sealed class TestRunToolTests
         Assert.Equal("/daemon", root.GetProperty("context").GetProperty("workingDirectory").GetString());
         Assert.Equal("/w", root.GetProperty("context").GetProperty("testWorkingDirectories")
             .GetProperty("/w/T/T.csproj").GetString());
+        Assert.Equal("T/T.csproj", root.GetProperty("projects")[0].GetProperty("projectId").GetString());
         var tests = root.GetProperty("tests").EnumerateArray()
-            .Select(t => (t.GetProperty("fullyQualifiedName").GetString(), t.GetProperty("status").GetString()))
+            .Select(t => (t.GetProperty("projectId").GetString(), t.GetProperty("fullyQualifiedName").GetString(), t.GetProperty("status").GetString()))
             .ToList();
-        Assert.Equal([("Ns.A.First", "Passed"), ("Ns.B.Second", "Failed")], tests);
+        Assert.Equal([("T/T.csproj", "Ns.A.First", "Passed"), ("T/T.csproj", "Ns.B.Second", "Failed")], tests);
 
         using var latestDoc = JsonDocument.Parse(tools.GetTestRun(""));
         Assert.Equal("run-2", latestDoc.RootElement.GetProperty("runId").GetString());
         Assert.False(latestDoc.RootElement.GetProperty("isCurrentFullResult").GetBoolean());
+    }
+
+    [Fact]
+    public void GetTestRunPreservesSolutionFallbackSuiteIdentities()
+    {
+        var run = Run("fallback", 1);
+        var test = run.Suites[0].Tests[0] with { FullyQualifiedName = "Shared.Test" };
+        run = run with
+        {
+            Suites =
+            [
+                run.Suites[0] with { Name = "One", ProjectId = null, Tests = [test] },
+                run.Suites[0] with { Name = "Two", ProjectId = null, Tests = [test] },
+            ],
+        };
+        var engine = new StubEngine();
+        engine.State.RecentRuns = [run];
+
+        using var doc = JsonDocument.Parse(new TestTools(engine, NullMcpCallRecorder.Instance).GetTestRun(run.RunId));
+
+        Assert.Equal(["One", "Two"], doc.RootElement.GetProperty("tests").EnumerateArray()
+            .Select(t => t.GetProperty("projectId").GetString()));
+    }
+
+    [Fact]
+    public void GetTestRunKeepsIdenticalTestNamesSeparateByProjectId()
+    {
+        var run = Run("duplicate-tests", 1) with
+        {
+            Suites =
+            [
+                new TestSuite("Tests", [new("Shared.Test", "Shared.Test", TestStatus.Passed, TimeSpan.Zero, null, null, null, null)],
+                    DateTimeOffset.UnixEpoch, TimeSpan.Zero) { ProjectId = "One/Tests.csproj" },
+                new TestSuite("Tests", [new("Shared.Test", "Shared.Test", TestStatus.Failed, TimeSpan.Zero, null, null, null, null)],
+                    DateTimeOffset.UnixEpoch, TimeSpan.Zero) { ProjectId = "Two/Tests.csproj" },
+            ],
+        };
+        var engine = new StubEngine();
+        engine.State.RecentRuns = [run];
+        var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
+
+        using var doc = JsonDocument.Parse(tools.GetTestRun(run.RunId));
+        var tests = doc.RootElement.GetProperty("tests").EnumerateArray().ToArray();
+        Assert.Equal(2, tests.Length);
+        Assert.Equal("One/Tests.csproj", tests[0].GetProperty("projectId").GetString());
+        Assert.Equal("Two/Tests.csproj", tests[1].GetProperty("projectId").GetString());
+        Assert.All(tests, test => Assert.Equal("Shared.Test", test.GetProperty("fullyQualifiedName").GetString()));
     }
 
     [Fact]
@@ -323,7 +372,7 @@ public sealed class TestRunToolTests
         var result = tools.GetTestResults();
 
         Assert.Contains("Latest Run: run-9 | Status: Completed", result);
-        Assert.Contains("Suite: T (run run-9)", result);
+        Assert.Contains("Suite: T [T/T.csproj] (run run-9)", result);
         Assert.Contains("may combine several runs", result);
     }
     private static TestRunAdmission QueuedAdmission() => new(

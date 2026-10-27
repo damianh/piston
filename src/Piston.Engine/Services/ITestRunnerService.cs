@@ -18,6 +18,15 @@ public sealed record TestRunResult(
 /// <summary>Per-project callbacks raised while a test run is in flight. All members are optional.</summary>
 public sealed record TestRunCallbacks
 {
+    /// <summary>
+    /// Raised while a project waits for exclusive test resources held or queued for by other runs on the
+    /// machine, each time its queue status changes.
+    /// </summary>
+    public Action<string, TestResourceWait>? OnProjectWaiting { get; init; }
+
+    /// <summary>Raised when resources have been acquired, before waiting for a test-process slot.</summary>
+    public Action<string>? OnProjectResourcesAcquired { get; init; }
+
     /// <summary>Raised when a project's test process starts (after any pool queueing).</summary>
     public Action<string>? OnProjectStarted { get; init; }
 
@@ -113,4 +122,3 @@ public interface ITestRunnerService
         Action<string, IReadOnlyList<TestResult>> onDiscovered,
         CancellationToken ct) => Task.CompletedTask;
 }
-

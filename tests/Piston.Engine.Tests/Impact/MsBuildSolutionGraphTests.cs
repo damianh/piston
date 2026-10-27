@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Piston.Engine.Execution;
 using Piston.Engine.Impact;
 using Xunit;
 
@@ -233,6 +234,40 @@ public sealed class MsBuildSolutionGraphTests : IAsyncLifetime
 
         Assert.Equal([Path.GetFullPath(netCsproj)], sut.GetTransitiveDependencies(multiCsproj));
         Assert.Equal([Path.GetFullPath(multiCsproj)], sut.GetTransitiveDependents(netCsproj));
+    }
+
+    [Theory]
+    [InlineData("netstandard2.0")]
+    [InlineData("net10.0")]
+    public async Task MultiTargetedProject_ConditionalContainerReference_IsInferredAcrossAllNodes(string containerFramework)
+    {
+        var project = Path.Combine(_root, "Multi.Tests.csproj");
+        await File.WriteAllTextAsync(project, $$"""
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <TargetFrameworks>netstandard2.0;net10.0</TargetFrameworks>
+                <IsTestProject>true</IsTestProject>
+              </PropertyGroup>
+              <ItemGroup Condition="'$(TargetFramework)' == '{{containerFramework}}'">
+                <PackageReference Include="Testcontainers.PostgreSql" Version="4.0.0" />
+              </ItemGroup>
+              <ItemGroup Condition="'$(TargetFramework)' != '{{containerFramework}}'">
+                <PackageReference Include="xunit" Version="2.9.0" />
+              </ItemGroup>
+            </Project>
+            """, _ct);
+        var solution = Path.Combine(_root, "Multi.slnx");
+        await File.WriteAllTextAsync(solution, """<Solution><Project Path="Multi.Tests.csproj" /></Solution>""", _ct);
+
+        var graph = new MsBuildSolutionGraph(solution);
+        var facts = graph.GetTestProjectFacts(project);
+        var needs = new TestResourceInference(solution, [], graph.GetTestProjectFacts).Resolve(project);
+
+        Assert.NotNull(facts);
+        Assert.Contains("Testcontainers.PostgreSql", facts.PackageReferences);
+        Assert.Contains("xunit", facts.PackageReferences);
+        Assert.True(needs.UsesContainers);
+        Assert.StartsWith("project:", Assert.Single(needs.Keys), StringComparison.Ordinal);
     }
 
     private static Task<int> RunDotnetAsync(string args, string workDir) =>

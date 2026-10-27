@@ -19,10 +19,13 @@ public sealed class ChangedLineVerdictsTests
     private readonly Dictionary<string, CoveringTestOutcome> _outcomes = new(StringComparer.Ordinal);
 
     // Lines 1-4 executable: 1 and 2 ran, 3 did not, 4 ran with half its branches; line 5 has no code.
-    private void Measure(bool stale = false, bool partial = false) =>
+    private void Measure(bool stale = false, bool partial = false, params (int Start, int End)[] staleLines) =>
         _coverage[File] = new FileCoverageSnapshot(
             new CoverageFileSummary(File, "A", 4, 3, 2, 1, stale, partial, "hash", 1, DateTimeOffset.UnixEpoch),
-            [new(1, 3), new(2, 1), new(3, 0), new(4, 1, 1, 2)]);
+            [new(1, 3), new(2, 1), new(3, 0), new(4, 1, 1, 2)])
+        {
+            StaleLines = [.. staleLines.Select(r => new CoveredLineRange(r.Start, r.End))],
+        };
 
     private void Covers(string fqn, CoveringTestOutcome outcome, bool current = true, params (int Start, int End)[] lines)
     {
@@ -139,6 +142,28 @@ public sealed class ChangedLineVerdictsTests
         Assert.True(file.IsStale);
         Assert.All(file.Lines, l => Assert.Equal((ChangedLineVerdict.Unknown, UnknownReason.Stale), (l.Verdict, l.Reason)));
         Assert.All(file.Lines, l => Assert.Null(l.Coverage));
+    }
+
+    [Fact]
+    public void StaleFile_LinesOutsideItsStaleLines_UseTheRemappedCoverage()
+    {
+        // Lines 1-3 are in unchanged members, so the store remapped their coverage; line 4's member changed.
+        Measure(stale: true, staleLines: (4, 5));
+        Covers("T.Pass", CoveringTestOutcome.Passed, lines: (1, 2));
+
+        var file = Assert.Single(Classify(1, 3, 4, 5, 6).Files);
+
+        Assert.True(file.IsStale);
+        Assert.Equal(
+            [
+                (1, ChangedLineVerdict.CoveredByPassing, UnknownReason.None),
+                (3, ChangedLineVerdict.Uncovered, UnknownReason.None),
+                (4, ChangedLineVerdict.Unknown, UnknownReason.Stale),
+                (5, ChangedLineVerdict.Unknown, UnknownReason.Stale),
+                (6, ChangedLineVerdict.NonExecutable, UnknownReason.None),
+            ],
+            file.Lines.Select(l => (l.Line, l.Verdict, l.Reason)));
+        Assert.Null(file.Lines[2].Coverage);
     }
 
     [Fact]
@@ -301,6 +326,36 @@ public sealed class ChangedLineVerdictsTests
         Assert.Equal(CoveringTestOutcome.Passed,
             ChangedLineVerdicts.OutcomeLookup(state, [Project, "/tests/B.Tests/B.Tests.csproj"])(
                 new CoveringTest("T.Pass", Project, "test", [], true)));
+    }
+
+    [Fact]
+    public void OutcomeLookup_MatchesResultsByProjectIdentity()
+    {
+        var other = "/other/A.Tests/A.Tests.csproj";
+        var state = new PistonState
+        {
+            SolutionPath = "/App.slnx",
+            TestSuites =
+            [
+                Suite("A.Tests", ("T.Pass", TestStatus.Passed)) with { ProjectId = "tests/A.Tests/A.Tests.csproj" },
+                Suite("A.Tests", ("T.Pass", TestStatus.Failed), ("T.OnlyInOther", TestStatus.Passed))
+                    with { ProjectId = "other/A.Tests/A.Tests.csproj" },
+                Suite("A.Tests", ("T.Legacy", TestStatus.Passed)),
+            ],
+        };
+        var lookup = ChangedLineVerdicts.OutcomeLookup(state, [Project, other]);
+        CoveringTestOutcome Outcome(string fqn, string project) => lookup(new CoveringTest(fqn, project, "test", [], true));
+
+        // Projects that share a file name are told apart by their solution-relative paths.
+        Assert.Equal(CoveringTestOutcome.Passed, Outcome("T.Pass", Project));
+        Assert.Equal(CoveringTestOutcome.Failed, Outcome("T.Pass", other));
+        Assert.Equal(CoveringTestOutcome.NoResult, Outcome("T.OnlyInOther", Project));
+        Assert.Equal(CoveringTestOutcome.NoResult, Outcome("T.Legacy", Project));
+
+        // Results recorded without a project identity fall back to the suite name when it is unambiguous.
+        var legacy = new CoveringTest("T.Legacy", "/legacy/A.Tests/A.Tests.csproj", "test", [], true);
+        Assert.Equal(CoveringTestOutcome.NoResult, lookup(legacy));
+        Assert.Equal(CoveringTestOutcome.Passed, ChangedLineVerdicts.OutcomeLookup(state, [legacy.ProjectPath])(legacy));
     }
 
     private static TestSuite Suite(string name, params (string Fqn, TestStatus Status)[] tests) =>

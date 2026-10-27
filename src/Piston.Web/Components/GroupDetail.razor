@@ -23,7 +23,7 @@
                 <button type="button"
                         class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300 focus-visible:decoration-gray-300 focus:outline-none"
                         title="Show project details and its run log"
-                        @onclick="() => OnShowProject.InvokeAsync(Detail.Projects[0])">@Detail.Projects[0]</button>
+                        @onclick="() => OnShowProject.InvokeAsync(Detail.Projects[0])">@Detail.DisplayProjects[0]</button>
             </div>
         }
         <div class="flex flex-wrap gap-x-3 gap-y-1 text-gray-500 mt-2">
@@ -50,7 +50,7 @@
                 <button type="button" class="@RowClass" title="Show project details and its run log"
                         @onclick="() => OnShowProject.InvokeAsync(project)">
                     <NodeIcon Structure="NodeStructure.Project" Class="w-3.5 h-3.5" />
-                    <span class="flex-1 truncate text-left text-gray-300">@project</span>
+                    <span class="flex-1 truncate text-left text-gray-300">@ProjectLabel(project)</span>
                     <span class="text-gray-500 tabular-nums">@count.ToString("N0")</span>
                 </button>
             }
@@ -96,7 +96,7 @@
 
     @if (Detail.Structure == NodeStructure.Project)
     {
-        <RunLog Project="@Detail.Title" RunId="@Detail.RunId" />
+        <RunLog Project="@Detail.Projects[0]" RunId="@Detail.RunId" />
     }
 </div>
 
@@ -195,6 +195,19 @@
             .Where(g => g.Key is not null)
             .Select(g => (g.Key!, g.Count()))
             .OrderBy(g => g.Item1, StringComparer.Ordinal);
+
+    private string ProjectLabel(string project)
+    {
+        for (var index = 0; index < Detail.Projects.Count; index++)
+        {
+            if (Detail.Projects[index] == project && index < Detail.DisplayProjects.Count)
+            {
+                return Detail.DisplayProjects[index];
+            }
+        }
+
+        return project;
+    }
 
     private static string StatusIcon(TestStatusDto? status) => status switch
     {

@@ -50,6 +50,11 @@ ARCHITECTURE describe the implementation in detail.
   freshness, its own build diagnostics, and fixed and newly failing tests.
 - One owner per worktree through OS file locks, and a machine-wide CPU/memory
   admission budget (`budget.json`) with visible FIFO queueing.
+- Integration-test resource scheduling: container use inferred from package
+  references, per-repository isolation of container test projects, exclusive
+  `port:`/`container:`/`resource:` keys and overrides in `testResources`, an
+  optional `containerSlots` budget, visible waits, and port-probe and
+  conflict-signature hints.
 - Correct selective builds: one solution-filter build of the affected projects,
   then no-build test execution.
 - VSTest and Microsoft.Testing.Platform routing, with opt-in warm MTP test hosts.
@@ -70,6 +75,9 @@ ARCHITECTURE describe the implementation in detail.
   Cobertura export over MCP, HTTP, the protocol and the CLI.
 - An impact map with idle per-test (default) or per-class backfill, and
   changed-line test selection with per-test reasons and conservative fallback.
+- Method-level identity for C# coverage evidence: line shifts preserve validated
+  member evidence, while edited members are invalidated and unvalidated lines are
+  never reused.
 - Git bases (`working`, `branch`, `range`) for affected-test planning and
   changed-line coverage.
 - A verdict for each changed line: covered by passing tests, covered only by
@@ -83,6 +91,8 @@ ARCHITECTURE describe the implementation in detail.
 - Coverage tab: a grouped file list, highlighted source with hit counts,
   covering tests per file and line, and backfill progress.
 - MCP call history, user settings, keyboard shortcuts and theme-aware styling.
+- Machine tab: owned worktrees and dashboard links, budget use, running work and
+  the FIFO queue; `piston status --all` prints the same machine overview.
 
 **Distribution and CI**
 - A framework-dependent .NET tool (`Piston` package, `piston` command) attached
@@ -123,22 +133,15 @@ opens by hand (today's `piston-dashboard` skill).
 - A coverage-aware diff view in the dashboard and canvas, with drill-down to the
   covering tests.
 - Branch-level attribution in the impact map.
-- Method-level identity, so line shifts do not invalidate evidence. Never reuse old
-  line evidence without validated remapping.
 
 ### Execution
 - Explore MTP server mode further for structured results and stable test
-  identities; keep VSTest/TRX as the compatibility path.
-- Integration-test resources: infer likely needs (containers, exclusive
-  resources) from package references, with explicit overrides, and schedule
-  them within the budget. Address fixed-port and container-name conflicts
-  conservatively.
+  identities; keep VSTest/TRX as the compatibility path. The investigation and
+  current decision are in [MTP server-mode investigation](mtp-server-mode.md).
 - Per-test output and relevant artifacts in the MCP tools and the dashboard.
 
 ### Dashboard
 - A session timeline: edits, runs, outcomes, freshness and failure classification.
-- A workspace overview: owned worktrees on the machine, queued and running work,
-  and budget use.
 
 ## Risks and open questions
 

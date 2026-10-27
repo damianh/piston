@@ -51,7 +51,7 @@ else
                     <button type="button"
                             class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300 focus-visible:decoration-gray-300 focus:outline-none"
                             title="Show project details and its run log"
-                            @onclick="() => OnShowProject.InvokeAsync(Project)">@Project</button>
+                            @onclick="() => OnShowProject.InvokeAsync(Project)">                            @(ProjectLabel ?? Project)</button>
                 </div>
             }
             @if (Test.TargetFramework is { } framework)
@@ -193,6 +193,7 @@ else
 
     /// <summary>The project that produced <see cref="Test"/>'s result.</summary>
     [Parameter] public string? Project { get; set; }
+    [Parameter] public string? ProjectLabel { get; set; }
 
     /// <summary>Shows a project's details, including its run log.</summary>
     [Parameter] public EventCallback<string> OnShowProject { get; set; }

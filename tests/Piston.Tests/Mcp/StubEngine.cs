@@ -23,10 +23,16 @@ internal sealed class StubEngine : IEngine
     public IReadOnlyList<TestHistory>? Histories { get; set; }
 
     public string? LastHistoryProject { get; private set; }
+    public ArgumentException? GetTestHistoryError { get; set; }
 
     public IReadOnlyList<TestHistory>? GetTestHistory(string test, string? project = null)
     {
         LastHistoryProject = project;
+        if (GetTestHistoryError is { } error)
+        {
+            throw error;
+        }
+
         return Histories?.Where(h => h.Test == test || h.Test.StartsWith(test + " [", StringComparison.Ordinal)).ToList();
     }
 

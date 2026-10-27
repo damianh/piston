@@ -143,6 +143,24 @@ public sealed class CoverageToolsTests : IDisposable
     }
 
     [Fact]
+    public void GetCoverage_File_ReportsUnvalidatedCurrentLines()
+    {
+        var engine = Engine();
+        engine.CoverageReport = new CoverageReportSnapshot([]);
+        engine.FileCoverage["src/A.cs"] = new FileCoverageSnapshot(
+            Summary(Path.Combine(_root, "src", "A.cs"), 2, 1, stale: true),
+            [new(1, 1)])
+        {
+            StaleLines = [new CoveredLineRange(2, 3)],
+        };
+        var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
+
+        var json = JsonNode.Parse(tools.GetCoverage("src/A.cs"))!;
+
+        Assert.Equal("2-3", json["staleLines"]!.GetValue<string>());
+    }
+
+    [Fact]
     public void GetCoverage_UnmeasuredFile_Fails()
     {
         var engine = Engine();
@@ -471,6 +489,38 @@ public sealed class CoverageToolsTests : IDisposable
 
         Assert.Equal(ChangedLineVerdict.CoveredByPassing, Assert.Single(result.Files).Lines[0].Verdict);
         Assert.Contains(result.Warnings, w => w.Contains("run-2", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetChangedLineCoverage_UsesRemappedLinesAndReportsStaleChangedLines()
+    {
+        Git("init", "-q", "-b", "main");
+        var measured = Path.Combine(_root, "Measured.cs");
+        await File.WriteAllLinesAsync(measured, ["a", "b", "c"], _ct);
+        Git("add", ".");
+        Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+        await File.WriteAllLinesAsync(measured, ["a", "B", "C"], _ct);
+
+        var engine = Engine();
+        engine.CoverageReport = new CoverageReportSnapshot([]);
+        engine.FileCoverage[measured] = new FileCoverageSnapshot(
+            Summary(measured, 2, 1, stale: true),
+            [new(2, 1)])
+        {
+            StaleLines = [new CoveredLineRange(3, 3)],
+        };
+        engine.CoveringTests[measured] = [Covering("Lib.Tests.T", 2, 2)];
+        engine.State.TestSuites = [LibSuite(TestStatus.Passed)];
+        var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
+
+        var json = JsonNode.Parse(await tools.GetChangedLineCoverageAsync(ct: _ct))!;
+
+        // Line 2 is in an unchanged member, so its remapped coverage still applies; line 3 changed after it was measured.
+        var file = Assert.Single(json["files"]!.AsArray())!;
+        Assert.True(file["isStale"]!.GetValue<bool>());
+        Assert.Equal("2", file["coveredByPassing"]!.GetValue<string>());
+        var unknown = Assert.Single(file["unknown"]!.AsArray())!;
+        Assert.Equal(("3", "stale"), (unknown["lines"]!.GetValue<string>(), unknown["reason"]!.GetValue<string>()));
     }
 
     [Fact]

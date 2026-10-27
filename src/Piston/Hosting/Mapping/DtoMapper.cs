@@ -3,6 +3,7 @@
 
 using Piston.Engine;
 using Piston.Engine.Coverage;
+using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Hosting.Services;
 using Piston.Mcp.Tools;
@@ -14,6 +15,61 @@ namespace Piston.Hosting.Mapping;
 
 public static class DtoMapper
 {
+    public static MachineOverviewDto ToDto(this MachineExecutionOverview overview)
+    {
+        var running = overview.Running
+            .Select(entry => entry.ToMachineEntryDto(overview.Owners))
+            .ToList();
+        var queue = overview.Queue
+            .Select(entry => entry.ToMachineEntryDto(overview.Owners))
+            .ToList();
+        var worktrees = overview.Owners
+            .Select(owner =>
+            {
+                var info = owner.Owner;
+                var runningHere = info is not null && running.Any(entry => entry.ProcessId == info.ProcessId);
+                var queuedHere = info is not null ? queue.FirstOrDefault(entry => entry.ProcessId == info.ProcessId) : null;
+                var state = owner.Liveness == OwnershipLiveness.Stale ? "Stale"
+                    : info is null || !overview.CoordinationAvailable ? "Unknown"
+                    : runningHere ? "Running"
+                    : queuedHere is not null ? "Queued"
+                    : "Idle";
+                return new MachineWorktreeDto(
+                    owner.Key,
+                    owner.Liveness.ToString(),
+                    info?.ProcessId,
+                    info?.SolutionPath,
+                    info?.WorktreePath,
+                    info?.AcquiredAt,
+                    info?.Host,
+                    info?.DashboardUrl,
+                    info?.ProcessId == Environment.ProcessId,
+                    state,
+                    queuedHere?.QueuePosition);
+            })
+            .OrderBy(worktree => worktree.WorktreePath, StringComparer.Ordinal)
+            .ToList();
+        var budget = overview.Budget is { } value
+            ? new MachineBudgetDto(
+                value.CpuSlots, value.MemoryMb, overview.CpuSlotsInUse, overview.MemoryMbInUse,
+                overview.CoordinationAvailable ? running.Count : null,
+                overview.CoordinationAvailable ? queue.Count : null, value.Source)
+            : null;
+
+        return new MachineOverviewDto(
+            overview.CapturedAt, budget, worktrees, running, queue, overview.Error,
+            overview.CoordinationAvailable, overview.OwnersAvailable);
+    }
+
+    private static MachineExecutionEntryDto ToMachineEntryDto(
+        this MachineExecutionEntry entry, IReadOnlyList<OwnershipRecord> owners)
+    {
+        var worktree = owners.FirstOrDefault(owner => owner.Key == entry.WorktreeKey)?.Owner?.WorktreePath;
+        return new MachineExecutionEntryDto(
+            entry.Sequence, entry.RunId, entry.ProcessId, entry.CpuSlots, entry.MemoryMb,
+            entry.WorktreeKey, worktree, entry.QueuePosition);
+    }
+
     public static ActivityEvent ToDto(this EngineActivityEvent activity)
     {
         var dto = activity switch
@@ -72,6 +128,7 @@ public static class DtoMapper
         ProjectRunStatus.Failed => ProjectRunStatusDto.Failed,
         ProjectRunStatus.Crashed => ProjectRunStatusDto.Crashed,
         ProjectRunStatus.TimedOut => ProjectRunStatusDto.TimedOut,
+        ProjectRunStatus.WaitingForResources => ProjectRunStatusDto.WaitingForResources,
         _ => ProjectRunStatusDto.Pending,
     };
 
@@ -97,7 +154,8 @@ public static class DtoMapper
             suite.Tests.Select(t => t.ToDto()).ToList(),
             suite.Timestamp,
             suite.TotalDuration.TotalMilliseconds,
-            suite.RunId
+            suite.RunId,
+            suite.ProjectId
         );
 
     /// <summary>
@@ -214,14 +272,14 @@ public static class DtoMapper
     }
 
     /// <summary>
-    /// The log of the latest run of the test project named <paramref name="project"/> (one process covers
+    /// The log of the latest run of the test project identified by <paramref name="projectId"/> (one process covers
     /// all of its target frameworks), or <see langword="null"/> when none was recorded.
     /// </summary>
-    public static ExecutionLogDto? FindRunLog(this PistonState state, string project)
+    public static ExecutionLogDto? FindRunLog(this PistonState state, string projectId)
     {
         // A selective run leaves the project's untouched results in the previous suite, so take the latest.
         var latest = state.TestSuites
-            .Where(s => s.ExecutionLog is not null && string.Equals(s.Name, project, StringComparison.Ordinal))
+            .Where(s => s.ExecutionLog is not null && string.Equals(s.Key, projectId, StringComparison.Ordinal))
             .MaxBy(s => s.Timestamp);
 
         return latest?.ExecutionLog!.ToDto(latest.RunId);
@@ -237,12 +295,13 @@ public static class DtoMapper
     public static StoredRunDto ToDto(this StoredRun run) => new(
         run.Summary.ToDto(),
         [.. run.Results.Select(r => new StoredTestResultDto(r.Project, r.Test, r.Status.ToString(), r.DurationMs, r.ErrorMessage, r.StackTrace,
-            r.Attempts is { Count: > 0 } attempts ? [.. attempts.Select(a => new StoredAttemptDto(a.Status.ToString(), a.DurationMs, a.ErrorMessage))] : null))]);
+            r.Attempts is { Count: > 0 } attempts ? [.. attempts.Select(a => new StoredAttemptDto(a.Status.ToString(), a.DurationMs, a.ErrorMessage))] : null,
+            r.ProjectId))]);
 
     public static TestHistoryDto ToDto(this TestHistory history) => new(
         history.Project, history.Test, history.Flaky,
         [.. history.Runs.Select(e => new TestHistoryEntryDto(e.RunId, e.At, e.Status.ToString(), e.DurationMs, e.Source, e.Attempt))],
-        history.Flakiness?.ToDto());
+        history.Flakiness?.ToDto(), history.ProjectId);
 
     public static FlakyEvidenceDto ToDto(this FlakinessEvidence evidence) => new(
         evidence.Source, evidence.Passed, evidence.Failed, evidence.RetryOutcomes, evidence.OtherWorktrees, evidence.Describe(),
@@ -251,18 +310,18 @@ public static class DtoMapper
     /// <summary>One mark per test that is failing now or flaky.</summary>
     public static List<TestMarkDto> ToMarks(IReadOnlyList<FailureClassification> failures, IReadOnlyList<TestHistory> flaky)
     {
-        var flakyByKey = flaky.GroupBy(f => (f.Project, f.Test)).ToDictionary(g => g.Key, g => g.First().Flakiness);
+        var flakyByKey = flaky.GroupBy(f => (f.ProjectId, f.Test)).ToDictionary(g => g.Key, g => g.First().Flakiness);
         var marks = failures
             .Select(f =>
             {
-                var evidence = f.Flakiness ?? flakyByKey.GetValueOrDefault((f.Project, f.Test));
+                var evidence = f.Flakiness ?? flakyByKey.GetValueOrDefault((f.ProjectId, f.Test));
                 return new TestMarkDto(f.Project, f.Test, f.Kind.ToString(), f.Evidence,
-                    evidence is not null || flakyByKey.ContainsKey((f.Project, f.Test)), evidence?.ToDto());
+                    evidence is not null || flakyByKey.ContainsKey((f.ProjectId, f.Test)), evidence?.ToDto(), f.ProjectId);
             })
             .ToList();
-        var failing = failures.Select(f => (f.Project, f.Test)).ToHashSet();
-        marks.AddRange(flaky.Where(f => !failing.Contains((f.Project, f.Test)))
-            .Select(f => new TestMarkDto(f.Project, f.Test, null, null, Flaky: true, f.Flakiness?.ToDto())));
+        var failing = failures.Select(f => (f.ProjectId, f.Test)).ToHashSet();
+        marks.AddRange(flaky.Where(f => !failing.Contains((f.ProjectId, f.Test)))
+            .Select(f => new TestMarkDto(f.Project, f.Test, null, null, Flaky: true, f.Flakiness?.ToDto(), f.ProjectId)));
         return marks;
     }
 
@@ -289,7 +348,7 @@ public static class DtoMapper
             SourceAfter: run.SourceAfter?.ToDto(),
             SourceChangeObserved: run.SourceChangeObserved,
             EffectiveFilter: run.Context?.EffectiveFilter,
-            TestProjects: run.Context?.TestProjects,
+            TestProjects: run.Context?.TestProjects?.Select(path => ProjectId(run.Context.SolutionPath, path)).ToList(),
             TotalTests: tests.Count,
             Passed: tests.Count(t => t.Status == TestStatus.Passed),
             Failed: tests.Count(t => t.Status == TestStatus.Failed),
@@ -303,15 +362,57 @@ public static class DtoMapper
                 kv => (IReadOnlyList<TestSelectionReasonDto>)[.. kv.Value.Select(r => r.ToDto())],
                 StringComparer.Ordinal),
             ChangedFiles: run.ChangedFiles,
-            FixedTests: [.. run.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
-            NewlyFailingTests: [.. run.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
+            FixedTests: [.. run.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key) { ProjectId = t.ProjectId })],
+            NewlyFailingTests: [.. run.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key) { ProjectId = t.ProjectId })],
+            ProjectResources: run.Projects.Any(p => p.Resources is not null || p.SuspectedResourceConflict is not null)
+                ? [.. run.Projects
+                    .Where(p => p.Resources is not null || p.SuspectedResourceConflict is not null)
+                    .Select(p => p.ToResourcesDto())]
+                : null,
             RetryLimit: run.RetryLimit,
             RetriesSkippedReason: run.RetriesSkippedReason,
-            PassedOnRetry: tests.Count(t => t.Status == TestStatus.Passed && t.Attempts.Count > 0));
+            PassedOnRetry: tests.Count(t => t.Status == TestStatus.Passed && t.Attempts.Count > 0),
+            Projects: [.. run.Projects.Select(project => new TestRunProjectOutcomeDto(
+                project.ProjectPath,
+                project.ProjectId,
+                project.Status.ToString(),
+                project.TestCount,
+                project.NoTestsReason,
+                project.TimedOut?.Test,
+                project.TimedOut is { } timeout ? timeout.Limit.TotalMilliseconds : null))]);
     }
 
+    public static TestProjectResourcesDto ToResourcesDto(this TestRunProjectOutcome project) =>
+        new(
+            ProjectPath: project.ProjectPath,
+            Keys: project.Resources?.Needs.Keys ?? [],
+            UsesContainers: project.Resources?.Needs.UsesContainers ?? false,
+            Reasons: project.Resources?.Needs.Reasons ?? [],
+            Wait: project.Resources?.Wait?.ToDto(),
+            Warnings: project.Resources?.Warnings ?? [],
+            SuspectedConflict: project.SuspectedResourceConflict);
+
+    public static TestResourceWaitDto ToDto(this TestResourceWait wait) =>
+        new(
+            State: wait.State.ToString(),
+            Keys: wait.Keys,
+            UsesContainers: wait.UsesContainers,
+            BlockedBy: [.. wait.BlockedBy.Select(b => new TestResourceBlockerDto(b.Resource, b.Kind.ToString(), b.ProcessId, b.Worktree, b.Project, b.Since))],
+            QueuedAhead: wait.QueuedAhead,
+            ContainerSlotsInUse: wait.ContainerSlotsInUse,
+            ContainerSlotBudget: wait.ContainerSlotBudget,
+            WaitingSince: wait.WaitingSince,
+            AcquiredAt: wait.AcquiredAt,
+            WaitedMs: wait.Waited?.TotalMilliseconds);
+
     public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
-        new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath);
+        new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath, reason.Member);
+
+    private static string ProjectId(string solutionPath, string projectPath)
+    {
+        var solutionDirectory = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? Path.GetFullPath(solutionPath);
+        return Path.GetRelativePath(solutionDirectory, Path.GetFullPath(projectPath, solutionDirectory)).Replace('\\', '/');
+    }
 
     public static CoveringTestsDto ToCoveringTestsDto(string filePath, IReadOnlyList<CoveringTest>? tests) =>
         new(filePath, [.. (tests ?? []).Select(t => new CoveringTestDto(
@@ -518,6 +619,9 @@ public static class DtoMapper
             LongestRunningTest: state.LongestRunningTest is { } running
                 ? new RunningTestDto(running.Name, running.ProjectPath, running.StartedAt, running.PossiblyHanging)
                 : null,
+            ProjectResourceWaits: state.ProjectResourceWaits.Count > 0
+                ? state.ProjectResourceWaits.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToDto())
+                : null,
             RetryStatus: state.RetryStatus
         );
 
@@ -564,5 +668,8 @@ public static class DtoMapper
                 coverage.File.FilePath,
                 [.. coverage.Lines.Select(l => l.ToDto())],
                 coverage.File.ToDto(solutionDirectory),
-                includeSource ? SourceFileReader.Read(coverage.File.FilePath, solutionDirectory).Lines : null);
+                includeSource ? SourceFileReader.Read(coverage.File.FilePath, solutionDirectory).Lines : null)
+            {
+                StaleLines = [.. coverage.StaleLines.Select(range => new LineRangeDto(range.Start, range.End))],
+            };
 }

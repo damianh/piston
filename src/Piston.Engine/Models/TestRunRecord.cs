@@ -4,7 +4,10 @@
 namespace Piston.Engine.Models;
 
 /// <summary>A test result key scoped to the project suite that produced it.</summary>
-public sealed record TestOutcomeReference(string Project, string Key);
+public sealed record TestOutcomeReference(string Project, string Key)
+{
+    public string ProjectId { get; init; } = Project;
+}
 
 /// <summary>What caused a test run to be requested.</summary>
 public enum TestRunTrigger
@@ -167,7 +170,19 @@ public sealed record TestRunProjectOutcome(
     ProjectRunStatus Status,
     int TestCount,
     string? NoTestsReason = null,
-    TestTimeout? TimedOut = null);
+    TestTimeout? TimedOut = null)
+{
+    public string ProjectId { get; init; } = ProjectPath;
+
+    /// <summary>The exclusive test resources the project held and how long it waited, when it needed any.</summary>
+    public TestProjectResources? Resources { get; init; }
+
+    /// <summary>
+    /// Set when a failed project's output looks like a port or container name conflict, with the evidence
+    /// and a hint to declare the resource in <c>testResources</c>.
+    /// </summary>
+    public string? SuspectedResourceConflict { get; init; }
+}
 
 /// <summary>
 /// Provenance and results of exactly one test run. Unlike the aggregate

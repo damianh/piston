@@ -31,7 +31,10 @@ public sealed record ChangedLineTotalsDto(
 /// <param name="FilePath">Absolute path.</param>
 /// <param name="RelativePath">Path relative to the solution directory, with forward slashes.</param>
 /// <param name="IsMeasured">The coverage report has the file.</param>
-/// <param name="IsStale">The file changed after it was measured, so every changed line is unknown.</param>
+/// <param name="IsStale">
+/// The file changed after it was measured. Its changed lines are unknown, except those in unchanged C# members,
+/// which keep their remapped coverage.
+/// </param>
 /// <param name="IsPartial">Only a selective run measured the file.</param>
 /// <param name="Totals">The file's changed lines per verdict.</param>
 /// <param name="CoveredByPassing">Changed lines that ran, with every credited test passing.</param>

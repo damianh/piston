@@ -119,14 +119,14 @@ public sealed class TestToolsTests
                 [
                     new("run-1", at, TestStatus.Passed, 12.4, "abcdef0123456789"),
                     new("run-2", at.AddMinutes(1), TestStatus.Failed, 3, null),
-                ], Flakiness: null),
+                ], Flakiness: null) { ProjectId = "tests/A.Tests/A.Tests.csproj" },
             ],
         };
 
-        var text = new TestTools(engine, NullRecorder).GetTestHistory("A.Tests.One", " A.Tests ");
+        var text = new TestTools(engine, NullRecorder).GetTestHistory("A.Tests.One", " tests/A.Tests/A.Tests.csproj ");
 
-        Assert.Equal("A.Tests", engine.LastHistoryProject);
-        Assert.StartsWith("A.Tests :: A.Tests.One [net10.0]", text, StringComparison.Ordinal);
+        Assert.Equal("tests/A.Tests/A.Tests.csproj", engine.LastHistoryProject);
+        Assert.StartsWith("A.Tests [tests/A.Tests/A.Tests.csproj] :: A.Tests.One [net10.0]", text, StringComparison.Ordinal);
         var passed = text.IndexOf("2025-03-04 05:06:07Z Passed        12ms run run-1 (abcdef012345)", StringComparison.Ordinal);
         var failed = text.IndexOf("2025-03-04 05:07:07Z Failed         3ms run run-2 (unknown source)", StringComparison.Ordinal);
         Assert.True(failed > 0 && passed > failed, text);
@@ -140,13 +140,13 @@ public sealed class TestToolsTests
             Histories =
             [
                 new("A.Tests", "A.Tests.Steady", [], Flakiness: null),
-                new("A.Tests", "A.Tests.Wobbly", [], Flakiness: new FlakinessEvidence("abc", 1, 1, 0, [], [])),
+                new("A.Tests", "A.Tests.Wobbly", [], Flakiness: new FlakinessEvidence("abc", 1, 1, 0, [], [])) { ProjectId = "tests/A.Tests/A.Tests.csproj" },
             ],
         };
 
         var text = new TestTools(engine, NullRecorder).GetTestHistory();
 
-        Assert.Equal("A.Tests :: A.Tests.Wobbly (flaky)\n  Evidence: Passed 1 and failed 1 time(s) on source abc.", text.ReplaceLineEndings("\n"));
+        Assert.Equal("A.Tests [tests/A.Tests/A.Tests.csproj] :: A.Tests.Wobbly (flaky)\n  Evidence: Passed 1 and failed 1 time(s) on source abc.", text.ReplaceLineEndings("\n"));
     }
 
     [Fact]
@@ -168,13 +168,13 @@ public sealed class TestToolsTests
                 [
                     new("run-2", at.AddMinutes(1), TestStatus.Failed, 3, source),
                     new("run-2", at.AddMinutes(1), TestStatus.Passed, 4, source, Attempt: 1),
-                ], evidence),
+                ], evidence) { ProjectId = "tests/A.Tests/A.Tests.csproj" },
             ],
         };
 
         var text = new TestTools(engine, NullRecorder).GetTestHistory("A.Tests.One");
 
-        Assert.Contains("A.Tests :: A.Tests.One (flaky)", text);
+        Assert.Contains("A.Tests [tests/A.Tests/A.Tests.csproj] :: A.Tests.One (flaky)", text);
         Assert.Contains("  Evidence: Passed 2 and failed 1 time(s) on source abcdef012345 (1 from in-run retries; other worktrees: feature-x).", text);
         Assert.Contains("  2025-03-04 05:06:07Z Passed  run run-9 in worktree feature-x", text);
         Assert.Contains("  2025-03-04 05:07:07Z Passed         4ms run run-2 retry 1 (abcdef012345)", text);

@@ -1,6 +1,8 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Piston.Engine.Impact;
+
 namespace Piston.Engine.Coverage;
 
 /// <summary>
@@ -60,8 +62,9 @@ internal interface ICoverageStore : IDisposable
     /// <param name="runId">Run identifier returned by <see cref="CreateRunId"/>.</param>
     /// <param name="files">Each covered file with the hash of the content it was measured against.</param>
     /// <param name="isFullRun">
-    /// True when every test ran unfiltered: the report is replaced. Otherwise only files whose content is
-    /// unchanged are merged (taking the higher counts); other files are replaced and flagged partial.
+    /// True when every test ran unfiltered: the report is replaced. Otherwise prior lines are retained when
+    /// source is unchanged, or only remapped through unchanged C# members when source has changed; other
+    /// evidence is dropped and the report is flagged partial.
     /// </param>
     Task StoreReportAsync(long runId, IReadOnlyList<CoverageReportFile> files, bool isFullRun);
 
@@ -73,4 +76,7 @@ internal interface ICoverageStore : IDisposable
 
     /// <summary>Returns the stored line coverage for <paramref name="filePath"/>, ordered by line number.</summary>
     IReadOnlyList<LineCoverage> GetReportLines(string filePath);
+
+    /// <summary>Returns current source lines whose stored coverage cannot be validated and remapped.</summary>
+    IReadOnlyList<LineSpan> GetReportStaleLines(string filePath);
 }

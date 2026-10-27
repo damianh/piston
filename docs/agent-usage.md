@@ -171,6 +171,13 @@ source builds and all tests pass. Every other verdict is not a pass:
 An `Admission:` line means the run waited for the machine execution budget (queue
 position and wait time). That is expected under load, not a failure.
 
+A `Test resources:` list reports test projects that waited for exclusive test
+resources (containers, fixed ports) held by runs in other worktrees, which is
+also expected, plus warnings and failures that look like port or container name
+conflicts. For a suspected conflict, declare the resource in `testResources` in
+`.piston.json` (see the README's *Integration-test resources*) rather than
+retrying in a loop.
+
 Do not treat these as verification:
 - `get_test_results`: accumulated state that may combine several runs;
 - filtered or selective runs;
@@ -234,7 +241,7 @@ are available to protocol clients as `coverage/getChangedLines`.
 
 | Unknown reason | Meaning | What to do |
 |---|---|---|
-| `stale` | The file changed after it was measured, so the coverage describes old code; or, for a `range`, the file differs between the range's last commit and the working tree, so the changed line numbers do not match the measured file; or the file kept changing while the verdicts were read (every changed line is then `stale`). | Run the affected tests (`run_affected_tests`) and ask again. |
+| `stale` | The line's code changed after it was measured, so the coverage describes old code (lines in unchanged C# members keep their remapped coverage and get verdicts); or, for a `range`, the file differs between the range's last commit and the working tree, so the changed line numbers do not match the measured file; or the file kept changing while the verdicts were read (every changed line is then `stale`). | Run the affected tests (`run_affected_tests`) and ask again. |
 | `notMeasured` | No coverage run measured the file, for example it is not compiled into a tested assembly. | Run the tests, or accept that the file is not covered by tests. |
 | `noTestEvidence` | The line ran, but the impact map has no current record of which tests executed it. | Run the affected tests. |
 | `mixedEvidence` | Passing and failing tests are both credited with the line. | Fix the failing tests, then ask again. |
@@ -251,17 +258,19 @@ every reason. Warnings explain caveats, such as a run in progress.
 How to read the verdicts:
 
 - Only `coveredByPassing` means passing tests executed the line. Never describe
-  an `unknown` line as covered, and never treat a `stale` file's old coverage as
-  evidence about the current code.
+  an `unknown` line as covered, and never treat a `stale` line's old coverage as
+  evidence about the current code. A file with `isStale` can still have verdicts
+  for changed lines in members whose code is unchanged since it was measured.
 - The impact map records which methods each test (or test class, or whole test
   project run) executed, not individual lines. A test can be credited with a line
   of a method it entered without executing that line. Because of this, a line is
   `coveredByPassing` only when every credited test passed; any mix gives `unknown`.
 - A credited test's result is its latest result in its own test project. A test
   with no result there counts as not run, even if another project has a test of
-  the same name. Results are grouped by project file name, so tests of two
-  projects that share one (such as `One/Tests.csproj` and `Two/Tests.csproj`)
-  also count as not run.
+  the same name. Projects are told apart by their solution-relative paths, so
+  `One/Tests.csproj` and `Two/Tests.csproj` keep separate results. Results
+  recorded without a project path are matched by project file name, and count
+  as not run when two projects share that name.
 - Known limitation: while a file's content is unchanged, a selective run adds its
   hits to the stored coverage instead of replacing them, and the coverage does not
   record which run hit each line. Verdicts use each credited test's latest result.

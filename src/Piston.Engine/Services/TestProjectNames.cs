@@ -11,4 +11,8 @@ internal static class TestProjectNames
 
     /// <summary>The project's file name without extension (e.g. <c>MyApp.Tests</c>).</summary>
     internal static string SuiteName(string path) => Path.GetFileNameWithoutExtension(path);
+
+    /// <summary>The project's path relative to the solution directory, with a stable separator.</summary>
+    internal static string ProjectId(string solutionDirectory, string projectPath) =>
+        Path.GetRelativePath(solutionDirectory, Path.GetFullPath(projectPath, solutionDirectory)).Replace('\\', '/');
 }

@@ -90,6 +90,7 @@
                 <TestDetail @key="_selectedTest?.Key"
                             Test="@_selectedTest"
                             Project="@ProjectOf(_selectedTest)"
+                            ProjectLabel="@ProjectLabelOf(_selectedTest)"
                             CanRun="@CanRun"
                             SelectionReasons="@SelectionReasonsOf(_selectedTest)"
                             SolutionPath="@_snapshot?.SolutionPath"
@@ -137,6 +138,7 @@
         if (Client.CurrentSnapshot is { } current)
         {
             _snapshot = current;
+            _viewState.ResourceWaits = ResourceWaitText.ByProjectId(current.ProjectResourceWaits, current.SolutionPath);
             RebuildTree();
         }
 
@@ -159,7 +161,7 @@
         var byKey = new Dictionary<(string Project, string Test), TestMarkDto>();
         foreach (var mark in marks.Tests)
         {
-            byKey[(mark.Project, mark.Test)] = mark;
+            byKey[(mark.ProjectId ?? mark.Project, mark.Test)] = mark;
         }
 
         _viewState.TestMarks = byKey;
@@ -194,6 +196,7 @@
         }
 
         _snapshot = snapshot;
+        _viewState.ResourceWaits = ResourceWaitText.ByProjectId(snapshot.ProjectResourceWaits, snapshot.SolutionPath);
         RebuildTree();
         InvokeAsync(StateHasChanged);
     }
@@ -328,7 +331,12 @@
             : null;
 
     private string? ProjectOf(TestResultDto? test) =>
-        test is null ? null : _displayedSuites.FirstOrDefault(s => s.Tests.Any(t => ReferenceEquals(t, test)))?.Name;
+        test is null ? null : _displayedSuites.FirstOrDefault(s => s.Tests.Any(t => ReferenceEquals(t, test))) is { } suite
+            ? suite.ProjectId ?? suite.Name
+            : null;
+
+    private string? ProjectLabelOf(TestResultDto? test) =>
+        ProjectOf(test) is { } project ? TestTreeBuilder.DisplayProjectName(_displayedSuites, project) : null;
 
     // Why the last run selected the test, when the impact map narrowed it by changed lines.
     private IReadOnlyList<TestSelectionReasonDto>? SelectionReasonsOf(TestResultDto? test) =>
@@ -353,7 +361,7 @@
 
     private void RevealTestByKey(TestOutcomeReferenceDto reference)
     {
-        if (_snapshot?.Suites.Where(s => s.Name == reference.Project)
+        if (_snapshot?.Suites.Where(s => (s.ProjectId ?? s.Name) == (reference.ProjectId ?? reference.Project))
             .SelectMany(s => s.Tests).FirstOrDefault(t => t.Key == reference.Key) is { } test)
         {
             RevealTest(test);

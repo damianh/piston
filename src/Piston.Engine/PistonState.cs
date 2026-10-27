@@ -94,6 +94,13 @@ public sealed class PistonState
     public IReadOnlyDictionary<string, ProjectRunStatus> ProjectStatuses { get; set; }
         = new Dictionary<string, ProjectRunStatus>();
 
+    /// <summary>
+    /// Queue status of the projects in the current run that are waiting for exclusive test resources,
+    /// keyed by project path (or the solution path for a whole-solution run).
+    /// </summary>
+    public IReadOnlyDictionary<string, TestResourceWait> ProjectResourceWaits { get; set; }
+        = new Dictionary<string, TestResourceWait>();
+
     // ── Verified/stale tracking ──
 
     /// <summary>Timestamp of the most recent file change that triggered a run. Null until first file change.</summary>

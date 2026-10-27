@@ -32,8 +32,9 @@ internal enum UnknownReason
     None,
 
     /// <summary>
-    /// The file changed after it was measured, or (for a range) differs from the working tree: the coverage does not
-    /// describe the changed lines.
+    /// The line's code changed after it was measured, or (for a range) the file differs from the working tree: the
+    /// coverage does not describe the line. Lines in unchanged C# members of a changed file keep their remapped
+    /// coverage instead.
     /// </summary>
     Stale,
 
@@ -117,7 +118,10 @@ internal sealed record ChangedLineTotals(
 /// <summary>The verdicts for one changed source file.</summary>
 /// <param name="FilePath">Absolute path.</param>
 /// <param name="IsMeasured">The coverage report has the file.</param>
-/// <param name="IsStale">The file changed after it was measured, or a range's version of it differs from the working tree.</param>
+/// <param name="IsStale">
+/// The file changed after it was measured, or a range's version of it differs from the working tree. Lines in its
+/// unchanged C# members may still have verdicts from remapped coverage.
+/// </param>
 /// <param name="IsPartial">Only a selective run measured the file, so tests that did not run may cover more of it.</param>
 internal sealed record ChangedFileVerdicts(
     string FilePath, bool IsMeasured, bool IsStale, bool IsPartial, IReadOnlyList<ChangedLineResult> Lines)
@@ -357,7 +361,10 @@ internal static class ChangedLineVerdicts
                 [.. lines.Select(n => new ChangedLineResult(n, ChangedLineVerdict.Unknown, UnknownReason.NotMeasured))]);
         }
 
-        if (coverage.File.IsStale)
+        // A changed file keeps the coverage of its unchanged C# members, remapped onto the current lines; the lines
+        // the store cannot validate are listed. Without that list, a changed file has no valid lines.
+        var staleLines = coverage.StaleLines;
+        if (coverage.File.IsStale && staleLines.Count == 0)
         {
             return new ChangedFileVerdicts(path, IsMeasured: true, IsStale: true, coverage.File.IsPartial,
                 [.. lines.Select(n => new ChangedLineResult(n, ChangedLineVerdict.Unknown, UnknownReason.Stale))]);
@@ -369,7 +376,11 @@ internal static class ChangedLineVerdicts
         var results = new List<ChangedLineResult>();
         foreach (var n in lines)
         {
-            if (!byLine.TryGetValue(n, out var line))
+            if (staleLines.Any(r => r.Start <= n && n <= r.End))
+            {
+                results.Add(new ChangedLineResult(n, ChangedLineVerdict.Unknown, UnknownReason.Stale));
+            }
+            else if (!byLine.TryGetValue(n, out var line))
             {
                 results.Add(new ChangedLineResult(n, ChangedLineVerdict.NonExecutable));
             }
@@ -384,7 +395,7 @@ internal static class ChangedLineVerdicts
             }
         }
 
-        return new ChangedFileVerdicts(path, IsMeasured: true, IsStale: false, coverage.File.IsPartial, results);
+        return new ChangedFileVerdicts(path, IsMeasured: true, coverage.File.IsStale, coverage.File.IsPartial, results);
     }
 
     /// <summary>
@@ -480,30 +491,43 @@ internal static class ChangedLineVerdicts
     }
 
     /// <summary>
-    /// Looks up a covering test's latest outcome in <paramref name="state"/>, in the suite named after its project
-    /// (both runners name a project's suite that way). A test with no result there has
-    /// <see cref="CoveringTestOutcome.NoResult"/>, even when another project has a test of the same name. So does a
-    /// test whose project shares its file name with another of <paramref name="testProjectPaths"/>: their results
-    /// share a suite, so they cannot be told apart. A test that ran under several frameworks failed if any result
-    /// failed, and passed if every result passed or was skipped (but not all skipped).
+    /// Looks up a covering test's latest outcome in <paramref name="state"/>, in the suite of its own project,
+    /// identified by its solution-relative path. A test with no result there has
+    /// <see cref="CoveringTestOutcome.NoResult"/>, even when another project has a test of the same name. Results
+    /// recorded without a project identity are matched by suite name (the project's file name), unless the project
+    /// shares its file name with another of <paramref name="testProjectPaths"/>: their results cannot be told apart.
+    /// A test that ran under several frameworks failed if any result failed, and passed if every result passed or
+    /// was skipped (but not all skipped).
     /// </summary>
     public static Func<CoveringTest, CoveringTestOutcome> OutcomeLookup(
         PistonState state, IEnumerable<string>? testProjectPaths = null)
     {
-        var bySuite = new Dictionary<(string Suite, string Fqn), List<TestStatus>>();
+        var byProject = new Dictionary<(string ProjectId, string Fqn), List<TestStatus>>();
+        var bySuiteName = new Dictionary<(string Suite, string Fqn), List<TestStatus>>();
+        var projectIds = new HashSet<string>(StringComparer.Ordinal);
         foreach (var suite in state.TestSuites)
         {
+            if (suite.ProjectId is { } projectId)
+            {
+                _ = projectIds.Add(projectId);
+            }
+
             foreach (var test in suite.Tests)
             {
-                if (!bySuite.TryGetValue((suite.Name, test.FullyQualifiedName), out var list))
+                if (suite.ProjectId is { } id)
                 {
-                    bySuite[(suite.Name, test.FullyQualifiedName)] = list = [];
+                    Add(byProject, (id, test.FullyQualifiedName), test.Status);
                 }
-
-                list.Add(test.Status);
+                else
+                {
+                    Add(bySuiteName, (suite.Name, test.FullyQualifiedName), test.Status);
+                }
             }
         }
 
+        var solutionDirectory = state.SolutionPath is { } solutionPath
+            ? Path.GetDirectoryName(Path.GetFullPath(solutionPath))
+            : null;
         var sharedSuites = (testProjectPaths ?? [])
             .Select(Path.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -514,21 +538,40 @@ internal static class ChangedLineVerdicts
 
         return test =>
         {
-            var suite = Path.GetFileNameWithoutExtension(test.ProjectPath);
-            if (sharedSuites.Contains(suite))
+            if (solutionDirectory is not null)
             {
-                return CoveringTestOutcome.NoResult;
+                var projectId = Path.GetRelativePath(solutionDirectory, Path.GetFullPath(test.ProjectPath, solutionDirectory))
+                    .Replace('\\', '/');
+                if (projectIds.Contains(projectId))
+                {
+                    return Combine(byProject.GetValueOrDefault((projectId, test.TestFqn)));
+                }
             }
 
-            var statuses = bySuite.GetValueOrDefault((suite, test.TestFqn));
-            return statuses switch
+            var suite = Path.GetFileNameWithoutExtension(test.ProjectPath);
+            return sharedSuites.Contains(suite)
+                ? CoveringTestOutcome.NoResult
+                : Combine(bySuiteName.GetValueOrDefault((suite, test.TestFqn)));
+        };
+
+        static void Add<TKey>(Dictionary<TKey, List<TestStatus>> results, TKey key, TestStatus status)
+            where TKey : notnull
+        {
+            if (!results.TryGetValue(key, out var list))
             {
-                null or [] => CoveringTestOutcome.NoResult,
-                _ when statuses.Contains(TestStatus.Failed) => CoveringTestOutcome.Failed,
-                _ when statuses.TrueForAll(s => s == TestStatus.Skipped) => CoveringTestOutcome.Skipped,
-                _ when statuses.TrueForAll(s => s is TestStatus.Passed or TestStatus.Skipped) => CoveringTestOutcome.Passed,
-                _ => CoveringTestOutcome.NoResult,
-            };
+                results[key] = list = [];
+            }
+
+            list.Add(status);
+        }
+
+        static CoveringTestOutcome Combine(List<TestStatus>? statuses) => statuses switch
+        {
+            null or [] => CoveringTestOutcome.NoResult,
+            _ when statuses.Contains(TestStatus.Failed) => CoveringTestOutcome.Failed,
+            _ when statuses.TrueForAll(s => s == TestStatus.Skipped) => CoveringTestOutcome.Skipped,
+            _ when statuses.TrueForAll(s => s is TestStatus.Passed or TestStatus.Skipped) => CoveringTestOutcome.Passed,
+            _ => CoveringTestOutcome.NoResult,
         };
     }
 

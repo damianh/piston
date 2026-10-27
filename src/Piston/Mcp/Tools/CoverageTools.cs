@@ -98,7 +98,8 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         "a commit range (files whose range version differs from the working tree are unknown: stale). Each changed " +
         "line of a source file is coveredByPassing (it ran and every current test credited with executing it passed), " +
         "coveredOnlyByFailing (every such test failed; failingTests lists them), uncovered, nonExecutable, or unknown " +
-        "with a reason: stale (the file changed after it was measured: run the tests), notMeasured, noTestEvidence, " +
+        "with a reason: stale (the line's code changed after it was measured: run the tests; lines in unchanged C# " +
+        "members keep their remapped coverage), notMeasured, noTestEvidence, " +
         "mixedEvidence, testsNotRun, outdatedEvidence or resultsUpdating (a run was publishing results: ask again). " +
         "Only coveredByPassing shows a line is exercised by passing tests; it uses each credited test's latest " +
         "result, so hits kept from an earlier run of unchanged code are judged by later results. Requires the daemon " +
@@ -322,7 +323,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                 {
                     "none" => Task.FromResult<TestRunRecord?>(null),
                     "full" => engine.RequestRunAsync(),
-                    _ => AsNullable(engine.RunSelectedAsync(Selection(plan))),
+                    _ => AsNullable(engine.RunSelectedAsync(Selection(plan, SolutionDirectory()))),
                 };
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NotSupportedException)
@@ -363,9 +364,10 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         static async Task<TestRunRecord?> AsNullable(Task<TestRunRecord> task) => await task.ConfigureAwait(false);
     }
 
-    /// <summary>The test projects of a narrowed or project-scope plan, by suite name, with its tests when narrowed.</summary>
-    internal static TestSelection Selection(ImpactAnalysisResult plan) => new(
-        [.. plan.AffectedTestProjectPaths.Select(Path.GetFileNameWithoutExtension).OfType<string>()
+    /// <summary>The test projects of a narrowed or project-scope plan, by solution-relative ID, with tests when narrowed.</summary>
+    internal static TestSelection Selection(ImpactAnalysisResult plan, string? solutionDirectory = null) => new(
+        [.. plan.AffectedTestProjectPaths
+            .Select(p => solutionDirectory is null ? Path.GetFullPath(p) : Relative(p, solutionDirectory))
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
         plan.NarrowsToTests ? [.. (plan.AffectedTestFqns ?? []).Order(StringComparer.Ordinal)] : null);
 
@@ -473,6 +475,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         json["granularity"] = Granularity;
         json["uncoveredLines"] = ChangedLines.FormatRanges(coverage.Lines.Where(l => l.HitCount == 0).Select(l => l.LineNumber));
         json["partialLines"] = PartialLines(coverage.Lines.Where(IsPartial));
+        json["staleLines"] = ChangedLines.FormatRanges(coverage.StaleLines.SelectMany(range => Enumerable.Range(range.Start, range.End - range.Start + 1)));
         return json;
     }
 
