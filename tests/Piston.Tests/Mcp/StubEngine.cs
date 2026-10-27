@@ -115,13 +115,27 @@ internal sealed class StubEngine : IEngine
         State.TotalExpectedTests = 0;
     }
 
-    /// <summary>Coverage report returned by <see cref="GetCoverageReport"/>; null means coverage is disabled.</summary>
-    public Engine.Coverage.CoverageReportSnapshot? CoverageReport { get; set; }
+    /// <summary>
+    /// Coverage report returned by <see cref="GetCoverageReport"/>; null means coverage is disabled. Setting it also
+    /// sets <see cref="PistonState.CoverageEnabled"/>, as the engine does.
+    /// </summary>
+    public Engine.Coverage.CoverageReportSnapshot? CoverageReport
+    {
+        get;
+        set
+        {
+            field = value;
+            State.CoverageEnabled = value is not null;
+        }
+    }
+
+    /// <summary>Replaces <see cref="CoverageReport"/> in <see cref="GetCoverageReport"/>, e.g. to block like the coverage lock.</summary>
+    public Func<Engine.Coverage.CoverageReportSnapshot?>? OnGetCoverageReport { get; set; }
 
     /// <summary>Per-file coverage returned by <see cref="GetFileCoverage"/>, keyed by the requested path.</summary>
     public Dictionary<string, Engine.Coverage.FileCoverageSnapshot> FileCoverage { get; } = [];
 
-    public Engine.Coverage.CoverageReportSnapshot? GetCoverageReport() => CoverageReport;
+    public Engine.Coverage.CoverageReportSnapshot? GetCoverageReport() => OnGetCoverageReport is { } get ? get() : CoverageReport;
 
     /// <summary>Plan returned by <see cref="PlanAffected"/>.</summary>
     public ImpactAnalysisResult? AffectedPlan { get; set; }

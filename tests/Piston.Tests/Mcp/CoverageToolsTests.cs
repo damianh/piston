@@ -402,6 +402,33 @@ public sealed class CoverageToolsTests : IDisposable
     }
 
     [Fact]
+    public async Task GetChangedLineCoverage_RequestedWhileARunHoldsTheCoverageLock_IsCancellable()
+    {
+        var (engine, _) = await ChangedMeasuredFileAsync();
+        using var release = new ManualResetEventSlim();
+        engine.OnGetCoverageReport = () =>
+        {
+            _ = release.Wait(TimeSpan.FromSeconds(30));
+            return engine.CoverageReport;
+        };
+        engine.OnGetFileCoverage = _ => release.Wait(TimeSpan.FromSeconds(30));
+        var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+        cts.CancelAfter(TimeSpan.FromMilliseconds(200));
+        try
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => tools.GetChangedLineCoverageAsync(ct: cts.Token));
+
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"Took {stopwatch.Elapsed}.");
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Fact]
     public async Task GetChangedLineVerdicts_CoverageReadBlockedByARun_GivesUpWithoutWaitingForIt()
     {
         var (engine, _) = await ChangedMeasuredFileAsync();

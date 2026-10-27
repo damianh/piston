@@ -119,7 +119,8 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<GetChangedLineCoverageCommand>(@params);
                     ChangedLineCoverageDto result;
-                    if (_engine.GetCoverageReport() is null)
+                    // The flag, not the report: reading the report waits on the lock a run holds while storing coverage.
+                    if (!_engine.State.CoverageEnabled)
                     {
                         result = DtoMapper.DisabledChangedLineCoverage;
                     }

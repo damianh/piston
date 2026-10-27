@@ -209,6 +209,42 @@ public sealed class CoverageCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task GetChangedLines_RequestedWhileARunHoldsTheCoverageLock_IsCancellable()
+    {
+        Git("init", "-q", "-b", "main");
+        var path = Path.Combine(_root, "A.cs");
+        await File.WriteAllLinesAsync(path, ["a"], _ct);
+        Git("add", ".");
+        Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+        await File.WriteAllLinesAsync(path, ["A"], _ct);
+
+        var engine = new StubEngine { CoverageReport = new CoverageReportSnapshot([]) };
+        engine.State.SolutionPath = Path.Combine(_root, "App.slnx");
+        using var release = new ManualResetEventSlim();
+        engine.OnGetCoverageReport = () =>
+        {
+            _ = release.Wait(TimeSpan.FromSeconds(30));
+            return engine.CoverageReport;
+        };
+        engine.OnGetFileCoverage = _ => release.Wait(TimeSpan.FromSeconds(30));
+        var dispatcher = new EngineCommandDispatcher(engine);
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+        cts.CancelAfter(TimeSpan.FromMilliseconds(200));
+        try
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => dispatcher.HandleCommandAsync(
+                ProtocolMethods.CoverageGetChangedLines, JsonNode.Parse("""{"base":"working"}"""), cts.Token));
+
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"Took {stopwatch.Elapsed}.");
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Fact]
     public async Task GetChangedLines_OptionLikeBase_IsInvalidParams()
     {
         var engine = new StubEngine { CoverageReport = new CoverageReportSnapshot([]) };

@@ -115,7 +115,8 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         string? summary = null;
         try
         {
-            if (engine.GetCoverageReport() is null)
+            // The flag, not the report: reading the report waits on the lock a run holds while storing coverage.
+            if (!engine.State.CoverageEnabled)
             {
                 throw new McpException("Coverage is disabled. Start Piston with --coverage or set coverageEnabled in .piston.json.");
             }
