@@ -592,8 +592,7 @@ public static class DtoMapper
 
     private static ChangedLineFileDto ToDto(this ChangedFileVerdicts file, string solutionDirectory, bool withDetail)
     {
-        var failing = file.Lines.SelectMany(l => l.FailingTests ?? []).Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal).ToList();
+        var failing = file.FailingTests();
         var failingListed = withDetail ? Math.Min(failing.Count, CoverageTools.MaxFailingTestsPerFile) : 0;
         return new(
             file.FilePath,

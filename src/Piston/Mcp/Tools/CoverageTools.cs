@@ -154,8 +154,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         var files = new JsonArray();
         foreach (var file in result.Files)
         {
-            var failing = file.Lines.SelectMany(l => l.FailingTests ?? []).Distinct(StringComparer.Ordinal)
-                .Order(StringComparer.Ordinal).ToList();
+            var failing = file.FailingTests();
             files.Add(new JsonObject
             {
                 ["path"] = Relative(file.FilePath, solutionDirectory),

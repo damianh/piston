@@ -127,6 +127,18 @@ internal sealed record ChangedFileVerdicts(
     string FilePath, bool IsMeasured, bool IsStale, bool IsPartial, IReadOnlyList<ChangedLineResult> Lines)
 {
     public ChangedLineTotals Totals => ChangedLineTotals.Of(Lines);
+
+    /// <summary>The distinct failing tests credited with any of the file's lines, in ordinal order.</summary>
+    /// <remarks>Lines credited to the same tests share one list, so each list is read once, not once per line.</remarks>
+    public IReadOnlyList<string> FailingTests() =>
+        [.. Lines
+            .Select(l => l.FailingTests)
+            .OfType<IReadOnlyList<string>>()
+            .Distinct(ReferenceEqualityComparer.Instance)
+            .Cast<IReadOnlyList<string>>()
+            .SelectMany(tests => tests)
+            .Distinct(StringComparer.Ordinal)
+            .Order(StringComparer.Ordinal)];
 }
 
 /// <summary>Verdicts for every changed line of every changed source file.</summary>

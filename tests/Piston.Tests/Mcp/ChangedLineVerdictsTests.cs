@@ -76,6 +76,19 @@ public sealed class ChangedLineVerdictsTests
     }
 
     [Fact]
+    public void FileFailingTests_MergesTheLinesSharedListsIntoOneOrderedList()
+    {
+        Measure();
+        Covers("T.Fail2", CoveringTestOutcome.Failed, lines: [(1, 2), (4, 4)]);
+        Covers("T.Fail1", CoveringTestOutcome.Failed, lines: (1, 2));
+        Covers("T.Fail3", CoveringTestOutcome.Failed, lines: (4, 4));
+
+        var file = Assert.Single(Classify(1, 2, 4).Files);
+
+        Assert.Equal(["T.Fail1", "T.Fail2", "T.Fail3"], file.FailingTests());
+    }
+
+    [Fact]
     public void LineExecutedOnlyByFailingTests_IsCoveredOnlyByFailing_AndNamesThem()
     {
         Measure();

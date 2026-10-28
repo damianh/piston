@@ -117,7 +117,16 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
 
             case ProtocolMethods.CoverageGetChangedLines:
                 {
-                    var cmd = JsonRpcSerializer.DeserializeParams<GetChangedLineCoverageCommand>(@params);
+                    GetChangedLineCoverageCommand? cmd;
+                    try
+                    {
+                        cmd = JsonRpcSerializer.DeserializeParams<GetChangedLineCoverageCommand>(@params);
+                    }
+                    catch (JsonException ex)
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, $"Invalid parameters: {ex.Message}");
+                    }
+
                     ChangedLineCoverageDto result;
                     // The flag, not the report: reading the report waits on the lock a run holds while storing coverage.
                     if (!_engine.State.CoverageEnabled)

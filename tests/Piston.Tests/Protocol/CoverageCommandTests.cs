@@ -243,6 +243,21 @@ public sealed class CoverageCommandTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("""{"base":1}""")]
+    [InlineData("""{"baseRef":false}""")]
+    public async Task GetChangedLines_WronglyTypedParams_AreInvalidParams(string @params)
+    {
+        var engine = new StubEngine { CoverageReport = new CoverageReportSnapshot([]) };
+        engine.State.SolutionPath = Path.Combine(_root, "App.slnx");
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var ex = await Assert.ThrowsAsync<JsonRpcException>(() => dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageGetChangedLines, JsonNode.Parse(@params), _ct));
+
+        Assert.Equal(JsonRpcErrorCodes.InvalidParams, ex.Code);
+    }
+
     [Fact]
     public async Task GetChangedLines_OptionLikeBase_IsInvalidParams()
     {
