@@ -188,8 +188,12 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                 }
 
             case ProtocolMethods.EngineRunTests:
+            case ProtocolMethods.EngineRunFailed:
                 {
-                    var cmd = JsonRpcSerializer.DeserializeParams<RunTestsCommand>(@params);
+                    var cmd = method == ProtocolMethods.EngineRunFailed
+                        ? RunTestsCommand.ForFailed(_engine.State.ToSnapshot().Suites)
+                            ?? throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, "No failed tests to run.")
+                        : JsonRpcSerializer.DeserializeParams<RunTestsCommand>(@params);
                     if (cmd?.Projects is not { Count: > 0 } projects || projects.Any(string.IsNullOrWhiteSpace))
                     {
                         throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "projects is required.");

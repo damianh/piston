@@ -26,7 +26,22 @@ public sealed class WorktreeOwnership : IDisposable
     }
 
     public WorktreeIdentity Worktree { get; }
-    public ExecutionOwnerInfo Owner { get; }
+    public ExecutionOwnerInfo Owner { get; private set; }
+
+    public void PublishDashboardUrl(string? url)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        var updated = Owner with { DashboardUrl = url };
+        try
+        {
+            WriteInfo(_infoPath, updated);
+            Owner = updated;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new ExecutionCoordinationException($"Cannot publish dashboard endpoint: {ex.Message}", ex);
+        }
+    }
 
     /// <summary>
     /// How long <see cref="Acquire"/> retries a held lock before reporting a conflict. Covers the brief
@@ -84,15 +99,23 @@ public sealed class WorktreeOwnership : IDisposable
     /// Lists ownership records in <paramref name="directory"/>, probing each lock without blocking.
     /// A probe briefly takes an unheld lock; <see cref="Acquire"/> retries briefly to ride over it.
     /// </summary>
-    public static IReadOnlyList<OwnershipRecord> ListOwners(ExecutionCoordinationDirectory directory)
+    public static IReadOnlyList<OwnershipRecord> ListOwners(ExecutionCoordinationDirectory directory, bool strict = false)
     {
         string[] locks;
         try
         {
             locks = Directory.GetFiles(directory.OwnersDirectory, "*.lock");
         }
-        catch (Exception ex) when (ex is DirectoryNotFoundException or IOException or UnauthorizedAccessException)
+        catch (DirectoryNotFoundException)
         {
+            return [];
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            if (strict)
+            {
+                throw new ExecutionCoordinationException($"Cannot inspect ownership records: {ex.Message}", ex);
+            }
             return [];
         }
 
@@ -101,7 +124,7 @@ public sealed class WorktreeOwnership : IDisposable
         {
             var key = Path.GetFileNameWithoutExtension(lockPath);
             var infoPath = Path.Combine(directory.OwnersDirectory, key + ".json");
-            var liveness = ProbeLock(lockPath);
+            var liveness = ProbeLock(lockPath, strict);
             if (liveness == OwnershipLiveness.None)
             {
                 continue;
@@ -119,7 +142,7 @@ public sealed class WorktreeOwnership : IDisposable
         return records;
     }
 
-    private static OwnershipLiveness ProbeLock(string lockPath)
+    private static OwnershipLiveness ProbeLock(string lockPath, bool strict)
     {
         FileStream? stream;
         try
@@ -132,6 +155,10 @@ public sealed class WorktreeOwnership : IDisposable
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
+            if (strict)
+            {
+                throw new ExecutionCoordinationException($"Cannot inspect ownership lock '{lockPath}': {ex.Message}", ex);
+            }
             return OwnershipLiveness.None;
         }
 
@@ -174,7 +201,8 @@ public sealed class WorktreeOwnership : IDisposable
                 root.GetProperty("solutionPath").GetString() ?? "",
                 root.GetProperty("worktreePath").GetString() ?? "",
                 root.GetProperty("acquiredAt").GetDateTimeOffset(),
-                root.TryGetProperty("host", out var host) && host.ValueKind == JsonValueKind.String ? host.GetString() : null);
+                root.TryGetProperty("host", out var host) && host.ValueKind == JsonValueKind.String ? host.GetString() : null,
+                root.TryGetProperty("dashboardUrl", out var url) && url.ValueKind == JsonValueKind.String ? url.GetString() : null);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException
                                        or KeyNotFoundException or InvalidOperationException or FormatException)
@@ -197,6 +225,10 @@ public sealed class WorktreeOwnership : IDisposable
             if (owner.Host is not null)
             {
                 writer.WriteString("host", owner.Host);
+            }
+            if (owner.DashboardUrl is not null)
+            {
+                writer.WriteString("dashboardUrl", owner.DashboardUrl);
             }
             writer.WriteEndObject();
         }

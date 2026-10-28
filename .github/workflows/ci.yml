@@ -35,6 +35,11 @@ jobs:
         run: dotnet run build.cs -- build
       - name: Test
         run: dotnet run build.cs -- test --skip-dependencies
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Test canvas provider
+        run: node --test .github/extensions/piston-dashboard/provider.test.mjs .github/extensions/piston-dashboard/theme.test.mjs
 
   smoke:
     name: Smoke test samples (${{ matrix.os }})

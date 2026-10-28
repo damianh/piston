@@ -177,6 +177,11 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     /// <summary>Worktree ownership held by this engine; null before <see cref="StartAsync"/>.</summary>
     internal WorktreeOwnership? Ownership => _ownership;
 
+    public ExecutionOwnerInfo? OwnerInfo => _ownership?.Owner;
+
+    /// <summary>Advertises a bound dashboard while this engine holds worktree ownership.</summary>
+    public void PublishDashboardUrl(string? url) => _ownership?.PublishDashboardUrl(url);
+
     /// <summary>
     /// Acquires exclusive ownership of the solution's worktree and validates the machine execution
     /// budget, then starts watching and runs the initial build/test.

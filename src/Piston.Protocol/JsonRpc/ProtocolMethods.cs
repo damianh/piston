@@ -26,6 +26,7 @@ public static class ProtocolMethods
 
     /// <summary>Start a run of selected tests; replies once the run is requested, without awaiting it.</summary>
     public const string EngineRunTests = "engine/runTests";
+    public const string EngineRunFailed = "engine/runFailed";
 
     /// <summary>Request per-file coverage data for the given source file.</summary>
     public const string CoverageGetForFile = "coverage/getForFile";

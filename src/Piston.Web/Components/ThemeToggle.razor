@@ -2,7 +2,8 @@
 @implements IDisposable
 
 <button class="p-1.5 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800 transition-colors"
-        title="@Title (click to change)" aria-label="@Title" @onclick="CycleAsync">
+        title="@(Theme.IsCanvas ? "Theme follows Copilot" : $"{Title} (click to change)")"
+        aria-label="@(Theme.IsCanvas ? "Theme follows Copilot" : Title)" disabled="@Theme.IsCanvas" @onclick="CycleAsync">
     @switch (Theme.Preference)
     {
         case ThemeService.Light:

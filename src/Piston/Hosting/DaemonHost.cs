@@ -3,7 +3,6 @@
 
 using System.Reflection;
 using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Piston.Engine;
 using Piston.Engine.Execution;
@@ -28,7 +27,7 @@ public sealed class DaemonHost : IAsyncDisposable
 
     private PistonEngine? _engine;
     private ProtocolRouter? _router;
-    private WebApplication? _webApp;
+    private DashboardHost? _dashboard;
     private WebApplication? _mcpApp;
     private WorktreePresenceMonitor? _presenceMonitor;
     private readonly TaskCompletionSource _shutdownRequested = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -166,49 +165,17 @@ public sealed class DaemonHost : IAsyncDisposable
 
         RouterTask = _router.RunAsync(ct);
 
-        // Always start the web server for WebSocket + static file serving
-        var webBuilder = WebApplication.CreateBuilder(new WebApplicationOptions
+        _dashboard = new DashboardHost();
+        try
         {
-            ApplicationName = "Piston",
-            // Set content root to the directory containing the host binary so that
-            // UseStaticFiles() can find the wwwroot/ folder with Blazor WASM assets.
-            ContentRootPath = AppContext.BaseDirectory,
-        });
-
-        _webApp = webBuilder.Build();
-        _webApp.Urls.Add(WebUrl);
-        _ = _webApp.UseWebSockets();
-        _ = _webApp.UseRequestGuard(
-            securityHeaders: true,
-            ContentSecurityPolicy.Build(ContentSecurityPolicy.ReadIndex(_webApp.Environment.WebRootFileProvider)));
-
-        // Serve Blazor WASM framework files (handles content negotiation for .br/.gz compressed
-        // assets) and static files. UseBlazorFrameworkFiles must come before UseStaticFiles.
-        _ = _webApp.UseBlazorFrameworkFiles();
-        _ = _webApp.UseDefaultFiles();
-        _ = _webApp.UseStaticFiles();
-        _ = _webApp.UseRouting();
-
-        var router = _router;
-        var stopping = _webApp.Lifetime.ApplicationStopping;
-        _ = _webApp.Map("/ws", async context =>
+            await _dashboard.StartAsync(_router, WebUrl, () => engine.OwnerInfo, ct).ConfigureAwait(false);
+        }
+        catch (IOException ex)
         {
-            if (!context.WebSockets.IsWebSocketRequest)
-            {
-                context.Response.StatusCode = StatusCodes.Status400BadRequest;
-                return;
-            }
-
-            var webSocket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
-            // End the session when the server stops; otherwise shutdown waits for the dashboard to disconnect.
-            using var session = CancellationTokenSource.CreateLinkedTokenSource(ct, stopping);
-            await router.AddWebSocketSessionAsync(webSocket, session.Token).ConfigureAwait(false);
-        });
-
-        // Fallback to index.html for Blazor SPA client-side routing
-        _ = _webApp.MapFallbackToFile("index.html");
-
-        await StartEndpointAsync(_webApp, "web dashboard", WebUrl, "--web-port", ct).ConfigureAwait(false);
+            throw new DaemonStartupException(
+                $"Could not start the web dashboard on {WebUrl}: {ex.Message} Choose a different --web-port.", ex);
+        }
+        engine.PublishDashboardUrl(_dashboard.Url);
         _log($"[piston] Web server (WebSocket) listening on port: {_options.WebPort}");
 
         if (_options.McpPort is not null)
@@ -271,11 +238,18 @@ public sealed class DaemonHost : IAsyncDisposable
             _mcpApp = null;
         }
 
-        if (_webApp is not null)
+        if (_dashboard is not null)
         {
-            await _webApp.StopAsync().ConfigureAwait(false);
-            await _webApp.DisposeAsync().ConfigureAwait(false);
-            _webApp = null;
+            try
+            {
+                _engine?.PublishDashboardUrl(null);
+            }
+            catch (ExecutionCoordinationException ex)
+            {
+                _log($"[piston] Could not withdraw dashboard endpoint: {ex.Message}");
+            }
+            await _dashboard.DisposeAsync().ConfigureAwait(false);
+            _dashboard = null;
         }
 
         _log("[piston] Shutting down.");

@@ -84,6 +84,9 @@ public sealed class PistonConfig
     /// </summary>
     public int? McpPort { get; set; }
 
+    /// <summary>Opt in to an ephemeral loopback dashboard for <c>piston mcp</c>.</summary>
+    public bool? Dashboard { get; set; }
+
     /// <summary>
     /// Test execution mode. Accepted values: "Auto", "Process", "InProcess".
     /// Stored as a string to avoid a type dependency on <c>Piston.Engine</c>.

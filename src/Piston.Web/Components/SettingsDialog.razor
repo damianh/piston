@@ -28,16 +28,19 @@
                     <div class="flex items-center justify-between gap-6 px-4 py-3.5">
                         <div id="settings-theme-label">
                             <div class="font-medium">Theme</div>
-                            <div class="text-xs text-gray-400 mt-0.5">Saved in this browser.</div>
+                            <div class="text-xs text-gray-400 mt-0.5">@(Theme.IsCanvas ? "Follows the Copilot app." : "Saved in this browser.")</div>
                         </div>
-                        <div role="radiogroup" aria-labelledby="settings-theme-label" class="@GroupClass">
-                            @foreach (var preference in ThemeService.Preferences)
-                            {
-                                var value = preference;
-                                @Segment("settings-theme", value, ThemeLabel(value), null,
-                                    Theme.Preference == value, disabled: false, () => Theme.SetAsync(value))
-                            }
-                        </div>
+                        @if (!Theme.IsCanvas)
+                        {
+                            <div role="radiogroup" aria-labelledby="settings-theme-label" class="@GroupClass">
+                                @foreach (var preference in ThemeService.Preferences)
+                                {
+                                    var value = preference;
+                                    @Segment("settings-theme", value, ThemeLabel(value), null,
+                                        Theme.Preference == value, disabled: false, () => Theme.SetAsync(value))
+                                }
+                            </div>
+                        }
                     </div>
 
                     <div class="flex items-center justify-between gap-6 px-4 py-3.5">

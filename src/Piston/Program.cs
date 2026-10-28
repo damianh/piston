@@ -72,6 +72,9 @@ var webPortOpt = new Option<int>(
     description: "Port for the web UI and WebSocket server.",
     getDefaultValue: () => 5199);
 
+var dashboardOpt = new Option<bool>("--dashboard",
+    "Expose this MCP session's dashboard on an ephemeral loopback port.");
+
 var forceOpt = new Option<bool>(
     name: "--force",
     description: "Terminate a live owner that cannot be stopped over its pipe (SIGTERM, then kill after 10s).");
@@ -180,6 +183,7 @@ var mcpCmd = new Command("mcp",
     coverageOpt,
     parallelismOpt,
     configDirectoryOpt,
+    dashboardOpt,
 };
 
 mcpCmd.SetHandler(async ctx =>
@@ -190,10 +194,33 @@ mcpCmd.SetHandler(async ctx =>
     var coverage = ctx.ParseResult.GetValueForOption(coverageOpt);
     var parallelism = ctx.ParseResult.GetValueForOption(parallelismOpt);
     var configDirectory = ctx.ParseResult.GetValueForOption(configDirectoryOpt);
-    ctx.ExitCode = await RunMcpAsync(solutionFile, debounceMs, filter, coverage, parallelism, configDirectory);
+    ctx.ExitCode = await RunMcpAsync(solutionFile, debounceMs, filter, coverage, parallelism, configDirectory,
+        ctx.ParseResult.GetValueForOption(dashboardOpt));
 });
 
 rootCommand.AddCommand(mcpCmd);
+
+var jsonOpt = new Option<bool>("--json", "Write machine-readable dashboard discovery state.");
+var dashboardCmd = new Command("dashboard", "Inspect the current worktree's dashboard without starting Piston.")
+{
+    solutionArg,
+    jsonOpt,
+};
+dashboardCmd.SetHandler(ctx =>
+{
+    var result = DashboardDiscovery.Inspect(
+        ctx.ParseResult.GetValueForArgument(solutionArg)?.FullName ?? Directory.GetCurrentDirectory());
+    if (ctx.ParseResult.GetValueForOption(jsonOpt))
+    {
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result, DashboardJsonContext.Default.DashboardEndpoint));
+    }
+    else
+    {
+        Console.WriteLine(result.Url ?? result.Message);
+    }
+    ctx.ExitCode = result.State == "error" ? 1 : 0;
+});
+rootCommand.AddCommand(dashboardCmd);
 
 // ── stop subcommand ────────────────────────────────────────────────────────────
 
@@ -552,7 +579,8 @@ static async Task<int> RunMcpAsync(
     string? cliFilter,
     bool cliCoverage,
     int cliParallelism,
-    string? configDirectory)
+    string? configDirectory,
+    bool dashboard)
 {
     // stdout carries MCP JSON-RPC only: anything written through Console.Out goes to stderr instead.
     var stdout = Console.OpenStandardOutput();
@@ -578,6 +606,7 @@ static async Task<int> RunMcpAsync(
     try
     {
         (solutionPath, var config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
+        dashboard |= config.Dashboard ?? false;
         options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config,
             McpStdioHost.OwnerHost);
         if (!HostHelpers.DotnetSdkAvailable())
@@ -597,6 +626,7 @@ static async Task<int> RunMcpAsync(
         StartupError = startupError,
         Input = stdin,
         Output = stdout,
+        Dashboard = dashboard,
     });
     return await host.RunAsync(cts.Token);
 }

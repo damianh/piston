@@ -83,6 +83,48 @@ See [README.md](README.md) for executable commands and the actual configuration
 shape. The daemon's `--stdio` JSON-RPC transport is not MCP; the stdio MCP server
 is the separate `piston mcp` command.
 
+## Native Copilot canvas and dashboard hosting
+
+The project-scoped `.github/extensions/piston-dashboard/` extension renders the
+existing `Piston.Web` dashboard, not a second UI. `DashboardHost` shares static
+file serving, CSP, request guards and WebSocket routing between `DaemonHost` and
+`McpStdioHost`. The latter opts in with `--dashboard` or `.piston.json`'s
+`dashboard: true`, binding `127.0.0.1:0` and publishing the assigned address.
+Default stdio sessions continue to open no web ports.
+
+**Decision:** expose an opt-in loopback web endpoint in the existing stdio
+owner, rather than attaching that session to a daemon. This preserves one engine
+per owning process, stdio lifetime/availability behavior and exclusive worktree
+ownership. No second owner is launched for a canvas.
+
+The ownership sidecar carries an optional `dashboardUrl`, atomically replaced
+without changing the ownership lock or acquisition timestamp. `piston dashboard
+--json` discovers a live lock for the canonical current worktree and returns an
+explicit connected/disconnected/disabled/error state. Records without an endpoint
+remain compatible. Unheld locks and non-loopback URLs are not attachment targets.
+The read-only `/api/dashboard` endpoint reports the owner's worktree, PID and
+acquisition timestamp; the extension checks them before using the endpoint.
+
+The extension keeps a small loopback connection shell independent of the engine.
+It proxies HTTP assets and WebSockets to only that verified owner, validates its
+own Host/Origin, and translates same-origin headers only after validation.
+It does not accept a caller-supplied upstream URL or disable the upstream guards.
+The shell forwards documented canvas theme tokens into the same-origin dashboard.
+Standalone theme storage remains separate from the canvas's host-following mode.
+
+The shell inspects periodically and on refresh, shows actionable disconnected
+states even when the engine was absent at first load, and replaces the embedded
+document when ownership changes. Rehydration resolves the active worktree again;
+instance IDs identify panels, not durable engine state. Closing a panel tears
+down its server/connections, not the engine. Open, refresh and reconnect issue no
+run commands. Only explicit `run`/`run_failed` actions or existing dashboard
+controls request tests; failed-test selection is shared in `RunTestsCommand`.
+Execution controls are inert while the shared dashboard is disconnected.
+
+The extension is a repository asset, not automatically installed by the packed
+tool. It requires a runtime with extension canvas support and a canvas-capable
+`piston` on PATH. The SDK canvas API is experimental.
+
 ## Engine pipeline
 
 ```text
@@ -488,5 +530,5 @@ admission budget described above.
 
 Aspire is one possible integration-test example for the generic runner. There
 is no Aspire-specific lifecycle, service orchestration, or dedicated
-integration contract. Planned work, including a native Copilot canvas for the
-dashboard, is in [docs/ROADMAP.md](docs/ROADMAP.md).
+integration contract. Planned work, including packaged harness assets, is in
+[docs/ROADMAP.md](docs/ROADMAP.md).

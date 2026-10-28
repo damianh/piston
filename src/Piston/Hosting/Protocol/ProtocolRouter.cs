@@ -20,7 +20,7 @@ namespace Piston.Hosting.Protocol;
 /// and broadcasts engine state notifications to all connected clients.
 /// Implements <see cref="IActivityEventSink"/> to map engine activity to wire notifications.
 /// </summary>
-public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
+public sealed class ProtocolRouter(IEngine engine, NamedPipeListener? listener = null)
     : IActivityEventSink, IAsyncDisposable
 {
     private readonly ConcurrentDictionary<string, ClientSession> _pipeSessions = new();
@@ -76,6 +76,11 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
         engine.State.StateChanged += OnEngineStateChanged;
         try
         {
+            if (listener is null)
+            {
+                await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
+                return;
+            }
             await foreach (var stream in listener.AcceptClientsAsync(ct).ConfigureAwait(false))
             {
                 var sessionId = $"pipe-{Interlocked.Increment(ref _sessionCounter)}";
@@ -230,6 +235,6 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener listener)
     public ValueTask DisposeAsync()
     {
         engine.State.StateChanged -= OnEngineStateChanged;
-        return listener.DisposeAsync();
+        return listener?.DisposeAsync() ?? ValueTask.CompletedTask;
     }
 }

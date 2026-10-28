@@ -7,6 +7,7 @@
 <ConnectionOverlay IsConnected="@Client.IsConnected" IsConnecting="@Client.IsConnecting" />
 
 <div class="flex h-screen bg-gray-950 text-gray-100 font-sans text-sm overflow-hidden"
+     inert="@(!Client.IsConnected)"
      @onkeydown="HandleKeyDown" tabindex="0" @ref="_rootElement">
 
     <div class="flex flex-1 flex-col overflow-hidden">
@@ -94,6 +95,10 @@
 
     private void HandleKeyDown(KeyboardEventArgs e)
     {
+        if (!Client.IsConnected)
+        {
+            return;
+        }
         if (e.Key == "?")
         {
             _shortcutsOpen = true;

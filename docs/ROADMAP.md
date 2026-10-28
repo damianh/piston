@@ -85,20 +85,16 @@ ARCHITECTURE describe the implementation in detail.
   tests run the MSTest, NUnit, xUnit v3 and TUnit samples through `piston daemon`
   and through `verify` over `piston mcp` on Linux, Windows and macOS.
 
+**Project-scoped Copilot canvas**
+- A thin `.github/extensions/piston-dashboard/` extension hosts the existing
+  web UI with an independent connection shell and worktree-owner discovery.
+- Stdio MCP can opt in to an ephemeral loopback dashboard with `--dashboard`
+  or `.piston.json`'s `dashboard: true`; no daemon attachment or second engine.
+- Inspection-only open/refresh/reconnect, explicit run/run-failed actions,
+  disconnected recovery, shared failed-test selection and host-following themes.
+- Packaged installation into other projects remains under harness integration.
+
 ## Near-term
-
-### Native Copilot canvas
-Show the dashboard as a Copilot app canvas rather than a browser tab the agent
-opens by hand (today's `piston-dashboard` skill).
-
-- Ship a thin canvas extension that hosts the existing web UI. Do not build a
-  second UI.
-- Decide how a stdio `piston mcp` session, which opens no ports today, exposes the
-  dashboard: an opt-in loopback web port, or attaching to a daemon.
-- Validate canvas reload/resume, the disconnected state, actions such as run and
-  run failed, theme integration and accessibility.
-- Opening the canvas only inspects state. It must not start continuous test
-  execution on its own.
 
 ### Harness integration assets
 - Ship Copilot assets with the tool: an MCP config snippet, a skill or custom
