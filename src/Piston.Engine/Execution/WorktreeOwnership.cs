@@ -150,6 +150,19 @@ public sealed class WorktreeOwnership : IDisposable
         return records;
     }
 
+    public static OwnershipRecord? FindLiveOwner(
+        ExecutionCoordinationDirectory directory, WorktreeIdentity worktree, bool reportErrors = false)
+    {
+        var lockPath = Path.Combine(directory.OwnersDirectory, worktree.Key + ".lock");
+        if (ProbeLock(lockPath, reportErrors) != OwnershipLiveness.Live)
+        {
+            return null;
+        }
+
+        var infoPath = Path.Combine(directory.OwnersDirectory, worktree.Key + ".json");
+        return new OwnershipRecord(worktree.Key, OwnershipLiveness.Live, TryReadInfo(infoPath, reportErrors));
+    }
+
     private static OwnershipLiveness ProbeLock(string lockPath, bool reportErrors)
     {
         FileStream? stream;

@@ -19,13 +19,22 @@ export function loopbackEndpoint(value) {
     return url;
 }
 
-export async function discover(cwd) {
+export async function discover(cwd, executeCommand = execute) {
     try {
-        const { stdout } = await execute("piston", ["dashboard", "--json"], {
-            cwd, timeout: 5000, maxBuffer: 64 * 1024, windowsHide: true,
-        });
+        let stdout;
+        let failed = false;
+        try {
+            ({ stdout } = await executeCommand("piston", ["dashboard", "--json"], {
+                cwd, timeout: 5000, maxBuffer: 64 * 1024, windowsHide: true,
+            }));
+        } catch (error) {
+            if (error.code !== 1 || typeof error.stdout !== "string") throw error;
+            stdout = error.stdout;
+            failed = true;
+        }
         const state = JSON.parse(stdout);
-        if (!["connected", "disconnected", "disabled", "error"].includes(state.state) || typeof state.message !== "string") {
+        if (!state || !["connected", "disconnected", "disabled", "error"].includes(state.state)
+            || typeof state.message !== "string" || (failed && state.state !== "error")) {
             throw new Error("Unexpected discovery response; upgrade Piston to a version with canvas support.");
         }
         return state;

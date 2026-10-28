@@ -2,7 +2,34 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 import { createHash } from "node:crypto";
-import { createDashboardCanvas, loopbackEndpoint, probe, rpc } from "./provider.mjs";
+import { createDashboardCanvas, discover, loopbackEndpoint, probe, rpc } from "./provider.mjs";
+
+test("discovery preserves validated CLI error responses from exit code 1", async () => {
+    const state = { state: "error", message: "The owner advertised an invalid dashboard endpoint." };
+    const result = await discover("/repo/current", async (command, args, options) => {
+        assert.equal(command, "piston");
+        assert.deepEqual(args, ["dashboard", "--json"]);
+        assert.equal(options.cwd, "/repo/current");
+        throw Object.assign(new Error("Command failed"), { code: 1, stdout: JSON.stringify(state) });
+    });
+    assert.deepEqual(result, state);
+});
+
+test("discovery rejects launch failures, malformed output and unexpected exit states", async () => {
+    for (const error of [
+        Object.assign(new Error("Missing executable"), { code: "ENOENT" }),
+        Object.assign(new Error("Timed out"), { killed: true }),
+        Object.assign(new Error("Command failed"), { code: 2, stdout: '{"state":"error","message":"bad"}' }),
+        Object.assign(new Error("Command failed"), { code: 1, stdout: "not JSON" }),
+        Object.assign(new Error("Command failed"), { code: 1, stdout: '{"state":"error"}' }),
+        Object.assign(new Error("Command failed"), { code: 1, stdout: '{"state":"connected","message":"ok"}' }),
+    ]) {
+        await assert.rejects(discover("/repo/current", async () => { throw error; }), /Could not inspect Piston/);
+    }
+    assert.deepEqual(await discover("/repo/current", async () => ({
+        stdout: '{"state":"disabled","message":"Opt in."}',
+    })), { state: "disabled", message: "Opt in." });
+});
 
 async function serve(t, handler, upgrade) {
     const server = createServer(handler);

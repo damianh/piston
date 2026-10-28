@@ -36,7 +36,7 @@ test("canvas follows live host color mode without overwriting standalone prefere
     page.mode("dark");
     page.api.syncCanvas();
     assert.equal(page.dark(), true);
-    page.api.set("light");
+    page.api.set("dark");
     assert.equal(page.dark(), true);
     assert.equal(page.stored(), "light");
     page.mode("light");

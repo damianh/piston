@@ -78,6 +78,30 @@ public sealed class McpStdioHostTests : IDisposable
             var buffer = new byte[64 * 1024];
             var response = await ws.ReceiveAsync(buffer.AsMemory(), _ct);
             Assert.Contains("engine/stateSnapshot", System.Text.Encoding.UTF8.GetString(buffer, 0, response.Count));
+            await ws.SendAsync(
+                """{"jsonrpc":"2.0","id":"machine-overview","method":"machine/getOverview"}"""u8.ToArray().AsMemory(),
+                System.Net.WebSockets.WebSocketMessageType.Text, true, _ct);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(10));
+            while (true)
+            {
+                using var message = new MemoryStream();
+                do
+                {
+                    response = await ws.ReceiveAsync(buffer.AsMemory(), timeout.Token);
+                    Assert.Equal(System.Net.WebSockets.WebSocketMessageType.Text, response.MessageType);
+                    message.Write(buffer, 0, response.Count);
+                } while (!response.EndOfMessage);
+                using var document = System.Text.Json.JsonDocument.Parse(message.ToArray());
+                if (!document.RootElement.TryGetProperty("id", out var id) || id.GetString() != "machine-overview")
+                {
+                    continue;
+                }
+                Assert.False(document.RootElement.TryGetProperty("error", out _), document.RootElement.ToString());
+                Assert.Equal(System.Text.Json.JsonValueKind.Array,
+                    document.RootElement.GetProperty("result").GetProperty("worktrees").ValueKind);
+                break;
+            }
         }
         await client.DisposeAsync();
         await _toServer.Writer.CompleteAsync();

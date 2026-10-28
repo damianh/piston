@@ -17,8 +17,7 @@ internal static class DashboardDiscovery
         {
             directory ??= ExecutionCoordinationDirectory.ResolveDefault();
             var identity = WorktreeIdentity.FromSolutionPath(path);
-            var owners = WorktreeOwnership.ListOwners(directory, reportErrors: true);
-            var record = owners.SingleOrDefault(r => r.Key == identity.Key && r.Liveness == OwnershipLiveness.Live);
+            var record = WorktreeOwnership.FindLiveOwner(directory, identity, reportErrors: true);
             if (record is null)
             {
                 return new("disconnected", "No live Piston owner. Start a daemon or connect `piston mcp --dashboard`.", Worktree: identity.RootPath);

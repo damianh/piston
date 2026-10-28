@@ -31,6 +31,26 @@ public sealed class DashboardDiscoveryTests : IDisposable
     }
 
     [Fact]
+    public void Discovery_IgnoresInvalidEndpointsFromOtherAndStaleOwners()
+    {
+        var current = Solution("current");
+        var other = Solution("other");
+        using var owner = WorktreeOwnership.Acquire(_directory, current);
+        using var otherOwner = WorktreeOwnership.Acquire(_directory, other);
+        owner.PublishDashboardUrl("http://127.0.0.1:12345");
+        otherOwner.PublishDashboardUrl("http://evil.example:1234");
+        Assert.Equal("connected", DashboardDiscovery.Inspect(current, _directory).State);
+        Assert.Equal("error", DashboardDiscovery.Inspect(other, _directory).State);
+
+        var infoPath = Path.Combine(OwnersDirectory, $"{otherOwner.Worktree.Key}.json");
+        var metadata = File.ReadAllText(infoPath);
+        otherOwner.Dispose();
+        File.WriteAllText(infoPath, metadata);
+        Assert.Equal("connected", DashboardDiscovery.Inspect(current, _directory).State);
+        Assert.Equal("disconnected", DashboardDiscovery.Inspect(other, _directory).State);
+    }
+
+    [Fact]
     public void Discovery_UsesOnlyTheCurrentWorktreeAndLiveOwnership()
     {
         var a = Solution("a");

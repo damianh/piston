@@ -195,12 +195,25 @@ public sealed class McpStdioHost
     private async Task StartDashboardAsync(PistonEngine engine, ActivityEventSinkProxy activity)
     {
         _router = new ProtocolRouter(engine);
+        _router.SetMachineOverviewProvider(
+            ct => MachineExecutionOverviewReader.ReadAsync(engine.ExecutionCoordinationDirectory, ct));
         activity.SetSink(_router);
         _callTracker = new McpCallTracker(_router.Emit, _options.SolutionPath!);
         _router.SetMcpCallTracker(_callTracker);
-        if (UserSettingsStore.ResolveDefaultPath() is { } path)
+        try
         {
-            _router.SetUserSettingsStore(new UserSettingsStore(path));
+            if (UserSettingsStore.ResolveDefaultPath() is { } path)
+            {
+                _router.SetUserSettingsStore(new UserSettingsStore(path));
+            }
+            else
+            {
+                _log("[piston] No application-data folder; machine-wide settings are unavailable.");
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            _log($"[piston] Machine-wide settings are unavailable: {ex.Message}");
         }
         _routerTask = _router.RunAsync(_dashboardLifetime.Token);
         _dashboard = new DashboardHost();
