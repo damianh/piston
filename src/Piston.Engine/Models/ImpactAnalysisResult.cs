@@ -76,4 +76,5 @@ public sealed record TestSelectionReason(
     string ChangedLines,
     string? ExecutedLines,
     string Granularity,
-    string ProjectPath);
+    string ProjectPath,
+    string? Member = null);

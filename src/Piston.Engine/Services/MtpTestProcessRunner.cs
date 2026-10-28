@@ -103,20 +103,25 @@ internal static partial class MtpTestProcessRunner
         try
         {
             ProjectTestResult? result = null;
-            // Server mode does not complete with --coverage: the extension relaunches the test host under a
-            // controller process, so coverage runs use dotnet test.
-            if (appPath is not null && File.Exists(appPath) && coverageArgs is null)
+            if (appPath is not null && File.Exists(appPath))
             {
-                result = await RunWithServerAsync(projectPath, appPath, solutionDirectory, filter, onProgress, ct, log, warmHosts)
-                    .ConfigureAwait(false);
-            }
-            else if (coverageArgs is not null)
-            {
-                log.Write("MtpRunner", "Collecting coverage, so running with dotnet test rather than server mode");
+                // With --coverage the extension relaunches the test host under a controller, which connects
+                // as a passive node; the run uses a host started for it alone, not a warm one.
+                result = await RunWithServerAsync(projectPath, appPath, solutionDirectory, filter, onProgress, ct, log, warmHosts,
+                    coverageArgs).ConfigureAwait(false);
             }
 
-            result ??= await RunWithDotnetTestAsync(projectPath, solutionDirectory, filter, onProgress, ct, log, coverageArgs)
-                .ConfigureAwait(false);
+            if (result is null)
+            {
+                if (resultsDir is not null)
+                {
+                    // A server attempt that did not start may have left a partial report behind.
+                    ClearDirectory(resultsDir);
+                }
+
+                result = await RunWithDotnetTestAsync(projectPath, solutionDirectory, filter, onProgress, ct, log, coverageArgs)
+                    .ConfigureAwait(false);
+            }
 
             if (resultsDir is not null)
             {
@@ -133,6 +138,28 @@ internal static partial class MtpTestProcessRunner
             if (resultsDir is not null && coverageReportPaths.Count == 0)
             {
                 try { Directory.Delete(resultsDir, recursive: true); } catch { /* ignore */ }
+            }
+        }
+    }
+
+    private static void ClearDirectory(string directory)
+    {
+        foreach (var entry in new DirectoryInfo(directory).EnumerateFileSystemInfos())
+        {
+            try
+            {
+                if (entry is DirectoryInfo subdirectory)
+                {
+                    subdirectory.Delete(recursive: true);
+                }
+                else
+                {
+                    entry.Delete();
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Best effort: a leftover report is at worst merged with the fallback's.
             }
         }
     }

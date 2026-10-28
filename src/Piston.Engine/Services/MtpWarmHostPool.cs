@@ -157,11 +157,12 @@ internal sealed class MtpWarmHostPool : IAsyncDisposable
             return new MtpServerSession.Result(outcome, error, stderr);
         }
 
+        var reportedNodes = host.Connection!.ReportedNodes;
         Retire(host);
         var result = await host.EndAsync(outcome, error, log).ConfigureAwait(false);
 
         // A reused host may have died while idle: the request never reached it, so start afresh.
-        if (reused && !host.Connection.ReportedNodes && !ct.IsCancellationRequested
+        if (reused && !reportedNodes && !ct.IsCancellationRequested
             && outcome is MtpServerSession.Outcome.Failed or MtpServerSession.Outcome.NotStarted)
         {
             log?.Invoke("MtpServer", "Warm host failed before reporting any test; retrying in a new process");
@@ -253,6 +254,7 @@ internal sealed class MtpWarmHostPool : IAsyncDisposable
     {
         private OwnedTestProcess? _process;
         private TcpClient? _client;
+        private MtpServerSession.ServerLink? _link;
         private bool _ended;
 
         public string Key { get; } = key;
@@ -301,10 +303,17 @@ internal sealed class MtpWarmHostPool : IAsyncDisposable
 
             _process = started.Process;
             _client = started.Client;
-            Connection = new MtpServerSession.Connection(_client.GetStream());
-            var (outcome, error) = await Connection.InitializeAsync(timeouts.Initialize, ct).ConfigureAwait(false);
+            _link = started.CreateLink((source, message) => Output.Log?.Invoke(source, message));
+            MtpServerSession.Outcome outcome;
+            string? error;
+            using (started.Listener)
+            {
+                (outcome, error) = await _link.OpenAsync(timeouts.Initialize, ct).ConfigureAwait(false);
+            }
+
             if (outcome == MtpServerSession.Outcome.Completed)
             {
+                Connection = _link.Active;
                 return null;
             }
 
@@ -317,8 +326,8 @@ internal sealed class MtpWarmHostPool : IAsyncDisposable
             MtpServerSession.Outcome outcome, string? error, Action<string, string>? log)
         {
             _ended = true;
-            _client?.Dispose();
-            var result = await MtpServerSession.EndAsync(_process!, outcome, error, Output, log).ConfigureAwait(false);
+            _link?.CloseActive();
+            var result = await MtpServerSession.EndAsync(_process!, outcome, error, Output, log, _link?.ExitTimeout).ConfigureAwait(false);
             Release();
             return result;
         }
@@ -334,8 +343,9 @@ internal sealed class MtpWarmHostPool : IAsyncDisposable
                     await Connection.TrySendExitAsync(exitDeadline.Token).ConfigureAwait(false);
                 }
 
-                _client?.Dispose();
-                await MtpServerSession.WaitForExitOrKillAsync(_process, MtpServerSession.ExitTimeout, Output.Log).ConfigureAwait(false);
+                _link?.CloseActive();
+                await MtpServerSession.WaitForExitOrKillAsync(_process, _link?.ExitTimeout ?? MtpServerSession.ExitTimeout, Output.Log)
+                    .ConfigureAwait(false);
             }
 
             Release();
@@ -343,9 +353,11 @@ internal sealed class MtpWarmHostPool : IAsyncDisposable
 
         private void Release()
         {
+            _link?.Dispose();
+            _link = null;
             _client?.Dispose();
             _client = null;
-            Connection?.Dispose();
+            Connection = null;
             _process?.Dispose();
             _process = null;
         }

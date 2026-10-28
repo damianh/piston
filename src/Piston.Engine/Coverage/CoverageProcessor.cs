@@ -60,7 +60,11 @@ internal sealed class CoverageProcessor : ICoverageProcessor
         if (parsedAny)
         {
             var files = reportFiles.Values
-                .Select(f => new CoverageReportFile(f, CoverageReportFile.ComputeContentHash(f.FilePath)))
+                .Select(f =>
+                {
+                    var content = ImpactContent.TryRead(f.FilePath);
+                    return new CoverageReportFile(f, content is null ? null : ImpactContent.Hash(content), content);
+                })
                 .ToList();
             await store.StoreReportAsync(runId, files, isFullRun).ConfigureAwait(false);
         }

@@ -25,7 +25,10 @@ public enum FailureKind
 /// <param name="Kind">The classification.</param>
 /// <param name="Evidence">One sentence naming the earlier runs it is based on.</param>
 /// <param name="Flakiness">The outcomes that make the test flaky; set when <paramref name="Kind"/> is <see cref="FailureKind.Flaky"/>.</param>
-public sealed record FailureClassification(string Project, string Test, FailureKind Kind, string Evidence, FlakinessEvidence? Flakiness = null);
+public sealed record FailureClassification(string Project, string Test, FailureKind Kind, string Evidence, FlakinessEvidence? Flakiness = null)
+{
+    public string ProjectId { get; init; } = Project;
+}
 
 /// <summary>One recorded outcome that a flaky label rests on.</summary>
 /// <param name="RunId">The run that produced it.</param>
@@ -103,6 +106,7 @@ public sealed record TestHistoryEntry(string RunId, DateTimeOffset At, TestStatu
 public sealed record TestHistory(string Project, string Test, IReadOnlyList<TestHistoryEntry> Runs, FlakinessEvidence? Flakiness)
 {
     public bool Flaky => Flakiness is not null;
+    public string ProjectId { get; init; } = Project;
 }
 
 /// <summary>Summary of a run kept in the history.</summary>
@@ -136,7 +140,10 @@ public sealed record StoredTestResult(
     double DurationMs,
     string? ErrorMessage = null,
     string? StackTrace = null,
-    IReadOnlyList<StoredAttempt>? Attempts = null);
+    IReadOnlyList<StoredAttempt>? Attempts = null)
+{
+    public string ProjectId { get; init; } = Project;
+}
 
 /// <summary>A run kept in the history with its per-test results.</summary>
 public sealed record StoredRun(StoredRunSummary Summary, IReadOnlyList<StoredTestResult> Results);

@@ -75,6 +75,9 @@ ARCHITECTURE describe the implementation in detail.
   Cobertura export over MCP, HTTP, the protocol and the CLI.
 - An impact map with idle per-test (default) or per-class backfill, and
   changed-line test selection with per-test reasons and conservative fallback.
+- Method-level identity for C# coverage evidence: line shifts preserve validated
+  member evidence, while edited members are invalidated and unvalidated lines are
+  never reused.
 - Git bases (`working`, `branch`, `range`) for affected-test planning and
   changed-line coverage.
 
@@ -82,9 +85,14 @@ ARCHITECTURE describe the implementation in detail.
 - Tests tab: a virtualized tree, run strip, failure diffs, a stack-trace source
   view, a history strip and new/flaky filters.
 - Runs tab: browse and compare kept runs.
+- Timeline tab: the daemon session's edits and runs with their outcomes,
+  freshness and failure classification, tracing each failing test to the run
+  and edit that broke it.
 - Coverage tab: a grouped file list, highlighted source with hit counts,
   covering tests per file and line, and backfill progress.
 - MCP call history, user settings, keyboard shortcuts and theme-aware styling.
+- Machine tab: owned worktrees and dashboard links, budget use, running work and
+  the FIFO queue; `piston status --all` prints the same machine overview.
 
 **Distribution and CI**
 - A framework-dependent .NET tool (`Piston` package, `piston` command) attached
@@ -127,19 +135,12 @@ opens by hand (today's `piston-dashboard` skill).
 - A coverage-aware diff view in the dashboard and canvas, with drill-down to the
   covering tests.
 - Branch-level attribution in the impact map.
-- Method-level identity, so line shifts do not invalidate evidence. Never reuse old
-  line evidence without validated remapping.
 
 ### Execution
 - Explore MTP server mode further for structured results and stable test
   identities; keep VSTest/TRX as the compatibility path. The investigation and
   current decision are in [MTP server-mode investigation](mtp-server-mode.md).
 - Per-test output and relevant artifacts in the MCP tools and the dashboard.
-
-### Dashboard
-- A session timeline: edits, runs, outcomes, freshness and failure classification.
-- A workspace overview: owned worktrees on the machine, queued and running work,
-  and budget use.
 
 ## Risks and open questions
 

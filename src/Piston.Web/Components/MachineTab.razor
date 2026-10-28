@@ -1,0 +1,276 @@
+@using Piston.Protocol.Dtos
+@using Piston.Web.Models
+@inject EngineClientService Client
+@implements IDisposable
+
+<div class="flex flex-col h-full overflow-hidden text-xs">
+    <div class="flex flex-wrap items-center gap-x-5 gap-y-2 px-4 py-2 shrink-0 bg-gray-900 border-b border-gray-800">
+        <div class="flex items-center gap-2 text-gray-300">
+            <span class="font-semibold text-gray-100">Machine</span>
+            @if (_overview is { } current)
+            {
+                <span class="text-gray-500">Updated @current.CapturedAt.ToLocalTime().ToString("T")</span>
+            }
+        </div>
+        @if (_overview is { CoordinationAvailable: true, Budget: { CpuSlotsInUse: { } cpuInUse, MemoryMbInUse: { } memoryInUse } budget })
+        {
+            <div class="flex items-center gap-2 min-w-40">
+                <span class="text-gray-400">CPU</span>
+                <div class="w-24 h-1.5 bg-gray-700 rounded-full overflow-hidden" role="progressbar"
+                     aria-label="CPU slots in use" aria-valuemin="0" aria-valuemax="@budget.CpuSlots"
+                     aria-valuenow="@Math.Min(cpuInUse, budget.CpuSlots)">
+                    <div class="h-full bg-cyan-400 rounded-full"
+                         style="width: @Percent(cpuInUse, budget.CpuSlots)%"></div>
+                </div>
+                <span class="text-gray-300 tabular-nums">@cpuInUse/@budget.CpuSlots slots</span>
+            </div>
+            <div class="flex items-center gap-2 min-w-40">
+                <span class="text-gray-400">Memory</span>
+                @if (budget.MemoryMb is { } memoryBudget)
+                {
+                    <div class="w-24 h-1.5 bg-gray-700 rounded-full overflow-hidden" role="progressbar"
+                         aria-label="Memory in use" aria-valuemin="0" aria-valuemax="@memoryBudget"
+                         aria-valuenow="@Math.Min(memoryInUse, memoryBudget)">
+                        <div class="h-full bg-violet-400 rounded-full"
+                             style="width: @Percent(memoryInUse, memoryBudget)%"></div>
+                    </div>
+                    <span class="text-gray-300 tabular-nums">@FormatMemory(memoryInUse)/@FormatMemory(memoryBudget)</span>
+                }
+                else
+                {
+                    <span class="text-gray-400">
+                        Not budgeted@(memoryInUse > 0 ? $" · {FormatMemory(memoryInUse)} reserved" : "")
+                    </span>
+                }
+            </div>
+            <span class="text-gray-500">Budget: @budget.Source</span>
+        }
+        else if (_overview is { CoordinationAvailable: false })
+        {
+            <span class="text-gray-400">Resource usage unknown</span>
+        }
+        else if (_overview is null && _error is null)
+        {
+            <span class="text-gray-500">Loading machine overview…</span>
+        }
+        else
+        {
+            <span class="text-gray-400">Budget unavailable</span>
+        }
+        <div class="ml-auto flex items-center gap-3 text-gray-400 tabular-nums">
+            <span>@(_overview is { CoordinationAvailable: true } counts ? counts.Running.Count.ToString() : "?") running</span>
+            <span>@(_overview is { CoordinationAvailable: true } queuedCounts ? queuedCounts.Queue.Count.ToString() : "?") queued</span>
+        </div>
+    </div>
+
+    <div class="flex-1 min-h-0 overflow-y-auto">
+        @if (_error is not null)
+        {
+            <div class="px-4 py-2 text-red-300 bg-red-900/20 border-b border-red-900" role="alert">
+                Could not refresh machine overview: @_error
+            </div>
+        }
+        @if (_overview?.Error is { Length: > 0 } overviewError)
+        {
+            <div class="px-4 py-2 text-yellow-300 bg-yellow-900/20 border-b border-yellow-900" role="status">
+                @overviewError
+            </div>
+        }
+
+        <section aria-labelledby="worktrees-heading">
+            <h2 id="worktrees-heading" class="px-4 py-2 text-gray-200 font-semibold border-b border-gray-800">
+                Owned worktrees <span class="ml-1 text-gray-500 font-normal tabular-nums">@(_overview is { OwnersAvailable: true } owners ? owners.Worktrees.Count.ToString() : "?")</span>
+            </h2>
+            @if (_overview is { OwnersAvailable: false })
+            {
+                <p class="px-4 py-4 text-gray-500 italic">Worktree ownership is unknown. Retrying automatically.</p>
+            }
+            else if (_overview is { Worktrees.Count: 0 })
+            {
+                <p class="px-4 py-4 text-gray-500 italic">No worktrees are currently owned by Piston.</p>
+            }
+            else if (_overview is { } overview)
+            {
+                <div class="overflow-x-auto">
+                    <table class="w-full min-w-[48rem] text-left">
+                        <thead class="text-gray-500 bg-gray-900/50">
+                            <tr>
+                                <th scope="col" class="px-4 py-1.5 font-medium">State</th>
+                                <th scope="col" class="px-3 py-1.5 font-medium">Worktree</th>
+                                <th scope="col" class="px-3 py-1.5 font-medium">Solution</th>
+                                <th scope="col" class="px-3 py-1.5 font-medium">Owner</th>
+                                <th scope="col" class="px-3 py-1.5 font-medium">Since</th>
+                                <th scope="col" class="px-3 py-1.5 font-medium">Dashboard</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var worktree in MachineOverviewView.Worktrees(overview))
+                            {
+                                var linkLabel = MachineOverviewView.DashboardLinkLabel(worktree);
+                                <tr class="border-t border-gray-800 @(worktree.State == "Stale" ? "opacity-60" : "")">
+                                    <td class="px-4 py-2 whitespace-nowrap">
+                                        <span class="@MachineOverviewView.StateColor(worktree.State)">@worktree.State</span>
+                                        @if (worktree.QueuePosition is { } position)
+                                        {
+                                            <span class="ml-1 text-yellow-400 tabular-nums">#@position</span>
+                                        }
+                                    </td>
+                                    <td class="px-3 py-2 max-w-72 truncate text-gray-200" title="@worktree.WorktreePath">
+                                        @worktree.WorktreePath
+                                    </td>
+                                    <td class="px-3 py-2 max-w-64 truncate text-gray-400" title="@worktree.SolutionPath">
+                                        @worktree.SolutionPath
+                                    </td>
+                                    <td class="px-3 py-2 whitespace-nowrap text-gray-400">
+                                        @(worktree.Host ?? "Piston")@(worktree.ProcessId is { } pid ? $" · PID {pid}" : "")
+                                    </td>
+                                    <td class="px-3 py-2 whitespace-nowrap text-gray-500 tabular-nums">
+                                        @(worktree.AcquiredAt?.ToLocalTime().ToString("g") ?? "—")
+                                    </td>
+                                    <td class="px-3 py-2 whitespace-nowrap">
+                                        @if (worktree.DashboardUrl is { } dashboardUrl
+                                             && !worktree.IsCurrent
+                                             && worktree.Liveness == "Live")
+                                        {
+                                            <a class="text-blue-400 hover:underline focus-visible:outline focus-visible:outline-1 focus-visible:outline-blue-400"
+                                               href="@dashboardUrl" target="_blank" rel="noopener noreferrer">@linkLabel</a>
+                                        }
+                                        else
+                                        {
+                                            <span class="text-gray-500">@linkLabel</span>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section aria-labelledby="running-heading" class="mt-4">
+            <h2 id="running-heading" class="px-4 py-2 text-gray-200 font-semibold border-y border-gray-800">
+                Running work <span class="ml-1 text-gray-500 font-normal tabular-nums">@(_overview is { CoordinationAvailable: true } runningCounts ? runningCounts.Running.Count.ToString() : "?")</span>
+            </h2>
+            @if (_overview is { CoordinationAvailable: false })
+            {
+                <p class="px-4 py-3 text-gray-500 italic">Running work is unknown. Retrying automatically.</p>
+            }
+            else if (_overview is { Running.Count: 0 })
+            {
+                <p class="px-4 py-3 text-gray-500 italic">No runs currently hold machine budget.</p>
+            }
+            else if (_overview is { } runningOverview)
+            {
+                @foreach (var entry in runningOverview.Running)
+                {
+                    <div class="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 border-b border-gray-800/70">
+                        <span class="text-cyan-400">PID @entry.ProcessId</span>
+                        <span class="min-w-0 truncate text-gray-300" title="@entry.WorktreePath">
+                            @(entry.WorktreePath ?? "Unknown worktree")
+                        </span>
+                        <span class="text-gray-500">run @ShortRunId(entry.RunId)</span>
+                        <span class="ml-auto text-gray-400 tabular-nums">
+                            @entry.CpuSlots CPU slot@(entry.CpuSlots == 1 ? "" : "s")@(entry.MemoryMb is { } memory ? $", {FormatMemory(memory)} memory" : "")
+                        </span>
+                    </div>
+                }
+            }
+        </section>
+
+        <section aria-labelledby="queue-heading" class="mt-4">
+            <h2 id="queue-heading" class="px-4 py-2 text-gray-200 font-semibold border-y border-gray-800">
+                FIFO queue <span class="ml-1 text-gray-500 font-normal tabular-nums">@(_overview is { CoordinationAvailable: true } queueCounts ? queueCounts.Queue.Count.ToString() : "?")</span>
+            </h2>
+            @if (_overview is { CoordinationAvailable: false })
+            {
+                <p class="px-4 py-3 text-gray-500 italic">Queued work is unknown. Retrying automatically.</p>
+            }
+            else if (_overview is { Queue.Count: 0 })
+            {
+                <p class="px-4 py-3 text-gray-500 italic">The machine queue is empty.</p>
+            }
+            else if (_overview is { } queueOverview)
+            {
+                @foreach (var entry in queueOverview.Queue)
+                {
+                    <div class="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 border-b border-gray-800/70">
+                        <span class="text-yellow-400 tabular-nums">#@entry.QueuePosition</span>
+                        <span class="text-gray-300">@(entry.WorktreePath ?? "Unknown worktree")</span>
+                        <span class="text-gray-500">PID @entry.ProcessId · run @ShortRunId(entry.RunId)</span>
+                        <span class="ml-auto text-gray-400 tabular-nums">
+                            @entry.CpuSlots CPU slot@(entry.CpuSlots == 1 ? "" : "s")@(entry.MemoryMb is { } memory ? $", {FormatMemory(memory)} memory" : "")
+                        </span>
+                    </div>
+                }
+            }
+        </section>
+    </div>
+</div>
+
+@code {
+    private static readonly TimeSpan RefreshInterval = TimeSpan.FromSeconds(2);
+    private readonly CancellationTokenSource _disposeCts = new();
+    private MachineOverviewDto? _overview;
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var cancellationToken = _disposeCts.Token;
+        await RefreshAsync(cancellationToken);
+        if (!cancellationToken.IsCancellationRequested)
+        {
+            _ = PollAsync(cancellationToken);
+        }
+    }
+
+    private async Task PollAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(RefreshInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                await InvokeAsync(() => RefreshAsync(cancellationToken));
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task RefreshAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            _overview = await Client.GetMachineOverviewAsync(cancellationToken);
+            _error = _overview is null ? "The daemon returned no overview." : null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+
+        if (!cancellationToken.IsCancellationRequested)
+        {
+            StateHasChanged();
+        }
+    }
+
+    private static int Percent(long value, long maximum) =>
+        maximum <= 0 ? 0 : (int)Math.Clamp(value * 100d / maximum, 0, 100);
+
+    private static string FormatMemory(long memoryMb) =>
+        memoryMb >= 1024 ? $"{memoryMb / 1024d:0.#} GiB" : $"{memoryMb:N0} MiB";
+
+    private static string ShortRunId(string runId) => runId.Length <= 8 ? runId : runId[..8];
+
+    public void Dispose()
+    {
+        _disposeCts.Cancel();
+        _disposeCts.Dispose();
+    }
+}

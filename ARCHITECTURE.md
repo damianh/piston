@@ -76,8 +76,10 @@ a file, with their evidence granularity and executed line ranges.
 it refuses paths that resolve (following symlinks) outside the solution
 directory, files over 1 MB and binary files.
 Clients receive state, test progress, build errors, and activity notifications.
-The dashboard presents current test/build state, run history and comparison,
-aggregate coverage with covering tests, activity, and MCP call history.
+`machine/getOverview` reads machine-wide worktree owners, budget, live leases and
+queue tickets for the dashboard. The dashboard presents current test/build state,
+run history and comparison, aggregate coverage with covering tests, activity,
+MCP call history and a Machine tab for the workspace overview.
 
 See [README.md](README.md) for executable commands and the actual configuration
 shape. The daemon's `--stdio` JSON-RPC transport is not MCP; the stdio MCP server
@@ -152,21 +154,26 @@ plus a content-addressed snapshot of the file as measured.
 
 - **Recording.** After a coverage run, the orchestrator records one `run` unit per
   test project from that project's reports. A full run in which all the project's
-  tests ran cleanly replaces the unit; other runs merge into it, first remapping
-  earlier spans onto the new content with a line diff.
+  tests ran cleanly replaces the unit; other runs merge it by C# member identity.
+  Each executed member is keyed by its containing namespace/type, signature and
+  token hash. Earlier spans are carried forward only through unchanged members;
+  evidence that cannot be validated becomes file-level rather than being shifted
+  by an unvalidated line diff.
 - **Backfill.** `run` evidence credits every executed line to every test of the
   project. When the daemon is idle, `ImpactBackfill` plans class (or test) units
   that are missing or outdated, and the orchestrator runs each with a name filter
   and coverage, recording a `class`/`test` unit. A unit is skipped when not every
   planned test ran. Any new run cancels the backfill; progress is published as
   `ImpactBackfill` in the state snapshot.
-- **Selection.** `SelectTests` diffs each changed file against each unit's
-  snapshot. A unit whose executed spans overlap the changed lines selects its tests,
-  with a `TestSelectionReason` (changed lines, executed span, granularity); a change
-  outside every span selects every test that executed the file. Current finer
-  evidence about a test overrides coarser evidence. Analyzing a change marks the
-  file's class and test units dirty, so the `run` unit decides until they are
-  remeasured.
+- **Selection.** `SelectTests` compares member keys and body hashes against each
+  unit's snapshot. A changed or removed executed member selects its tests and
+  includes the member identity in its `TestSelectionReason`; edits outside
+  recorded members conservatively select every test that executed the file.
+  Current finer evidence about a test overrides coarser evidence. A line insertion
+  that leaves member identities and bodies unchanged remaps its spans without
+  dirtying the class/test units. Analyzing a change dirties units when their
+  executed member or non-member syntax changes, or declarations are added or
+  removed: even unchanged callers can bind differently after an overload is added.
 - **Abstaining.** A changed test file, a changed file with no recording, or more
   than `ImpactAnalysisResult.MaxFilteredTests` (100) selected tests falls back to
   project selection, and the run records why (`SelectionExplanation`). Without an
@@ -212,7 +219,9 @@ warm hosts are enabled for MTP), each under `Piston.ProcessHost`:
 | Backend | Current mechanism |
 |---|---|
 | VSTest | `dotnet test` on the project/solution target, `--no-build`, normal verbosity, TRX results. The `PistonLive` data collector streams per-test start/end events; stdout is parsed for progress as well. |
-| Microsoft.Testing.Platform (MTP) | Runs the built test app in MTP server mode (JSON-RPC), which reports each test as it starts and finishes. Test identities combine the test class and display name. Falls back to `dotnet test --project <csproj> --no-build` with stdout parsing when the app is not found or server mode fails, and always uses `dotnet test` for coverage. The fallback needs the MTP runner configured in the solution's `global.json`. See the [MTP server-mode investigation](docs/mtp-server-mode.md) for identity and coverage findings. |
+| Microsoft.Testing.Platform (MTP) | Runs the built test app in MTP server mode (JSON-RPC), which reports each test as it starts and finishes. Test identities combine the test class and display name. Falls back to `dotnet test --project <csproj> --no-build` with stdout parsing when the app is not found or server mode fails. Coverage runs stay in server mode: the coverage extension's test host controller connects first as a passive node (`multipleConnectionProvider`) and the test host it relaunches connects next and serves the run. The fallback needs the MTP runner configured in the solution's `global.json`. |
+
+See the [MTP server-mode investigation](docs/mtp-server-mode.md) for identity and coverage findings.
 
 When the graph identifies an MTP output path, the composite strategy selects
 MTP; otherwise it selects VSTest. `Auto` and the currently named `Process` mode
@@ -275,7 +284,10 @@ errors; schema errors and access denial fail immediately.
 `PistonEngine.StartAsync` validates the budget, then takes
 `WorktreeOwnership`. That is an exclusive lock on
 `owners/<sha256(canonical worktree)>.lock`, plus a JSON sidecar with PID, solution,
-worktree and acquisition time used in conflict messages. The canonical worktree is
+worktree, acquisition time, host kind and (for daemons) local dashboard URL used in
+conflict messages and the machine overview. Dashboard URLs are accepted only when
+they use HTTP on localhost or a loopback address with no path, query or credentials.
+The canonical worktree is
 the solution path with symlinks resolved, walked up to the first `.git` directory
 or file, including solution-file symlinks. Without one, it is the solution directory.
 Windows paths are case-folded; macOS uses `F_GETPATH` to preserve actual directory
@@ -315,6 +327,19 @@ and keeps its place. Stop/dispose does not. Admission errors (invalid budget,
 unrecognised held entries, IO) fault the run with an explicit reason. Only a missing
 budget file selects the default; unreadable files do not. Build/test cancellation
 waits for the killed runner to exit before the pipeline releases its lease.
+
+`MachineExecutionOverviewReader` takes `admission.lock` briefly and reads the
+same live ticket and lease names without cleaning up stale files. It reports CPU
+and memory use from held leases, FIFO queue positions, and owner-to-entry matches
+by PID. The dashboard polls `machine/getOverview` only while the Machine tab is
+open; a 500 ms lock timeout or invalid budget is returned as visible overview
+error text rather than silently inventing resource values. A failed coordination
+scan discards partial entries and marks availability false; usage and counts are
+unknown, and live owners are not labelled idle. `piston status --all`
+uses the same reader.
+Ownership scan availability is tracked separately: unreadable owner directories
+or locks produce a visible error and unknown ownership, not an empty-success list.
+Filesystem probes distinguish missing directories from access and I/O failures.
 
 **Test resources** (`MachineResourceCoordinator`, behind the internal
 `ITestResourceGate`) schedule test projects, not runs. `TestResourceInference`
@@ -375,7 +400,7 @@ and uses WAL mode. Its tables are:
 
 | Table | Stored data |
 |---|---|
-| `coverage_files` | Per-file line/branch totals, module, content hash, stale and partial flags. |
+| `coverage_files` | Per-file line/branch totals, module, content and snapshot hashes, stale and partial flags. |
 | `coverage_lines` | Per-line hits and branch counts: the merged report. |
 | `coverage_sets` | One row per file-level attribution set: run ID and granularity (always `run`). |
 | `coverage_set_tests` | The tests credited with a set. |
@@ -383,14 +408,18 @@ and uses WAL mode. Its tables are:
 | `coverage_summary` | File path, last run ID, last-updated timestamp. |
 | `impact_units` | One row per impact unit: test project, granularity, unit key, run ID, dirty flag. |
 | `impact_unit_tests` | The tests a unit measured. |
-| `impact_unit_files` | Per unit and file: the executed line spans and the snapshot they are numbered against. |
-| `impact_snapshots` | File content by hash, so later edits can be diffed against what was measured. |
+| `impact_unit_files` | Per unit and file: executed member keys, fallback spans and the snapshot they were measured against. |
+| `impact_snapshots` | Deduplicated file content by hash, shared by the report and impact map. |
 
 The report tables answer the dashboard, `get_coverage`, changed-line coverage and
 exports. A full, unfiltered run replaces them. A selective run merges its hits
-into files whose content hash is unchanged, and replaces (and marks partial) files
-that are new or changed. A file whose content no longer matches its hash is
-reported stale.
+into files whose source is unchanged, or remaps earlier hits through unchanged
+C# members when source has moved, provided non-member syntax is unchanged. Only
+one-to-one line mappings preserve counts; ambiguous split or joined lines remain
+stale until remeasured. Hits from edited members are dropped. Unvalidated
+current lines are returned as stale ranges; changed-line coverage can still report
+lines whose member identity and body are unchanged. Exports continue to omit stale
+files.
 
 The set tables hold coarse file-level attribution: every covered line of a run is credited to every test of that run. Tests that share one
 line list share one set, so a run stores its covered lines once rather than once
@@ -398,7 +427,8 @@ per test. Processing replaces old associations for files present in new coverage
 data and prunes sets left without lines. Hit counts are association values, not
 independently measured per-test execution counts. Databases from older versions
 held a per-test `coverage_map` table; it is dropped on startup and refilled by the
-next coverage run. The store serializes all use of its connection, since the
+next coverage run. A schema-version change drops these derived coverage caches;
+the next coverage run and idle backfill rebuild them. The store serializes all use of its connection, since the
 orchestrator and the impact analyzer call it from different threads.
 
 Clearing results deletes every coverage table's rows transactionally using a
@@ -498,6 +528,24 @@ MCP adds `build` (null before a build result is captured) to the existing v1
 document. Raw diagnostic lines retain MSBuild's ID and file/line/column location.
 A build failure uses the same source-freshness computation as test completion;
 `Current` build diagnostics do not make `isCurrentFullResult` true.
+
+Every test suite also carries its short display `Name` and a `ProjectId`: the
+project path relative to the solution directory, with `/` separators and the
+project-file extension (for example, `tests/One/Tests.csproj`). The ID is the
+key for `engine/runTests`, `tests/getRunLog`, history, and dashboard selection;
+short names are not accepted for targeted requests. The dashboard displays the
+short name unless another project shares it, in which case it adds the relative
+path; labels normalize daemon path separators regardless of the browser's platform.
+Duplicate test IDs are detected within each project, not across projects. When
+the runner falls back to a solution target without project IDs, suite names remain
+the fallback identities for logs and flattened test results.
+Run history format v2 stores project IDs, and retained history remains queryable
+by ID after a project is renamed or removed. On loading v1 history, a short
+name is migrated only when it identifies exactly one current test project,
+after a successful build and post-restore graph refresh. While project discovery
+is incomplete, legacy data is left unchanged and new runs are not recorded in
+history, with a diagnostic explaining why. Ambiguous or removed projects are dropped only once
+the complete project list is available.
 
 `set_test_filter` changes the active filter but does not itself run tests.
 `clear_results` clears in-memory suites, the last-run timestamp, coverage state,

@@ -31,6 +31,7 @@ namespace Piston.Protocol.JsonRpc;
 // ── DTO records ───────────────────────────────────────────────────────────
 [JsonSerializable(typeof(TestResultDto))]
 [JsonSerializable(typeof(TestSuiteDto))]
+[JsonSerializable(typeof(TestRunProjectOutcomeDto))]
 [JsonSerializable(typeof(BuildResultDto))]
 [JsonSerializable(typeof(BuildStatusDto))]
 [JsonSerializable(typeof(PistonPhaseDto))]
@@ -66,6 +67,13 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(TestHistoryEntryDto))]
 [JsonSerializable(typeof(TestHistoryDto))]
 [JsonSerializable(typeof(TestHistoriesDto))]
+[JsonSerializable(typeof(MachineOverviewDto))]
+[JsonSerializable(typeof(MachineBudgetDto))]
+[JsonSerializable(typeof(MachineWorktreeDto))]
+[JsonSerializable(typeof(MachineExecutionEntryDto))]
+[JsonSerializable(typeof(FailureClassificationDto))]
+[JsonSerializable(typeof(SessionTimelineEntryDto))]
+[JsonSerializable(typeof(SessionTimelineDto))]
 
 // ── Message records ───────────────────────────────────────────────────────
 [JsonSerializable(typeof(StateSnapshotNotification))]
@@ -90,6 +98,7 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(ExportCoverageCommand))]
 [JsonSerializable(typeof(GetCoveringTestsCommand))]
 [JsonSerializable(typeof(GetStoredRunCommand))]
+[JsonSerializable(typeof(GetSessionTimelineCommand))]
 [JsonSerializable(typeof(GetTestHistoryCommand))]
 [JsonSerializable(typeof(McpCallLogResponse))]
 [JsonSerializable(typeof(ActivityLogResponse))]
@@ -109,6 +118,7 @@ namespace Piston.Protocol.JsonRpc;
 // ── Concrete collection registrations for IReadOnlyList<T>/IReadOnlyDictionary<K,V> ──
 // STJ source generators cannot resolve interface-typed collection properties automatically.
 [JsonSerializable(typeof(List<TestSuiteDto>))]
+[JsonSerializable(typeof(List<TestRunProjectOutcomeDto>))]
 [JsonSerializable(typeof(List<TestResultDto>))]
 [JsonSerializable(typeof(List<string>))]
 [JsonSerializable(typeof(List<CoverageLineDto>))]
@@ -124,6 +134,11 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(List<TestMarkDto>))]
 [JsonSerializable(typeof(List<TestHistoryEntryDto>))]
 [JsonSerializable(typeof(List<TestHistoryDto>))]
+[JsonSerializable(typeof(List<MachineWorktreeDto>))]
+[JsonSerializable(typeof(List<MachineExecutionEntryDto>))]
+[JsonSerializable(typeof(List<TestOutcomeReferenceDto>))]
+[JsonSerializable(typeof(List<FailureClassificationDto>))]
+[JsonSerializable(typeof(List<SessionTimelineEntryDto>))]
 
 internal sealed partial class PistonJsonContext : JsonSerializerContext
 {

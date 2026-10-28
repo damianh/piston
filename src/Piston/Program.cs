@@ -78,7 +78,7 @@ var forceOpt = new Option<bool>(
 
 var allOpt = new Option<bool>(
     name: "--all",
-    description: "List every Piston process (daemons and `piston mcp` sessions) that owns a worktree.");
+    description: "List owned worktrees, running and queued work, and machine budget use.");
 
 // ── Root command (default: web UI with auto-start) ─────────────────────────────
 
@@ -229,7 +229,7 @@ statusCmd.SetHandler(async ctx =>
     var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
     var pipeName = ctx.ParseResult.GetValueForOption(pipeNameOpt);
     var all = ctx.ParseResult.GetValueForOption(allOpt);
-    var exitCode = all ? RunStatusAll() : await RunStatusAsync(solutionFile, pipeName);
+    var exitCode = all ? await RunStatusAllAsync() : await RunStatusAsync(solutionFile, pipeName);
     ctx.ExitCode = exitCode;
 });
 
@@ -346,7 +346,9 @@ static async Task RunDaemonAsync(
     try
     {
         (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
-        options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config, "daemon");
+        options = HostHelpers.BuildOptions(
+            solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config, "daemon",
+            $"http://localhost:{webPort}");
     }
     catch (InvalidOperationException ex)
     {
@@ -947,25 +949,19 @@ static bool PrintOwners(string path)
     return owners.Count > 0;
 }
 
-static int RunStatusAll()
+static async Task<int> RunStatusAllAsync()
 {
-    var records = OwnerLookup.ListAll();
-    var live = records.Where(r => r.Liveness == OwnershipLiveness.Live).ToList();
-    var stale = records.Where(r => r.Liveness == OwnershipLiveness.Stale).ToList();
-    if (live.Count == 0)
+    MachineExecutionOverview overview;
+    try
     {
-        Console.WriteLine("No Piston process owns a worktree.");
+        overview = await MachineExecutionOverviewReader.ReadAsync(ExecutionCoordinationDirectory.ResolveDefault());
+    }
+    catch (ExecutionCoordinationException ex)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 1;
     }
 
-    foreach (var record in live)
-    {
-        Console.WriteLine($"Live : {OwnerLookup.Describe(record)}");
-    }
-
-    foreach (var record in stale)
-    {
-        Console.WriteLine($"Stale: {OwnerLookup.Describe(record)} (owner exited without cleanup; harmless)");
-    }
-
+    Console.Write(StatusAllFormatter.Format(overview));
     return 0;
 }

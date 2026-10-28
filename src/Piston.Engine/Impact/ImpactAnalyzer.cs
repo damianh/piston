@@ -354,6 +354,14 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         }
     }
 
+    public IReadOnlyList<string>? GetRestoredTestProjectPaths()
+    {
+        lock (_graphLock)
+        {
+            return _graph is { EvaluatedBeforeRestore: false } ? _graph.TestProjectPaths : null;
+        }
+    }
+
     public IReadOnlyList<string> GetBuildProjectPaths(IReadOnlyList<string>? buildTargets)
     {
         lock (_graphLock)
@@ -418,7 +426,8 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         reason.ChangedLines.ToString(),
         reason.ExecutedSpan?.ToString(),
         reason.Granularity.ToString().ToLowerInvariant(),
-        reason.ProjectPath);
+        reason.ProjectPath,
+        reason.Member);
 
     private static ImpactAnalysisResult FullRunResult() =>
         new([], [], RequiresGraphRebuild: false, IsFullRun: true);

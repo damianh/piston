@@ -122,7 +122,8 @@ public sealed partial class PistonOrchestrator
                     _state.TestSuites,
                     project => store.GetUnits(project, granularity),
                     granularity,
-                    _backfillFailed);
+                    _backfillFailed,
+                    solutionDir);
             }
             finally
             {

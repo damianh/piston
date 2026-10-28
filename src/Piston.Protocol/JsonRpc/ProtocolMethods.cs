@@ -54,6 +54,12 @@ public static class ProtocolMethods
     /// <summary>Request the recorded results of a test.</summary>
     public const string HistoryGetTestHistory = "history/getTestHistory";
 
+    /// <summary>
+    /// Request a page of the session timeline: terminal runs since the engine started, with their edits and outcome
+    /// changes. Pages are bounded in size; request the next with the last entry's sequence while <c>hasMore</c> is set.
+    /// </summary>
+    public const string SessionGetTimeline = "session/getTimeline";
+
     // Notifications (server → client, no response)
 
     /// <summary>Full state snapshot — sent on connect and after every state change.</summary>
@@ -93,6 +99,9 @@ public static class ProtocolMethods
 
     /// <summary>Read the machine-wide user settings and the file they live in.</summary>
     public const string SettingsGet = "settings/get";
+
+    /// <summary>Read machine-wide worktree owners, execution reservations and budget use.</summary>
+    public const string MachineGetOverview = "machine/getOverview";
 
     /// <summary>Merge the non-null fields of a partial settings object into the machine-wide user settings; returns the result and the file path.</summary>
     public const string SettingsUpdate = "settings/update";
