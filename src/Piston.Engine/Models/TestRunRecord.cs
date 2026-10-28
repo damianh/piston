@@ -259,6 +259,13 @@ public sealed record TestRunRecord
     public IReadOnlyList<TestOutcomeReference> NewlyFailingTests { get; init; } = [];
 
     /// <summary>
+    /// The run produced test results but there were no earlier results to compare them with (the session's first
+    /// results, or the first after results were cleared), so <see cref="FixedTests"/> and
+    /// <see cref="NewlyFailingTests"/> are empty whatever changed.
+    /// </summary>
+    public bool NoEarlierResults { get; init; }
+
+    /// <summary>
     /// How each failed test relates to the worktree's run history (new, pre-existing, flaky or unknown);
     /// tests that failed and then passed on retry are included as flaky. Empty when history is off or nothing failed.
     /// </summary>

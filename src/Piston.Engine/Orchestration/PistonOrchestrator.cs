@@ -1643,6 +1643,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 CleanUpCoverageResultsDirs(coverageReportPaths);
             }
 
+            var noEarlierResults = !_state.TestSuites.Any(s => s.Tests.Count > 0) && newSuites.Any(s => s.Tests.Count > 0);
             var (fixedTests, newlyFailingTests) = TestOutcomeChanges.Compare(_state.TestSuites, newSuites);
 
             // Merge selective results with preserved results from untouched test projects
@@ -1696,6 +1697,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 PossiblyHangingTests = hangingTests,
                 FixedTests = fixedTests,
                 NewlyFailingTests = newlyFailingTests,
+                NoEarlierResults = noEarlierResults,
                 RunnerError = runnerError,
                 RetryLimit = RetryFailedTests,
                 RetriesSkippedReason = retriesSkippedReason,
@@ -1847,6 +1849,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             FreshnessReason = freshnessReason,
         };
 
+        var inRunHistory = false;
         if (RunHistory is { } history)
         {
             try
@@ -1856,6 +1859,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 {
                     finished = finished with { FailureClassifications = failures };
                 }
+
+                inRunHistory = history.GetRun(finished.RunId) is not null;
             }
             catch (Exception ex)
             {
@@ -1878,6 +1883,14 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             var recent = new List<TestRunRecord>(_state.RecentRuns.Count + 1) { finished };
             recent.AddRange(_state.RecentRuns.Take(PistonState.MaxRecentRuns - 1).Select(DropExecutionLogs));
             _state.RecentRuns = recent;
+
+            // Runs can finish out of request order (a queued run cancelled while an older one stops), so keep the
+            // timeline sorted by request so that trimming always drops the oldest requests.
+            var timeline = _state.SessionTimeline;
+            var skip = Math.Max(0, timeline.Count + 1 - PistonState.MaxSessionTimelineEntries);
+            _state.SessionTimeline = [.. timeline.Append(SessionTimelineEntry.From(finished, inRunHistory)).OrderBy(e => e.Sequence).Skip(skip)];
+            _state.SessionTimelineDroppedRuns += skip;
+            _state.SessionTimelineRevision++;
 
             if (_runWaiters.Remove(finished.RunId, out var waiter))
             {

@@ -125,6 +125,24 @@ public sealed class ViewState
         RevealSelectedTest = true;
     }
 
+    // ── Links into the Runs and Timeline tabs ──
+
+    /// <summary>A run another tab opened; the Runs tab selects it once it is listed.</summary>
+    public string? RevealedRunId { get; private set; }
+
+    public void RevealRun(string runId) => RevealedRunId = runId;
+
+    /// <summary>Returns <see cref="RevealedRunId"/> and clears it, so the run is selected only once.</summary>
+    public string? TakeRevealedRun()
+    {
+        var runId = RevealedRunId;
+        RevealedRunId = null;
+        return runId;
+    }
+
+    /// <summary>The test the Timeline tab follows, highlighting the runs and edits that changed its outcome.</summary>
+    public TestReference? TracedTest { get; set; }
+
     public TestResultDto? FindSelectedTest(IEnumerable<TestSuiteDto> suites)
     {
         if (SelectedTestKey is not { } key)
