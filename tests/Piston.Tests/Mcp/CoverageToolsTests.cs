@@ -401,20 +401,29 @@ public sealed class CoverageToolsTests : IDisposable
         Assert.Contains(result.Warnings, w => w.Contains("run-1", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// Cancels once the coverage read is blocked, not on a timer: a timer can fire while git still runs in the
+    /// repository, and the killed git can still hold it when the test deletes it.
+    /// </summary>
+    internal static void CancelAndBlock(CancellationTokenSource cts, ManualResetEventSlim release)
+    {
+        _ = Task.Run(cts.Cancel);
+        _ = release.Wait(TimeSpan.FromSeconds(30));
+    }
+
     [Fact]
     public async Task GetChangedLineCoverage_RequestedWhileARunHoldsTheCoverageLock_IsCancellable()
     {
         var (engine, _) = await ChangedMeasuredFileAsync();
         using var release = new ManualResetEventSlim();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
         engine.OnGetCoverageReport = () =>
         {
-            _ = release.Wait(TimeSpan.FromSeconds(30));
+            CancelAndBlock(cts, release);
             return engine.CoverageReport;
         };
-        engine.OnGetFileCoverage = _ => release.Wait(TimeSpan.FromSeconds(30));
+        engine.OnGetFileCoverage = _ => CancelAndBlock(cts, release);
         var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
-        cts.CancelAfter(TimeSpan.FromMilliseconds(200));
         try
         {
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
@@ -454,9 +463,8 @@ public sealed class CoverageToolsTests : IDisposable
     {
         var (engine, _) = await ChangedMeasuredFileAsync();
         using var release = new ManualResetEventSlim();
-        engine.OnGetFileCoverage = _ => release.Wait(TimeSpan.FromSeconds(30));
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
-        cts.CancelAfter(TimeSpan.FromMilliseconds(200));
+        engine.OnGetFileCoverage = _ => CancelAndBlock(cts, release);
         try
         {
             _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>

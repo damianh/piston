@@ -221,15 +221,14 @@ public sealed class CoverageCommandTests : IDisposable
         var engine = new StubEngine { CoverageReport = new CoverageReportSnapshot([]) };
         engine.State.SolutionPath = Path.Combine(_root, "App.slnx");
         using var release = new ManualResetEventSlim();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
         engine.OnGetCoverageReport = () =>
         {
-            _ = release.Wait(TimeSpan.FromSeconds(30));
+            CoverageToolsTests.CancelAndBlock(cts, release);
             return engine.CoverageReport;
         };
-        engine.OnGetFileCoverage = _ => release.Wait(TimeSpan.FromSeconds(30));
+        engine.OnGetFileCoverage = _ => CoverageToolsTests.CancelAndBlock(cts, release);
         var dispatcher = new EngineCommandDispatcher(engine);
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
-        cts.CancelAfter(TimeSpan.FromMilliseconds(200));
         try
         {
             var stopwatch = System.Diagnostics.Stopwatch.StartNew();
