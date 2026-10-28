@@ -405,6 +405,110 @@ public static class DtoMapper
             AcquiredAt: wait.AcquiredAt,
             WaitedMs: wait.Waited?.TotalMilliseconds);
 
+    /// <summary>
+    /// Most bytes one page of the session timeline may take once serialized. Half the named-pipe message limit
+    /// leaves room for the JSON-RPC envelope, and is well under the dashboard's WebSocket limit.
+    /// </summary>
+    internal const long SessionTimelinePageBudget = MessageFramer.DefaultMaxMessageSize / 2;
+
+    /// <summary>
+    /// A page of the session timeline: the runs requested after <paramref name="afterSequence"/>, in request order, up
+    /// to <paramref name="budget"/> serialized bytes.
+    /// </summary>
+    /// <param name="inRunHistory">Whether a run is still kept in the run history, which retains fewer runs than the timeline.</param>
+    public static SessionTimelineDto ToSessionTimelineDto(
+        this PistonState state,
+        long? afterSequence,
+        Func<string, bool> inRunHistory,
+        long budget = SessionTimelinePageBudget)
+    {
+        // Read the entries before the dropped count, so a concurrent trim overstates rather than hides dropped runs.
+        var timeline = state.SessionTimeline;
+        var dropped = state.SessionTimelineDroppedRuns;
+        var entries = new List<SessionTimelineEntryDto>();
+        long size = 0;
+        var hasMore = false;
+        foreach (var entry in timeline.Where(e => afterSequence is null || e.Sequence > afterSequence).OrderBy(e => e.Sequence))
+        {
+            var dto = entry.ToDto() with { InRunHistory = entry.InRunHistory && inRunHistory(entry.RunId) };
+            var bytes = SerializedSize(dto);
+            if (entries.Count > 0 && size + bytes > budget)
+            {
+                hasMore = true;
+                break;
+            }
+
+            if (bytes > budget)
+            {
+                (dto, bytes) = TrimToBudget(dto, budget);
+            }
+
+            entries.Add(dto);
+            size += bytes;
+        }
+
+        long? oldest = timeline.Count > 0 ? timeline.Min(e => e.Sequence) : null;
+        return new(state.SessionStartedAt, state.SolutionPath, entries, hasMore, dropped, oldest);
+    }
+
+    /// <summary>
+    /// Halves an oversized entry's lists until it fits. The totals are kept, so clients see the lists as truncated.
+    /// </summary>
+    private static (SessionTimelineEntryDto Entry, long Bytes) TrimToBudget(SessionTimelineEntryDto dto, long budget)
+    {
+        var keep = Math.Max(Math.Max(dto.ChangedFiles.Count, dto.NewlyFailingTests.Count), Math.Max(dto.FixedTests.Count, dto.FailureClassifications.Count));
+        var bytes = SerializedSize(dto);
+        while (bytes > budget && keep > 0)
+        {
+            keep /= 2;
+            dto = dto with
+            {
+                ChangedFiles = [.. dto.ChangedFiles.Take(keep)],
+                NewlyFailingTests = [.. dto.NewlyFailingTests.Take(keep)],
+                FixedTests = [.. dto.FixedTests.Take(keep)],
+                FailureClassifications = [.. dto.FailureClassifications.Take(keep)],
+            };
+            bytes = SerializedSize(dto);
+        }
+
+        return (dto, bytes);
+    }
+
+    private static long SerializedSize(SessionTimelineEntryDto dto) =>
+        System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(dto, JsonRpcSerializer.Options).LongLength;
+
+    public static SessionTimelineEntryDto ToDto(this SessionTimelineEntry entry) => new(
+        entry.RunId,
+        entry.Sequence,
+        entry.Trigger.ToString(),
+        entry.Status.ToString(),
+        entry.StatusReason,
+        entry.Scope?.ToString(),
+        entry.IsFullScope,
+        entry.IsFiltered,
+        entry.Freshness.ToString(),
+        entry.FreshnessReason,
+        entry.RequestedAt,
+        entry.StartedAt,
+        entry.CompletedAt,
+        entry.SourceBefore,
+        entry.SourceAfter,
+        entry.SourceChangeObserved,
+        entry.ChangedFiles,
+        entry.ChangedFileCount,
+        entry.BuildStatus?.ToString(),
+        entry.BuildErrorCount,
+        entry.Passed,
+        entry.Failed,
+        entry.Skipped,
+        [.. entry.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key) { ProjectId = t.ProjectId })],
+        entry.NewlyFailingCount,
+        [.. entry.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key) { ProjectId = t.ProjectId })],
+        entry.FixedCount,
+        [.. entry.FailureClassifications.Select(c => new FailureClassificationDto(c.Project, c.Test, c.Kind.ToString(), c.Evidence, c.ProjectId))],
+        entry.InRunHistory,
+        entry.NoEarlierResults);
+
     public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
         new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath, reason.Member);
 
@@ -622,7 +726,8 @@ public static class DtoMapper
             ProjectResourceWaits: state.ProjectResourceWaits.Count > 0
                 ? state.ProjectResourceWaits.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToDto())
                 : null,
-            RetryStatus: state.RetryStatus
+            RetryStatus: state.RetryStatus,
+            TimelineRevision: state.SessionTimelineRevision
         );
 
     public static CoverageSummaryDto ToCoverageSummaryDto(CoverageReportSnapshot? report, string? solutionDirectory) =>

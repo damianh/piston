@@ -28,3 +28,7 @@ public sealed record GetStoredRunCommand(string RunId);
 /// <param name="Test">Fully-qualified name; a multi-targeted test's results under every framework match.</param>
 /// <param name="Project">Test project name; null matches any.</param>
 public sealed record GetTestHistoryCommand(string Test, string? ProjectId = null);
+
+/// <summary>Request a page of the session timeline.</summary>
+/// <param name="AfterSequence">Return only runs requested after this sequence (the last entry of the previous page); null starts from the oldest.</param>
+public sealed record GetSessionTimelineCommand(long? AfterSequence = null);

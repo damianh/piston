@@ -94,7 +94,8 @@
                             CanRun="@CanRun"
                             SelectionReasons="@SelectionReasonsOf(_selectedTest)"
                             SolutionPath="@_snapshot?.SolutionPath"
-                            OnShowProject="SelectProject" />
+                            OnShowProject="SelectProject"
+                            OnTraceTest="OnTraceTest" />
             }
         </div>
     </div>
@@ -111,6 +112,9 @@
 
 @code {
     [Parameter] public KeyboardEventArgs? KeyboardEvent { get; set; }
+
+    /// <summary>Follows a test in the Timeline tab, to see which run and edit made it fail.</summary>
+    [Parameter] public EventCallback<TestReference> OnTraceTest { get; set; }
 
     private StateSnapshotNotification? _snapshot;
     private List<TestNode> _treeNodes = [];

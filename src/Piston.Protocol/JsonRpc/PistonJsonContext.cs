@@ -76,6 +76,9 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(MachineBudgetDto))]
 [JsonSerializable(typeof(MachineWorktreeDto))]
 [JsonSerializable(typeof(MachineExecutionEntryDto))]
+[JsonSerializable(typeof(FailureClassificationDto))]
+[JsonSerializable(typeof(SessionTimelineEntryDto))]
+[JsonSerializable(typeof(SessionTimelineDto))]
 
 // ── Message records ───────────────────────────────────────────────────────
 [JsonSerializable(typeof(StateSnapshotNotification))]
@@ -101,6 +104,7 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(GetCoveringTestsCommand))]
 [JsonSerializable(typeof(GetChangedLineCoverageCommand))]
 [JsonSerializable(typeof(GetStoredRunCommand))]
+[JsonSerializable(typeof(GetSessionTimelineCommand))]
 [JsonSerializable(typeof(GetTestHistoryCommand))]
 [JsonSerializable(typeof(McpCallLogResponse))]
 [JsonSerializable(typeof(ActivityLogResponse))]
@@ -142,6 +146,9 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(List<TestHistoryDto>))]
 [JsonSerializable(typeof(List<MachineWorktreeDto>))]
 [JsonSerializable(typeof(List<MachineExecutionEntryDto>))]
+[JsonSerializable(typeof(List<TestOutcomeReferenceDto>))]
+[JsonSerializable(typeof(List<FailureClassificationDto>))]
+[JsonSerializable(typeof(List<SessionTimelineEntryDto>))]
 
 internal sealed partial class PistonJsonContext : JsonSerializerContext
 {

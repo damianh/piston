@@ -89,7 +89,8 @@ internal static partial class MtpTestProcessRunner
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct,
         ExecutionLog? runLog = null,
-        MtpWarmHostPool? warmHosts = null)
+        MtpWarmHostPool? warmHosts = null,
+        string? hostArguments = null)
     {
         var log = runLog ?? new ExecutionLog(projectPath);
         log.Runner = "MTP server";
@@ -157,7 +158,7 @@ internal static partial class MtpTestProcessRunner
             }
 
             progress?.Signal();
-        }, ct, log, warmHosts).ConfigureAwait(false);
+        }, ct, log, warmHosts, hostArguments).ConfigureAwait(false);
 
         log.Write("MtpRunner", $"Server run {run.Outcome}: {live.Count} test(s)" + (run.Error is null ? "" : $" | {run.Error}"));
 

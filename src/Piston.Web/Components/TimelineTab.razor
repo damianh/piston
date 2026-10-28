@@ -1,0 +1,492 @@
+@inject EngineClientService Client
+@inject ViewState View
+@inject IJSRuntime JS
+@implements IDisposable
+
+<div class="flex flex-col h-full overflow-hidden text-xs">
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1.5 shrink-0 bg-gray-900 border-b border-gray-800">
+        <span class="text-gray-100 font-semibold">Session</span>
+        @if (_dto is { } dto)
+        {
+            <span class="text-gray-400" title="@dto.StartedAt.ToLocalTime().ToString("u")">started @FormatTime(dto.StartedAt)</span>
+            <span class="text-gray-400 tabular-nums">@Plural(_timeline.Runs.Count(), "run") · @Plural(_timeline.Items.OfType<SessionTimelineEdit>().Count(), "edit")</span>
+        }
+        <div class="flex-1"></div>
+        @if (View.TracedTest is { } traced)
+        {
+            <span class="flex items-center gap-2 min-w-0">
+                <span class="text-gray-400 shrink-0">Following</span>
+                <button class="truncate text-left text-gray-100 hover:underline" title="Open @traced.Project :: @traced.Key in the Tests tab"
+                        @onclick="() => OnOpenTest.InvokeAsync(traced)">@ShortName(traced.Key)</button>
+                <button class="shrink-0 px-1.5 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800" title="Stop following the test"
+                        @onclick="() => Follow(null)">Clear</button>
+            </span>
+        }
+    </div>
+
+    <div class="flex-1 min-h-0 overflow-y-auto" aria-label="Session timeline">
+        @if (_dto is null)
+        {
+            <div class="text-gray-600 italic px-4 py-4">@(_loaded ? "The daemon is unreachable." : "Loading…")</div>
+        }
+        else
+        {
+            @RenderFailing()
+
+            <div class="py-1" role="list" aria-label="Edits and runs, newest first">
+                @if (_snapshot?.ActiveRun is { } active)
+                {
+                    <div role="listitem" class="flex items-center gap-2 px-4 py-1 text-gray-300">
+                        <span class="w-16 shrink-0 tabular-nums text-gray-400">@FormatTime(active.RequestedAt)</span>
+                        <span class="w-2 h-2 rounded-full shrink-0 bg-blue-500 animate-pulse" title="@active.Status"></span>
+                        <span>@Describe(active.Trigger, active.Scope, active.IsFullScope)</span>
+                        <span class="text-gray-500">@(active.Status == "Running" ? "running…" : active.Status.ToLowerInvariant() + "…")</span>
+                    </div>
+                }
+                @if (_timeline.Items.Count == 0 && _snapshot?.ActiveRun is null)
+                {
+                    <div class="text-gray-600 italic px-4 py-4">No runs have finished since the daemon started.</div>
+                }
+                @for (var i = _timeline.Items.Count - 1; i >= 0; i--)
+                {
+                    var item = _timeline.Items[i];
+                    if (item is SessionTimelineEdit edit)
+                    {
+                        @RenderEdit(edit)
+                    }
+                    else if (item is SessionTimelineRun run)
+                    {
+                        @RenderRun(run)
+                    }
+                }
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    private const int CollapsedTests = 5;
+    private const int CollapsedFiles = 3;
+
+    private SessionTimelineDto? _dto;
+    private SessionTimeline _timeline = SessionTimeline.Empty;
+    private bool _loaded;
+    private StateSnapshotNotification? _snapshot;
+    private long _timelineRevision;
+    private (string? RunId, string? Status) _activeRun;
+    private IReadOnlyList<SessionFailureTrace> _failures = [];
+    private HashSet<string> _relatedRuns = new(StringComparer.Ordinal);
+    private HashSet<SessionTimelineEdit> _relatedEdits = [];
+    private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
+    private string? _scrollTo;
+    private int _refreshGeneration;
+
+    /// <summary>Opens a test, by project and result key, in the Tests tab.</summary>
+    [Parameter] public EventCallback<TestReference> OnOpenTest { get; set; }
+
+    /// <summary>Opens a run kept in the run history in the Runs tab.</summary>
+    [Parameter] public EventCallback<string> OnOpenRun { get; set; }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Client.StateChanged += OnStateChanged;
+        Client.ConnectionStateChanged += OnConnectionStateChanged;
+        _snapshot = Client.CurrentSnapshot;
+        _timelineRevision = _snapshot?.TimelineRevision ?? 0;
+        _activeRun = (_snapshot?.ActiveRun?.RunId, _snapshot?.ActiveRun?.Status);
+        await RefreshAsync();
+        if (View.TracedTest is { } traced)
+        {
+            ScrollToIntroduction(traced);
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_scrollTo is { } id)
+        {
+            _scrollTo = null;
+            await JS.InvokeVoidAsync("pistonScroll.revealElement", id);
+        }
+    }
+
+    private void OnStateChanged(StateSnapshotNotification snapshot)
+    {
+        _snapshot = snapshot;
+        var activeRun = (snapshot.ActiveRun?.RunId, snapshot.ActiveRun?.Status);
+        var revisionChanged = snapshot.TimelineRevision != _timelineRevision;
+        var activeChanged = activeRun != _activeRun;
+        _timelineRevision = snapshot.TimelineRevision;
+        _activeRun = activeRun;
+
+        // Every terminal run, including a queued run cancelled without ever becoming the active or last run, changes
+        // the revision.
+        if (revisionChanged)
+        {
+            _ = InvokeAsync(RefreshAsync);
+        }
+        else if (activeChanged)
+        {
+            // Failing tests only change when a run finishes, which refreshes the timeline anyway.
+            _ = InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private void OnConnectionStateChanged()
+    {
+        if (Client.IsConnected)
+        {
+            _ = InvokeAsync(RefreshAsync);
+        }
+    }
+
+    private async Task RefreshAsync()
+    {
+        // Refreshes can overlap; only the latest one may apply its result.
+        var generation = ++_refreshGeneration;
+        var dto = await Client.GetSessionTimelineAsync();
+        if (generation != _refreshGeneration)
+        {
+            return;
+        }
+
+        _dto = dto;
+        _loaded = true;
+        _timeline = _dto is null ? SessionTimeline.Empty : SessionTimeline.Build(_dto.Entries, _dto.EarlierRunsDropped);
+        Recompute();
+        StateHasChanged();
+    }
+
+    private void Recompute()
+    {
+        var failing = (_snapshot?.Suites ?? [])
+            .SelectMany(s => s.Tests.Where(t => t.Status == TestStatusDto.Failed).Select(t => new TestReference(s.ProjectId ?? s.Name, t.Key)));
+        _failures = _timeline.TraceFailures(failing);
+        (_relatedRuns, _relatedEdits) = View.TracedTest is { } traced
+            ? _timeline.Related(traced)
+            : (new HashSet<string>(StringComparer.Ordinal), new HashSet<SessionTimelineEdit>());
+    }
+
+    private void Follow(TestReference? test)
+    {
+        View.TracedTest = test;
+        Recompute();
+        if (test is not null)
+        {
+            ScrollToIntroduction(test);
+        }
+    }
+
+    private void ScrollToIntroduction(TestReference test)
+    {
+        var trace = _timeline.TraceFailures([test])[0];
+        var run = trace.IntroducedBy ?? _timeline.Runs.LastOrDefault(r => _relatedRuns.Contains(r.Entry.RunId));
+        _scrollTo = trace.Edit is { } edit ? EditId(edit) : run is null ? null : RunId(run);
+    }
+
+    private void Reveal(string elementId) => _scrollTo = elementId;
+
+    private void Toggle(string key)
+    {
+        if (!_expanded.Remove(key))
+        {
+            _ = _expanded.Add(key);
+        }
+    }
+
+    private RenderFragment RenderFailing() => __builder =>
+    {
+        if (_failures.Count == 0)
+        {
+            return;
+        }
+
+        <div class="px-4 py-2 border-b border-gray-800" aria-label="Currently failing tests">
+            <div class="font-semibold text-red-400 mb-1">Currently failing <span class="tabular-nums text-gray-500 font-normal">@_failures.Count</span></div>
+            @foreach (var group in _failures.GroupBy(f => (f.Origin, f.IntroducedBy)).OrderByDescending(g => g.Key.IntroducedBy?.Number ?? 0).ThenBy(g => g.Key.Origin))
+            {
+                var key = "failing:" + group.Key.Origin + ":" + (group.Key.IntroducedBy?.Entry.RunId ?? "");
+                var traces = group.OrderBy(t => t.Test.Key, StringComparer.Ordinal).ToList();
+                var shown = _expanded.Contains(key) ? traces : traces.Take(CollapsedTests).ToList();
+                <div class="mb-1.5">
+                    <div class="text-gray-400">
+                        @if (group.Key.IntroducedBy is { } run)
+                        {
+                            <span>Since </span>
+                            <button class="text-gray-200 hover:underline" title="Show the run in the timeline" @onclick="() => Reveal(RunId(run))">run #@run.Number</button>
+                            <span class="tabular-nums"> at @FormatTime(run.Entry.RequestedAt)</span>
+                            @if (traces[0].Edit is { } edit)
+                            {
+                                <span>, after </span>
+                                <button class="text-gray-200 hover:underline" title="Show the edit in the timeline" @onclick="() => Reveal(EditId(edit))">@DescribeEdit(edit)</button>
+                            }
+                            else if (traces[0].SourceUnchanged)
+                            {
+                                <span title="No edit was recorded since the session started">, on unchanged source</span>
+                            }
+                            else
+                            {
+                                <span title="The edit that produced the source this run tested is not recorded">, no recorded edit</span>
+                            }
+                        }
+                        else if (group.Key.Origin == FailureOrigin.SessionStart)
+                        {
+                            <span title="No run this session recorded the test changing from passing to failing">Failing since the session's first results</span>
+                        }
+                        else
+                        {
+                            <span title="@UnknownOriginReason()">Origin unknown</span>
+                        }
+                    </div>
+                    @foreach (var trace in shown)
+                    {
+                        var test = trace.Test;
+                        var followed = View.TracedTest == test;
+                        <div class="flex items-center gap-2 pl-3 @(followed ? "bg-blue-500/10" : "")">
+                            <button class="truncate text-left text-gray-200 hover:underline" title="Follow @test.Project :: @test.Key in the timeline"
+                                    aria-pressed="@(followed ? "true" : "false")" @onclick="() => Follow(followed ? null : test)">@ShortName(test.Key)</button>
+                            @RenderKind(trace.Classification)
+                            <span class="flex-1"></span>
+                            <button class="shrink-0 text-gray-500 hover:text-gray-200" title="Open in the Tests tab"
+                                    @onclick="() => OnOpenTest.InvokeAsync(test)">Tests ↗</button>
+                        </div>
+                    }
+                    @if (traces.Count > CollapsedTests)
+                    {
+                        <button class="pl-3 text-gray-500 hover:text-gray-200" @onclick="() => Toggle(key)">
+                            @(_expanded.Contains(key) ? "Show fewer" : $"+{traces.Count - CollapsedTests} more")
+                        </button>
+                    }
+                </div>
+            }
+        </div>
+    };
+
+    private RenderFragment RenderEdit(SessionTimelineEdit edit) => __builder =>
+    {
+        var key = "edit:" + edit.NextRunId;
+        var related = _relatedEdits.Contains(edit);
+        var files = _expanded.Contains(key) ? edit.Files : edit.Files.Take(CollapsedFiles).ToList();
+        <div id="@EditId(edit)" role="listitem" class="flex items-start gap-2 px-4 py-1 @(related ? "bg-blue-500/10 ring-1 ring-inset ring-blue-500/40" : "")">
+            <span class="w-16 shrink-0 tabular-nums text-gray-400" title="@edit.At.ToLocalTime().ToString("u")">@FormatTime(edit.At)</span>
+            <span class="w-2 shrink-0 text-blue-400 leading-4" aria-hidden="true">✎</span>
+            <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                    <span class="text-blue-400">@DescribeEdit(edit)</span>
+                    <span class="font-mono text-gray-500" title="Source fingerprint @(edit.FromSource ?? "(none)") → @edit.ToSource">@(edit.FromSource is { } from ? Short(from) : "∅") → @Short(edit.ToSource)</span>
+                </div>
+                @foreach (var file in files)
+                {
+                    <div class="truncate text-gray-400 font-mono" title="@file">@RelativePath(file)</div>
+                }
+                @if (edit.FileCount > CollapsedFiles && edit.Files.Count > CollapsedFiles)
+                {
+                    <button class="text-gray-500 hover:text-gray-200" @onclick="() => Toggle(key)">
+                        @(_expanded.Contains(key) ? "Show fewer" : $"+{edit.FileCount - CollapsedFiles} more")
+                    </button>
+                }
+                else if (edit.FileCount > edit.Files.Count)
+                {
+                    <div class="text-gray-500">+@(edit.FileCount - edit.Files.Count) more not listed</div>
+                }
+            </div>
+        </div>
+    };
+
+    private RenderFragment RenderRun(SessionTimelineRun run) => __builder =>
+    {
+        var entry = run.Entry;
+        var related = _relatedRuns.Contains(entry.RunId);
+        <div id="@RunId(run)" role="listitem" class="px-4 py-1 @(related ? "bg-blue-500/10 ring-1 ring-inset ring-blue-500/40" : "")">
+            <div class="flex items-center gap-2">
+                <span class="w-16 shrink-0 tabular-nums text-gray-400" title="@entry.RequestedAt.ToLocalTime().ToString("u")">@FormatTime(entry.RequestedAt)</span>
+                <span class="w-2 h-2 rounded-full shrink-0 @StatusDot(entry)" title="@entry.Status"></span>
+                <span class="text-gray-100 font-semibold tabular-nums">#@run.Number</span>
+                <span class="truncate @(run.Started ? "text-gray-300" : "text-gray-500")">@Describe(entry.Trigger, entry.Scope, entry.IsFullScope)</span>
+                @if (entry.Status != "Completed")
+                {
+                    <span class="text-gray-500 truncate" title="@entry.StatusReason">@entry.Status.ToLowerInvariant()@(entry.StatusReason is { Length: > 0 } reason ? ": " + reason : "")</span>
+                }
+                @if (entry.CompletedAt is { } completed && entry.StartedAt is { } started)
+                {
+                    <span class="text-yellow-600 tabular-nums shrink-0">@TestNode.FormatDuration((completed - started).TotalMilliseconds)</span>
+                }
+                @if (entry.BuildStatus == "Failed")
+                {
+                    <span class="text-red-400 shrink-0">build failed@(entry.BuildErrorCount > 0 ? $" ({Plural(entry.BuildErrorCount, "error")})" : "")</span>
+                }
+                @if (run.EditedDuringRun || entry.Freshness == "Stale")
+                {
+                    <span class="px-1 rounded text-[10px] bg-yellow-500/15 text-yellow-400 shrink-0"
+                          title="@(entry.FreshnessReason ?? "The source changed while the run executed, so its results may not match it")">stale</span>
+                }
+                else if (entry.Freshness == "Unknown" && run.Started)
+                {
+                    <span class="text-gray-500 shrink-0" title="@entry.FreshnessReason">freshness unknown</span>
+                }
+                @if (entry.SourceBefore is { } source)
+                {
+                    <span class="font-mono text-gray-500 shrink-0" title="Tested source fingerprint @source">@Short(source)</span>
+                }
+                <span class="flex-1"></span>
+                @if (run.Started)
+                {
+                    <span class="tabular-nums shrink-0">
+                        <span class="text-green-500">@entry.Passed</span>
+                        @if (entry.Failed > 0)
+                        {
+                            <span class="text-red-400 ml-1">@entry.Failed</span>
+                        }
+                        @if (entry.Skipped > 0)
+                        {
+                            <span class="text-gray-500 ml-1">@entry.Skipped</span>
+                        }
+                    </span>
+                }
+                @if (entry.InRunHistory)
+                {
+                    <button class="shrink-0 text-gray-500 hover:text-gray-200" title="Open the run's per-test results in the Runs tab"
+                            @onclick="() => OnOpenRun.InvokeAsync(entry.RunId)">Runs ↗</button>
+                }
+            </div>
+            @RenderOutcomes(run, "New failures", "text-red-400", entry.NewlyFailingTests, entry.NewlyFailingCount, true)
+            @RenderOutcomes(run, "Fixed", "text-green-500", entry.FixedTests, entry.FixedCount, false)
+        </div>
+    };
+
+    private RenderFragment RenderOutcomes(SessionTimelineRun run, string title, string color, IReadOnlyList<TestOutcomeReferenceDto> tests, int count, bool classify) => __builder =>
+    {
+        if (count == 0)
+        {
+            return;
+        }
+
+        var key = title + ":" + run.Entry.RunId;
+        var shown = _expanded.Contains(key) ? tests : tests.Take(CollapsedTests).ToList();
+        <div class="ml-[4.5rem] pl-4">
+            <span class="@color">@title</span> <span class="tabular-nums text-gray-500">@count</span>
+            @foreach (var reference in shown)
+            {
+                var test = new TestReference(reference.ProjectId, reference.Key);
+                var followed = View.TracedTest == test;
+                var classification = classify
+                    ? _timeline.ClassificationIn(run, test)
+                    : null;
+                <div class="flex items-center gap-2 pl-3 @(followed ? "bg-blue-500/10" : "")">
+                    <button class="truncate text-left text-gray-300 hover:underline" title="Follow @test.Project :: @test.Key in the timeline"
+                            aria-pressed="@(followed ? "true" : "false")" @onclick="() => Follow(followed ? null : test)">@ShortName(test.Key)</button>
+                    @RenderKind(classification)
+                    <span class="flex-1"></span>
+                    <button class="shrink-0 text-gray-500 hover:text-gray-200" title="Open in the Tests tab"
+                            @onclick="() => OnOpenTest.InvokeAsync(test)">Tests ↗</button>
+                </div>
+            }
+            @if (count > CollapsedTests && tests.Count > CollapsedTests)
+            {
+                <button class="pl-3 text-gray-500 hover:text-gray-200" @onclick="() => Toggle(key)">
+                    @(_expanded.Contains(key) ? "Show fewer" : $"+{count - CollapsedTests} more")
+                </button>
+            }
+            else if (count > tests.Count)
+            {
+                <div class="pl-3 text-gray-500">+@(count - tests.Count) more not listed</div>
+            }
+        </div>
+    };
+
+    private static RenderFragment RenderKind(FailureClassificationDto? classification) => __builder =>
+    {
+        if (classification is null || TestHistoryStrip.KindLabel(classification.Kind) is not { } label)
+        {
+            return;
+        }
+
+        <span class="px-1 rounded text-[10px] shrink-0 @KindClass(classification.Kind)" title="@classification.Evidence">@label</span>
+    };
+
+    private static string KindClass(string kind) => kind switch
+    {
+        "New" => "bg-red-900/40 text-red-300",
+        "Flaky" => "bg-yellow-500/15 text-yellow-400",
+        _ => "bg-gray-800 text-gray-300",
+    };
+
+    private string UnknownOriginReason() => _timeline.EarlierRunsDropped > 0
+        ? $"The run that introduced the failure may be among the session's {Plural(_timeline.EarlierRunsDropped, "oldest run")} no longer retained, or was omitted from a run's capped list of outcome changes"
+        : "A run's list of outcome changes was capped, or results were cleared before a run, so the run that introduced the failure cannot be identified";
+
+    private static string RunId(SessionTimelineRun run) => "timeline-run-" + run.Entry.RunId;
+
+    private static string EditId(SessionTimelineEdit edit) => "timeline-edit-" + edit.NextRunId;
+
+    private static string DescribeEdit(SessionTimelineEdit edit) => edit.FileCount switch
+    {
+        0 => "source changed",
+        1 when edit.Files.Count == 1 => "edit of " + FileName(edit.Files[0]),
+        _ => $"edit of {edit.FileCount} files",
+    };
+
+    private static string Describe(string trigger, string? scope, bool isFullScope)
+    {
+        var label = trigger switch
+        {
+            "FileChange" => "File change",
+            "Forced" => "Manual",
+            _ => trigger,
+        };
+        var described = isFullScope ? "all tests" : scope == "Selective" ? "affected tests" : "selected tests";
+        return $"{label} · {described}";
+    }
+
+    private static string StatusDot(SessionTimelineEntryDto entry) => entry switch
+    {
+        { BuildStatus: "Failed" } or { Failed: > 0 } => "bg-red-500",
+        { Status: "Completed" } => "bg-green-500",
+        _ => "bg-gray-600",
+    };
+
+    /// <summary>The test's class and method, with any arguments and target framework, dropping the namespace.</summary>
+    private static string ShortName(string key)
+    {
+        var end = key.IndexOf('(');
+        if (end < 0)
+        {
+            end = key.IndexOf(" [", StringComparison.Ordinal);
+        }
+
+        var name = end < 0 ? key : key[..end];
+        var method = name.LastIndexOf('.');
+        var type = method > 0 ? name.LastIndexOf('.', method - 1) : -1;
+        return type < 0 ? key : key[(type + 1)..];
+    }
+
+    private string RelativePath(string file)
+    {
+        var solution = _dto?.SolutionPath;
+        var separator = solution is null ? -1 : solution.LastIndexOfAny(['/', '\\']);
+        if (separator > 0 && file.StartsWith(solution![..(separator + 1)], StringComparison.OrdinalIgnoreCase))
+        {
+            return file[(separator + 1)..];
+        }
+
+        return file;
+    }
+
+    private static string FileName(string file) => file[(file.LastIndexOfAny(['/', '\\']) + 1)..];
+
+    private static string Plural(int count, string noun) => count == 1 ? $"1 {noun}" : $"{count} {noun}s";
+
+    private static string FormatTime(DateTimeOffset time)
+    {
+        var local = time.ToLocalTime();
+        return local.Date == DateTime.Today ? local.ToString("HH:mm:ss") : local.ToString("MMM d HH:mm");
+    }
+
+    private static string Short(string source) => source.Length > 8 ? source[..8] : source;
+
+    public void Dispose()
+    {
+        Client.StateChanged -= OnStateChanged;
+        Client.ConnectionStateChanged -= OnConnectionStateChanged;
+    }
+}

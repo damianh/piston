@@ -66,6 +66,16 @@ else
 
         <HistoryStrip TestKey="@Test.Key" Project="@Project" />
 
+        @if (Test.Status == TestStatusDto.Failed && Project is not null && OnTraceTest.HasDelegate)
+        {
+            <div>
+                <button type="button"
+                        class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300 focus-visible:decoration-gray-300 focus:outline-none"
+                        title="Show the run that started this failure and the edit before it"
+                        @onclick="() => OnTraceTest.InvokeAsync(new TestReference(Project, Test.Key))">Trace in timeline</button>
+            </div>
+        }
+
         <!-- Earlier attempts when the test was retried within the run -->
         @if (Test.Attempts is { Count: > 0 } attempts)
         {
@@ -197,6 +207,9 @@ else
 
     /// <summary>Shows a project's details, including its run log.</summary>
     [Parameter] public EventCallback<string> OnShowProject { get; set; }
+
+    /// <summary>Follows the test in the Timeline tab.</summary>
+    [Parameter] public EventCallback<TestReference> OnTraceTest { get; set; }
 
     /// <summary>False while a run is in progress or the daemon is unreachable.</summary>
     [Parameter] public bool CanRun { get; set; }

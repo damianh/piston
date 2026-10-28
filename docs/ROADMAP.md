@@ -88,6 +88,9 @@ ARCHITECTURE describe the implementation in detail.
 - Tests tab: a virtualized tree, run strip, failure diffs, a stack-trace source
   view, a history strip and new/flaky filters.
 - Runs tab: browse and compare kept runs.
+- Timeline tab: the daemon session's edits and runs with their outcomes,
+  freshness and failure classification, tracing each failing test to the run
+  and edit that broke it.
 - Coverage tab: a grouped file list, highlighted source with hit counts,
   covering tests per file and line, and backfill progress.
 - MCP call history, user settings, keyboard shortcuts and theme-aware styling.
@@ -139,9 +142,6 @@ opens by hand (today's `piston-dashboard` skill).
   identities; keep VSTest/TRX as the compatibility path. The investigation and
   current decision are in [MTP server-mode investigation](mtp-server-mode.md).
 - Per-test output and relevant artifacts in the MCP tools and the dashboard.
-
-### Dashboard
-- A session timeline: edits, runs, outcomes, freshness and failure classification.
 
 ## Risks and open questions
 

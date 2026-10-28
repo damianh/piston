@@ -38,6 +38,16 @@ public sealed class ViewStateTests
         Assert.Null(view.FindSelectedTest([suites[0]]));
     }
 
+    [Fact]
+    public void ARevealedRunIsTakenOnce()
+    {
+        var view = new ViewState();
+        view.RevealRun("r7");
+
+        Assert.Equal("r7", view.TakeRevealedRun());
+        Assert.Null(view.TakeRevealedRun());
+    }
+
     [Theory]
     [InlineData("Shared.Test")]
     [InlineData("Shared.Test [net9.0]")]
