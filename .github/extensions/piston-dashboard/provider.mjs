@@ -170,7 +170,7 @@ export function createDashboardCanvas({ inspect = discover, check = probe, invok
                 headers: proxyHeaders(req.headers, target),
                 timeout: 15000,
             }, response => {
-                res.writeHead(response.statusCode, response.headers);
+                res.writeHead(response.statusCode, { ...response.headers, ...res.getHeaders() });
                 response.on("error", error => res.destroy(error));
                 response.pipe(res);
             });

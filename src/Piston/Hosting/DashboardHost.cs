@@ -35,7 +35,13 @@ internal sealed class DashboardHost : IAsyncDisposable
         _ = _app.UseDefaultFiles();
         _ = _app.UseStaticFiles();
         _ = _app.UseRouting();
-        _ = _app.MapGet("/api/dashboard", () => Results.Json(owner(), DashboardJsonContext.Default.ExecutionOwnerInfo));
+        _ = _app.MapGet("/api/dashboard", IResult () =>
+        {
+            var current = owner();
+            return current is null
+                ? Results.StatusCode(StatusCodes.Status503ServiceUnavailable)
+                : Results.Json(current, DashboardJsonContext.Default.ExecutionOwnerInfo);
+        });
         var stopping = _app.Lifetime.ApplicationStopping;
         _ = _app.Map("/ws", async context =>
         {

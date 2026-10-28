@@ -73,7 +73,10 @@ test("HTTP proxy preserves assets and rejects cross-origin and arbitrary upstrea
     const received = [];
     const upstream = await serve(t, (req, res) => {
         received.push(req);
-        res.writeHead(200, { "Content-Type": "application/wasm", "Content-Security-Policy": "default-src 'self'" });
+        res.writeHead(200, {
+            "Content-Type": "application/wasm", "Content-Security-Policy": "default-src 'self'",
+            "X-Content-Type-Options": "upstream", "Referrer-Policy": "unsafe-url", "Cache-Control": "public, max-age=3600",
+        });
         res.end("existing Blazor asset");
     });
     const provider = createDashboardCanvas({
@@ -85,6 +88,10 @@ test("HTTP proxy preserves assets and rejects cross-origin and arbitrary upstrea
     const asset = await fetch(`${origin}/_framework/app.wasm`, { headers: { Origin: origin } });
     assert.equal(await asset.text(), "existing Blazor asset");
     assert.equal(asset.headers.get("content-security-policy"), "default-src 'self'");
+    assert.equal(asset.headers.get("content-type"), "application/wasm");
+    assert.equal(asset.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(asset.headers.get("referrer-policy"), "no-referrer");
+    assert.equal(asset.headers.get("cache-control"), "no-store");
     assert.equal(received[0].headers.origin, new URL(upstream).origin);
     for (const [headers, method] of [[{ Origin: "https://evil.example" }, "GET"], [{ Host: "evil.example" }, "GET"], [{}, "POST"]]) {
         const status = await new Promise((resolve, reject) => {
