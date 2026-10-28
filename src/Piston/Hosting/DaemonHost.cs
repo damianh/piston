@@ -153,6 +153,8 @@ public sealed class DaemonHost : IAsyncDisposable
 
         var listener = new NamedPipeListener(_options.PipeName);
         _router = new ProtocolRouter(engine, listener);
+        _router.SetMachineOverviewProvider(
+            ct => MachineExecutionOverviewReader.ReadAsync(_engine!.ExecutionCoordinationDirectory, ct));
 
         // Connect the activity proxy to the router so engine events are broadcast to clients
         activityProxy.SetSink(_router);

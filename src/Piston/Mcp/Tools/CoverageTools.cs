@@ -100,8 +100,8 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         "tree (staged, unstaged and untracked files) with HEAD, or with the merge base of baseRef and HEAD, or a commit " +
         "range (whose line numbers match the coverage only when it ends at the checked-out state). For each " +
         "changed source file: covered, partially covered and uncovered changed lines (non-executable lines are ignored). " +
-        "Files changed since the last run that measured them are reported as stale with no line verdicts: run the tests " +
-        "first. Requires the daemon to run with coverage enabled.")]
+        "Coverage from unchanged C# members is remapped; changed or unvalidated lines are listed as stale. " +
+        "Requires the daemon to run with coverage enabled.")]
     public async Task<string> GetChangedLineCoverageAsync(
         [Description(BaseRefDescription)] string? baseRef = null,
         [Description(BaseDescription)] string? @base = null,
@@ -155,16 +155,21 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                 continue;
             }
 
-            if (coverage.File.IsStale)
-            {
-                stale.Add(relative);
-                continue;
-            }
-
+            var staleChangedLines = lines
+                .Where(line => coverage.StaleLines.Count == 0
+                    ? coverage.File.IsStale
+                    : coverage.StaleLines.Any(range => range.Start <= line && line <= range.End))
+                .ToList();
+            var staleLineSet = staleChangedLines.ToHashSet();
             var byLine = coverage.Lines.ToDictionary(l => l.LineNumber);
-            var changed = lines.Where(byLine.ContainsKey).Select(n => byLine[n]).ToList();
+            var changed = lines.Where(byLine.ContainsKey).Where(line => !staleLineSet.Contains(line)).Select(n => byLine[n]).ToList();
             if (changed.Count == 0)
             {
+                if (coverage.File.IsStale || staleChangedLines.Count > 0)
+                {
+                    stale.Add(relative);
+                }
+
                 continue;
             }
 
@@ -183,6 +188,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                 ["uncoveredLines"] = ChangedLines.FormatRanges(fileUncovered),
                 ["partialLines"] = PartialLines(filePartial),
                 ["isPartial"] = coverage.File.IsPartial,
+                ["staleLines"] = ChangedLines.FormatRanges(staleChangedLines),
             });
         }
 
@@ -326,7 +332,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                 {
                     "none" => Task.FromResult<TestRunRecord?>(null),
                     "full" => engine.RequestRunAsync(),
-                    _ => AsNullable(engine.RunSelectedAsync(Selection(plan))),
+                    _ => AsNullable(engine.RunSelectedAsync(Selection(plan, SolutionDirectory()))),
                 };
             }
             catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NotSupportedException)
@@ -367,9 +373,10 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         static async Task<TestRunRecord?> AsNullable(Task<TestRunRecord> task) => await task.ConfigureAwait(false);
     }
 
-    /// <summary>The test projects of a narrowed or project-scope plan, by suite name, with its tests when narrowed.</summary>
-    internal static TestSelection Selection(ImpactAnalysisResult plan) => new(
-        [.. plan.AffectedTestProjectPaths.Select(Path.GetFileNameWithoutExtension).OfType<string>()
+    /// <summary>The test projects of a narrowed or project-scope plan, by solution-relative ID, with tests when narrowed.</summary>
+    internal static TestSelection Selection(ImpactAnalysisResult plan, string? solutionDirectory = null) => new(
+        [.. plan.AffectedTestProjectPaths
+            .Select(p => solutionDirectory is null ? Path.GetFullPath(p) : Relative(p, solutionDirectory))
             .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
         plan.NarrowsToTests ? [.. (plan.AffectedTestFqns ?? []).Order(StringComparer.Ordinal)] : null);
 
@@ -477,6 +484,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         json["granularity"] = Granularity;
         json["uncoveredLines"] = ChangedLines.FormatRanges(coverage.Lines.Where(l => l.HitCount == 0).Select(l => l.LineNumber));
         json["partialLines"] = PartialLines(coverage.Lines.Where(IsPartial));
+        json["staleLines"] = ChangedLines.FormatRanges(coverage.StaleLines.SelectMany(range => Enumerable.Range(range.Start, range.End - range.Start + 1)));
         return json;
     }
 

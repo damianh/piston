@@ -17,7 +17,7 @@ internal static class DashboardDiscovery
         {
             directory ??= ExecutionCoordinationDirectory.ResolveDefault();
             var identity = WorktreeIdentity.FromSolutionPath(path);
-            var owners = WorktreeOwnership.ListOwners(directory, strict: true);
+            var owners = WorktreeOwnership.ListOwners(directory, reportErrors: true);
             var record = owners.SingleOrDefault(r => r.Key == identity.Key && r.Liveness == OwnershipLiveness.Live);
             if (record is null)
             {

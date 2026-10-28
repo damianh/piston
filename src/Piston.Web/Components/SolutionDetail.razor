@@ -12,7 +12,7 @@
         }
         else if (_activeTab == DashboardTab.Tests)
         {
-            <TestsTab KeyboardEvent="@KeyboardEvent" />
+            <TestsTab KeyboardEvent="@KeyboardEvent" OnTraceTest="TraceTest" />
         }
         else if (_activeTab == DashboardTab.Coverage)
         {
@@ -21,6 +21,14 @@
         else if (_activeTab == DashboardTab.Runs)
         {
             <RunsTab OnOpenTest="OpenTest" />
+        }
+        else if (_activeTab == DashboardTab.Timeline)
+        {
+            <TimelineTab OnOpenTest="OpenTest" OnOpenRun="OpenRun" />
+        }
+        else if (_activeTab == DashboardTab.Machine)
+        {
+            <MachineTab />
         }
     </div>
 
@@ -43,6 +51,18 @@
     {
         View.RevealTest(test);
         _activeTab = DashboardTab.Tests;
+    }
+
+    private void OpenRun(string runId)
+    {
+        View.RevealRun(runId);
+        _activeTab = DashboardTab.Runs;
+    }
+
+    private void TraceTest(TestReference test)
+    {
+        View.TracedTest = test;
+        _activeTab = DashboardTab.Timeline;
     }
 
     private void OnActivityEvent(ActivityEvent _) { /* keeps badge counts fresh if needed */ }

@@ -26,14 +26,20 @@
     <Compile Include="..\..\src\Piston.Web\Models\DashboardStatus.cs" Link="Web\DashboardStatus.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\TestNode.cs" Link="Web\TestNode.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\RunComparison.cs" Link="Web\RunComparison.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\SessionTimeline.cs" Link="Web\SessionTimeline.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\TestHistoryStrip.cs" Link="Web\TestHistoryStrip.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\TestRetries.cs" Link="Web\TestRetries.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\TestTreeBuilder.cs" Link="Web\TestTreeBuilder.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\ViewState.cs" Link="Web\ViewState.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\NodeDetail.cs" Link="Web\NodeDetail.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\ProjectLabels.cs" Link="Web\ProjectLabels.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\ProjectPaths.cs" Link="Web\ProjectPaths.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\TreeRow.cs" Link="Web\TreeRow.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\StackTraceParser.cs" Link="Web\StackTraceParser.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\CSharpHighlighter.cs" Link="Web\CSharpHighlighter.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\WatchStrip.cs" Link="Web\WatchStrip.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\MachineOverviewView.cs" Link="Web\MachineOverviewView.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\ResourceWaitText.cs" Link="Web\ResourceWaitText.cs" />
   </ItemGroup>
 
   <ItemGroup>

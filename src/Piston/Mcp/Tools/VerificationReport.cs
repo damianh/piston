@@ -54,44 +54,83 @@ internal static class VerificationReport
             _ = sb.AppendLine(TestTools.DescribeAdmission(admission));
         }
 
+        AppendList(sb, "Test resources", TestTools.DescribeResourceNotes(run, TestTools.ResourceWaitWorthReporting), note => note);
+
         if (result.Verdict == VerificationVerdict.BuildFailed && run.Build is { } build)
         {
             AppendList(sb, "Build errors", build.Errors, e => e, CapBuildError);
+            if (build.OmittedErrors > 0)
+            {
+                _ = sb.AppendLine($"  ... {build.OmittedErrors} more build error(s) omitted");
+            }
         }
 
+        var classifications = run.FailureClassifications
+            .GroupBy(c => (c.ProjectId, c.Test))
+            .ToDictionary(g => g.Key, g => g.First());
         if (result.Verdict is VerificationVerdict.TestsFailed)
         {
-            var kinds = run.FailureClassifications
-                .GroupBy(c => (c.Project, c.Test))
-                .ToDictionary(g => g.Key, g => g.First().Kind);
-            if (kinds.Count > 0)
+            var failedKeys = run.Suites
+                .SelectMany(s => s.Tests.Where(t => t.Status == TestStatus.Failed).Select(t => (s.Key, t.ResultKey)))
+                .ToHashSet();
+            var failedClassifications = run.FailureClassifications.Where(c => failedKeys.Contains((c.ProjectId, c.Test))).ToList();
+            if (failedClassifications.Count > 0)
             {
-                _ = sb.AppendLine(DescribeFailureHistory(run.FailureClassifications));
+                _ = sb.AppendLine(DescribeFailureHistory(failedClassifications));
             }
 
-            FailureKind? KindOf(string project, TestResult t) =>
-                kinds.TryGetValue((project, t.ResultKey), out var kind) ? kind : null;
+            FailureKind? KindOf(string projectId, TestResult t) =>
+                classifications.TryGetValue((projectId, t.ResultKey), out var c) ? c.Kind : null;
             var repeatedKeys = tests.GroupBy(t => t.ResultKey, StringComparer.Ordinal)
                 .Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet(StringComparer.Ordinal);
             AppendList(sb, "Failed tests", run.Suites
-                    .SelectMany(s => s.Tests.Select(t => (Project: s.Name, Test: t)))
+                    .SelectMany(s => s.Tests.Select(t => (Project: s.Name, ProjectId: s.Key, Test: t)))
                     .Where(t => t.Test.Status == TestStatus.Failed)
-                    .OrderBy(t => KindOrder(KindOf(t.Project, t.Test)))
+                    .OrderBy(t => KindOrder(KindOf(t.ProjectId, t.Test)))
                     .ToList(),
                 entry =>
                 {
-                    var (project, test) = entry;
-                    var tag = KindOf(project, test) is { } kind ? $" [{Label(kind)}]" : "";
-                    var name = repeatedKeys.Contains(test.ResultKey) ? $"{project} :: {test.ResultKey}" : test.ResultKey;
+                    var (project, projectId, test) = entry;
+                    var tag = classifications.GetValueOrDefault((projectId, test.ResultKey)) is { } c
+                        ? $" [{Label(c.Kind)}{(c.Flakiness is { } evidence ? $": {evidence.Brief()}" : "")}]"
+                        : "";
+                    if (test.Attempts.Count > 0)
+                    {
+                        tag += $" (failed all {test.Attempts.Count + 1} attempts)";
+                    }
+
+                    var name = repeatedKeys.Contains(test.ResultKey) ? $"{project} [{projectId}] :: {test.ResultKey}" : test.ResultKey;
                     return test.ErrorMessage is { } message ? $"{name}{tag}: {Cap(message)}" : name + tag;
                 });
+        }
+
+        AppendList(sb, "Passed on retry", run.Suites
+                .SelectMany(s => s.Tests.Select(t => (ProjectId: s.Key, Test: t)))
+                .Where(t => t.Test.Status == TestStatus.Passed && t.Test.Attempts.Any(a => a.Status == TestStatus.Failed))
+                .ToList(),
+            entry =>
+            {
+                var (projectId, test) = entry;
+                var failed = test.Attempts.Where(a => a.Status == TestStatus.Failed).ToList();
+                var text = $"{test.ResultKey}: passed on attempt {test.Attempts.Count + 1} after {failed.Count} failure(s)";
+                if (classifications.GetValueOrDefault((projectId, test.ResultKey))?.Flakiness is { } evidence)
+                {
+                    text += $" [flaky: {evidence.Brief()}]";
+                }
+
+                return failed[^1].ErrorMessage is { } message ? $"{text}: {Cap(message)}" : text;
+            });
+
+        if (run.RetriesSkippedReason is { } skipped)
+        {
+            _ = sb.AppendLine($"Retries skipped: {skipped}");
         }
 
         if (result.Verdict is VerificationVerdict.Incomplete)
         {
             var problems = run.Projects.Where(p => p.Status != ProjectRunStatus.Completed || p.TestCount == 0).ToList();
             AppendList(sb, "Projects without complete results", problems,
-                p => $"{p.ProjectPath}: {p.Status switch
+                p => $"{p.ProjectId}: {p.Status switch
                 {
                     ProjectRunStatus.Completed => NoResults(p),
                     ProjectRunStatus.TimedOut when p.TimedOut is { } timeout => $"TimedOut ({timeout.Test} ran longer than {Durations.Format(timeout.Limit)})",
@@ -118,7 +157,8 @@ internal static class VerificationReport
         int Count(FailureKind kind) => classifications.Count(c => c.Kind == kind);
         return $"Failure history: {Count(FailureKind.New)} new, {Count(FailureKind.PreExisting)} pre-existing, " +
                $"{Count(FailureKind.Flaky)} flaky, {Count(FailureKind.Unknown)} unknown " +
-               "(new = passed in the previous run of the test in this worktree; flaky = passed and failed on the same source; " +
+               "(new = passed in the previous run of the test in this worktree; flaky = passed and failed on the same source, " +
+               "in this or another worktree, or across retries in one run; " +
                "get_test_history(test) shows the evidence)";
     }
 

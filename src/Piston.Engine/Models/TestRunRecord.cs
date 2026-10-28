@@ -4,7 +4,10 @@
 namespace Piston.Engine.Models;
 
 /// <summary>A test result key scoped to the project suite that produced it.</summary>
-public sealed record TestOutcomeReference(string Project, string Key);
+public sealed record TestOutcomeReference(string Project, string Key)
+{
+    public string ProjectId { get; init; } = Project;
+}
 
 /// <summary>What caused a test run to be requested.</summary>
 public enum TestRunTrigger
@@ -167,7 +170,19 @@ public sealed record TestRunProjectOutcome(
     ProjectRunStatus Status,
     int TestCount,
     string? NoTestsReason = null,
-    TestTimeout? TimedOut = null);
+    TestTimeout? TimedOut = null)
+{
+    public string ProjectId { get; init; } = ProjectPath;
+
+    /// <summary>The exclusive test resources the project held and how long it waited, when it needed any.</summary>
+    public TestProjectResources? Resources { get; init; }
+
+    /// <summary>
+    /// Set when a failed project's output looks like a port or container name conflict, with the evidence
+    /// and a hint to declare the resource in <c>testResources</c>.
+    /// </summary>
+    public string? SuspectedResourceConflict { get; init; }
+}
 
 /// <summary>
 /// Provenance and results of exactly one test run. Unlike the aggregate
@@ -244,10 +259,23 @@ public sealed record TestRunRecord
     public IReadOnlyList<TestOutcomeReference> NewlyFailingTests { get; init; } = [];
 
     /// <summary>
+    /// The run produced test results but there were no earlier results to compare them with (the session's first
+    /// results, or the first after results were cleared), so <see cref="FixedTests"/> and
+    /// <see cref="NewlyFailingTests"/> are empty whatever changed.
+    /// </summary>
+    public bool NoEarlierResults { get; init; }
+
+    /// <summary>
     /// How each failed test relates to the worktree's run history (new, pre-existing, flaky or unknown);
-    /// empty when history is off or nothing failed.
+    /// tests that failed and then passed on retry are included as flaky. Empty when history is off or nothing failed.
     /// </summary>
     public IReadOnlyList<FailureClassification> FailureClassifications { get; init; } = [];
+
+    /// <summary>Most retries of each failed test; 0 when retries are off.</summary>
+    public int RetryLimit { get; init; }
+
+    /// <summary>Why failed tests were not retried although retries are on (for example, too many failed).</summary>
+    public string? RetriesSkippedReason { get; init; }
 
     public string? RunnerError { get; init; }
 

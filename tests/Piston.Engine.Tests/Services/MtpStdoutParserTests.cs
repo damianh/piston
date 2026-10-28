@@ -330,6 +330,64 @@ public sealed class MtpStdoutParserTests
         Assert.Equal(string.Join(Environment.NewLine, "helper line", "console line"), passed.Output);
     }
 
+    [Fact]
+    public void LargeOutputAndFailureDetails_AreBoundedWithVisibleMarkers()
+    {
+        var limit = RetentionLimits.MaxTestTextLength;
+        var sut = new MtpStdoutParser();
+        _ = sut.ProcessLine("failed Ns.Class.Noisy (1ms)");
+        _ = sut.ProcessLine($"  {new string('e', limit)}");
+        _ = sut.ProcessLine($"  {new string('f', limit)}");
+        _ = sut.ProcessLine("  Standard output");
+        _ = sut.ProcessLine($"    {new string('a', limit)}");
+        _ = sut.ProcessLine($"    {new string('z', limit)}");
+
+        var result = sut.Flush()!;
+
+        Assert.InRange(result.ErrorMessage!.Length, 1, limit);
+        Assert.StartsWith(new string('e', 100), result.ErrorMessage, StringComparison.Ordinal);
+        Assert.Contains("characters truncated", result.ErrorMessage, StringComparison.Ordinal);
+        Assert.InRange(result.Output!.Length, 1, limit);
+        Assert.StartsWith(new string('a', 100), result.Output, StringComparison.Ordinal);
+        Assert.EndsWith(new string('z', 100), result.Output, StringComparison.Ordinal);
+        Assert.Contains("characters truncated", result.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ShortOutput_DoesNotAllocateFullRetentionBuffer()
+    {
+        var sut = new MtpStdoutParser();
+        static void Feed(MtpStdoutParser parser)
+        {
+            _ = parser.ProcessLine("passed Ns.Class.Method (1ms)");
+            _ = parser.ProcessLine("  Standard output");
+            _ = parser.ProcessLine("    x");
+        }
+
+        Feed(sut);
+        _ = sut.Flush();
+        const int iterations = 100;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < iterations; i++)
+        {
+            Feed(sut);
+            Assert.Equal("x", sut.Flush()!.Output);
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Assert.InRange(allocated, 0, iterations * 16 * 1024);
+    }
+
+    [Fact]
+    public void BoundedTextBuffer_DoesNotRetainTrailingWhitespaceAsErrorText()
+    {
+        var buffer = new BoundedTextBuffer(16);
+        buffer.AppendLine("error");
+        buffer.AppendLine(new string(' ', 10_000));
+
+        Assert.Equal("error", buffer.GetHeadValue());
+    }
+
     // ── Target framework ───────────────────────────────────────────────────────
 
     [Fact]

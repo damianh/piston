@@ -5,6 +5,7 @@ using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text.Json.Nodes;
 using Piston.Engine;
+using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
@@ -29,6 +30,7 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener? listener =
     private McpCallTracker? _mcpCallTracker;
     private DaemonControl? _daemonControl;
     private UserSettingsStore? _userSettings;
+    private Func<CancellationToken, Task<MachineExecutionOverview>>? _machineOverviewProvider;
     private readonly ActivityHistory _activityHistory = new();
 
     public int ClientCount => _pipeSessions.Count + _wsSessions.Count;
@@ -41,6 +43,9 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener? listener =
 
     public void SetUserSettingsStore(UserSettingsStore store) =>
         _userSettings = store;
+
+    public void SetMachineOverviewProvider(Func<CancellationToken, Task<MachineExecutionOverview>> provider) =>
+        _machineOverviewProvider = provider;
 
     private EngineCommandDispatcher CreateDispatcher(bool allowDaemonControl)
     {
@@ -55,6 +60,11 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener? listener =
         if (_userSettings is not null)
         {
             dispatcher.SetUserSettingsStore(_userSettings);
+        }
+
+        if (_machineOverviewProvider is not null)
+        {
+            dispatcher.SetMachineOverviewProvider(_machineOverviewProvider);
         }
 
         // Process control is limited to local pipe clients (the CLI); browser-reachable

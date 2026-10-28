@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Globalization;
+using System.Text.Json;
 using Microsoft.Data.Sqlite;
 using Piston.Engine.Impact;
 using Piston.Engine.Services;
@@ -14,7 +15,7 @@ namespace Piston.Engine.Coverage;
 /// impact_units      (unit_id, project_path, granularity, unit_key, run_id, is_dirty, recorded_at)
 ///                   -- a measured unit: a project's run (granularity 0), a class (1) or a test (2)
 /// impact_unit_tests (unit_id, test_fqn)                      -- the tests credited with the unit's files
-/// impact_unit_files (unit_id, file_path, snapshot_hash, spans) -- executed method ranges, e.g. "3-9,12-20"
+/// impact_unit_files (unit_id, file_path, snapshot_hash, spans, member_keys) -- executed member identities
 /// impact_snapshots  (snapshot_hash, content)                  -- file content when measured, shared by hash
 /// </code>
 /// </remarks>
@@ -43,6 +44,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             file_path     TEXT    NOT NULL,
             snapshot_hash TEXT    NOT NULL,
             spans         TEXT    NOT NULL,
+            member_keys   TEXT    NOT NULL DEFAULT '[]',
             PRIMARY KEY (unit_id, file_path)
         ) WITHOUT ROWID;
 
@@ -120,31 +122,67 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             var pSnapshotContent = snapshotCmd.Parameters.Add("$content", SqliteType.Text);
 
             using var fileCmd = Command(transaction, """
-                INSERT OR REPLACE INTO impact_unit_files (unit_id, file_path, snapshot_hash, spans)
-                VALUES ($unit_id, $path, $hash, $spans);
+                INSERT OR REPLACE INTO impact_unit_files (unit_id, file_path, snapshot_hash, spans, member_keys)
+                VALUES ($unit_id, $path, $hash, $spans, $members);
                 """);
             _ = fileCmd.Parameters.AddWithValue("$unit_id", unitId);
             var pPath = fileCmd.Parameters.Add("$path", SqliteType.Text);
             var pHash = fileCmd.Parameters.Add("$hash", SqliteType.Text);
             var pSpans = fileCmd.Parameters.Add("$spans", SqliteType.Text);
+            var pMembers = fileCmd.Parameters.Add("$members", SqliteType.Text);
 
             foreach (var file in recording.Files)
             {
                 var hash = ImpactContent.Hash(file.Content);
+                var sourceMembers = SourceMembers.Parse(file.Content);
+                var memberKeys = sourceMembers.Members.Count == 0
+                    ? new HashSet<string>(StringComparer.Ordinal)
+                    : MembersForSpans(sourceMembers, file.Spans).ToHashSet(StringComparer.Ordinal);
+                if (sourceMembers.Members.Count > 0 && HasLooseSpans(sourceMembers, file.Spans))
+                {
+                    _ = memberKeys.Add("*");
+                }
                 IEnumerable<LineSpan> spans = file.Spans;
 
                 if (recording.Merge && ReadUnitFile(unitId, file.FilePath, transaction) is { } existing)
                 {
-                    // Keep what the tests that did not run this time executed, moved onto the new content.
-                    var earlier = LineSpan.Parse(existing.Spans);
-                    if (!string.Equals(existing.Hash, hash, StringComparison.Ordinal)
-                        && ReadSnapshot(existing.Hash, transaction) is { } oldContent
-                        && SnapshotDiff.Compute(SnapshotDiff.SplitLines(oldContent), SnapshotDiff.SplitLines(file.Content)) is { } diff)
+                    var earlierKeys = ReadMemberKeys(unitId, file.FilePath, transaction);
+                    var earlierSpans = LineSpan.Parse(existing.Spans);
+                    if (ReadSnapshot(existing.Hash, transaction) is { } oldContent)
                     {
-                        earlier = diff.Remap(earlier);
-                    }
+                        var oldMembers = SourceMembers.Parse(oldContent);
+                        if (oldMembers.Members.Count == 0 || sourceMembers.Members.Count == 0)
+                        {
+                            var oldLines = LineSpan.Parse(existing.Spans);
+                            var diff = SnapshotDiff.Compute(SnapshotDiff.SplitLines(oldContent), SnapshotDiff.SplitLines(file.Content));
+                            spans = spans.Concat(diff is { } changed ? changed.Remap(oldLines) : oldLines);
+                        }
+                        else
+                        {
+                            var unchanged = oldMembers.Members
+                                .Join(sourceMembers.Members, old => old.Key, current => current.Key, (old, current) => (old, current))
+                                .Where(pair => pair.old.BodyHash == pair.current.BodyHash)
+                                .Select(pair => pair.old.Key)
+                                .ToHashSet(StringComparer.Ordinal);
+                            if (oldMembers.ResidualHash != sourceMembers.ResidualHash
+                                || earlierKeys.Any(key => key != "*" && !unchanged.Contains(key)))
+                            {
+                                _ = memberKeys.Add("*");
+                            }
 
-                    spans = spans.Concat(earlier);
+                            memberKeys.UnionWith(earlierKeys.Where(key => key == "*" || unchanged.Contains(key)));
+                            spans = spans.Concat(oldMembers.RemapUnchangedSpans(sourceMembers, earlierSpans));
+                        }
+                    }
+                    else
+                    {
+                        _ = memberKeys.Add("*");
+                    }
+                }
+
+                if (sourceMembers.Members.Count > 0 && memberKeys.Count == 0 && file.Spans.Count > 0)
+                {
+                    _ = memberKeys.Add("*");
                 }
 
                 pSnapshotHash.Value = hash;
@@ -154,12 +192,14 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                 pPath.Value = file.FilePath;
                 pHash.Value = hash;
                 pSpans.Value = LineSpan.Format(LineSpan.Normalize(spans));
+                pMembers.Value = JsonSerializer.Serialize(memberKeys.Order(StringComparer.Ordinal));
                 _ = await fileCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
 
             using (var pruneCmd = Command(transaction, """
                 DELETE FROM impact_snapshots
-                WHERE NOT EXISTS (SELECT 1 FROM impact_unit_files f WHERE f.snapshot_hash = impact_snapshots.snapshot_hash);
+                WHERE NOT EXISTS (SELECT 1 FROM impact_unit_files f WHERE f.snapshot_hash = impact_snapshots.snapshot_hash)
+                  AND NOT EXISTS (SELECT 1 FROM coverage_files c WHERE c.snapshot_hash = impact_snapshots.snapshot_hash);
                 """))
             {
                 _ = await pruneCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
@@ -194,8 +234,15 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                 continue;
             }
 
+            var recordedMemberKeys = rows
+                .SelectMany(row => row.MemberKeys)
+                .Where(key => key != "*")
+                .ToHashSet(StringComparer.Ordinal);
             var currentHash = change.Content is null ? null : ImpactContent.Hash(change.Content);
             var currentCodeItems = change.Content is null ? null : SnapshotDiff.CodeItems(change.Content);
+            var currentMembers = change.Content is null || !change.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                ? null
+                : SourceMembers.Parse(change.Content);
             var hits = new List<(FileUnit Unit, ImpactReason Reason)>();
             var touched = new List<(FileUnit Unit, ImpactReason Reason)>();
             var hasCodeChange = false;
@@ -205,6 +252,66 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                 if (string.Equals(row.Hash, currentHash, StringComparison.Ordinal))
                 {
                     // The unit was measured against this content already.
+                    continue;
+                }
+
+                if (currentMembers is { Members.Count: > 0 })
+                {
+                    var oldContent = ReadSnapshot(row.Hash, null);
+                    if (oldContent is null)
+                    {
+                        hasCodeChange = true;
+                        touched.Add((row, new ImpactReason(change.FilePath, new LineSpan(1, 1), null, row.Granularity, row.ProjectPath)));
+                        continue;
+                    }
+
+                    var oldMembers = SourceMembers.Parse(oldContent);
+                    if (oldMembers.HasSameCode(currentMembers))
+                    {
+                        continue;
+                    }
+
+                    hasCodeChange = true;
+                    var oldByKey = oldMembers.Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
+                    var newByKey = currentMembers.Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
+                    var residualChanged = oldMembers.ResidualHash != currentMembers.ResidualHash;
+                    var changedKeys = oldMembers.Members
+                        .Where(member => !newByKey.TryGetValue(member.Key, out var currentMember)
+                            || member.BodyHash != currentMember.BodyHash)
+                        .Select(member => member.Key)
+                        .Concat(currentMembers.Members
+                            .Where(member => !oldByKey.TryGetValue(member.Key, out var oldMember)
+                                || member.BodyHash != oldMember.BodyHash)
+                            .Select(member => member.Key));
+                    if (residualChanged || changedKeys.Any(key => !recordedMemberKeys.Contains(key)))
+                    {
+                        hits.Add((row, new ImpactReason(change.FilePath, new LineSpan(1, Math.Max(1, SnapshotDiff.SplitLines(oldContent).Length)), null, row.Granularity, row.ProjectPath)));
+                        continue;
+                    }
+
+                    var rowKeys = row.MemberKeys;
+                    if (rowKeys.Contains("*", StringComparer.Ordinal))
+                    {
+                        hits.Add((row, new ImpactReason(change.FilePath, new LineSpan(1, Math.Max(1, SnapshotDiff.SplitLines(oldContent).Length)), null, row.Granularity, row.ProjectPath)));
+                        continue;
+                    }
+
+                    foreach (var key in rowKeys)
+                    {
+                        if (!oldByKey.TryGetValue(key, out var oldMember))
+                        {
+                            continue;
+                        }
+
+                        if (newByKey.TryGetValue(key, out var newMember) && oldMember.BodyHash == newMember.BodyHash)
+                        {
+                            continue;
+                        }
+
+                        var reason = new ImpactReason(change.FilePath, oldMember.Lines, oldMember.Lines, row.Granularity, row.ProjectPath, key);
+                        hits.Add((row, reason));
+                    }
+
                     continue;
                 }
 
@@ -315,20 +422,73 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
     {
         using var gate = Enter();
 
-        using var cmd = _connection!.CreateCommand();
-        cmd.CommandText = """
-            UPDATE impact_units SET is_dirty = 1
-            WHERE granularity > 0 AND is_dirty = 0 AND unit_id IN (
-                SELECT unit_id FROM impact_unit_files
-                WHERE file_path = $path AND ($hash IS NULL OR snapshot_hash <> $hash));
-            """;
-        var pPath = cmd.Parameters.Add("$path", SqliteType.Text);
-        var pHash = cmd.Parameters.Add("$hash", SqliteType.Text);
         foreach (var change in changes)
         {
-            pPath.Value = change.FilePath;
-            pHash.Value = change.Content is null ? DBNull.Value : ImpactContent.Hash(change.Content);
-            _ = await cmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            var shouldDirty = new HashSet<long>();
+            using (var readCmd = _connection!.CreateCommand())
+            {
+                readCmd.CommandText = """
+                    SELECT u.unit_id, f.snapshot_hash, f.member_keys, s.content
+                    FROM impact_unit_files f
+                    JOIN impact_units u ON u.unit_id = f.unit_id
+                    LEFT JOIN impact_snapshots s ON s.snapshot_hash = f.snapshot_hash
+                    WHERE f.file_path = $path AND u.granularity > 0 AND u.is_dirty = 0;
+                    """;
+                _ = readCmd.Parameters.AddWithValue("$path", change.FilePath);
+                using var reader = readCmd.ExecuteReader();
+                var current = change.Content is null || !change.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                    ? null
+                    : SourceMembers.Parse(change.Content);
+                while (reader.Read())
+                {
+                    var unitId = reader.GetInt64(0);
+                    var snapshotHash = reader.GetString(1);
+                    if (change.Content is null || current is null)
+                    {
+                        _ = shouldDirty.Add(unitId);
+                        continue;
+                    }
+
+                    var oldContent = reader.IsDBNull(3) ? null : reader.GetString(3);
+                    if (oldContent is null)
+                    {
+                        _ = shouldDirty.Add(unitId);
+                        continue;
+                    }
+
+                    var old = SourceMembers.Parse(oldContent);
+                    if (old.ResidualHash != current.ResidualHash)
+                    {
+                        _ = shouldDirty.Add(unitId);
+                        continue;
+                    }
+
+                    var keys = DeserializeMemberKeys(reader.GetString(2));
+                    var oldByKey = old.Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
+                    var newByKey = current.Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
+                    // Added or removed declarations can change binding in an unchanged caller.
+                    if (!oldByKey.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(newByKey.Keys)
+                        || keys.Contains("*", StringComparer.Ordinal)
+                        || keys.Any(key => !oldByKey.TryGetValue(key, out var oldMember)
+                            || !newByKey.TryGetValue(key, out var newMember)
+                            || oldMember.BodyHash != newMember.BodyHash))
+                    {
+                        _ = shouldDirty.Add(unitId);
+                    }
+                }
+            }
+
+            if (shouldDirty.Count > 0)
+            {
+                using var update = _connection!.CreateCommand();
+                update.CommandText = "UPDATE impact_units SET is_dirty = 1 WHERE unit_id = $unit_id;";
+                var pUnit = update.Parameters.Add("$unit_id", SqliteType.Integer);
+                foreach (var unitId in shouldDirty)
+                {
+                    pUnit.Value = unitId;
+                    _ = await update.ExecuteNonQueryAsync().ConfigureAwait(false);
+                }
+            }
         }
     }
 
@@ -418,7 +578,8 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
 
             using (var pruneCmd = Command(transaction, """
                 DELETE FROM impact_snapshots
-                WHERE NOT EXISTS (SELECT 1 FROM impact_unit_files f WHERE f.snapshot_hash = impact_snapshots.snapshot_hash);
+                WHERE NOT EXISTS (SELECT 1 FROM impact_unit_files f WHERE f.snapshot_hash = impact_snapshots.snapshot_hash)
+                  AND NOT EXISTS (SELECT 1 FROM coverage_files c WHERE c.snapshot_hash = impact_snapshots.snapshot_hash);
                 """))
             {
                 _ = await pruneCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
@@ -441,10 +602,13 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
         var currentContent = ImpactContent.TryRead(filePath);
         var currentHash = currentContent is null ? null : ImpactContent.Hash(currentContent);
         var currentItems = currentContent is null ? null : SnapshotDiff.CodeItems(currentContent);
+        var currentMembers = currentContent is null || !filePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+            ? null
+            : SourceMembers.Parse(currentContent);
         var snapshotItems = new Dictionary<string, IReadOnlyList<SnapshotDiff.CodeItem>>(StringComparer.Ordinal);
         using var cmd = _connection!.CreateCommand();
         cmd.CommandText = """
-            SELECT u.project_path, t.test_fqn, u.granularity, u.is_dirty, f.snapshot_hash, f.spans, s.content
+            SELECT u.project_path, t.test_fqn, u.granularity, u.is_dirty, f.snapshot_hash, f.spans, s.content, f.member_keys
             FROM impact_unit_files f
             JOIN impact_units u ON u.unit_id = f.unit_id
             JOIN impact_unit_tests t ON t.unit_id = u.unit_id
@@ -469,7 +633,22 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             var snapshotHash = reader.GetString(4);
             var snapshotContent = reader.IsDBNull(6) ? null : reader.GetString(6);
             var contentIsCurrent = string.Equals(snapshotHash, currentHash, StringComparison.Ordinal);
-            if (!contentIsCurrent && currentItems is not null && snapshotContent is not null)
+            var spans = LineSpan.Parse(reader.GetString(5));
+            if (!contentIsCurrent && currentMembers is { Members.Count: > 0 } && snapshotContent is not null)
+            {
+                var oldMembers = SourceMembers.Parse(snapshotContent);
+                var keys = DeserializeMemberKeys(reader.GetString(7));
+                var oldByKey = oldMembers.Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
+                var newByKey = currentMembers.Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
+                contentIsCurrent = oldMembers.ResidualHash == currentMembers.ResidualHash
+                    && oldByKey.Keys.ToHashSet(StringComparer.Ordinal).SetEquals(newByKey.Keys)
+                    && !keys.Contains("*", StringComparer.Ordinal)
+                    && keys.All(key => oldByKey.TryGetValue(key, out var oldMember)
+                        && newByKey.TryGetValue(key, out var newMember)
+                        && oldMember.BodyHash == newMember.BodyHash);
+                spans = oldMembers.RemapUnchangedSpans(currentMembers, spans);
+            }
+            else if (!contentIsCurrent && currentItems is not null && snapshotContent is not null)
             {
                 if (!snapshotItems.TryGetValue(snapshotHash, out var items))
                 {
@@ -479,8 +658,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                 contentIsCurrent = SnapshotDiff.ComputeCodeRange(snapshotContent, items, currentItems) is null;
             }
 
-            var spans = LineSpan.Parse(reader.GetString(5));
-            if (contentIsCurrent
+            if (currentMembers is not { Members.Count: > 0 } && contentIsCurrent
                 && !string.Equals(snapshotHash, currentHash, StringComparison.Ordinal)
                 && snapshotContent is not null
                 && currentContent is not null
@@ -504,13 +682,38 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             .ThenBy(e => e.TestFqn, StringComparer.Ordinal)];
     }
 
-    private sealed record FileUnit(long UnitId, string ProjectPath, ImpactGranularity Granularity, string Hash, string Spans);
+    private sealed record FileUnit(long UnitId, string ProjectPath, ImpactGranularity Granularity, string Hash, string Spans, IReadOnlyList<string> MemberKeys);
+
+    private static IReadOnlyList<string> MembersForSpans(SourceMembers members, IReadOnlyList<LineSpan> spans) =>
+        members.Members
+            .Where(member => spans.Any(span => member.Lines.Overlaps(span)))
+            .Select(member => member.Key)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
+    private static bool HasLooseSpans(SourceMembers members, IReadOnlyList<LineSpan> spans)
+    {
+        var memberLines = LineSpan.Normalize(members.Members.Select(member => member.Lines));
+        return spans.Any(span => !memberLines.Any(memberSpan => memberSpan.Start <= span.Start && span.End <= memberSpan.End));
+    }
+
+    private static IReadOnlyList<string> DeserializeMemberKeys(string value) =>
+        JsonSerializer.Deserialize<string[]>(value) ?? [];
+
+    private IReadOnlyList<string> ReadMemberKeys(long unitId, string filePath, SqliteTransaction transaction)
+    {
+        using var cmd = Command(transaction, "SELECT member_keys FROM impact_unit_files WHERE unit_id = $unit_id AND file_path = $path;");
+        _ = cmd.Parameters.AddWithValue("$unit_id", unitId);
+        _ = cmd.Parameters.AddWithValue("$path", filePath);
+        var value = cmd.ExecuteScalar() as string;
+        return value is null ? [] : DeserializeMemberKeys(value);
+    }
 
     private List<FileUnit> ReadFileUnits(string filePath)
     {
         using var cmd = _connection!.CreateCommand();
         cmd.CommandText = """
-            SELECT u.unit_id, u.project_path, u.granularity, f.snapshot_hash, f.spans
+            SELECT u.unit_id, u.project_path, u.granularity, f.snapshot_hash, f.spans, f.member_keys
             FROM impact_unit_files f
             JOIN impact_units u ON u.unit_id = f.unit_id
             WHERE f.file_path = $path;
@@ -526,7 +729,8 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                 reader.GetString(1),
                 (ImpactGranularity)reader.GetInt32(2),
                 reader.GetString(3),
-                reader.GetString(4)));
+                reader.GetString(4),
+                DeserializeMemberKeys(reader.GetString(5))));
         }
 
         return rows;

@@ -67,6 +67,13 @@ public sealed class PistonState
     public IReadOnlyDictionary<string, ProjectRunStatus> ProjectStatuses { get; set; }
         = new Dictionary<string, ProjectRunStatus>();
 
+    /// <summary>
+    /// Queue status of the projects in the current run that are waiting for exclusive test resources,
+    /// keyed by project path (or the solution path for a whole-solution run).
+    /// </summary>
+    public IReadOnlyDictionary<string, TestResourceWait> ProjectResourceWaits { get; set; }
+        = new Dictionary<string, TestResourceWait>();
+
     // ── Verified/stale tracking ──
 
     /// <summary>Timestamp of the most recent file change that triggered a run. Null until first file change.</summary>
@@ -101,6 +108,9 @@ public sealed class PistonState
     /// <summary>The test that has been running longest in the current run, or null when none is running.</summary>
     public RunningTest? LongestRunningTest { get; set; }
 
+    /// <summary>What the current run's retries of its failed tests are doing, e.g. "Retrying 2 failed test(s): attempt 1 of 3"; null when not retrying.</summary>
+    public string? RetryStatus { get; set; }
+
     // ── Run provenance ───────────────────────────────────────────────────────
 
     /// <summary>Number of terminal runs retained in <see cref="RecentRuns"/> (in memory only).</summary>
@@ -114,6 +124,26 @@ public sealed class PistonState
 
     /// <summary>Terminal runs, newest first, bounded by <see cref="MaxRecentRuns"/>.</summary>
     public IReadOnlyList<TestRunRecord> RecentRuns { get; set; } = [];
+
+    // ── Session timeline ─────────────────────────────────────────────────────
+
+    /// <summary>Number of entries retained in <see cref="SessionTimeline"/> (in memory only).</summary>
+    public const int MaxSessionTimelineEntries = 500;
+
+    /// <summary>When this engine's session began; the timeline covers runs since then.</summary>
+    public DateTimeOffset SessionStartedAt { get; } = DateTimeOffset.UtcNow;
+
+    /// <summary>
+    /// Every terminal run of this session, oldest first, bounded by <see cref="MaxSessionTimelineEntries"/>.
+    /// Kept across reset and clearing results, which do not end the session.
+    /// </summary>
+    public IReadOnlyList<SessionTimelineEntry> SessionTimeline { get; set; } = [];
+
+    /// <summary>How many of the session's oldest runs have been dropped from <see cref="SessionTimeline"/>.</summary>
+    public int SessionTimelineDroppedRuns { get; set; }
+
+    /// <summary>Changes whenever <see cref="SessionTimeline"/> does, so clients know when to reload it.</summary>
+    public long SessionTimelineRevision { get; set; }
 
     /// <summary>Finds a retained run by ID, including the active run.</summary>
     public TestRunRecord? FindRun(string runId)

@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Text.Json;
 using Piston.Engine.History;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
@@ -242,11 +243,61 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         var fixedRun = _state.LastRun!;
 
         Assert.Empty(broken!.ChangedFiles);
-        Assert.Equal([new("A.Tests", "A.Tests.Test1")], broken.NewlyFailingTests);
+        Assert.Equal([new("A.Tests", "A.Tests.Test1") { ProjectId = TestProjectNames.ProjectId(_root, Projects[0]) }], broken.NewlyFailingTests);
         Assert.Empty(broken.FixedTests);
         Assert.Equal([code], fixedRun.ChangedFiles);
-        Assert.Equal([new("A.Tests", "A.Tests.Test1")], fixedRun.FixedTests);
+        Assert.Equal([new("A.Tests", "A.Tests.Test1") { ProjectId = TestProjectNames.ProjectId(_root, Projects[0]) }], fixedRun.FixedTests);
         Assert.Empty(fixedRun.NewlyFailingTests);
+    }
+
+    [Fact]
+    public async Task RunsWithoutEarlierResultsToCompare_AreMarked()
+    {
+        await StartAndWaitForStartupRunAsync();
+        var compared = await _orchestrator.RequestRunAsync();
+
+        _orchestrator.ClearResults(_root);
+        _runner.FailingTest = "A.Tests.Test1";
+        var afterClear = await _orchestrator.RequestRunAsync();
+
+        Assert.True(_state.SessionTimeline[0].NoEarlierResults);
+        Assert.False(compared!.NoEarlierResults);
+        Assert.True(afterClear!.NoEarlierResults);
+        Assert.Empty(afterClear.NewlyFailingTests);
+        Assert.True(_state.SessionTimeline[^1].NoEarlierResults);
+    }
+
+    [Fact]
+    public async Task SessionTimeline_KeepsEveryTerminalRunWithItsEditsAndOutcomeChanges()
+    {
+        await StartAndWaitForStartupRunAsync();
+        var code = Path.Combine(_root, "Code.cs");
+
+        File.WriteAllText(code, "class Code { int X; }");
+        _runner.FailingTest = "A.Tests.Test1";
+        _watcher.TriggerChange(new FileChangeBatch(
+            [new FileChangeEvent(code, WatcherChangeTypes.Changed, DateTimeOffset.UtcNow)], DateTimeOffset.UtcNow));
+        await WaitForAsync(() => _state.LastRun is { Trigger: TestRunTrigger.FileChange });
+        _runner.FailingTest = null;
+        var fixedRun = await _orchestrator.RequestRunAsync();
+
+        var timeline = _state.SessionTimeline;
+        Assert.Equal(3, timeline.Count);
+        var (startup, broken, fixedEntry) = (timeline[0], timeline[1], timeline[2]);
+        Assert.Equal(TestRunTrigger.Startup, startup.Trigger);
+        Assert.Equal(TestRunTrigger.FileChange, broken.Trigger);
+        Assert.Equal([code], broken.ChangedFiles);
+        Assert.Equal(1, broken.ChangedFileCount);
+        Assert.NotEqual(startup.SourceAfter, broken.SourceBefore);
+        Assert.Equal([new("A.Tests", "A.Tests.Test1") { ProjectId = TestProjectNames.ProjectId(_root, Projects[0]) }], broken.NewlyFailingTests);
+        Assert.Equal(1, broken.Failed);
+        Assert.Equal(BuildStatus.Succeeded, broken.BuildStatus);
+        Assert.Equal(fixedRun!.RunId, fixedEntry.RunId);
+        Assert.Equal([new("A.Tests", "A.Tests.Test1") { ProjectId = TestProjectNames.ProjectId(_root, Projects[0]) }], fixedEntry.FixedTests);
+        Assert.Equal(broken.SourceAfter, fixedEntry.SourceBefore);
+        Assert.False(fixedEntry.InRunHistory);
+        Assert.True(timeline.Zip(timeline.Skip(1)).All(p => p.First.Sequence < p.Second.Sequence));
+        Assert.Equal(3, _state.SessionTimelineRevision);
     }
 
     [Fact]
@@ -262,6 +313,106 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         Assert.Equal(Projects, run.Context!.TestProjects);
         Assert.Equal(Projects, run.Context.TestWorkingDirectories!.Keys.Order(StringComparer.Ordinal));
         Assert.Equal(["A.Tests", "B.Tests"], _state.TestSuites.Select(s => s.Name).Order(StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task StartupHistoryMigrationWaitsForTheCompletePostRestoreGraph(bool ambiguous)
+    {
+        var restoredProject = ambiguous ? "/src/Other/A.Tests.csproj" : Projects[1];
+        var legacyName = Path.GetFileNameWithoutExtension(restoredProject);
+        var historyDirectory = _root + "-history";
+        WriteLegacyHistory(historyDirectory, legacyName);
+        using var history = RunHistoryStore.Open(historyDirectory, SolutionPath);
+        _orchestrator.RunHistory = history;
+        _impact.TestProjects = [Projects[0]];
+        _impact.TestProjectsAfterRestore = [Projects[0], restoredProject];
+        _build.DuringBuild = () =>
+            Assert.Equal(legacyName, Assert.Single(history.GetTestHistory("Shared.Test")).ProjectId);
+
+        try
+        {
+            await StartAndWaitForStartupRunAsync();
+
+            var migrated = history.GetTestHistory("Shared.Test");
+            if (ambiguous)
+            {
+                Assert.Empty(migrated);
+            }
+            else
+            {
+                Assert.Equal(TestProjectNames.ProjectId(_root, restoredProject), Assert.Single(migrated).ProjectId);
+            }
+        }
+        finally
+        {
+            _orchestrator.RunHistory = null;
+            history.Dispose();
+            Directory.Delete(historyDirectory, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IncompleteGraphOrFailedBuildLeavesLegacyHistoryUnchanged(bool buildFails)
+    {
+        var historyDirectory = _root + "-history";
+        WriteLegacyHistory(historyDirectory, "A.Tests");
+        var location = HistoryLocation.Resolve(historyDirectory, SolutionPath);
+        var original = File.ReadAllText(location.FilePath);
+        var messages = new List<string>();
+        using var history = RunHistoryStore.Open(historyDirectory, SolutionPath, messages.Add);
+        _orchestrator.RunHistory = history;
+        _impact.ProjectDiscoveryComplete = false;
+        _build.Fail = buildFails;
+
+        try
+        {
+            await StartAndWaitForStartupRunAsync();
+            history.Save();
+
+            Assert.Equal(original, File.ReadAllText(location.FilePath));
+            Assert.Equal("A.Tests", Assert.Single(history.GetTestHistory("Shared.Test")).ProjectId);
+            if (!buildFails)
+            {
+                Assert.Contains(messages, m => m.Contains("waiting for complete project discovery", StringComparison.Ordinal));
+            }
+
+            _impact.ProjectDiscoveryComplete = true;
+            _build.Fail = false;
+            _ = await _orchestrator.RequestRunAsync();
+            Assert.Equal(TestProjectNames.ProjectId(_root, Projects[0]),
+                Assert.Single(history.GetTestHistory("Shared.Test")).ProjectId);
+        }
+        finally
+        {
+            _orchestrator.RunHistory = null;
+            history.Dispose();
+            Directory.Delete(historyDirectory, recursive: true);
+        }
+    }
+
+    private void WriteLegacyHistory(string directory, string project)
+    {
+        var location = HistoryLocation.Resolve(directory, SolutionPath);
+        _ = Directory.CreateDirectory(location.Directory);
+        File.WriteAllText(location.FilePath, JsonSerializer.Serialize(new
+        {
+            Version = 1,
+            Names = new[] { project, "Shared.Test" },
+            Tests = new[]
+            {
+                new
+                {
+                    Project = 0,
+                    Test = 1,
+                    Runs = new[] { new { RunId = "legacy-run", At = DateTimeOffset.UtcNow, Status = "P", DurationMs = 1 } },
+                },
+            },
+            Runs = Array.Empty<object>(),
+        }));
     }
 
     [Fact]
@@ -322,9 +473,14 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         var flaky = await _orchestrator.RequestRunAsync();
 
         var classification = Assert.Single(broken!.FailureClassifications);
-        Assert.Equal(new FailureClassification("B.Tests", "B.Tests.Test1", FailureKind.New, classification.Evidence), classification);
+        Assert.Equal(new FailureClassification("B.Tests", "B.Tests.Test1", FailureKind.New, classification.Evidence)
+        {
+            ProjectId = TestProjectNames.ProjectId(_root, Projects[1]),
+        }, classification);
         Assert.Equal(FailureKind.Flaky, Assert.Single(flaky!.FailureClassifications).Kind);
         Assert.Equal(4, history.GetRuns().Count);
+        Assert.All(_state.SessionTimeline, e => Assert.True(e.InRunHistory));
+        Assert.Equal(FailureKind.New, Assert.Single(_state.SessionTimeline.Single(e => e.RunId == broken.RunId).FailureClassifications).Kind);
         _orchestrator.RunHistory = null;
         history.Dispose();
         Directory.Delete(historyDirectory, recursive: true);
@@ -391,6 +547,31 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     }
 
     [Fact]
+    public async Task IdenticalTestsInDifferentProjects_AreNotDuplicateIdentities()
+    {
+        _impact.TestProjects =
+        [
+            Path.Combine(_root, "One", "Tests.csproj"),
+            Path.Combine(_root, "Two", "Tests.csproj"),
+        ];
+        await StartAndWaitForStartupRunAsync();
+
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(TestRunStatus.Completed, run!.Status);
+        Assert.Equal(["One/Tests.csproj", "Two/Tests.csproj"], run.Suites.Select(s => s.ProjectId));
+        Assert.All(run.Tests, test => Assert.Equal("Tests.Test1", test.ResultKey));
+        Assert.Empty(run.DuplicateTestIds);
+        Assert.True(run.IsCurrentFullResult);
+
+        _runner.DuplicateFirstTest = true;
+        var duplicated = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(["Tests.Test1"], duplicated!.DuplicateTestIds);
+        Assert.False(duplicated.IsCurrentFullResult);
+    }
+
+    [Fact]
     public async Task DuplicateTestIdentities_AreReportedAndNotCurrentFullResult()
     {
         await StartAndWaitForStartupRunAsync();
@@ -430,6 +611,23 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     }
 
     [Fact]
+    public async Task OlderRecentRunsDropExecutionLogs_WhileLatestAggregateKeepsItsLog()
+    {
+        _runner.AttachExecutionLog = true;
+        await StartAndWaitForStartupRunAsync();
+        var older = _state.LastRun!;
+        Assert.NotNull(older.Suites.First(s => s.Name == "A.Tests").ExecutionLog);
+
+        var newer = await _orchestrator.RequestRunAsync();
+
+        Assert.NotNull(newer!.Suites.First(s => s.Name == "A.Tests").ExecutionLog);
+        Assert.Null(_state.FindRun(older.RunId)!.Suites.First(s => s.Name == "A.Tests").ExecutionLog);
+        var aggregate = _state.TestSuites.First(s => s.Name == "A.Tests");
+        Assert.NotNull(aggregate.ExecutionLog);
+        Assert.Equal(newer.RunId, aggregate.RunId);
+    }
+
+    [Fact]
     public async Task BuildDiagnosticsStayWithTheirRunAfterLaterBuilds()
     {
         await StartAndWaitForStartupRunAsync();
@@ -466,6 +664,10 @@ internal sealed class ProvenanceImpactAnalyzer(IReadOnlyList<string> testProject
 
     /// <summary>The test projects the graph finds once reloaded after restore; null when it was restored already.</summary>
     public IReadOnlyList<string>? TestProjectsAfterRestore { get; set; }
+    public bool ProjectDiscoveryComplete { get; set; } = true;
+
+    public IReadOnlyList<string>? GetRestoredTestProjectPaths() =>
+        ProjectDiscoveryComplete && TestProjectsAfterRestore is null ? TestProjects : null;
 
     public bool RefreshGraphIfEvaluatedBeforeRestore()
     {
@@ -525,6 +727,19 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
     public string? RunningTest { get; set; }
     public TimeSpan HoldRunning { get; set; }
     public string? LastFilter { get; private set; }
+    public bool AttachExecutionLog { get; set; }
+
+    /// <summary>How many more runs <see cref="FailingTest"/> fails in before it passes; null fails it every time.</summary>
+    public int? FailuresRemaining { get; set; }
+
+    /// <summary>The framework unfiltered runs report for <see cref="FailingTest"/>, as a multi-targeted project's would.</summary>
+    public string? FailingTestFramework { get; set; }
+
+    /// <summary>Extra failing tests each project reports.</summary>
+    public int ExtraFailures { get; set; }
+
+    /// <summary>Every call: its targets, filter and whether it collected coverage.</summary>
+    public List<(IReadOnlyList<string>? Targets, string? Filter, bool Coverage)> Calls { get; } = [];
 
     public Task<TestRunResult> RunTestsAsync(
         string solutionPath, string? filter, Action<IReadOnlyList<TestSuite>>? onProgress, CancellationToken ct) =>
@@ -540,7 +755,13 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
         Action<IReadOnlyList<TestSuite>>? onProgress, Action<ProjectTestResult>? onProjectCompleted, CancellationToken ct)
     {
         LastFilter = filter;
+        Calls.Add((testProjectPaths, filter, collectCoverage));
         DuringRun?.Invoke();
+        var failing = FailingTest is not null && FailuresRemaining is not <= 0;
+        if (failing && FailuresRemaining is { } remaining && testProjectPaths?.Any(p => FailingTest!.StartsWith(Path.GetFileNameWithoutExtension(p) + ".", StringComparison.Ordinal)) == true)
+        {
+            FailuresRemaining = remaining - 1;
+        }
 
         if (RunningTest is { } running)
         {
@@ -551,12 +772,19 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
         }
 
         var all = new List<TestSuite>();
+        var projects = new List<ProjectTestResult>();
+        void Complete(ProjectTestResult project)
+        {
+            projects.Add(project);
+            onProjectCompleted?.Invoke(project);
+        }
+
         foreach (var path in testProjectPaths ?? [])
         {
             var name = Path.GetFileNameWithoutExtension(path);
             if (CrashedProjects.Contains(path))
             {
-                onProjectCompleted?.Invoke(new ProjectTestResult(path, [], "crashed", [], Crashed: true));
+                Complete(new ProjectTestResult(path, [], "crashed", [], Crashed: true));
                 continue;
             }
             if (TimedOutProjects.TryGetValue(path, out var timeout))
@@ -564,31 +792,42 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
                 var timedOutTest = new TestResult(timeout.Test, timeout.Test, TestStatus.Failed, timeout.Limit, null, "Timed out", null, null);
                 var timedOutSuite = new TestSuite(name, [timedOutTest], DateTimeOffset.UtcNow, timeout.Limit);
                 all.Add(timedOutSuite);
-                onProjectCompleted?.Invoke(new ProjectTestResult(path, [timedOutSuite], null, [], Crashed: false) { TimedOut = timeout });
+                Complete(new ProjectTestResult(path, [timedOutSuite], null, [], Crashed: false) { TimedOut = timeout });
                 continue;
             }
             if (ProjectsWithoutResults.Contains(path))
             {
-                onProjectCompleted?.Invoke(new ProjectTestResult(path, [], null, [], Crashed: false));
+                Complete(new ProjectTestResult(path, [], null, [], Crashed: false));
                 continue;
             }
 
             var fqn = $"{name}.Test1";
             var tests = new List<TestResult>
             {
-                new(fqn, "Test1", fqn == FailingTest ? TestStatus.Failed : TestStatus.Passed,
-                    TimeSpan.FromMilliseconds(1), null, null, null, null),
+                new(fqn, "Test1", failing && fqn == FailingTest ? TestStatus.Failed : TestStatus.Passed,
+                    TimeSpan.FromMilliseconds(1), null, failing && fqn == FailingTest ? "boom" : null, null, null)
+                {
+                    TargetFramework = filter is null && fqn == FailingTest ? FailingTestFramework : null,
+                },
             };
+            for (var i = 0; i < ExtraFailures; i++)
+            {
+                tests.Add(new($"{name}.Extra{i}", $"Extra{i}", TestStatus.Failed, TimeSpan.FromMilliseconds(1), null, "boom", null, null));
+            }
+
             if (DuplicateFirstTest && all.Count == 0)
             {
                 tests.Add(tests[0]);
             }
 
-            var suite = new TestSuite(name, tests, DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(1));
+            var suite = new TestSuite(name, tests, DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(1))
+            {
+                ExecutionLog = AttachExecutionLog ? new ExecutionLog(path) : null,
+            };
             all.Add(suite);
-            onProjectCompleted?.Invoke(new ProjectTestResult(path, [suite], null, [], Crashed: false));
+            Complete(new ProjectTestResult(path, [suite], null, [], Crashed: false));
         }
 
-        return new TestRunResult(all, null, []);
+        return new TestRunResult(all, null, []) { Projects = projects };
     }
 }

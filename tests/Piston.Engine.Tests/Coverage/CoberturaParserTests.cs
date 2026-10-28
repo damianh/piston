@@ -152,6 +152,28 @@ public sealed class CoberturaParserTests : IDisposable
     }
 
     [Fact]
+    public void Parse_ExecutedMethod_EmitsItsActualLinesRatherThanTheRangeBetweenThem()
+    {
+        var sut = new CoberturaParser();
+        var xmlPath = WriteTempXml("""
+            <coverage version="1.9"><sources><source>/repo</source></sources><packages>
+              <package name="Lib"><classes><class filename="Code.cs">
+                <methods><method name="M"><lines>
+                  <line number="4" hits="1" />
+                  <line number="7" hits="0" />
+                  <line number="12" hits="1" />
+                </lines></method></methods>
+                <lines><line number="4" hits="1" /><line number="7" hits="0" /><line number="12" hits="1" /></lines>
+              </class></classes></package>
+            </packages></coverage>
+            """);
+
+        var file = Assert.Single(sut.Parse(xmlPath).Files);
+
+        Assert.Equal([new LineSpan(4, 4), new LineSpan(7, 7), new LineSpan(12, 12)], file.GetExecutedSpans());
+    }
+
+    [Fact]
     public void Parse_AbsoluteFilePath_ReturnedAsIs()
     {
         // On Windows the path separator differs, but the path should still be absolute
@@ -306,7 +328,7 @@ public sealed class CoberturaParserTests : IDisposable
 
         var file = Assert.Single(new CoberturaParser().Parse(xmlPath).Files);
 
-        Assert.Equal([new LineSpan(3, 7)], file.ExecutedSpans);
+        Assert.Equal([new LineSpan(3, 4), new LineSpan(6, 7)], file.ExecutedSpans);
     }
 
     [Fact]

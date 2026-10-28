@@ -10,4 +10,6 @@ namespace Piston.Engine.Models;
 /// null runs every test in them. A parameterised test's arguments are ignored, so all of its cases run. Names may
 /// not contain double quotes.
 /// </param>
-public sealed record TestSelection(IReadOnlyList<string> Projects, IReadOnlyList<string>? Tests = null);
+/// <param name="ProjectIds">Solution-relative project IDs of the test projects to run.</param>
+/// <param name="Tests">Fully-qualified test names to run, or null to run every test in those projects.</param>
+public sealed record TestSelection(IReadOnlyList<string> ProjectIds, IReadOnlyList<string>? Tests = null);

@@ -198,19 +198,19 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
         }
     }
 
-    private static long NextSequence(IReadOnlyList<Entry> tickets, IReadOnlyList<Entry> leases)
+    private static long NextSequence(IReadOnlyList<ExecutionQueueEntry> tickets, IReadOnlyList<ExecutionQueueEntry> leases)
     {
         var maxLive = tickets.Concat(leases).Select(e => e.Sequence).DefaultIfEmpty(0).Max();
         return Math.Max(DateTime.UtcNow.Ticks, maxLive + 1);
     }
 
     /// <summary>Must be called under the admission lock. Removes entries of exited processes.</summary>
-    private (IReadOnlyList<Entry> Tickets, IReadOnlyList<Entry> Leases) ScanLiveEntries() =>
+    private (IReadOnlyList<ExecutionQueueEntry> Tickets, IReadOnlyList<ExecutionQueueEntry> Leases) ScanLiveEntries() =>
         (ScanLive(_directory.QueueDirectory, TicketExtension), ScanLive(_directory.LeasesDirectory, LeaseExtension));
 
-    private static List<Entry> ScanLive(string directory, string extension)
+    private static List<ExecutionQueueEntry> ScanLive(string directory, string extension)
     {
-        var live = new List<Entry>();
+        var live = new List<ExecutionQueueEntry>();
         try
         {
             foreach (var path in System.IO.Directory.EnumerateFiles(directory))
@@ -221,7 +221,8 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
                 }
 
                 var name = Path.GetFileName(path);
-                if (!name.EndsWith(extension, StringComparison.Ordinal) || Entry.TryParse(name, out var entry) is false)
+                if (!name.EndsWith(extension, StringComparison.Ordinal)
+                    || !ExecutionQueueEntry.TryParse(name, out var entry))
                 {
                     throw new ExecutionCoordinationException(
                         $"Unrecognised held entry '{path}' in the execution coordination directory; another " +
@@ -236,33 +237,6 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
             throw new ExecutionCoordinationException($"Cannot read execution queue '{directory}': {ex.Message}", ex);
         }
         return live;
-    }
-
-    private readonly record struct Entry(long Sequence, int CpuSlots, int? MemoryMb, string Name)
-    {
-        public int CompareTo(long sequence, string name)
-        {
-            var bySequence = Sequence.CompareTo(sequence);
-            return bySequence != 0 ? bySequence : string.CompareOrdinal(Name, name);
-        }
-
-        public static bool TryParse(string fileName, out Entry entry)
-        {
-            entry = default;
-            var parts = Path.GetFileNameWithoutExtension(fileName).Split('_');
-            if (parts.Length != 5
-                || !long.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out var sequence)
-                || !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var cpu) || cpu <= 0
-                || !int.TryParse(parts[2], NumberStyles.None, CultureInfo.InvariantCulture, out var memory)
-                || !int.TryParse(parts[3], NumberStyles.None, CultureInfo.InvariantCulture, out _)
-                || parts[4].Length == 0)
-            {
-                return false;
-            }
-
-            entry = new Entry(sequence, cpu, memory == 0 ? null : memory, fileName);
-            return true;
-        }
     }
 
     private sealed class Lease(FileStream file, TestRunAdmission status, string admissionLockPath) : IExecutionLease

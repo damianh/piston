@@ -6,7 +6,7 @@ namespace Piston.Engine.Execution;
 /// <summary>
 /// Per-user directory shared by every Piston daemon of the user on this machine. It holds the
 /// machine budget (<c>budget.json</c>) and, under a format-versioned subdirectory, worktree owner
-/// locks, the admission queue and admitted leases. It must be on a local filesystem: lock semantics
+/// locks, the admission queue and admitted leases, and the test resource queue and leases. It must be on a local filesystem: lock semantics
 /// on network filesystems are not relied upon.
 /// </summary>
 public sealed class ExecutionCoordinationDirectory
@@ -38,6 +38,29 @@ public sealed class ExecutionCoordinationDirectory
     internal string QueueDirectory => Path.Combine(StateDirectory, "queue");
     internal string LeasesDirectory => Path.Combine(StateDirectory, "leases");
     internal string AdmissionLockPath => Path.Combine(StateDirectory, "admission.lock");
+    internal string ResourceQueueDirectory => Path.Combine(StateDirectory, "resource-queue");
+    internal string ResourceLeasesDirectory => Path.Combine(StateDirectory, "resource-leases");
+    internal string ResourceLockPath => Path.Combine(StateDirectory, "resources.lock");
+
+    internal static bool DirectoryExistsOrThrow(string path)
+    {
+        FileAttributes attributes;
+        try
+        {
+            attributes = File.GetAttributes(path);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return false;
+        }
+
+        if ((attributes & FileAttributes.Directory) == 0)
+        {
+            throw new IOException($"Execution coordination path '{path}' is not a directory.");
+        }
+
+        return true;
+    }
 
     /// <summary>
     /// <see cref="EnvironmentVariable"/> when set, otherwise <c>Piston/execution</c> under the per-user
@@ -84,7 +107,11 @@ public sealed class ExecutionCoordinationDirectory
     {
         try
         {
-            foreach (var dir in new[] { BaseDirectory, StateDirectory, OwnersDirectory, QueueDirectory, LeasesDirectory })
+            foreach (var dir in new[]
+            {
+                BaseDirectory, StateDirectory, OwnersDirectory, QueueDirectory, LeasesDirectory,
+                ResourceQueueDirectory, ResourceLeasesDirectory,
+            })
             {
                 if (OperatingSystem.IsWindows())
                 {

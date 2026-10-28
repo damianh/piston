@@ -27,6 +27,15 @@ public interface ITestProcessPool : IDisposable
         CancellationToken ct);
 
     /// <summary>
+    /// Runs a single test project once a pool slot is available, reporting its start (once it holds a
+    /// slot) and live progress via <paramref name="callbacks"/>. Completion is left to the caller.
+    /// </summary>
+    Task<ProjectTestResult> RunProjectAsync(
+        ProjectTestRequest request,
+        TestRunCallbacks callbacks,
+        CancellationToken ct);
+
+    /// <summary>
     /// Runs multiple test projects concurrently (up to PoolSize).
     /// Reports progress per-project via the callback.
     /// Returns all results when all projects complete.

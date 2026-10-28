@@ -66,7 +66,7 @@ piston status [<solution>] [--all]
 piston coverage-export [<solution>] [--format lcov|cobertura] [-o <file>]
 ```
 
-`piston status --all` lists every live worktree owner (PID, `mcp` or `daemon`, solution, worktree) and stale ownership records. If a worktree's owner cannot be reached over the daemon pipe (for example a `piston mcp` process, or a daemon whose worktree was deleted), `piston stop` prints the owner's PID, solution and worktree and exits 1; `piston stop --force` sends SIGTERM and kills the process if it has not exited.
+`piston status --all` lists every live worktree owner (PID, `mcp` or `daemon`, solution, worktree and dashboard URL where available), stale ownership records, running reservations, FIFO queue order and CPU/memory use against the machine budget. The dashboard's **Machine** tab shows the same overview and links to local dashboards. `piston mcp` sessions have no dashboard URL. If a worktree's owner cannot be reached over the daemon pipe (for example a `piston mcp` process, or a daemon whose worktree was deleted), `piston stop` prints the owner's PID, solution and worktree and exits 1; `piston stop --force` sends SIGTERM and kills the process if it has not exited.
 
 `piston status` prints the daemon's PID, solution, phase, web and MCP URLs, and its latest and active run. `piston stop` asks the daemon to shut down, then waits for its process to exit. It exits 0 only once the process has exited, so the ports are free; with no daemon running it prints `No daemon running` and also exits 0. Startup failures exit with code 1 and an `error:` message: a worktree that already has a daemon, or an occupied `--mcp-port`/`--web-port`. Endpoints bind after worktree ownership is taken and before the startup run, so a port conflict starts no build or test run.
 
@@ -151,6 +151,8 @@ C# source in the coverage detail pane uses the same theme-aware syntax highlight
 
 The **Runs** tab lists the runs kept in the [run history](#run-history-and-failure-classification), newest first, with each run's trigger, scope and passed, failed and skipped counts. Selecting a run shows its per-test results, failures first with their messages, and compares it with an earlier run (the previous one by default): new failures, fixed tests, tests that passed in both but became at least twice as slow and 100 ms slower, tests still failing, added tests and, for a run of all tests, tests that did not run. Click a test to open it in the **Tests** tab.
 
+The **Machine** tab shows owned worktrees, the current CPU/memory budget use, admitted runs and the strict FIFO queue. It refreshes while open, marks stale ownership records, and opens another daemon's local dashboard when its owner record has a dashboard URL.
+
 Keyboard shortcuts (press `?` in the dashboard for the list): `R` runs the selection, `[` and `]` move to the previous or next failure, `1`–`4` show or hide failed, passed, skipped and not-run tests, `G` cycles the grouping, `E` expands or collapses all, and `S` sorts by duration (press again to reverse).
 
 Dashboard styles are bundled locally; no CDN access is needed. After changing
@@ -190,13 +192,13 @@ To set up a coding agent, follow [docs/agent-usage.md](docs/agent-usage.md). It 
 | `verify` | Get current full verification (optional `expectedSolution` guard; the reply names the `Solution:`). Reuses the latest run if it is a current, full-scope, unfiltered result for the present source fingerprint; otherwise awaits an active full run or forces one, retrying at most twice when the source changes mid-run, then reporting `Stale`. Returns a compact verdict (`Passed`, `TestsFailed`, `BuildFailed`, `Incomplete`, `Stale`, `Cancelled`, `Faulted`, `TimedOut`, `NotFullScope`) with run ID, fingerprint, counts, capped failing tests / build errors and queue info. Only `Passed` is proof. |
 | `run_tests` | Request a full build + test run; returns a textual summary plus a `Run:` line with the run ID, status, scope, freshness and source fingerprint. |
 | `get_test_run` | Read one run's solution path, provenance, build diagnostics and per-test results as JSON (`piston.test-run/v1`): `runId` = an ID, `latest` (default) or `active`. |
-| `get_test_history` | Recorded results of one test (`test`, optional `project`) across runs in this worktree, newest first, with run ID, time, status, duration and source fingerprint. Empty `test` lists flaky tests. See [Run history and failure classification](#run-history-and-failure-classification). |
+| `get_test_history` | Recorded results of one test (`test`, optional `project`) across runs in this worktree, newest first, with run ID, time, status, duration, source fingerprint and retry attempt; a flaky test has an `Evidence:` line. Empty `test` lists flaky tests with their evidence. See [Run history and failure classification](#run-history-and-failure-classification). |
 | `get_test_results` | Read current accumulated test results (may combine several runs; each suite shows its run ID). |
 | `set_test_filter` | Apply a test name filter. |
-| `get_coverage` | Line and branch coverage as JSON (`piston.coverage/v1`). Without `file`: solution and per-module totals plus the files with the most uncovered lines (`maxFiles`, default 50). With `file`: its totals and its uncovered and partly covered line ranges. Requires coverage. |
-| `get_changed_line_coverage` | Coverage of the changed lines (see [git bases](#git-bases)), as JSON (`piston.changed-line-coverage/v1`). Files changed since they were last measured are reported as stale with no line verdicts. Requires coverage. |
+| `get_coverage` | Line and branch coverage as JSON (`piston.coverage/v1`). Without `file`: solution and per-module totals plus the files with the most uncovered lines (`maxFiles`, default 50). With `file`: its totals, uncovered and partly covered line ranges, and current-source lines without validated evidence (`staleLines`). Requires coverage. |
+| `get_changed_line_coverage` | Coverage of the changed lines (see [git bases](#git-bases)), as JSON (`piston.changed-line-coverage/v1`). It reports verdicts for unchanged members when their lines can be remapped; changed or otherwise unvalidated lines are listed as stale. Requires coverage. |
 | `export_coverage` | Write the coverage report as LCOV or Cobertura (`format`) to `outputPath`, which must be inside the solution directory (default `.piston/coverage/lcov.info` or `cobertura.xml`). Requires coverage. |
-| `plan_affected_tests` | Preview what Piston would build and run for `files` (or git changes, see [git bases](#git-bases)) without running anything, as JSON (`piston.affected-plan/v1`): `scope` (`full`, `projects`, `tests` or `none`), an `explanation`, the projects, any `warnings`, and with coverage the selected tests with the changed lines that selected each and the granularity of that evidence (`run`, `class` or `test`). |
+| `plan_affected_tests` | Preview what Piston would build and run for `files` (or git changes, see [git bases](#git-bases)) without running anything, as JSON (`piston.affected-plan/v1`): `scope` (`full`, `projects`, `tests` or `none`), an `explanation`, the projects, any `warnings`, and with coverage the selected tests with changed lines, optional member identities and the granularity of that evidence (`run`, `class` or `test`). |
 | `run_affected_tests` | Run that plan and wait for it: the same JSON plus `run` (ID, status and counts; null when nothing is affected). For example, `base: "branch"` runs the tests affected by everything since the branch left `main`. |
 | `clear_results` | Clear current test suites, last-run timestamp, coverage state, and persisted coverage in the current solution directory. A running test run may publish new results afterwards. |
 
@@ -238,7 +240,12 @@ freshness before treating a diagnostic as evidence for their source generation.
 
 Limits:
 
-- Full run records (what `get_test_run` returns) are kept for the 16 most recent runs, in memory only. Per-test outcomes persist separately in the [run history](#run-history-and-failure-classification).
+- Full run records (what `get_test_run` returns) are kept for the 16 most recent runs, in memory only. Per-test outcomes persist separately in the [run history](#run-history-and-failure-classification). Execution logs are dropped from older run records; aggregate project suites retain the latest log per project.
+- Each test result retains at most 64 Ki characters each for `Output`, `ErrorMessage` and `StackTrace`. Output keeps its beginning and end with a truncation marker; error messages and stack traces keep their beginning. This bounds those three fields to 192 Ki UTF-16 characters (about 384 KiB) per test result, independent of console-output volume. The 16 retained runs still retain their individual test results.
+- A build retains at most 500 errors and 500 warnings, with each diagnostic limited to 2,000 characters. `OmittedErrors` and `OmittedWarnings` (also in the MCP `get_test_run` build object) report how many more there were; the dashboard and `verify` report indicate omissions.
+- Each test-completion activity event retains at most 50 failures, with the test name and message each limited to 1,000 characters. Each build-completion event retains at most 50 errors of at most 1,000 characters. The event's `failed`/`errorCount` fields remain the total, and the activity timeline shows how many entries were omitted.
+- Each project execution log retains at most 2,000 entries of at most 4,000 characters. Older `RecentRuns` records drop their log copies; the latest run and aggregate project suites keep the logs needed by the dashboard.
+- `.piston/diagnostics.log` rotates at 10 MiB to one previous file, `.piston/diagnostics.log.1`; log entries are limited to 4,000 characters. Starting the daemon clears both files.
 - The fingerprint does not cover sources outside the solution directory, installed SDKs, the NuGet cache, or merged user/machine NuGet configuration.
 - `verify` reevaluates project inputs and returns `NotFullScope` for user projects, imports or declared files outside the fingerprint (including excluded directories). SDK/workload files, packages and generated restore imports remain toolchain/cache exclusions. Evaluation failure is `Faulted`; neither verdict is a pass or a hidden fallback.
 - Full runs refresh the solution graph before selecting test projects. `verify` also rejects an otherwise current run if its selected projects omit a test project from the refreshed graph.
@@ -256,7 +263,7 @@ Daemons for the same OS user coordinate through a per-user directory: `$PISTON_E
   { "cpuSlots": 8, "memoryMb": 16384 }
   ```
 
-  Without the file, the budget is the logical processor count with no memory limit. When the file exists, `cpuSlots` is required and `memoryMb` is optional. An unreadable file is an error, not a default budget. Unknown properties, non-positive values, or a reservation that could never fit fail explicitly: at daemon startup, or as a `Faulted` run if the file changes while a run waits. If the budget limits memory, every daemon must set `execution.memoryMb`. MCP text also reports configured memory reservations when memory is unbudgeted, explicitly marked `unbudgeted`.
+  Without the file, the budget is the logical processor count with no memory limit. When the file exists, `cpuSlots` is required and `memoryMb` and `containerSlots` (see [Integration-test resources](#integration-test-resources)) are optional. An unreadable file is an error, not a default budget. Unknown properties, non-positive values, or a reservation that could never fit fail explicitly: at daemon startup, or as a `Faulted` run if the file changes while a run waits. If the budget limits memory, every daemon must set `execution.memoryMb`. MCP text also reports configured memory reservations when memory is unbudgeted, explicitly marked `unbudgeted`.
 
   Update `budget.json` by writing the complete JSON to a temporary file in the same directory, then atomically renaming it over `budget.json` (without deleting the old file first). This is recommended over editing in place. Empty/partial JSON and I/O failures are retried up to five times at 20 ms intervals (100 ms total delay); persistent failures still report the existing invalid-budget error. Schema errors and access denial fail immediately.
 - **Visible queueing.** A waiting run is published as the active run with status `Queued` and an `admission` object: `state` (`Queued`/`Admitted`), `queuedAhead`, `queueLength`, `otherAdmittedRuns`, `cpuSlotsInUse`, `memoryMbInUse`, the reservation, the budget and its source, `queuedAt` and `admittedAt`. It appears in `get_test_run` (`active` or by ID), in the `Active Run:` line of `get_test_results`, and in `ActiveRun`/`LastRun` of the protocol state snapshot. A run superseded while queued ends `Cancelled` without starting, and its replacement keeps the queue position. Leases and tickets are released when a run ends, is cancelled or faults, or when the daemon exits or crashes.
@@ -266,6 +273,41 @@ Graceful engine disposal waits for cancelled pipelines to finish and release the
 Test execution and discovery use a launcher that establishes a Unix process group or Windows job before starting the test command. The launcher uses Piston's runtime installation, but resolves the target command in the original Piston process's context, preserving SDK selection. On Windows, test commands remain windowless and inherit the redirected stdout/stderr handles. After the command exits, redirected stdout/stderr get a five-second drain grace period. If descendants keep those streams open, Piston terminates the owned tree, bounds termination cleanup to ten seconds, and records that output was cut off in the run or diagnostic log.
 
 Limits: this is admission control by reservation. Piston does not cap the actual CPU or memory of builds or test processes (no cgroup or job-object resource limits). A hung but live daemon keeps its lease. Child processes orphaned by a crashed daemon are no longer counted. Daemons of different OS users do not share a budget. Solution loading at startup is not admitted. Owner `.lock` files are left in place on purpose. CI runs the full engine suite, including the execution budget tests, on Linux and Windows. On macOS, the smoke job runs `WorktreeOwnershipTests`, plus the packed-tool daemon and MCP `verify` smoke tests on the samples.
+
+### Integration-test resources
+
+Test projects that start containers or bind fixed ports collide when two worktrees run them at the same time. Piston schedules them through the same per-user coordination directory, so such runs queue instead of failing:
+
+- **Inference.** A test project that directly references a container testing package (`Testcontainers`, `Testcontainers.*`, `DotNet.Testcontainers*`, `Aspire.Hosting.Testing`, `Docker.DotNet*`, `Ductus.FluentDocker*`, `Squadron.*`) uses containers. References across all target frameworks are combined, including framework-conditional references. By default it is isolated per repository: only one run of that project at a time across all worktrees of the repository (on this machine, for this user), because such tests often reuse fixed container names, volumes and ports. Projects without container packages run without coordination unless a rule declares resources.
+- **Exclusive resources.** A run holds all of its resources at once, and a project waits, before taking a test-process slot, while another run holds or is queued ahead for any of them. Waiting is first-in, first-out per resource, so nothing starves or deadlocks. Resources are released when the project's test process ends, when the run is cancelled, or when the daemon exits or crashes.
+- **Container slots.** `containerSlots` in `budget.json` caps how many container-using test projects run at once machine-wide (for example `{ "cpuSlots": 8, "containerSlots": 2 }`). Without it, container projects are limited only by their exclusive resources.
+
+Declare or relax resources in `.piston.json` with `testResources`. Every rule whose `projects` glob matches a test project applies, in order:
+
+```json
+{
+  "testResources": [
+    { "projects": "tests/Api.IntegrationTests/*.csproj", "exclusive": ["port:5432", "container:api-postgres"] },
+    { "projects": "**/*.ContainerTests.csproj", "isolation": "none" },
+    { "projects": "Legacy.Tests.csproj", "containers": true, "exclusive": ["resource:shared-sql-database"] }
+  ]
+}
+```
+
+| Property | Description |
+|---|---|
+| `projects` | Required. Glob matched, ignoring case, against the project path relative to the solution directory with `/` separators. `**` matches any number of directories, `*` and `?` stay within one. A pattern without `/` matches the file name in any directory. |
+| `exclusive` | Resources the project's run holds exclusively, shared with any other project (in any worktree) that declares the same key: `port:<1-65535>`, `container:<name>`, or `resource:<any name>`. |
+| `containers` | `true` or `false` overrides package inference: whether the project uses containers (and a container slot). |
+| `isolation` | `"repository"` (default for container projects) runs the project once at a time across the repository's worktrees; `"none"` drops that default when the project's own resources are declared or it is safe to run in parallel. |
+
+Configuration errors (unknown properties, an invalid key such as `port:70000`, an unknown isolation) fail daemon startup. Rules that match no test project are logged to the diagnostic log. Whole-solution runs, which pass the solution to the runner as one target, hold the union of all test projects' resources.
+
+**Visibility.** A waiting project has status `WaitingForResources`. The protocol state snapshot's `ProjectResourceWaits` and the MCP `get_test_results` text list what it needs and which run holds or is queued ahead for it (resource, project, worktree and PID). The dashboard status bar shows the waiting count with the blockers as a tooltip, and the project's tree node a *waiting for resources* badge. Afterwards, `get_test_run` (each project's `resources`: keys, reasons, `wait` with `waitedMs`, `warnings`) and the run's `ProjectResources` in the protocol record what the project held, and `verify` mentions waits of a second or more.
+
+**Conflict hints.** After acquiring its resources, a run probes its declared `port:` keys and warns when a port is already bound by a process outside Piston. When a failed project's output contains a port or container name conflict (`address already in use`, `port is already allocated`, `container name "…" is already in use`, …), the project's `suspectedResourceConflict` (MCP `get_test_run`, `verify`, `get_test_results`) quotes the evidence and suggests declaring the resource in `testResources`.
+
+Limits: only direct package references are inspected. Coordination covers Piston daemons of the same OS user on one machine; tests run outside Piston, or by another user, are only detected by the port probe and the conflict hints. Test discovery is not gated.
 
 ## Coverage and impact selection
 
@@ -278,7 +320,9 @@ Project ownership and transitive dependencies determine affected test projects (
 
 Selection by lines is a heuristic, not a proof: code reached through reflection, static state, configuration or data files can affect a test without appearing in its executed lines, and a forced or full run remains the authority. `plan_affected_tests` previews a selection with the changed lines and evidence granularity behind each test.
 
-Coverage persists in `.piston/piston.db`: the merged line and branch report (what the dashboard, `get_coverage` and the exports read), the file-level test associations and the impact map used for selection. The project graph does not persist; test-result history is stored separately, outside the checkout (see [Run history and failure classification](#run-history-and-failure-classification)). Only files under the solution directory are recorded, so code a test loads from elsewhere (such as fixture projects built in a temp directory) does not count. A full, unfiltered run replaces the report; a selective run adds hits to unchanged files and marks new or changed files it measured as partial. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, running it through `dotnet test` rather than server mode (so without live per-test progress); without it, the project runs without coverage and its run log says why.
+Coverage persists in `.piston/piston.db`: the merged line and branch report (what the dashboard, `get_coverage` and the exports read), the file-level test associations and the impact map used for selection. The project graph does not persist; test-result history is stored separately, outside the checkout (see [Run history and failure classification](#run-history-and-failure-classification)). Only files under the solution directory are recorded, so code a test loads from elsewhere (such as fixture projects built in a temp directory) does not count. A full, unfiltered run replaces the report; a selective run adds hits to unchanged files and marks new or changed files it measured as partial. The VSTest runner requests `XPlat Code Coverage` (for example via `coverlet.collector`). The MTP runner passes `--coverage --coverage-output-format cobertura` when the test app was built with `Microsoft.Testing.Extensions.CodeCoverage`, still in server mode, so coverage runs keep live per-test progress (falling back to `dotnet test` like any other run, which reports each result only after the test finishes); without it, the project runs without coverage and its run log says why.
+
+See the [MTP server-mode investigation](docs/mtp-server-mode.md) for the original coverage probe and the controller-connection fix.
 
 ### Git bases
 
@@ -336,6 +380,7 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `hangThreshold` | `string` | How long a test runs before it is reported as possibly hanging (default `60s`). See [Slow and hanging tests](#slow-and-hanging-tests). |
 | `testTimeout` | `string` | Per-test limit; off by default. See [Slow and hanging tests](#slow-and-hanging-tests). |
 | `history` | `bool` | Keep per-test run history and classify failures (default `true`). See [Run history and failure classification](#run-history-and-failure-classification). |
+| `retryFailures` | `int` | Re-run a run's failed tests up to this many times (`0` to `3`, default `0`: off). See [Retrying failed tests](#retrying-failed-tests). |
 | `warmTestHosts` | `bool` | Keep MTP test apps running between runs to skip host start-up (default `false`). See [Warm test hosts](#warm-test-hosts). |
 | `parallelism` | `int` | Max concurrent test processes. `0` = auto: half the logical processor count, at least one. |
 | `processRecycleAfter` | `int` | Runs after which a pool slot logs a recycling warning (default 50). |
@@ -344,6 +389,7 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `mcpPort` | `int` | Port for the daemon's MCP server (default 5200). |
 | `dashboard` | `bool` | Expose the stdio MCP session's dashboard on an ephemeral loopback port (default `false`, or enable with `piston mcp --dashboard`). Does not affect daemon hosting. |
 | `testExecutionMode` | `string` | `"Auto"` and `"Process"` currently both route between MTP and VSTest. `"InProcess"` is not implemented and throws at startup. |
+| `testResources` | `array` | Exclusive resources of test projects and overrides of container inference. See [Integration-test resources](#integration-test-resources). |
 | `execution.memoryMb` | `int` | Memory in MiB each run reserves from the machine execution budget (see [Worktree ownership and machine execution budget](#worktree-ownership-and-machine-execution-budget)). Must be positive; required when the budget sets `memoryMb`. A reservation, not a cap. |
 
 ### Slow and hanging tests
@@ -375,13 +421,43 @@ Each failed test in a run is classified against that worktree's earlier results:
 
 - **new**: the test's previous recorded result was a pass;
 - **pre-existing**: it was already failing (the evidence names the first failing run and the last pass, if any);
-- **flaky**: within its recorded window it both passed and failed on the same source fingerprint. Only `Current`
-  runs carry a fingerprint, so an edit-break-fix loop is not mistaken for flakiness;
+- **flaky**: within its recorded window it both passed and failed on the same source fingerprint, counting the
+  results other worktrees of the same repository recorded on that fingerprint, or it both passed and failed across
+  [retries](#retrying-failed-tests) within one run. Only `Current` runs carry a fingerprint, so an edit-break-fix loop
+  is not mistaken for flakiness;
 - **unknown**: there is no earlier pass or fail. Missing history is not proof that a failure is new.
 
-`verify` lists failures with their class, new ones first, after a `Failure history:` count line.
-`get_test_run` includes `failureClassifications` (project, test, kind, evidence), and `get_test_history` shows the
-evidence. The dashboard's **Runs** tab browses and compares the kept runs, and the **Tests** tab marks and filters new failures and flaky tests. Set `"history": false` to turn this off.
+Every flaky label carries its evidence: how many times the test passed and failed, on which source (or within which
+run, for retries), how many of those outcomes came from retries, and which other worktrees contributed, with the
+newest outcomes listed. Other worktrees' history files are read, never written.
+
+`verify` lists failures with their class, new ones first, after a `Failure history:` count line; a flaky failure's
+tag gives its evidence in brief. `get_test_run` includes `failureClassifications` (project, test, kind, evidence and,
+for flaky tests, `flakiness`), and `get_test_history` prints an `Evidence:` line and the other worktrees' outcomes.
+The dashboard's **Runs** tab browses and compares the kept runs, and the **Tests** tab marks and filters new failures
+and flaky tests; the flaky badge's tooltip and the test's history strip show the evidence. Set `"history": false` to
+turn this off.
+
+### Retrying failed tests
+
+With `"retryFailures": n` (1 to 3), a run re-runs its failed tests up to `n` times against the same build, without
+coverage, before it finishes; each test stops being retried once it passes. A test that passes on a retry ends
+`Passed`, so `verify` can pass, but it is never hidden:
+
+- `verify` lists it under `Passed on retry`, with its last failure message and flakiness evidence, and a test that
+  failed every attempt is tagged `(failed all n attempts)`;
+- `get_test_run` gives each retried test's earlier `attempts`, the run's `retryLimit`, `summary.passedOnRetry` and
+  `retriesSkippedReason`;
+- the run history records every attempt (so a pass after a failure marks the test flaky), and `get_test_history`
+  marks them `retry n`;
+- the dashboard shows a **retried** badge, the attempts in the test's details, retry counts in the **Runs** tab and
+  the retry in progress in the status bar.
+
+Retries are skipped, with the reason reported, when more than 20 tests failed (likely a real breakage) and for the
+tests of a project that timed out. A retry that crashes, times out, reports no results or fails a test that was not
+being retried (such as another case of a parameterized test) is not used, and a retry that does not report a failed
+test exactly once (for example without the framework it failed under) does not clear that failure; those tests keep
+their failure and the reason is reported too. Retries are off by default.
 
 ### Warm test hosts
 
@@ -392,10 +468,11 @@ so MSBuild can overwrite output on Windows. No-build requests can keep reusing a
 when anything in its app's output directory changes, when it exits,
 and after a failed, timed-out or cancelled request; cancelling kills it. A host serves one request at a time, so a
 second concurrent request for the same app gets its own process, and a reused host that fails before reporting any
-test is retried once in a new process. Coverage runs still go through `dotnet test` in a fresh process. Warm hosts
+test is retried once in a new process. Coverage runs always start a fresh process. Warm hosts
 get the environment variable `PISTON_WARM_HOST=1`, so a test suite can tell when process-wide state may outlive a
 run; state that a fresh process would reset (statics, environment changes) carries over between runs, which is why
-this is off by default. Hosts are asked to exit when the daemon stops.
+this is off by default. Projects needing resource coordination always use fresh processes for discovery and execution,
+even with warm hosts enabled, so process-lifetime resources cannot outlive their leases. Hosts are asked to exit when the daemon stops.
 
 ### User settings
 
@@ -504,7 +581,8 @@ The daemon builds the watched solution in the default (Debug) configuration, so
 its own builds never overwrite the Release binaries it runs from. Stop it before
 rebuilding Release (`dotnet src/Piston/bin/Release/net10.0/Piston.dll stop`), then
 start it again. `.piston/diagnostics.log` records what the daemon did (runner choice,
-build skips, fallbacks) and is truncated on each start. Agents should follow the
+build skips, fallbacks), rotates at 10 MiB and is truncated on each start along with
+its single rotated backup. Agents should follow the
 [`piston-dashboard` skill](.github/skills/piston-dashboard/SKILL.md), which also
 covers opening the native Piston canvas, with a browser fallback.
 

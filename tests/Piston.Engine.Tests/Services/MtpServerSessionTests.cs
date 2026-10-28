@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
@@ -23,6 +24,33 @@ public sealed class MtpServerSessionTests
 
     // For exchanges expected to complete: a loaded CI runner can take longer than Short to answer.
     private static readonly MtpServerSession.StageTimeouts Generous = new(TimeSpan.FromSeconds(10), TimeSpan.FromSeconds(10));
+
+    [Fact]
+    public async Task CompletedRequest_CancellationDuringControllerExit_KillsAndDrainsHost()
+    {
+        var start = new ProcessStartInfo("dotnet")
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+        start.ArgumentList.Add(typeof(TestProcessHost.Program).Assembly.Location);
+        start.ArgumentList.Add("--hold-output");
+        using var process = new OwnedTestProcess(start);
+        process.Start();
+        process.Process.BeginOutputReadLine();
+        process.Process.BeginErrorReadLine();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+        var ending = MtpServerSession.EndAsync(process, MtpServerSession.Outcome.Completed, null,
+            new MtpServerSession.HostOutput(null), null, MtpServerSession.ControllerExitTimeout, stop.Token);
+        Assert.False(ending.IsCompleted);
+        await stop.CancelAsync();
+
+        var result = await ending.WaitAsync(TimeSpan.FromSeconds(20), _ct);
+
+        Assert.Equal(MtpServerSession.Outcome.Cancelled, result.Outcome);
+        Assert.True(process.Process.HasExited);
+    }
 
     [Fact]
     public async Task MissingHostExecutable_ReturnsNotStarted()
@@ -173,6 +201,96 @@ public sealed class MtpServerSessionTests
     }
 
     [Fact]
+    public async Task PassiveNode_RequestGoesToTheTestHostThatConnectsNext()
+    {
+        // As a test host controller (coverage) does: the first connection is a passive node that only
+        // pushes attachments, and the test host it launches connects next and serves the request.
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var (controllerClient, controllerServer) = await ConnectAsync(listener, _ct);
+        using var controllerClientLifetime = controllerClient;
+        using var controllerServerLifetime = controllerServer;
+        TcpClient? hostServer = null;
+
+        var controllerTask = Task.Run(async () =>
+        {
+            var controller = controllerServer.GetStream();
+            using var initialize = await ReadAsync(controller, _ct);
+            await WriteAsync(controller,
+                """{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"testing":{"multipleConnectionProvider":true}}}}""", _ct);
+            await WriteAsync(controller,
+                """{"jsonrpc":"2.0","method":"testing/testUpdates/attachments","params":{"attachments":[{"uri":"file:///r.cobertura.xml"}]}}""", _ct);
+            try
+            {
+                using var unexpected = await ReadAsync(controller, _ct);
+                return unexpected.RootElement.GetProperty("method").GetString();
+            }
+            catch (IOException)
+            {
+                return null;
+            }
+        }, _ct);
+
+        async Task<Stream?> AcceptNextAsync(CancellationToken ct)
+        {
+            var (client, server) = await ConnectAsync(listener, ct);
+            hostServer = server;
+            _ = Task.Run(async () =>
+            {
+                var host = server.GetStream();
+                await InitializeAsync(host, _ct);
+                using var request = await ReadAsync(host, _ct);
+                Assert.Equal(MtpServerSession.RunMethod, request.RootElement.GetProperty("method").GetString());
+                await WriteAsync(host, """{"jsonrpc":"2.0","method":"testing/testUpdates/tests","params":{"changes":[{"node":{"uid":"t1"}}]}}""", _ct);
+                await WriteAsync(host, """{"jsonrpc":"2.0","id":2,"result":{}}""", _ct);
+            }, _ct);
+            return client.GetStream();
+        }
+
+        var uids = new List<string?>();
+        var (outcome, error) = await MtpServerSession.ExchangeAsync(
+                controllerClient.GetStream(), MtpServerSession.RunMethod, tests: null,
+                nodes => uids.Add(nodes[0].GetProperty("uid").GetString()), Generous, _ct, AcceptNextAsync)
+            .WaitAsync(TimeSpan.FromSeconds(20), _ct);
+
+        using var hostServerLifetime = hostServer;
+        Assert.Equal((MtpServerSession.Outcome.Completed, (string?)null), (outcome, error));
+        Assert.Equal(["t1"], uids);
+        Assert.Null(await controllerTask.WaitAsync(TimeSpan.FromSeconds(20), _ct));
+    }
+
+    [Fact]
+    public async Task PassiveNode_WithoutAFurtherConnection_IsNotStarted()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var (client, server) = await ConnectAsync(listener, _ct);
+        using var clientLifetime = client;
+        using var serverLifetime = server;
+        var controllerTask = Task.Run(async () =>
+        {
+            using var initialize = await ReadAsync(server.GetStream(), _ct);
+            await WriteAsync(server.GetStream(),
+                """{"jsonrpc":"2.0","id":1,"result":{"capabilities":{"testing":{"multipleConnectionProvider":true}}}}""", _ct);
+        }, _ct);
+
+        var (outcome, _) = await MtpServerSession.ExchangeAsync(
+                client.GetStream(), MtpServerSession.RunMethod, tests: null, _ => { }, Generous, _ct, _ => Task.FromResult<Stream?>(null))
+            .WaitAsync(TimeSpan.FromSeconds(20), _ct);
+        await controllerTask;
+
+        Assert.Equal(MtpServerSession.Outcome.NotStarted, outcome);
+    }
+
+    [Fact]
+    public void CreateStartInfo_AppendsHostArguments()
+    {
+        var psi = MtpServerSession.CreateStartInfo("/sln/bin/Tests.dll", "/sln", 1234, "--coverage --results-directory \"/tmp/r\"");
+
+        Assert.EndsWith("--client-port 1234 --coverage --results-directory \"/tmp/r\"", psi.Arguments, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void CreateStartInfo_DoesNotMarkColdHostsWarm()
     {
         // Even when this test itself runs in a warm host.
@@ -229,6 +347,13 @@ public sealed class MtpServerSessionTests
             await stopHost.CancelAsync();
             await hostTask;
         }
+    }
+
+    private static async Task<(TcpClient Client, TcpClient Server)> ConnectAsync(TcpListener listener, CancellationToken ct)
+    {
+        var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, ((IPEndPoint)listener.LocalEndpoint).Port, ct);
+        return (client, await listener.AcceptTcpClientAsync(ct));
     }
 
     private static async Task InitializeAsync(NetworkStream host, CancellationToken ct)

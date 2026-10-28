@@ -134,7 +134,7 @@ public sealed class AffectedChangesTests : IDisposable
 
         var json = JsonNode.Parse(await tools.RunAffectedTestsAsync(["src/Lib/Code.cs"], ct: _ct))!;
 
-        Assert.Equal(["Lib.Tests"], engine.LastSelection!.Projects);
+        Assert.Equal(["tests/Lib.Tests/Lib.Tests.csproj"], engine.LastSelection!.ProjectIds);
         Assert.Equal(["Lib.Tests.A.One", "Lib.Tests.B.Two"], engine.LastSelection.Tests);
         Assert.Equal("tests", (string?)json["scope"]);
         Assert.Equal("run-3", (string?)json["run"]!["runId"]);

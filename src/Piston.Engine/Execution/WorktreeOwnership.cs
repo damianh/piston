@@ -53,8 +53,14 @@ public sealed class WorktreeOwnership : IDisposable
     /// <param name="contentionRetry">Retry window while the lock is held; defaults to <see cref="DefaultContentionRetry"/>.</param>
     /// <exception cref="WorktreeOwnershipConflictException">Another live process owns the worktree.</exception>
     public static WorktreeOwnership Acquire(
-        ExecutionCoordinationDirectory directory, string solutionPath, string? host = null, TimeSpan? contentionRetry = null)
+        ExecutionCoordinationDirectory directory, string solutionPath, string? host = null,
+        TimeSpan? contentionRetry = null, string? dashboardUrl = null)
     {
+        if (dashboardUrl is not null && !TryValidateDashboardUrl(dashboardUrl, out dashboardUrl))
+        {
+            throw new ArgumentException("Dashboard URL must be an HTTP URL on localhost or a loopback IP.", nameof(dashboardUrl));
+        }
+
         var worktree = WorktreeIdentity.FromSolutionPath(solutionPath);
         var lockPath = Path.Combine(directory.OwnersDirectory, worktree.Key + ".lock");
         var infoPath = Path.Combine(directory.OwnersDirectory, worktree.Key + ".json");
@@ -80,7 +86,7 @@ public sealed class WorktreeOwnership : IDisposable
         }
 
         var owner = new ExecutionOwnerInfo(
-            Environment.ProcessId, Path.GetFullPath(solutionPath), worktree.RootPath, DateTimeOffset.UtcNow, host);
+            Environment.ProcessId, Path.GetFullPath(solutionPath), worktree.RootPath, DateTimeOffset.UtcNow, host, dashboardUrl);
         try
         {
             WriteInfo(infoPath, owner);
@@ -99,23 +105,25 @@ public sealed class WorktreeOwnership : IDisposable
     /// Lists ownership records in <paramref name="directory"/>, probing each lock without blocking.
     /// A probe briefly takes an unheld lock; <see cref="Acquire"/> retries briefly to ride over it.
     /// </summary>
-    public static IReadOnlyList<OwnershipRecord> ListOwners(ExecutionCoordinationDirectory directory, bool strict = false)
+    public static IReadOnlyList<OwnershipRecord> ListOwners(
+        ExecutionCoordinationDirectory directory, bool reportErrors = false)
     {
         string[] locks;
         try
         {
+            if (!ExecutionCoordinationDirectory.DirectoryExistsOrThrow(directory.OwnersDirectory))
+            {
+                return [];
+            }
+
             locks = Directory.GetFiles(directory.OwnersDirectory, "*.lock");
         }
         catch (DirectoryNotFoundException)
         {
             return [];
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (!reportErrors && ex is IOException or UnauthorizedAccessException)
         {
-            if (strict)
-            {
-                throw new ExecutionCoordinationException($"Cannot inspect ownership records: {ex.Message}", ex);
-            }
             return [];
         }
 
@@ -124,13 +132,13 @@ public sealed class WorktreeOwnership : IDisposable
         {
             var key = Path.GetFileNameWithoutExtension(lockPath);
             var infoPath = Path.Combine(directory.OwnersDirectory, key + ".json");
-            var liveness = ProbeLock(lockPath, strict);
+            var liveness = ProbeLock(lockPath, reportErrors);
             if (liveness == OwnershipLiveness.None)
             {
                 continue;
             }
 
-            var info = TryReadInfo(infoPath);
+            var info = TryReadInfo(infoPath, reportErrors);
             if (liveness == OwnershipLiveness.Stale && info is null)
             {
                 // A released lock without details is the normal idle state, not a stale record.
@@ -142,7 +150,7 @@ public sealed class WorktreeOwnership : IDisposable
         return records;
     }
 
-    private static OwnershipLiveness ProbeLock(string lockPath, bool strict)
+    private static OwnershipLiveness ProbeLock(string lockPath, bool reportErrors)
     {
         FileStream? stream;
         try
@@ -153,12 +161,8 @@ public sealed class WorktreeOwnership : IDisposable
         {
             return OwnershipLiveness.None;
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (Exception ex) when (!reportErrors && ex is IOException or UnauthorizedAccessException)
         {
-            if (strict)
-            {
-                throw new ExecutionCoordinationException($"Cannot inspect ownership lock '{lockPath}': {ex.Message}", ex);
-            }
             return OwnershipLiveness.None;
         }
 
@@ -190,25 +194,77 @@ public sealed class WorktreeOwnership : IDisposable
         _lock.Dispose();
     }
 
-    internal static ExecutionOwnerInfo? TryReadInfo(string infoPath)
+    internal static ExecutionOwnerInfo? TryReadInfo(string infoPath, bool reportErrors = false)
     {
         try
         {
             using var document = JsonDocument.Parse(File.ReadAllBytes(infoPath));
             var root = document.RootElement;
+            string? safeDashboardUrl = null;
+            if (root.TryGetProperty("dashboardUrl", out var dashboardUrl)
+                && dashboardUrl.ValueKind == JsonValueKind.String)
+            {
+                if (TryValidateDashboardUrl(dashboardUrl.GetString(), out var validatedUrl))
+                {
+                    safeDashboardUrl = validatedUrl;
+                }
+                else if (reportErrors)
+                {
+                    throw new ExecutionCoordinationException("The owner advertised an invalid dashboard endpoint.");
+                }
+            }
             return new ExecutionOwnerInfo(
                 root.GetProperty("processId").GetInt32(),
                 root.GetProperty("solutionPath").GetString() ?? "",
                 root.GetProperty("worktreePath").GetString() ?? "",
                 root.GetProperty("acquiredAt").GetDateTimeOffset(),
                 root.TryGetProperty("host", out var host) && host.ValueKind == JsonValueKind.String ? host.GetString() : null,
-                root.TryGetProperty("dashboardUrl", out var url) && url.ValueKind == JsonValueKind.String ? url.GetString() : null);
+                safeDashboardUrl);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException
                                        or KeyNotFoundException or InvalidOperationException or FormatException)
         {
             return null;
         }
+    }
+
+    private static bool TryValidateDashboardUrl(string? value, out string safeUrl)
+    {
+        safeUrl = "";
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri)
+            || !string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase)
+            || !HasLoopbackHost(uri)
+            || uri.UserInfo.Length > 0
+            || (uri.AbsolutePath is not "" and not "/")
+            || uri.Query.Length > 0
+            || uri.Fragment.Length > 0)
+        {
+            return false;
+        }
+
+        safeUrl = uri.GetLeftPart(UriPartial.Authority);
+        return true;
+    }
+
+    private static bool HasLoopbackHost(Uri uri)
+    {
+        // Uri canonicalizes the DNS name "loopback" to "localhost"; validate the original host.
+        var original = uri.OriginalString.AsSpan().Trim();
+        const string prefix = "http://";
+        if (!original.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var authority = original[prefix.Length..];
+        var pathStart = authority.IndexOf('/');
+        authority = pathStart >= 0 ? authority[..pathStart] : authority;
+        var hostEnd = authority.StartsWith("[", StringComparison.Ordinal)
+            ? authority.IndexOf(']') + 1
+            : authority.IndexOf(':');
+        var host = hostEnd >= 0 ? authority[..hostEnd] : authority;
+        return host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+            || (System.Net.IPAddress.TryParse(host, out var address) && System.Net.IPAddress.IsLoopback(address));
     }
 
     private static void WriteInfo(string infoPath, ExecutionOwnerInfo owner)

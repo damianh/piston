@@ -35,4 +35,17 @@ public sealed record TestResult(
     /// </summary>
     [JsonIgnore]
     public string ResultKey => TargetFramework is null ? FullyQualifiedName : $"{FullyQualifiedName} [{TargetFramework}]";
+
+    /// <summary>
+    /// Earlier attempts of this test in the same run, oldest first, when failed tests were retried; empty
+    /// otherwise. This result is the last attempt, so a test that passed on retry is <see cref="TestStatus.Passed"/>.
+    /// </summary>
+    public IReadOnlyList<TestAttempt> Attempts { get; init; } = [];
 }
+
+/// <summary>One earlier attempt of a test that was retried within a run.</summary>
+/// <param name="Status">Outcome of the attempt.</param>
+/// <param name="Duration">How long the attempt took.</param>
+/// <param name="ErrorMessage">Failure message, when it failed.</param>
+/// <param name="StackTrace">Failure stack trace, when it failed.</param>
+public sealed record TestAttempt(TestStatus Status, TimeSpan Duration, string? ErrorMessage, string? StackTrace);

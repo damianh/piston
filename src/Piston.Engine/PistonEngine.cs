@@ -22,6 +22,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     private readonly string _solutionDirectory;
     private readonly MachineExecutionCoordinator _executionCoordinator;
     private readonly string? _ownerHost;
+    private readonly string? _ownerDashboardUrl;
     private readonly bool _historyEnabled;
     private readonly MtpWarmHostPool? _warmHosts;
     private readonly string? _historyDirectory;
@@ -37,6 +38,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     {
         _activitySink = activitySink;
         _ownerHost = options.OwnerHost;
+        _ownerDashboardUrl = options.OwnerDashboardUrl;
         _historyEnabled = options.HistoryEnabled;
         _historyDirectory = options.HistoryDirectory;
 
@@ -78,6 +80,10 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             solutionPath => new MsBuildSolutionGraph(solutionPath),
             _coverageStore);
 
+        var resourceResolver = new TestResourceResolver(
+            new TestResourceInference(options.SolutionPath, options.TestResourceRules, impactAnalyzer.GetTestProjectFacts),
+            impactAnalyzer.GetAllTestProjectPaths,
+            message => _diagnosticLog.Write("Resources", message));
         var vsTestStrategy = new ProcessTestExecutionStrategy(trxParser);
         _warmHosts = options.WarmTestHosts ? new MtpWarmHostPool() : null;
         var buildService = new BuildService(_warmHosts);
@@ -85,7 +91,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             projectPath => impactAnalyzer.GetMtpOutputPath(projectPath),
             solutionDir,
             impactAnalyzer.IsMultiTargeted,
-            _warmHosts);
+            _warmHosts,
+            projectPath => !resourceResolver.Resolve(projectPath).IsEmpty);
 
         ITestExecutionStrategy strategy = options.TestExecutionMode switch
         {
@@ -112,7 +119,13 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             coordinationDirectory,
             new ExecutionReservation(effectivePoolSize, options.ExecutionMemoryReservationMb));
 
-        var testRunner = new TestRunnerService(strategy, _pool);
+        // Test projects that share ports, container names or containers wait for each other machine-wide.
+        var resourceGate = new MachineResourceCoordinator(
+            coordinationDirectory,
+            resourceResolver.Resolve,
+            WorktreeIdentity.FromSolutionPath(options.SolutionPath).RootPath);
+
+        var testRunner = new TestRunnerService(strategy, _pool, resourceGate);
 
         _orchestrator = new PistonOrchestrator(
             fileWatcher,
@@ -134,6 +147,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             _ => null,
         };
         _orchestrator.HangThreshold = options.HangThreshold;
+        _orchestrator.RetryFailedTests = Math.Clamp(options.RetryFailedTests, 0, PistonOptions.MaxRetryFailedTests);
         _orchestrator.SdkVersionProvider = dir => sdkVersions.GetOrAdd(dir, d => new Lazy<string?>(() => ProbeSdkVersion(d))).Value;
     }
 
@@ -182,6 +196,9 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     /// <summary>Advertises a bound dashboard while this engine holds worktree ownership.</summary>
     public void PublishDashboardUrl(string? url) => _ownership?.PublishDashboardUrl(url);
 
+    /// <summary>The machine-wide coordination directory used by this engine.</summary>
+    public ExecutionCoordinationDirectory ExecutionCoordinationDirectory => _executionCoordinator.Directory;
+
     /// <summary>
     /// Acquires exclusive ownership of the solution's worktree and validates the machine execution
     /// budget, then starts watching and runs the initial build/test.
@@ -205,7 +222,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         }
 
         var budget = _executionCoordinator.Initialize();
-        _ownership = WorktreeOwnership.Acquire(_executionCoordinator.Directory, solutionPath, _ownerHost);
+        _ownership = WorktreeOwnership.Acquire(
+            _executionCoordinator.Directory, solutionPath, _ownerHost, dashboardUrl: _ownerDashboardUrl);
         // Only the owner may touch the worktree's .piston directory.
         _diagnosticLog.Open();
         _diagnosticLog.Write("Engine",
@@ -267,7 +285,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         _history = null;
     }
 
-    public IReadOnlyList<TestHistory>? GetTestHistory(string test, string? project = null) => _history?.GetTestHistory(test, project);
+    public IReadOnlyList<TestHistory>? GetTestHistory(string test, string? projectId = null) => _history?.GetTestHistory(test, projectId);
 
     public IReadOnlyList<TestHistory>? GetFlakyTests() => _history?.GetFlakyTests();
 

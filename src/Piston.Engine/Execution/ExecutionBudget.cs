@@ -13,7 +13,10 @@ namespace Piston.Engine.Execution;
 /// <param name="CpuSlots">Total CPU slots that admitted runs may reserve.</param>
 /// <param name="MemoryMb">Total memory reservation in MiB; null when memory is not budgeted.</param>
 /// <param name="Source">The budget file path, or <c>default</c>.</param>
-public sealed record ExecutionBudget(int CpuSlots, int? MemoryMb, string Source)
+/// <param name="ContainerSlots">
+/// How many container-using test projects may run at once across the machine; null when unlimited.
+/// </param>
+public sealed record ExecutionBudget(int CpuSlots, int? MemoryMb, string Source, int? ContainerSlots = null)
 {
     public const string DefaultSource = "default";
 
@@ -36,7 +39,7 @@ public sealed record ExecutionBudget(int CpuSlots, int? MemoryMb, string Source)
                 document = JsonDocument.Parse(reader.ReadToEnd());
                 break;
             }
-            catch (FileNotFoundException)
+            catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
             {
                 return Default;
             }
@@ -65,6 +68,7 @@ public sealed record ExecutionBudget(int CpuSlots, int? MemoryMb, string Source)
 
             int? cpuSlots = null;
             int? memoryMb = null;
+            int? containerSlots = null;
             foreach (var property in document.RootElement.EnumerateObject())
             {
                 if (property.Name.Equals("cpuSlots", StringComparison.OrdinalIgnoreCase))
@@ -75,9 +79,13 @@ public sealed record ExecutionBudget(int CpuSlots, int? MemoryMb, string Source)
                 {
                     memoryMb = PositiveInt(path, property);
                 }
+                else if (property.Name.Equals("containerSlots", StringComparison.OrdinalIgnoreCase))
+                {
+                    containerSlots = PositiveInt(path, property);
+                }
                 else
                 {
-                    throw Invalid(path, $"unknown property '{property.Name}'. Supported: cpuSlots, memoryMb.");
+                    throw Invalid(path, $"unknown property '{property.Name}'. Supported: cpuSlots, memoryMb, containerSlots.");
                 }
             }
 
@@ -86,7 +94,7 @@ public sealed record ExecutionBudget(int CpuSlots, int? MemoryMb, string Source)
                 throw Invalid(path, "'cpuSlots' is required when the budget file exists.");
             }
 
-            return new ExecutionBudget(cpuSlots.Value, memoryMb, path);
+            return new ExecutionBudget(cpuSlots.Value, memoryMb, path, containerSlots);
         }
     }
 

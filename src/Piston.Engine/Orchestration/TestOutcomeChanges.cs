@@ -23,8 +23,8 @@ internal static class TestOutcomeChanges
             foreach (var test in suite.Tests)
             {
                 var failed = test.Status == TestStatus.Failed;
-                var key = (suite.Name, test.ResultKey);
-                var name = (suite.Name, test.FullyQualifiedName);
+                var key = (suite.Key, test.ResultKey);
+                var name = (suite.Key, test.FullyQualifiedName);
                 before[key] = failed || before.GetValueOrDefault(key);
                 beforeByName[name] = failed || beforeByName.GetValueOrDefault(name);
             }
@@ -42,19 +42,19 @@ internal static class TestOutcomeChanges
         {
             foreach (var test in suite.Tests)
             {
-                bool? failedBefore = before.TryGetValue((suite.Name, test.ResultKey), out var f) ? f
-                    : test.TargetFramework is null && beforeByName.TryGetValue((suite.Name, test.FullyQualifiedName), out var n) ? n
+                bool? failedBefore = before.TryGetValue((suite.Key, test.ResultKey), out var f) ? f
+                    : test.TargetFramework is null && beforeByName.TryGetValue((suite.Key, test.FullyQualifiedName), out var n) ? n
                     : null;
                 if (test.Status == TestStatus.Passed && failedBefore == true)
                 {
-                    _ = fixedTests.Add(new(suite.Name, test.ResultKey));
+                    _ = fixedTests.Add(new(suite.Name, test.ResultKey) { ProjectId = suite.Key });
                 }
                 else if (test.Status == TestStatus.Failed)
                 {
-                    _ = currentlyFailing.Add(new(suite.Name, test.ResultKey));
+                    _ = currentlyFailing.Add(new(suite.Name, test.ResultKey) { ProjectId = suite.Key });
                     if (failedBefore != true)
                     {
-                        _ = newlyFailing.Add(new(suite.Name, test.ResultKey));
+                        _ = newlyFailing.Add(new(suite.Name, test.ResultKey) { ProjectId = suite.Key });
                     }
                 }
             }
@@ -63,7 +63,7 @@ internal static class TestOutcomeChanges
         // Conflicting results for one project and result key are never a fix.
         fixedTests.ExceptWith(currentlyFailing);
         return (
-            [.. fixedTests.OrderBy(t => t.Project, StringComparer.Ordinal).ThenBy(t => t.Key, StringComparer.Ordinal)],
-            [.. newlyFailing.OrderBy(t => t.Project, StringComparer.Ordinal).ThenBy(t => t.Key, StringComparer.Ordinal)]);
+            [.. fixedTests.OrderBy(t => t.ProjectId, StringComparer.Ordinal).ThenBy(t => t.Key, StringComparer.Ordinal)],
+            [.. newlyFailing.OrderBy(t => t.ProjectId, StringComparer.Ordinal).ThenBy(t => t.Key, StringComparer.Ordinal)]);
     }
 }

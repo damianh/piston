@@ -26,6 +26,10 @@ public sealed class ViewState
     public TestMarkDto? GetTestMark(string? project, string testKey) =>
         project is null ? null : TestMarks.GetValueOrDefault((project, testKey));
 
+    /// <summary>Test projects waiting for exclusive test resources, keyed by project ID (see <see cref="ResourceWaitText.ByProjectId"/>).</summary>
+    public IReadOnlyDictionary<string, TestResourceWaitDto> ResourceWaits { get; set; } =
+        new Dictionary<string, TestResourceWaitDto>();
+
     /// <summary>Show only failing tests whose previous result passed (with <see cref="OnlyFlaky"/>, either kind).</summary>
     public bool OnlyNewFailures { get; set; }
 
@@ -121,6 +125,24 @@ public sealed class ViewState
         RevealSelectedTest = true;
     }
 
+    // ── Links into the Runs and Timeline tabs ──
+
+    /// <summary>A run another tab opened; the Runs tab selects it once it is listed.</summary>
+    public string? RevealedRunId { get; private set; }
+
+    public void RevealRun(string runId) => RevealedRunId = runId;
+
+    /// <summary>Returns <see cref="RevealedRunId"/> and clears it, so the run is selected only once.</summary>
+    public string? TakeRevealedRun()
+    {
+        var runId = RevealedRunId;
+        RevealedRunId = null;
+        return runId;
+    }
+
+    /// <summary>The test the Timeline tab follows, highlighting the runs and edits that changed its outcome.</summary>
+    public TestReference? TracedTest { get; set; }
+
     public TestResultDto? FindSelectedTest(IEnumerable<TestSuiteDto> suites)
     {
         if (SelectedTestKey is not { } key)
@@ -128,7 +150,7 @@ public sealed class ViewState
             return null;
         }
 
-        var tests = suites.Where(s => SelectedTestProject is null || s.Name == SelectedTestProject)
+        var tests = suites.Where(s => SelectedTestProject is null || (s.ProjectId ?? s.Name) == SelectedTestProject)
             .SelectMany(s => s.Tests).ToList();
         return tests.FirstOrDefault(t => t.Key == key)
             ?? tests.FirstOrDefault(t => t.FullyQualifiedName == key
@@ -197,11 +219,13 @@ public sealed class ViewState
         new(DetailPosition == DetailPosition.Bottom ? DetailPanePosition.Bottom : DetailPanePosition.Right);
 }
 
-/// <summary>A test result key scoped to its suite name, independent of the host's project path separators.</summary>
+/// <summary>A test result key scoped to its project identity, independent of the host's project path separators.</summary>
 public sealed record TestReference(string Project, string Key)
 {
-    public static TestReference FromProjectPath(string projectPath, string key) =>
-        new(Path.GetFileNameWithoutExtension(projectPath.Replace('\\', '/')), key);
+    public static TestReference FromProjectPath(string projectPath, string key, string? solutionPath = null) =>
+        new(solutionPath is null
+            ? Path.GetFileNameWithoutExtension(projectPath.Replace('\\', '/'))
+            : ProjectPaths.ProjectId(projectPath, solutionPath), key);
 }
 
 public enum DetailPosition

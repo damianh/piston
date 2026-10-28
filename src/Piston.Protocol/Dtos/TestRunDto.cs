@@ -4,10 +4,23 @@
 namespace Piston.Protocol.Dtos;
 
 /// <summary>A test result key scoped to the project suite that produced it.</summary>
-public sealed record TestOutcomeReferenceDto(string Project, string Key);
+public sealed record TestOutcomeReferenceDto(string Project, string Key)
+{
+    public string ProjectId { get; init; } = Project;
+}
 
 /// <summary>Source-input fingerprint captured for a run (see <c>piston-source-v2</c>).</summary>
 public sealed record SourceFingerprintDto(string Algorithm, string Value, int FileCount);
+
+/// <summary>The outcome of running one test project.</summary>
+public sealed record TestRunProjectOutcomeDto(
+    string ProjectPath,
+    string ProjectId,
+    string Status,
+    int TestCount,
+    string? NoTestsReason,
+    string? TimedOutTest,
+    double? TestTimeoutMs);
 
 /// <summary>
 /// Machine-wide execution admission of a run, shared by Piston daemons of the same user.
@@ -37,6 +50,8 @@ public sealed record TestRunAdmissionDto(
 /// test was selected when the impact map narrowed the run by changed lines. <see cref="ChangedFiles"/> are the files
 /// whose change triggered the run; <see cref="FixedTests"/> and <see cref="NewlyFailingTests"/> are the project-scoped result keys of
 /// tests whose outcome the run changed from failed to passed, and to failed from passed or no result.
+/// <see cref="ProjectResources"/> lists the test projects that needed exclusive test resources or whose failure looks
+/// like a resource conflict.
 /// </summary>
 public sealed record TestRunDto(
     string RunId,
@@ -70,5 +85,10 @@ public sealed record TestRunDto(
     IReadOnlyDictionary<string, IReadOnlyList<TestSelectionReasonDto>>? SelectionReasons = null,
     IReadOnlyList<string>? ChangedFiles = null,
     IReadOnlyList<TestOutcomeReferenceDto>? FixedTests = null,
-    IReadOnlyList<TestOutcomeReferenceDto>? NewlyFailingTests = null
+    IReadOnlyList<TestOutcomeReferenceDto>? NewlyFailingTests = null,
+    IReadOnlyList<TestProjectResourcesDto>? ProjectResources = null,
+    int RetryLimit = 0,
+    string? RetriesSkippedReason = null,
+    int PassedOnRetry = 0,
+    IReadOnlyList<TestRunProjectOutcomeDto>? Projects = null
 );

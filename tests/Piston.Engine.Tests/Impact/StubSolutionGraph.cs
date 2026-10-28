@@ -38,6 +38,7 @@ internal sealed class StubSolutionGraph : ISolutionGraph
 
     public IReadOnlyList<string> AllProjectPaths => _allProjects;
     public IReadOnlyList<string> TestProjectPaths => _testProjects;
+    public bool EvaluatedBeforeRestore { get; set; }
 
     public string? FindOwningProject(string filePath) =>
         _fileToProject.TryGetValue(filePath, out var proj) ? proj : null;

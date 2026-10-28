@@ -151,6 +151,51 @@ public sealed class OrchestratorCoverageTests
         }
     }
 
+    [Theory]
+    [InlineData(".cs", false)]
+    [InlineData(".cs", true)]
+    [InlineData(".vb", false)]
+    [InlineData(".vb", true)]
+    public async Task GetFileCoverage_EncodedSourceStaysCurrentUntilDeleted(string extension, bool utf16)
+    {
+        var root = Directory.CreateTempSubdirectory("piston-coverage-encoding-").FullName;
+        try
+        {
+            var file = Path.Combine(root, "Code" + extension);
+            const string content = "Console.WriteLine(1);";
+            var encoding = utf16 ? System.Text.Encoding.Unicode : new System.Text.UTF8Encoding(encoderShouldEmitUTF8Identifier: true);
+            await File.WriteAllTextAsync(file, content, encoding, _ct);
+            using var store = new SqliteCoverageStore();
+            await store.InitializeAsync(root);
+            await store.StoreReportAsync(store.CreateRunId(), [
+                new CoverageReportFile(
+                    new FileCoverage(file, [new LineCoverage(1, 2)], "Lib"),
+                    ImpactContent.Hash(content), content),
+            ], isFullRun: true);
+            using var orchestrator = new PistonOrchestrator(
+                new StubFileWatcherService(), new StubBuildService(),
+                new StubTestRunnerService([], TimeSpan.Zero), new StubImpactAnalyzer([]),
+                new PistonState(), store, new CoverageProcessor(new CoberturaParser()), true);
+
+            Assert.False(orchestrator.GetFileCoverage(file)!.File.IsStale);
+            Assert.False(Assert.Single(orchestrator.GetCoverageReport()!.Files).IsStale);
+            Assert.Equal([new LineCoverage(1, 2)], orchestrator.GetFileCoverage(file)!.Lines);
+
+            File.Delete(file);
+
+            Assert.True(store.GetReportFile(file)!.IsStale);
+            Assert.True(Assert.Single(store.GetReportFiles()).IsStale);
+            var deleted = orchestrator.GetFileCoverage(file)!;
+            Assert.True(deleted.File.IsStale);
+            Assert.Empty(deleted.Lines);
+            Assert.True(Assert.Single(orchestrator.GetCoverageReport()!.Files).IsStale);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private sealed class PausingCoverageProcessor(string file) : ICoverageProcessor
     {
         public TaskCompletionSource Committed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

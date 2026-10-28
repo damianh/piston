@@ -122,7 +122,8 @@ public sealed partial class PistonOrchestrator
                     _state.TestSuites,
                     project => store.GetUnits(project, granularity),
                     granularity,
-                    _backfillFailed);
+                    _backfillFailed,
+                    solutionDir);
             }
             finally
             {
@@ -197,8 +198,8 @@ public sealed partial class PistonOrchestrator
         TestRunResult result;
         using (var lease = await _admission.AdmitAsync($"backfill-{Guid.NewGuid():N}", _ => { }, null, ct).ConfigureAwait(false))
         {
-            result = await _testRunner.RunTestsAsync(
-                solutionPath, [unit.ProjectPath], unit.Filter, collectCoverage: true, new TestRunCallbacks(), ct).ConfigureAwait(false);
+            result = await RunSecondaryTestsAsync(
+                solutionPath, [unit.ProjectPath], unit.Filter, collectCoverage: true, onProjectCompleted: null, ct).ConfigureAwait(false);
         }
 
         try

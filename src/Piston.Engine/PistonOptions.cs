@@ -109,10 +109,26 @@ public sealed class PistonOptions
     public string? ExecutionCoordinationDirectory { get; init; }
 
     /// <summary>
+    /// Overrides of the exclusive resources inferred for test projects (<c>testResources</c> in <c>.piston.json</c>).
+    /// </summary>
+    public IReadOnlyList<Execution.TestResourceRule> TestResourceRules { get; init; } = [];
+
+    /// <summary>
     /// Keeps per-test run history outside the checkout and classifies failures as new, pre-existing or flaky.
     /// Default is true.
     /// </summary>
     public bool HistoryEnabled { get; init; } = true;
+
+    /// <summary>Most retries a run makes of each failed test, from 0 to this.</summary>
+    public const int MaxRetryFailedTests = 3;
+
+    /// <summary>
+    /// How many times a run re-runs its failed tests, without rebuilding, to gather flakiness evidence: 0 (default)
+    /// turns retries off; at most <see cref="MaxRetryFailedTests"/>. A test that passes on a retry counts as passed
+    /// and is reported as passed on retry; its earlier attempts are kept. A run with more than
+    /// <see cref="Orchestration.PistonOrchestrator.MaxRetriedFailures"/> failed tests is not retried.
+    /// </summary>
+    public int RetryFailedTests { get; init; }
 
     /// <summary>
     /// Keeps each Microsoft.Testing.Platform test app running in server mode between runs, so later
@@ -130,4 +146,7 @@ public sealed class PistonOptions
     /// Recorded in the worktree ownership details so tools can tell a <c>piston mcp</c> session from a daemon.
     /// </summary>
     public string? OwnerHost { get; init; }
+
+    /// <summary>The local dashboard URL recorded in the worktree ownership details, when hosted.</summary>
+    public string? OwnerDashboardUrl { get; init; }
 }
