@@ -138,7 +138,7 @@ public sealed class WorktreeOwnership : IDisposable
                 continue;
             }
 
-            var info = TryReadInfo(infoPath, reportErrors);
+            var info = TryReadInfo(infoPath);
             if (liveness == OwnershipLiveness.Stale && info is null)
             {
                 // A released lock without details is the normal idle state, not a stale record.
