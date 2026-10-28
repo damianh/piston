@@ -115,7 +115,7 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         var executor = Assert.Single(_sut.GetTestsExecuting(path));
         Assert.True(executor.IsUnitCurrent);
         Assert.True(executor.IsContentCurrent);
-        Assert.Equal([new LineSpan(3, 5)], executor.Spans);
+        Assert.Equal([new LineSpan(5, 5)], executor.Spans);
     }
 
     [Fact]
@@ -169,6 +169,106 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task MarkChangedAsync_InsertingMemberAboveExecutedMethod_DirtiesBindingEvidence()
+    {
+        const string original = "class C\n{\n    void A() { int x = 1; }\n}";
+        const string inserted = "class C\n{\n    void Added() { }\n    void A() { int x = 1; }\n}";
+        var member = Assert.Single(SourceMembers.Parse(original).Members);
+        await _sut.RecordImpactAsync(new ImpactRecording(
+            Project, ImpactGranularity.Class, "C", _sut.CreateRunId(), ["T.C.A"],
+            [new ImpactFile(File, [member.Lines], original)], Merge: false));
+
+        await _sut.MarkChangedAsync([new ChangedFile(File, inserted)]);
+
+        Assert.False(Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Class)).IsCurrent);
+    }
+
+    [Fact]
+    public async Task MarkChangedAsync_AddedOverloadCannotSuppressNewerRunEvidence()
+    {
+        const string original = "class C\n{\nint M(object value) => 1;\n}";
+        const string added = "class C\n{\nint M(object value) => 1;\nint M(string value) => 2;\n}";
+        const string edited = "class C\n{\nint M(object value) => 1;\nint M(string value) => 3;\n}";
+        await Record(ImpactGranularity.Test, "T.A", ["T.A"], [new(3, 3)], original);
+
+        await _sut.MarkChangedAsync([new ChangedFile(File, added)]);
+        await Record(ImpactGranularity.Run, "run", ["T.A"], [new(4, 4)], added);
+
+        Assert.False(Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Test)).IsCurrent);
+        var reason = Assert.Single(_sut.SelectTests([new ChangedFile(File, edited)]).Tests["T.A"]);
+        Assert.Equal(ImpactGranularity.Run, reason.Granularity);
+    }
+
+    [Fact]
+    public async Task SelectTests_WildcardRunEvidenceIsSelectedAlongsideMemberHits()
+    {
+        const string original = "class C\n{\nvoid A() { int x = 1; }\nvoid B() { int y = 2; }\n}";
+        const string partial = "class C\n{\nvoid A() { int x = 3; }\nvoid B() { int y = 2; }\n}";
+        const string edited = "class C\n{\nvoid A() { int x = 3; }\nvoid B() { int y = 4; }\n}";
+        await Record(ImpactGranularity.Run, "run", ["T.A", "T.B"], [new(3, 3)], original);
+        await Record(ImpactGranularity.Run, "run", ["T.B"], [new(4, 4)], partial, merge: true);
+        await Record(ImpactGranularity.Test, "T.B", ["T.B"], [new(4, 4)], partial);
+
+        var selection = _sut.SelectTests([new ChangedFile(File, edited)]);
+
+        Assert.Equal(["T.A", "T.B"], selection.Tests.Keys.Order());
+        Assert.Equal(ImpactGranularity.Run, Assert.Single(selection.Tests["T.A"]).Granularity);
+        Assert.Equal(ImpactGranularity.Test, Assert.Single(selection.Tests["T.B"]).Granularity);
+    }
+
+    [Fact]
+    public async Task GetTestsExecuting_MovedExecutedMethodsDoNotCoverTheMethodBetweenThem()
+    {
+        const string original = "class C\n{\nvoid A() { }\nvoid B() { }\nvoid Cc() { }\n}";
+        const string reordered = "class C\n{\nvoid A() { }\nvoid Cc() { }\nvoid B() { }\n}";
+        var path = Path.Combine(_tempDir, "Methods.cs");
+        System.IO.File.WriteAllText(path, reordered);
+        await _sut.RecordImpactAsync(new ImpactRecording(
+            Project, ImpactGranularity.Test, "T.A", _sut.CreateRunId(), ["T.A"],
+            [new ImpactFile(path, [new(3, 4)], original)], Merge: false));
+
+        var executor = Assert.Single(_sut.GetTestsExecuting(path));
+
+        Assert.True(executor.IsContentCurrent);
+        Assert.Equal([new LineSpan(3, 3), new LineSpan(5, 5)], executor.Spans);
+    }
+
+    [Fact]
+    public async Task SelectTests_ReorderingInitializedEventsSelectsTheirTests()
+    {
+        const string original = "class C\n{\nevent Action A = Create(\"A\");\nevent Action B = Create(\"B\");\n}";
+        const string reordered = "class C\n{\nevent Action B = Create(\"B\");\nevent Action A = Create(\"A\");\n}";
+        await Record(ImpactGranularity.Test, "T.A", ["T.A"], [new(3, 3)], original);
+
+        var selection = _sut.SelectTests([new ChangedFile(File, reordered)]);
+
+        Assert.Equal(["T.A"], selection.Tests.Keys);
+        Assert.Empty(selection.UnchangedFiles);
+    }
+
+    [Fact]
+    public async Task SelectTests_MethodBodyEdit_SelectsItsRecordedTestAndReportsMember()
+    {
+        const string original = "class C\n{\n    void A() { int x = 1; }\n    void B() { int y = 2; }\n}";
+        const string edited = "class C\n{\n    void A() { int x = 3; }\n    void B() { int y = 2; }\n}";
+        var members = SourceMembers.Parse(original).Members.ToDictionary(member => member.Key, StringComparer.Ordinal);
+        var methodA = members.Values.Single(member => member.Key.StartsWith("C.A`", StringComparison.Ordinal));
+        var methodB = members.Values.Single(member => member.Key.StartsWith("C.B`", StringComparison.Ordinal));
+        var path = Path.Combine(_tempDir, "Methods.cs");
+        await _sut.RecordImpactAsync(new ImpactRecording(
+            Project, ImpactGranularity.Test, "C.A", _sut.CreateRunId(), ["T.C.A"],
+            [new ImpactFile(path, [methodA.Lines], original)], Merge: false));
+        await _sut.RecordImpactAsync(new ImpactRecording(
+            Project, ImpactGranularity.Test, "C.B", _sut.CreateRunId(), ["T.C.B"],
+            [new ImpactFile(path, [methodB.Lines], original)], Merge: false));
+
+        var selection = _sut.SelectTests([new ChangedFile(path, edited)]);
+
+        Assert.Equal(["T.C.A"], selection.Tests.Keys);
+        Assert.Equal(methodA.Key, Assert.Single(selection.Tests["T.C.A"]).Member);
+    }
+
+    [Fact]
     public async Task RecordImpactAsync_Replace_MakesTheUnitCurrentAndDropsOldTests()
     {
         await Record(ImpactGranularity.Class, "T.A", ["T.A.Old"], [new(3, 5)]);
@@ -194,6 +294,28 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         var selection = _sut.SelectTests([new ChangedFile(File, Edit(shifted, 6, "changed"))]);
         Assert.Equal(["T.A", "T.B"], selection.Tests.Keys.Order());
         Assert.Equal(new LineSpan(5, 7), Assert.Single(selection.Tests["T.A"]).ExecutedSpan);
+    }
+
+    [Fact]
+    public async Task RecordImpactAsync_MergeOnUnchangedTopLevelFilePreservesEarlierSpans()
+    {
+        var path = Path.Combine(_tempDir, "Program.cs");
+        System.IO.File.WriteAllText(path, Original);
+        await _sut.RecordImpactAsync(new ImpactRecording(
+            Project, ImpactGranularity.Run, "run", _sut.CreateRunId(), ["T.A"],
+            [new ImpactFile(path, [new(3, 5)], Original)], Merge: false));
+        await _sut.RecordImpactAsync(new ImpactRecording(
+            Project, ImpactGranularity.Run, "run", _sut.CreateRunId(), ["T.B"],
+            [new ImpactFile(path, [new(10, 12)], Original)], Merge: true));
+
+        var executors = _sut.GetTestsExecuting(path);
+
+        Assert.Equal(["T.A", "T.B"], executors.Select(executor => executor.TestFqn));
+        Assert.All(executors, executor =>
+        {
+            Assert.True(executor.IsContentCurrent);
+            Assert.Equal([new LineSpan(3, 5), new LineSpan(10, 12)], executor.Spans);
+        });
     }
 
     [Fact]

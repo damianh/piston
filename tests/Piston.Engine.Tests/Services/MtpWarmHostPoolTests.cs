@@ -52,6 +52,21 @@ public sealed class MtpWarmHostPoolTests : IDisposable
     }
 
     [Fact]
+    public async Task CancelledReusedRequest_RetiresHostWithoutReadingReleasedConnection()
+    {
+        await using var pool = new MtpWarmHostPool();
+        var first = await RunAsync(pool, MtpServerSession.RunMethod);
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+        await stop.CancelAsync();
+
+        var result = await pool.RunAsync(_appPath, _appDirectory, MtpServerSession.RunMethod, null, _ => { }, stop.Token);
+
+        Assert.Equal(MtpServerSession.Outcome.Cancelled, result.Outcome);
+        Assert.Equal(0, pool.Count);
+        Assert.True(HasExited(first.Pid));
+    }
+
+    [Fact]
     public async Task ChangedOutput_ReplacesTheHost()
     {
         await using var pool = new MtpWarmHostPool();

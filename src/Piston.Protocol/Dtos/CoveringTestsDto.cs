@@ -38,4 +38,5 @@ public sealed record TestSelectionReasonDto(
     string ChangedLines,
     string? ExecutedLines,
     string Granularity,
-    string ProjectPath);
+    string ProjectPath,
+    string? Member = null);

@@ -685,18 +685,25 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
         CoverageFileSummary? file;
         IReadOnlyList<LineCoverage> lines;
+        IReadOnlyList<LineSpan> staleLines;
         _coverageLock.Wait();
         try
         {
             file = _coverageStore.GetReportFile(filePath);
             lines = file is null ? [] : _coverageStore.GetReportLines(filePath);
+            staleLines = file is null ? [] : _coverageStore.GetReportStaleLines(filePath);
         }
         finally
         {
             _ = _coverageLock.Release();
         }
 
-        return file is null ? null : new FileCoverageSnapshot(WithCurrentStaleness(file), lines);
+        return file is null
+            ? null
+            : new FileCoverageSnapshot(WithCurrentStaleness(file), lines)
+            {
+                StaleLines = [.. staleLines.Select(range => new CoveredLineRange(range.Start, range.End))],
+            };
     }
 
     /// <summary>
@@ -763,11 +770,19 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     private const string RunUnitKey = "run";
 
     /// <summary>Flags a file stale when its content no longer matches what was measured, e.g. after edits while stopped.</summary>
-    private static CoverageFileSummary WithCurrentStaleness(CoverageFileSummary file) =>
-        file.IsStale || file.ContentHash is null
-            || string.Equals(file.ContentHash, CoverageReportFile.ComputeContentHash(file.FilePath), StringComparison.Ordinal)
+    private static CoverageFileSummary WithCurrentStaleness(CoverageFileSummary file)
+    {
+        var content = ImpactContent.TryRead(file.FilePath);
+        if (content is null)
+        {
+            return file with { IsStale = true };
+        }
+
+        return (file.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) && !file.IsStale)
+            || string.Equals(file.SnapshotHash ?? file.ContentHash, ImpactContent.Hash(content), StringComparison.Ordinal)
             ? file
             : file with { IsStale = true };
+    }
 
     internal async Task ProcessCoverageAsync(
         long runId,
@@ -1691,6 +1706,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 CleanUpCoverageResultsDirs(coverageReportPaths);
             }
 
+            var noEarlierResults = !_state.TestSuites.Any(s => s.Tests.Count > 0) && newSuites.Any(s => s.Tests.Count > 0);
             var (fixedTests, newlyFailingTests) = TestOutcomeChanges.Compare(_state.TestSuites, newSuites);
 
             // Merge selective results with preserved results from untouched test projects
@@ -1747,6 +1763,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 PossiblyHangingTests = hangingTests,
                 FixedTests = fixedTests,
                 NewlyFailingTests = newlyFailingTests,
+                NoEarlierResults = noEarlierResults,
                 RunnerError = runnerError,
                 RetryLimit = RetryFailedTests,
                 RetriesSkippedReason = retriesSkippedReason,
@@ -1898,6 +1915,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             FreshnessReason = freshnessReason,
         };
 
+        var inRunHistory = false;
         if (RunHistory is { } history)
         {
             try
@@ -1907,6 +1925,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 {
                     finished = finished with { FailureClassifications = failures };
                 }
+
+                inRunHistory = history.GetRun(finished.RunId) is not null;
             }
             catch (Exception ex)
             {
@@ -1929,6 +1949,14 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             var recent = new List<TestRunRecord>(_state.RecentRuns.Count + 1) { finished };
             recent.AddRange(_state.RecentRuns.Take(PistonState.MaxRecentRuns - 1).Select(DropExecutionLogs));
             _state.RecentRuns = recent;
+
+            // Runs can finish out of request order (a queued run cancelled while an older one stops), so keep the
+            // timeline sorted by request so that trimming always drops the oldest requests.
+            var timeline = _state.SessionTimeline;
+            var skip = Math.Max(0, timeline.Count + 1 - PistonState.MaxSessionTimelineEntries);
+            _state.SessionTimeline = [.. timeline.Append(SessionTimelineEntry.From(finished, inRunHistory)).OrderBy(e => e.Sequence).Skip(skip)];
+            _state.SessionTimelineDroppedRuns += skip;
+            _state.SessionTimelineRevision++;
 
             if (_runWaiters.Remove(finished.RunId, out var waiter))
             {

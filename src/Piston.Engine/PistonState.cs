@@ -125,6 +125,26 @@ public sealed class PistonState
     /// <summary>Terminal runs, newest first, bounded by <see cref="MaxRecentRuns"/>.</summary>
     public IReadOnlyList<TestRunRecord> RecentRuns { get; set; } = [];
 
+    // ── Session timeline ─────────────────────────────────────────────────────
+
+    /// <summary>Number of entries retained in <see cref="SessionTimeline"/> (in memory only).</summary>
+    public const int MaxSessionTimelineEntries = 500;
+
+    /// <summary>When this engine's session began; the timeline covers runs since then.</summary>
+    public DateTimeOffset SessionStartedAt { get; } = DateTimeOffset.UtcNow;
+
+    /// <summary>
+    /// Every terminal run of this session, oldest first, bounded by <see cref="MaxSessionTimelineEntries"/>.
+    /// Kept across reset and clearing results, which do not end the session.
+    /// </summary>
+    public IReadOnlyList<SessionTimelineEntry> SessionTimeline { get; set; } = [];
+
+    /// <summary>How many of the session's oldest runs have been dropped from <see cref="SessionTimeline"/>.</summary>
+    public int SessionTimelineDroppedRuns { get; set; }
+
+    /// <summary>Changes whenever <see cref="SessionTimeline"/> does, so clients know when to reload it.</summary>
+    public long SessionTimelineRevision { get; set; }
+
     /// <summary>Finds a retained run by ID, including the active run.</summary>
     public TestRunRecord? FindRun(string runId)
     {

@@ -426,7 +426,8 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         reason.ChangedLines.ToString(),
         reason.ExecutedSpan?.ToString(),
         reason.Granularity.ToString().ToLowerInvariant(),
-        reason.ProjectPath);
+        reason.ProjectPath,
+        reason.Member);
 
     private static ImpactAnalysisResult FullRunResult() =>
         new([], [], RequiresGraphRebuild: false, IsFullRun: true);

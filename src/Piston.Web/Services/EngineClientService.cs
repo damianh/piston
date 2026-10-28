@@ -399,6 +399,50 @@ public sealed class EngineClientService : IAsyncDisposable
         return result?.Deserialize<StoredRunsDto>(JsonRpcSerializer.Options);
     }
 
+    /// <summary>
+    /// The retained terminal runs of the engine's lifetime, in request order, loaded page by page; null when the
+    /// daemon is unreachable.
+    /// </summary>
+    public async Task<SessionTimelineDto?> GetSessionTimelineAsync()
+    {
+        var entries = new List<SessionTimelineEntryDto>();
+        DateTimeOffset? startedAt = null;
+        long? after = null;
+        while (true)
+        {
+            var result = await SendRequestAsync(ProtocolMethods.SessionGetTimeline, new GetSessionTimelineCommand(after)).ConfigureAwait(false);
+            if (result?.Deserialize<SessionTimelineDto>(JsonRpcSerializer.Options) is not { } page)
+            {
+                return null;
+            }
+
+            if (startedAt is { } started && started != page.StartedAt)
+            {
+                // The daemon restarted between pages; start over with the new session.
+                entries.Clear();
+                startedAt = null;
+                after = null;
+                continue;
+            }
+
+            if (page.OldestRetainedSequence is { } oldest)
+            {
+                // Runs that finished between pages may have pushed the oldest out of the retention window; drop them
+                // here too so the entries stay the retained runs that EarlierRunsDropped describes.
+                _ = entries.RemoveAll(e => e.Sequence < oldest);
+            }
+
+            startedAt = page.StartedAt;
+            entries.AddRange(page.Entries);
+            if (!page.HasMore || page.Entries.Count == 0)
+            {
+                return page with { Entries = entries, HasMore = false };
+            }
+
+            after = page.Entries[^1].Sequence;
+        }
+    }
+
     /// <summary>One stored run with its per-test results; null when it is not kept or the daemon is unreachable.</summary>
     public async Task<StoredRunDto?> GetStoredRunAsync(string runId)
     {

@@ -13,4 +13,8 @@ public sealed record FileCoverageDto(
     IReadOnlyList<CoverageLineDto> Lines,
     CoverageFileSummaryDto? Summary = null,
     IReadOnlyList<string>? Source = null
-);
+)
+{
+    /// <summary>Current source ranges without remappable coverage evidence.</summary>
+    public IReadOnlyList<LineRangeDto> StaleLines { get; init; } = [];
+}

@@ -8,11 +8,13 @@ execution. Captures from MSTest, NUnit, TUnit and xUnit v3 show stable node UIDs
 warm-host reruns of the same build. However, stability across source changes has not been established, and Piston
 currently discards the UID when it constructs a `TestResult`.
 
-Do not switch coverage runs to server mode yet. In the probe, a coverage-enabled MSTest app connected to the MTP
+Coverage runs now use server mode with support for multiple controller connections, retaining `dotnet test` as
+the fallback. In the original probe, a coverage-enabled MSTest app connected to the MTP
 server client but did not return test updates or a request response within two minutes; no coverage report was
 produced. The existing `dotnet test` path completed the same nine-test probe in under three seconds and produced
 one Cobertura report. This confirms the current fallback is valuable, but does not establish whether the server
-mode limitation is in MTP, its coverage extension, or Piston's protocol lifecycle.
+mode limitation is in MTP, its coverage extension, or Piston's protocol lifecycle. The follow-up for
+[#36](https://github.com/damianh/piston/issues/36) identified the missing controller connection handling in Piston.
 
 ## Method
 
@@ -65,6 +67,13 @@ capture. This reproduces the issue in [#42](https://github.com/damianh/piston/is
 
 ### Coverage and progress
 
+The observations below describe the original single-connection client. With `--coverage`, the controller
+connects first and advertises `capabilities.testing.multipleConnectionProvider`; the relaunched test host
+connects separately and serves requests. Piston now initializes both connections, sends requests to the active
+test host, and drains the passive controller connection until shutdown. Coverage runs use a fresh host and
+allow the controller time to finish its report after the child exits. Integration tests cover report generation
+and server-mode progress; the original stalled capture is retained as investigation evidence.
+
 The coverage experiment launched the MSTest app with `--server`, the loopback client options and the same
 `--coverage --coverage-output-format cobertura --results-directory` arguments used by Piston. It connected to the
 client, but the run request produced no test updates or response within 120 seconds and wrote no Cobertura report.
@@ -82,9 +91,8 @@ publish completed tests, not an in-progress test. See [#36](https://github.com/d
 - [#42](https://github.com/damianh/piston/issues/42): use an identity that includes the test type and a
   parameter/case discriminator; keep display names for display. Decide how identity changes affect stored history
   and downstream result keys before changing the key.
-- [#36](https://github.com/damianh/piston/issues/36): retain the coverage fallback. Investigate the stalled
-  server-mode request separately before enabling coverage in server mode; compare protocol lifecycle and
-  controller behavior.
+- [#36](https://github.com/damianh/piston/issues/36): the controller-connection fix enables coverage in server
+  mode while retaining the `dotnet test` fallback.
 - Preserve assertion values, skip reason, exception details, source location and traits as structured test-result
   fields. This is not covered by #36 or #42; see [#60](https://github.com/damianh/piston/issues/60).
 - Attachments and related artifacts belong with the scope of [#54](https://github.com/damianh/piston/issues/54).

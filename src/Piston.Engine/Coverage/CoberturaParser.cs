@@ -74,12 +74,11 @@ internal sealed class CoberturaParser : ICoberturaParser
                 moduleByFile[absolutePath] = module;
             }
 
-            // A method any test entered contributes its whole line range, so an edit to a line the tests
-            // skipped (an untaken branch) still counts as touching code they executed.
+            // Keep the method's actual report lines, including zero-hit branch lines within a method.
             foreach (var methodEl in classEl.Elements("methods").Elements("method"))
             {
-                int? first = null, last = null;
                 var executed = false;
+                var methodLines = new List<int>();
                 foreach (var lineEl in methodEl.Elements("lines").Elements("line"))
                 {
                     if (!int.TryParse(lineEl.Attribute("number")?.Value, out var number))
@@ -87,19 +86,18 @@ internal sealed class CoberturaParser : ICoberturaParser
                         continue;
                     }
 
-                    first = first is null ? number : Math.Min(first.Value, number);
-                    last = last is null ? number : Math.Max(last.Value, number);
+                    methodLines.Add(number);
                     executed |= int.TryParse(lineEl.Attribute("hits")?.Value, out var methodHits) && methodHits > 0;
                 }
 
-                if (executed)
+                if (executed && methodLines.Count > 0)
                 {
                     if (!spansByFile.TryGetValue(absolutePath, out var spans))
                     {
                         spansByFile[absolutePath] = spans = [];
                     }
 
-                    spans.Add(new LineSpan(first!.Value, last!.Value));
+                    spans.AddRange(methodLines.Select(line => new LineSpan(line, line)));
                 }
             }
 

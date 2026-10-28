@@ -166,6 +166,15 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
                 }
 
+            case ProtocolMethods.SessionGetTimeline:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<GetSessionTimelineCommand>(@params);
+                    var stored = _engine.GetStoredRuns()?.Select(r => r.RunId).ToHashSet(StringComparer.Ordinal);
+                    var result = _engine.State.ToSessionTimelineDto(cmd?.AfterSequence, id => stored?.Contains(id) == true);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
             case ProtocolMethods.CoverageGetSummary:
                 {
                     var result = DtoMapper.ToCoverageSummaryDto(_engine.GetCoverageReport(), SolutionDirectory);

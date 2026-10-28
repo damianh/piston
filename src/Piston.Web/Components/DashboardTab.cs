@@ -10,4 +10,5 @@ public enum DashboardTab
     Coverage,
     Runs,
     Machine,
+    Timeline,
 }
