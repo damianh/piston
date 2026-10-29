@@ -11,6 +11,12 @@ using Piston.Engine.Services;
 
 namespace Piston.Engine;
 
+/// <summary>Overrides engine services for deterministic tests.</summary>
+internal sealed record EngineServiceOverrides(
+    IBuildService? BuildService = null,
+    IImpactAnalyzer? ImpactAnalyzer = null,
+    Func<string, string?>? SdkVersionProvider = null);
+
 public sealed class PistonEngine : IEngine, IAsyncDisposable
 {
     private readonly PistonState _state;
@@ -30,11 +36,16 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     private RunHistoryStore? _history;
 
     public PistonEngine(PistonOptions options)
-        : this(options, NullActivityEventSink.Instance)
+        : this(options, NullActivityEventSink.Instance, serviceOverrides: null)
     {
     }
 
     public PistonEngine(PistonOptions options, IActivityEventSink activitySink)
+        : this(options, activitySink, serviceOverrides: null)
+    {
+    }
+
+    internal PistonEngine(PistonOptions options, IActivityEventSink activitySink, EngineServiceOverrides? serviceOverrides)
     {
         _activitySink = activitySink;
         _ownerHost = options.OwnerHost;
@@ -86,7 +97,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             message => _diagnosticLog.Write("Resources", message));
         var vsTestStrategy = new ProcessTestExecutionStrategy(trxParser);
         _warmHosts = options.WarmTestHosts ? new MtpWarmHostPool() : null;
-        var buildService = new BuildService(_warmHosts);
+        var buildService = serviceOverrides?.BuildService ?? new BuildService(_warmHosts);
         var mtpStrategy = new MtpTestExecutionStrategy(
             projectPath => impactAnalyzer.GetMtpOutputPath(projectPath),
             solutionDir,
@@ -131,7 +142,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             fileWatcher,
             buildService,
             testRunner,
-            impactAnalyzer,
+            serviceOverrides?.ImpactAnalyzer ?? impactAnalyzer,
             _state,
             _coverageStore,
             coverageProcessor,
@@ -148,7 +159,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         };
         _orchestrator.HangThreshold = options.HangThreshold;
         _orchestrator.RetryFailedTests = Math.Clamp(options.RetryFailedTests, 0, PistonOptions.MaxRetryFailedTests);
-        _orchestrator.SdkVersionProvider = dir => sdkVersions.GetOrAdd(dir, d => new Lazy<string?>(() => ProbeSdkVersion(d))).Value;
+        _orchestrator.SdkVersionProvider = serviceOverrides?.SdkVersionProvider
+            ?? (dir => sdkVersions.GetOrAdd(dir, d => new Lazy<string?>(() => ProbeSdkVersion(d))).Value);
     }
 
     /// <summary>

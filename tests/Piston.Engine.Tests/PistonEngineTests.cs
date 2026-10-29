@@ -4,6 +4,8 @@
 using Piston.Engine.Coverage;
 using Piston.Engine.Execution;
 using Piston.Engine.Models;
+using Piston.Engine.Services;
+using Piston.Engine.Tests.Orchestration;
 using Xunit;
 
 namespace Piston.Engine.Tests;
@@ -23,35 +25,27 @@ public sealed class PistonEngineTests : IDisposable
         var solution = Path.Combine(_root, "Test.slnx");
         File.WriteAllText(solution, "<Solution />");
         var directory = new ExecutionCoordinationDirectory(Path.Combine(_root, "coordination"));
+        var buildService = new GatedBuildService();
         var engine = new PistonEngine(new PistonOptions
         {
             SolutionPath = solution,
             ProcessPoolSize = 1,
             ExecutionCoordinationDirectory = directory.BaseDirectory,
-        });
-        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var release = new ManualResetEventSlim();
-        var blocked = 0;
-        engine.State.StateChanged += () =>
-        {
-            if (engine.State.Phase == PistonPhase.Building && Interlocked.Exchange(ref blocked, 1) == 0)
-            {
-                entered.SetResult();
-                release.Wait();
-                throw new OperationCanceledException();
-            }
-        };
-        var starting = Task.Run(() => engine.StartAsync(solution), _ct);
+        }, NullActivityEventSink.Instance, new EngineServiceOverrides(
+            BuildService: buildService,
+            ImpactAnalyzer: new StubImpactAnalyzer([]),
+            SdkVersionProvider: _ => null));
+        var starting = engine.StartAsync(solution);
         Task? disposing = null;
         try
         {
-            await entered.Task.WaitAsync(TimeSpan.FromSeconds(30), _ct);
+            await buildService.Started.Task.WaitAsync(TimeSpan.FromSeconds(30), _ct);
             disposing = engine.DisposeAsync().AsTask();
             Assert.False(disposing.IsCompleted);
             _ = Assert.Throws<WorktreeOwnershipConflictException>(() => WorktreeOwnership.Acquire(directory, solution));
             _ = Assert.Single(Directory.GetFiles(directory.LeasesDirectory));
 
-            release.Set();
+            buildService.Release();
             await starting.WaitAsync(TimeSpan.FromSeconds(30), _ct);
             await disposing.WaitAsync(TimeSpan.FromSeconds(30), _ct);
 
@@ -60,9 +54,28 @@ public sealed class PistonEngineTests : IDisposable
         }
         finally
         {
-            release.Set();
+            buildService.Release();
             await starting;
             await (disposing ?? engine.DisposeAsync().AsTask());
+        }
+    }
+
+    private sealed class GatedBuildService : IBuildService
+    {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Release() => _release.TrySetResult();
+
+        public Task<BuildResult> BuildAsync(string solutionPath, CancellationToken ct) =>
+            BuildAsync(solutionPath, null, ct);
+
+        public async Task<BuildResult> BuildAsync(string solutionPath, IReadOnlyList<string>? projectPaths, CancellationToken ct)
+        {
+            _ = Started.TrySetResult();
+            await _release.Task.ConfigureAwait(false);
+            throw new OperationCanceledException(ct);
         }
     }
 
