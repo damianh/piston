@@ -11,6 +11,7 @@ using Piston.Hosting;
 using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
 using Piston.Hosting.Protocol;
+using Piston.Integration;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
@@ -293,6 +294,50 @@ coverageExportCmd.SetHandler(async ctx =>
 });
 
 rootCommand.AddCommand(coverageExportCmd);
+
+// ── init subcommand ───────────────────────────────────────────────────────────
+
+var initWriteOpt = new Option<bool>("--write",
+    "Write the assets. Without it, only report what would change; nothing is written.");
+var initScopeOpt = new Option<string>("--scope", () => "user",
+    "user: the harness's user configuration directory. repo: the current directory (the repository root).")
+    .FromAmong("user", "repo");
+var initForceOpt = new Option<bool>("--force",
+    "With --write, overwrite Piston's MCP entry and asset files when their content differs.");
+var initDashboardOpt = new Option<bool>("--dashboard",
+    "Start `piston mcp` with --dashboard so the session serves the dashboard (needed by the canvas).");
+
+var initCmd = new Command("init",
+    "Print or (with --write) install Piston's agent integration assets. Never changes configuration without --write.");
+foreach (var (name, harness, description) in new[]
+{
+    ("copilot", Harness.Copilot, "GitHub Copilot: the MCP server entry, the `piston` skill and the Piston dashboard canvas."),
+    ("claude", Harness.Claude, "Claude Code: the `piston` skill and, at repo scope, the .mcp.json server entry."),
+})
+{
+    var harnessCmd = new Command(name, description) { initWriteOpt, initScopeOpt, initForceOpt, initDashboardOpt };
+    harnessCmd.SetHandler(ctx =>
+    {
+        var options = new InitOptions(
+            harness,
+            ctx.ParseResult.GetValueForOption(initScopeOpt) == "repo" ? InitScope.Repo : InitScope.User,
+            ctx.ParseResult.GetValueForOption(initWriteOpt),
+            ctx.ParseResult.GetValueForOption(initForceOpt),
+            ctx.ParseResult.GetValueForOption(initDashboardOpt));
+        try
+        {
+            ctx.ExitCode = HarnessInit.Run(options, InitLocations.FromEnvironment(Directory.GetCurrentDirectory()), Console.Out);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            Console.Error.WriteLine($"error: {ex.Message}");
+            ctx.ExitCode = 1;
+        }
+    });
+    initCmd.AddCommand(harnessCmd);
+}
+
+rootCommand.AddCommand(initCmd);
 
 return await rootCommand.InvokeAsync(args);
 

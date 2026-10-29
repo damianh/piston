@@ -129,9 +129,12 @@ run commands. Only explicit `run`/`run_failed` actions or existing dashboard
 controls request tests; failed-test selection is shared in `RunTestsCommand`.
 Execution controls are inert while the shared dashboard is disconnected.
 
-The extension is a repository asset, not automatically installed by the packed
-tool. It requires a runtime with extension canvas support and a canvas-capable
-`piston` on PATH. The SDK canvas API is experimental.
+The packed tool embeds a copy of the extension (without its tests) and the
+`piston` skill in `Piston.dll`. It installs them only on request:
+`piston init copilot --write` writes them under `$COPILOT_HOME` (or the current
+repository with `--scope repo`). An existing file whose content differs is kept
+unless `--force` is given. The extension requires a runtime with extension canvas
+support and a canvas-capable `piston` on PATH. The SDK canvas API is experimental.
 
 ## Engine pipeline
 
@@ -660,5 +663,5 @@ admission budget described above.
 
 Aspire is one possible integration-test example for the generic runner. There
 is no Aspire-specific lifecycle, service orchestration, or dedicated
-integration contract. Planned work, including packaged harness assets, is in
+integration contract. Planned work is in
 [docs/ROADMAP.md](docs/ROADMAP.md).

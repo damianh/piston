@@ -38,6 +38,15 @@
     </AssemblyAttribute>
   </ItemGroup>
 
+  <!-- Harness integration assets installed by `piston init`. The canvas is the repository's own extension. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Integration\Assets\SKILL.md" LogicalName="Piston.Integration/skill/SKILL.md" />
+    <EmbeddedResource Include="..\..\.github\extensions\piston-dashboard\*"
+                      Exclude="..\..\.github\extensions\piston-dashboard\*.test.mjs"
+                      LogicalName="Piston.Integration/canvas/%(Filename)%(Extension)"
+                      Link="Integration\Assets\canvas\%(Filename)%(Extension)" />
+  </ItemGroup>
+
   <!-- Publish Piston.Web and copy its wwwroot output to our wwwroot -->
   <Import Project="..\BlazorWebUI.targets" />
 </Project>
