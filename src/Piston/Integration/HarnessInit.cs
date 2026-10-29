@@ -212,12 +212,26 @@ internal static class HarnessInit
         var directory = Path.GetDirectoryName(path)!;
         _ = Directory.CreateDirectory(directory);
         var temp = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
+        var options = new FileStreamOptions { Mode = FileMode.CreateNew, Access = FileAccess.Write };
+        UnixFileMode? mode = null;
+        if (!OperatingSystem.IsWindows() && File.Exists(path))
+        {
+            // The existing file may hold other servers' credentials: keep the temporary copy private until it
+            // carries the destination's mode, rather than creating it with the umask's default.
+            mode = File.GetUnixFileMode(path);
+            options.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        }
+
         try
         {
-            File.WriteAllBytes(temp, content);
-            if (!OperatingSystem.IsWindows() && File.Exists(path))
+            using (var stream = new FileStream(temp, options))
             {
-                File.SetUnixFileMode(temp, File.GetUnixFileMode(path));
+                stream.Write(content);
+            }
+
+            if (mode is { } existing && !OperatingSystem.IsWindows())
+            {
+                File.SetUnixFileMode(temp, existing);
             }
 
             File.Move(temp, path, overwrite: true);
