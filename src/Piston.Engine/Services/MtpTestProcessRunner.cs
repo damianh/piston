@@ -297,25 +297,7 @@ internal static partial class MtpTestProcessRunner
         var suites = BuildSuitesFromLiveResults(projectPath, liveResults, liveResultsLock);
         if (parser.Attachments.Count > 0 && suites.Count > 0)
         {
-            var tests = suites.SelectMany(s => s.Tests).ToList();
-            foreach (var attachment in parser.Attachments)
-            {
-                var matching = tests.Where(test =>
-                    string.Equals(test.DisplayName, attachment.TestName, StringComparison.Ordinal)
-                    || string.Equals(test.FullyQualifiedName, attachment.TestName, StringComparison.Ordinal))
-                    .ToList();
-                if (matching.Count == 1)
-                {
-                    var test = matching[0];
-                    var updated = test with
-                    {
-                        Attachments = [.. test.Attachments, new TestAttachment(attachment.Path, Path.GetFileName(attachment.Path))],
-                    };
-                    tests[tests.IndexOf(test)] = updated;
-                }
-            }
-
-            suites = [suites[0] with { Tests = tests }];
+            suites = [suites[0] with { Tests = AttachArtifacts(suites[0].Tests, parser.Attachments, log) }];
         }
 
         var totalTests = suites.SelectMany(s => s.Tests).Count();
@@ -334,6 +316,36 @@ internal static partial class MtpTestProcessRunner
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    internal static IReadOnlyList<TestResult> AttachArtifacts(
+        IReadOnlyList<TestResult> results,
+        IReadOnlyList<MtpParsedAttachment> attachments,
+        ExecutionLog log)
+    {
+        var tests = results.ToList();
+        foreach (var attachment in attachments)
+        {
+            var matching = tests.Where(test =>
+                string.Equals(test.DisplayName, attachment.TestName, StringComparison.Ordinal)
+                || string.Equals(test.FullyQualifiedName, attachment.TestName, StringComparison.Ordinal))
+                .ToList();
+            if (matching.Count != 1)
+            {
+                log.Write("MtpRunner",
+                    $"Cannot associate artifact '{attachment.Path}' with test '{attachment.TestName}': " +
+                    $"{matching.Count} matching results; the artifact summary does not identify its producing framework.");
+                continue;
+            }
+
+            var test = matching[0];
+            tests[tests.IndexOf(test)] = test with
+            {
+                Attachments = [.. test.Attachments, new TestAttachment(attachment.Path, Path.GetFileName(attachment.Path))],
+            };
+        }
+
+        return tests;
+    }
 
     private static void RecordResult(
         MtpParsedResult parsed,

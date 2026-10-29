@@ -282,7 +282,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
             var suite = item.Suite;
             var result = item.Test;
             var classification = selectedRun.FailureClassifications.FirstOrDefault(entry =>
-                (entry.Project == suite.Name || entry.ProjectId == suite.ProjectId)
+                entry.ProjectId == suite.Key
                 && entry.Test == result.ResultKey)?.Kind.ToString();
             var attachments = new JsonArray(result.Attachments.Select(attachment => (JsonNode)new JsonObject
             {

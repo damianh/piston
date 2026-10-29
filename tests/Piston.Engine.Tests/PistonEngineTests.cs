@@ -135,6 +135,62 @@ public sealed class PistonEngineTests : IDisposable
         Assert.False(File.Exists(Path.Combine(_root, ".piston", "piston.db")));
     }
 
+    [Theory]
+    [InlineData("active")]
+    [InlineData("recent")]
+    [InlineData("restored")]
+    [InlineData("aggregate")]
+    public void GetTestArtifact_ResolvesFilesFromRetainedResults(string resultSource)
+    {
+        const string runId = "0123456789abcdef0123456789abcdef";
+        var source = Path.Combine(_root, "report.txt");
+        File.WriteAllText(source, "test artifact");
+        var suites = new TestArtifactStore(_root).Retain(runId,
+        [
+            new TestSuite("Tests",
+            [
+                new TestResult("Tests.Captures", "Captures", TestStatus.Passed, TimeSpan.Zero, null, null, null, null)
+                {
+                    Attachments = [new TestAttachment(source)],
+                },
+            ], DateTimeOffset.UnixEpoch, TimeSpan.Zero),
+        ]);
+        var run = new TestRunRecord
+        {
+            RunId = runId,
+            EngineInstanceId = "engine",
+            Sequence = 1,
+            Trigger = TestRunTrigger.Forced,
+            RequestedAt = DateTimeOffset.UnixEpoch,
+            Status = resultSource == "active" ? TestRunStatus.Running : TestRunStatus.Completed,
+            Restored = resultSource == "restored",
+            Suites = suites,
+        };
+        using var engine = new PistonEngine(new PistonOptions
+        {
+            SolutionPath = Path.Combine(_root, "Test.slnx"),
+        });
+        if (resultSource == "active")
+        {
+            engine.State.CurrentRun = run;
+        }
+        else if (resultSource == "aggregate")
+        {
+            engine.State.TestSuites = suites;
+        }
+        else
+        {
+            engine.State.RecentRuns = [run];
+        }
+
+        var path = engine.GetTestArtifact(runId, 0);
+
+        Assert.NotNull(path);
+        Assert.Equal("test artifact", File.ReadAllText(path));
+        Assert.Null(engine.GetTestArtifact(runId, 1));
+        Assert.Null(engine.GetTestArtifact("fedcba9876543210fedcba9876543210", 0));
+    }
+
     [Fact]
     public async Task StartAsync_RefusesAWorktreeOwnedByAnotherEngine_WithoutStarting()
     {

@@ -99,7 +99,7 @@ public sealed class TestArtifactStoreTests
             var unreferenced = Path.Combine(runDirectory, "9999-unreferenced.txt");
             File.WriteAllText(unreferenced, "remove");
             var obsoleteRun = Path.Combine(root, ".piston", "artifacts", "fedcba9876543210fedcba9876543210");
-            Directory.CreateDirectory(obsoleteRun);
+            _ = Directory.CreateDirectory(obsoleteRun);
             File.WriteAllText(Path.Combine(obsoleteRun, "0000-obsolete.txt"), "remove");
 
             store.Prune([], retained);
@@ -136,7 +136,7 @@ public sealed class TestArtifactStoreTests
     private static string CreateTempDirectory()
     {
         var path = Path.Combine(Path.GetTempPath(), $"piston-artifacts-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(path);
+        _ = Directory.CreateDirectory(path);
         return path;
     }
 }

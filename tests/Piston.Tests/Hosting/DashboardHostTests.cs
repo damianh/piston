@@ -42,7 +42,7 @@ public sealed class DashboardHostTests
     public async Task ArtifactEndpoint_ServesOnlyKnownArtifacts()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"piston-dashboard-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
+        _ = Directory.CreateDirectory(directory);
         var path = Path.Combine(directory, "report.txt");
         await File.WriteAllTextAsync(path, "test artifact", _ct);
         try

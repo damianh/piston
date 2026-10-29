@@ -77,18 +77,6 @@ internal sealed class MtpStdoutParser
     /// </summary>
     public MtpParsedResult? ProcessLine(string line)
     {
-        var artifactMatch = ArtifactLineRegex.Match(line);
-        if (artifactMatch.Success)
-        {
-            _attachments.Add(new(artifactMatch.Groups[1].Value, artifactMatch.Groups[2].Value.Trim()));
-            return null;
-        }
-
-        if (line.Trim().EndsWith("file artifacts produced:", StringComparison.OrdinalIgnoreCase))
-        {
-            return FlushPending();
-        }
-
         // Captured output is indented under its heading; check it first so output text that
         // happens to look like a status or stack-trace line is not misread.
         if (_currentOutputSection is not null)
@@ -100,6 +88,18 @@ internal sealed class MtpStdoutParser
             }
 
             _currentOutputSection = null;
+        }
+
+        var artifactMatch = ArtifactLineRegex.Match(line);
+        if (artifactMatch.Success)
+        {
+            _attachments.Add(new(artifactMatch.Groups[1].Value, artifactMatch.Groups[2].Value.Trim()));
+            return null;
+        }
+
+        if (line.Trim().EndsWith("file artifacts produced:", StringComparison.OrdinalIgnoreCase))
+        {
+            return FlushPending();
         }
 
         var statusMatch = StatusLineRegex.Match(line);

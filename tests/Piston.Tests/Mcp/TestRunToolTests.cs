@@ -245,6 +245,46 @@ public sealed class TestRunToolTests
         Assert.Equal("Ns.Cases.Add(2,3)", match.GetProperty("fullyQualifiedName").GetString());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GetTestResultKeepsFailureClassificationsBoundToTheProject(bool useSuiteNameFallback)
+    {
+        var firstProject = useSuiteNameFallback ? "One" : "One/Tests.csproj";
+        var secondProject = useSuiteNameFallback ? "Two" : "Two/Tests.csproj";
+        var test = new TestResult("Shared.Test", "Test", TestStatus.Failed,
+            TimeSpan.Zero, null, "boom", null, null);
+        var run = Run("classifications", 1) with
+        {
+            Suites =
+            [
+                new TestSuite(useSuiteNameFallback ? "One" : "Tests", [test],
+                    DateTimeOffset.UnixEpoch, TimeSpan.Zero) { ProjectId = useSuiteNameFallback ? null : firstProject },
+                new TestSuite(useSuiteNameFallback ? "Two" : "Tests", [test],
+                    DateTimeOffset.UnixEpoch, TimeSpan.Zero) { ProjectId = useSuiteNameFallback ? null : secondProject },
+            ],
+            FailureClassifications =
+            [
+                new(useSuiteNameFallback ? "One" : "Tests", "Shared.Test", FailureKind.PreExisting, "old failure")
+                {
+                    ProjectId = firstProject,
+                },
+                new(useSuiteNameFallback ? "Two" : "Tests", "Shared.Test", FailureKind.New, "new failure")
+                {
+                    ProjectId = secondProject,
+                },
+            ],
+        };
+        var engine = new StubEngine();
+        engine.State.RecentRuns = [run];
+
+        using var doc = JsonDocument.Parse(new TestTools(engine, NullMcpCallRecorder.Instance)
+            .GetTestResult("Shared.Test", run.RunId, secondProject));
+
+        var match = Assert.Single(doc.RootElement.GetProperty("matches").EnumerateArray());
+        Assert.Equal("New", match.GetProperty("failureClassification").GetString());
+    }
+
     [Fact]
     public void TestResultDtoCarriesSeparateStreamsAndRetainedArtifactUrl()
     {

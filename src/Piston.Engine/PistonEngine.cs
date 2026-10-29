@@ -346,7 +346,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
     public string? GetTestArtifact(string runId, int index)
     {
-        var attachment = _state.CurrentRun?.Tests
+        var attachment = (_state.CurrentRun?.Tests ?? [])
             .Concat(_state.RecentRuns.SelectMany(run => run.Tests))
             .Concat(_state.TestSuites.SelectMany(suite => suite.Tests))
             .SelectMany(test => test.Attachments)

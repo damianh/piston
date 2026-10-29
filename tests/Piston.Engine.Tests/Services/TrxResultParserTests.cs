@@ -244,7 +244,7 @@ public sealed class TrxResultParserTests
     public void Parse_ResolvesResultFilesRelativeToTheTrxFile()
     {
         var directory = Path.Combine(Path.GetTempPath(), $"piston-trx-{Guid.NewGuid():N}");
-        Directory.CreateDirectory(directory);
+        _ = Directory.CreateDirectory(directory);
         var trxPath = Path.Combine(directory, "results.trx");
         const string trx = """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -265,6 +265,48 @@ public sealed class TrxResultParserTests
 
             Assert.Equal(Path.Combine(directory, "attachment.txt"), attachment.Path);
             Assert.Equal("attachment.txt", attachment.DisplayName);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Parse_ResolvesResultFilesUsingTheLoggerDeploymentLayout()
+    {
+        var directory = Directory.CreateTempSubdirectory("piston-trx-").FullName;
+        try
+        {
+            const string executionId = "01234567-89ab-cdef-0123-456789abcdef";
+            var deploymentDirectory = Path.Combine(directory, "run", "In", executionId, "machine");
+            _ = Directory.CreateDirectory(deploymentDirectory);
+            var source = Path.Combine(deploymentDirectory, "report.txt");
+            File.WriteAllText(source, "test artifact");
+            var trxPath = Path.Combine(directory, "results.trx");
+            File.WriteAllText(trxPath, $"""
+                <?xml version="1.0" encoding="UTF-8"?>
+                <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+                  <TestSettings><Deployment runDeploymentRoot="run" /></TestSettings>
+                  <Results>
+                    <UnitTestResult testId="t1" testName="Tests.Captures" outcome="Passed"
+                                    relativeResultsDirectory="{executionId}">
+                      <ResultFiles><ResultFile path="machine/report.txt" /></ResultFiles>
+                    </UnitTestResult>
+                  </Results>
+                </TestRun>
+                """);
+
+            var suites = new TrxResultParser().Parse(trxPath);
+            var attachment = Assert.Single(suites[0].Tests[0].Attachments);
+
+            Assert.Equal(source, attachment.Path);
+            var store = new TestArtifactStore(directory);
+            var retained = store.Retain("0123456789abcdef0123456789abcdef", suites);
+            var copied = Assert.Single(retained[0].Tests[0].Attachments);
+            Assert.True(copied.Retained);
+            Directory.Delete(Path.Combine(directory, "run"), recursive: true);
+            Assert.Equal("test artifact", File.ReadAllText(store.Resolve(copied)!));
         }
         finally
         {

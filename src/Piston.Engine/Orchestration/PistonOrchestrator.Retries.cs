@@ -137,7 +137,7 @@ public sealed partial class PistonOrchestrator
                     }, ct).ConfigureAwait(false);
                     if (ct.IsCancellationRequested)
                     {
-                    CleanUpRunnerTemporaryDirectories(result.Projects, []);
+                        CleanUpRunnerTemporaryDirectories(result.Projects, []);
                     }
                     ct.ThrowIfCancellationRequested();
 

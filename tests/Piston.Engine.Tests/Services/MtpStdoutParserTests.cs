@@ -295,6 +295,29 @@ public sealed class MtpStdoutParserTests
         Assert.Equal("/tmp/report with spaces.txt", attachment.Path);
     }
 
+    [Theory]
+    [InlineData("  Standard output")]
+    [InlineData("  Error output")]
+    public void CapturedOutput_ArtifactLikeLinesRemainInTheirOutputStream(string heading)
+    {
+        var sut = new MtpStdoutParser();
+        _ = sut.ProcessLine("passed Ns.Class.Captures (1ms)");
+        _ = sut.ProcessLine(heading);
+        _ = sut.ProcessLine("    - For test 'Ns.Class.Captures': /tmp/not-an-artifact.txt");
+        Assert.Null(sut.ProcessLine("    In process file artifacts produced:"));
+        _ = sut.ProcessLine("    still captured");
+        var completed = sut.ProcessLine("  In process file artifacts produced:");
+        _ = sut.ProcessLine("    - For test 'Ns.Class.Captures': /tmp/real-artifact.txt");
+
+        Assert.NotNull(completed);
+        var expected = string.Join(Environment.NewLine,
+            "- For test 'Ns.Class.Captures': /tmp/not-an-artifact.txt",
+            "In process file artifacts produced:",
+            "still captured");
+        Assert.Equal(expected, heading == "  Standard output" ? completed.Output : completed.ErrorOutput);
+        Assert.Equal("/tmp/real-artifact.txt", Assert.Single(sut.Attachments).Path);
+    }
+
     [Fact]
     public void DotnetTestDetailedTranscript_ParsesErrorsAndOutput()
     {
