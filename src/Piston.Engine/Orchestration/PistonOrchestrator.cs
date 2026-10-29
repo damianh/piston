@@ -567,6 +567,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         }
 
         _coverageLock.Wait();
+        _state.BeginResultsUpdate();
         try
         {
             SqliteCoverageStore.Clear(solutionDirectory);
@@ -577,12 +578,16 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         }
         finally
         {
+            _state.EndResultsUpdate();
             _ = _coverageLock.Release();
         }
         _state.NotifyChanged();
     }
 
     /// <summary>What a run triggered by changes to <paramref name="filePaths"/> would select, without changing state.</summary>
+    /// <summary>Absolute paths of the solution's test projects; empty until the project graph has loaded.</summary>
+    internal IReadOnlyList<string> GetTestProjectPaths() => _impactAnalyzer.GetAllTestProjectPaths();
+
     internal ImpactAnalysisResult PlanAffected(IReadOnlyList<string> filePaths) =>
         _impactAnalyzer.Preview([.. filePaths.Select(p => new FileChangeEvent(
             p, File.Exists(p) ? WatcherChangeTypes.Changed : WatcherChangeTypes.Deleted, DateTimeOffset.UtcNow))]);
@@ -1605,51 +1610,62 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 log?.Write("Orchestrator", $"Retries skipped: {retriesSkippedReason}");
             }
 
-            // ── Coverage processing ────────────────────────────────────────────
-            if (_coverageEnabled && _coverageStore is not null && _coverageProcessor is not null
-                && coverageReportPaths.Count > 0 && newSuites.Count > 0)
+            // Coverage and outcomes change together: readers that combine them see the update and retry.
+            IReadOnlyList<TestOutcomeReference> fixedTests, newlyFailingTests;
+            var noEarlierResults = false;
+            _state.BeginResultsUpdate();
+            try
             {
-                var testFqns = newSuites
-                    .SelectMany(s => s.Tests)
-                    .Select(t => t.FullyQualifiedName)
-                    .Distinct(StringComparer.Ordinal)
-                    .ToList();
+                // ── Coverage processing ────────────────────────────────────────────
+                if (_coverageEnabled && _coverageStore is not null && _coverageProcessor is not null
+                    && coverageReportPaths.Count > 0 && newSuites.Count > 0)
+                {
+                    var testFqns = newSuites
+                        .SelectMany(s => s.Tests)
+                        .Select(t => t.FullyQualifiedName)
+                        .Distinct(StringComparer.Ordinal)
+                        .ToList();
 
-                try
-                {
-                    // Only an unfiltered run of every test project, with none crashing, measures the whole solution.
-                    var isFullCoverageRun = impactResult.IsFullRun
-                        && string.IsNullOrWhiteSpace(effectiveFilter)
-                        && runnerError is null;
-                    var impact = new CoverageImpactOptions(
-                        RunImpactUnits(projectResults, solutionPath, coverageReportPaths, testFqns, effectiveFilter),
-                        ImpactGranularity.Run,
-                        (run.StartedAt ?? DateTimeOffset.UtcNow).UtcDateTime);
-                    await ProcessCoverageAsync(runId, coverageReportPaths, testFqns, isFullCoverageRun, impact)
-                        .ConfigureAwait(false);
+                    try
+                    {
+                        // Only an unfiltered run of every test project, with none crashing, measures the whole solution.
+                        var isFullCoverageRun = impactResult.IsFullRun
+                            && string.IsNullOrWhiteSpace(effectiveFilter)
+                            && runnerError is null;
+                        var impact = new CoverageImpactOptions(
+                            RunImpactUnits(projectResults, solutionPath, coverageReportPaths, testFqns, effectiveFilter),
+                            ImpactGranularity.Run,
+                            (run.StartedAt ?? DateTimeOffset.UtcNow).UtcDateTime);
+                        await ProcessCoverageAsync(runId, coverageReportPaths, testFqns, isFullCoverageRun, impact)
+                            .ConfigureAwait(false);
+                    }
+                    catch
+                    {
+                        // Coverage processing failure is non-fatal
+                    }
+                    finally
+                    {
+                        // Clean up temp results directories after coverage has been processed
+                        CleanUpCoverageResultsDirs(coverageReportPaths);
+                    }
                 }
-                catch
+                else if (coverageReportPaths.Count > 0)
                 {
-                    // Coverage processing failure is non-fatal
-                }
-                finally
-                {
-                    // Clean up temp results directories after coverage has been processed
                     CleanUpCoverageResultsDirs(coverageReportPaths);
                 }
+
+                noEarlierResults = !_state.TestSuites.Any(s => s.Tests.Count > 0) && newSuites.Any(s => s.Tests.Count > 0);
+                (fixedTests, newlyFailingTests) = TestOutcomeChanges.Compare(_state.TestSuites, newSuites);
+
+                // Merge selective results with preserved results from untouched test projects
+                _state.TestSuites = impactResult.IsFullRun
+                    ? newSuites
+                    : MergeTestSuites(_state.TestSuites, newSuites);
             }
-            else if (coverageReportPaths.Count > 0)
+            finally
             {
-                CleanUpCoverageResultsDirs(coverageReportPaths);
+                _state.EndResultsUpdate();
             }
-
-            var noEarlierResults = !_state.TestSuites.Any(s => s.Tests.Count > 0) && newSuites.Any(s => s.Tests.Count > 0);
-            var (fixedTests, newlyFailingTests) = TestOutcomeChanges.Compare(_state.TestSuites, newSuites);
-
-            // Merge selective results with preserved results from untouched test projects
-            _state.TestSuites = impactResult.IsFullRun
-                ? newSuites
-                : MergeTestSuites(_state.TestSuites, newSuites);
 
             _state.InProgressSuites = [];
             _state.LastRunTime = DateTimeOffset.UtcNow;

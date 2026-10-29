@@ -6,6 +6,7 @@ using Piston.Engine.Coverage;
 using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Hosting.Services;
+using Piston.Mcp.Tools;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
@@ -524,6 +525,137 @@ public static class DtoMapper
             t.Granularity,
             [.. t.ExecutedLines.Select(r => new LineRangeDto(r.Start, r.End))],
             t.IsCurrent))]);
+
+    /// <summary>The changed-line coverage reply when coverage is disabled.</summary>
+    public static ChangedLineCoverageDto DisabledChangedLineCoverage { get; } =
+        new(false, null, new ChangedLineTotalsDto(0, 0, 0, 0, 0, 0), new Dictionary<string, int>(), [], 0, []);
+
+    /// <summary>
+    /// Most bytes the changed files may take once serialized. Half the named-pipe message limit leaves room for
+    /// the rest of the reply and its JSON-RPC envelope.
+    /// </summary>
+    internal const long ChangedLineFilesBudget = MessageFramer.DefaultMaxMessageSize / 2;
+
+    /// <summary>
+    /// Maps the verdicts to line ranges per file. Files are added in path order while they fit in
+    /// <paramref name="budget"/> serialized bytes: a file whose detail does not fit keeps only its totals, and once
+    /// even that does not fit the remaining files are omitted. The reply's totals always count every line.
+    /// </summary>
+    internal static ChangedLineCoverageDto ToDto(
+        this ChangedLineCoverageResult result, string solutionDirectory, long budget = ChangedLineFilesBudget)
+    {
+        var files = new List<ChangedLineFileDto>();
+        var detailOmitted = 0;
+        long used = 0;
+        foreach (var file in result.Files)
+        {
+            var dto = file.ToDto(solutionDirectory, withDetail: true);
+            var size = SerializedSize(dto);
+            if (used + size > budget)
+            {
+                dto = file.ToDto(solutionDirectory, withDetail: false);
+                size = SerializedSize(dto);
+                if (used + size > budget)
+                {
+                    break;
+                }
+
+                detailOmitted++;
+            }
+
+            files.Add(dto);
+            used += size;
+        }
+
+        var filesOmitted = result.Files.Count - files.Count;
+        var warnings = result.Warnings.ToList();
+        if (filesOmitted > 0 || detailOmitted > 0)
+        {
+            warnings.Add(
+                $"The reply is too large to list every changed line: {detailOmitted} file(s) give only totals and " +
+                $"{filesOmitted} file(s) are omitted. The totals count every changed line.");
+        }
+
+        return new(
+            Enabled: true,
+            Base: result.Basis,
+            Totals: result.Totals.ToDto(),
+            UnknownReasons: result.UnknownReasons.ToDictionary(
+                kv => ChangedLineVerdicts.Name(kv.Key)!, kv => kv.Value, StringComparer.Ordinal),
+            Files: files,
+            FilesOmitted: filesOmitted,
+            Warnings: warnings);
+
+        static long SerializedSize(ChangedLineFileDto dto) =>
+            System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(dto, JsonRpcSerializer.Options).Length + 1;
+    }
+
+    private static ChangedLineFileDto ToDto(this ChangedFileVerdicts file, string solutionDirectory, bool withDetail)
+    {
+        var failing = file.FailingTests();
+        var failingListed = withDetail ? Math.Min(failing.Count, CoverageTools.MaxFailingTestsPerFile) : 0;
+        return new(
+            file.FilePath,
+            Path.GetRelativePath(solutionDirectory, file.FilePath).Replace('\\', '/'),
+            file.IsMeasured,
+            file.IsStale,
+            file.IsPartial,
+            file.Totals.ToDto(),
+            CoveredByPassing: Ranges(ChangedLineVerdict.CoveredByPassing),
+            CoveredOnlyByFailing: Ranges(ChangedLineVerdict.CoveredOnlyByFailing),
+            Uncovered: Ranges(ChangedLineVerdict.Uncovered),
+            NonExecutable: Ranges(ChangedLineVerdict.NonExecutable),
+            Unknown: withDetail
+                ? [.. file.Lines
+                    .Where(l => l.Verdict == ChangedLineVerdict.Unknown)
+                    .GroupBy(l => l.Reason)
+                    .OrderBy(g => g.Min(l => l.Line))
+                    .Select(g => new ChangedLineUnknownDto(ChangedLineVerdicts.Name(g.Key)!, LineRanges(g.Select(l => l.Line))))]
+                : [],
+            PartialBranches: withDetail
+                ? [.. file.Lines.Where(l => l.HasPartialBranches)
+                    .Select(l => new ChangedLineBranchesDto(l.Line, l.Coverage!.BranchesCovered, l.Coverage.BranchesTotal))]
+                : [],
+            FailingTests: [.. failing.Take(failingListed)],
+            FailingTestsOmitted: failing.Count - failingListed,
+            DetailOmitted: !withDetail);
+
+        List<LineRangeDto> Ranges(ChangedLineVerdict verdict) =>
+            withDetail ? LineRanges(file.Lines.Where(l => l.Verdict == verdict).Select(l => l.Line)) : [];
+    }
+
+    /// <summary>Collapses line numbers into ordered, inclusive ranges of consecutive lines.</summary>
+    private static List<LineRangeDto> LineRanges(IEnumerable<int> lines)
+    {
+        var ranges = new List<LineRangeDto>();
+        int? start = null, previous = null;
+        foreach (var line in lines.Order())
+        {
+            if (previous is { } p && line <= p + 1)
+            {
+                previous = Math.Max(p, line);
+                continue;
+            }
+
+            if (start is { } s)
+            {
+                ranges.Add(new LineRangeDto(s, previous!.Value));
+            }
+
+            start = previous = line;
+        }
+
+        if (start is { } last)
+        {
+            ranges.Add(new LineRangeDto(last, previous!.Value));
+        }
+
+        return ranges;
+    }
+
+    private static ChangedLineTotalsDto ToDto(this ChangedLineTotals totals) =>
+        new(totals.ChangedLines, totals.CoveredByPassing, totals.CoveredOnlyByFailing, totals.Uncovered,
+            totals.NonExecutable, totals.Unknown);
 
     public static TestRunAdmissionDto ToDto(this TestRunAdmission admission) =>
         new(

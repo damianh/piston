@@ -12,6 +12,33 @@ public sealed class PistonState
     public BuildResult? LastBuild { get; set; }
     public IReadOnlyList<TestSuite> TestSuites { get; set; } = [];
 
+    private long _resultsVersion;
+    private int _resultsUpdates;
+
+    /// <summary>
+    /// Changes whenever publishing coverage and test results starts or ends. A run stores its coverage before it
+    /// replaces <see cref="TestSuites"/>, so a reader that combines the two can trust them only when
+    /// <see cref="IsPublishingResults"/> was false and this version did not change while it read.
+    /// </summary>
+    public long ResultsVersion => Interlocked.Read(ref _resultsVersion);
+
+    /// <summary>Coverage and test results are being replaced, so they may describe different runs.</summary>
+    public bool IsPublishingResults => Volatile.Read(ref _resultsUpdates) > 0;
+
+    /// <summary>Marks the start of publishing coverage and test results; pair with <see cref="EndResultsUpdate"/>.</summary>
+    public void BeginResultsUpdate()
+    {
+        _ = Interlocked.Increment(ref _resultsUpdates);
+        _ = Interlocked.Increment(ref _resultsVersion);
+    }
+
+    /// <summary>Marks the end of publishing coverage and test results.</summary>
+    public void EndResultsUpdate()
+    {
+        _ = Interlocked.Increment(ref _resultsVersion);
+        _ = Interlocked.Decrement(ref _resultsUpdates);
+    }
+
     /// <summary>
     /// Live snapshot of test results during a running test phase.
     /// Tests start as <see cref="TestStatus.Running"/> and are updated as stdout lines arrive.

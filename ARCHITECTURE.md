@@ -68,10 +68,16 @@ Implemented protocol operations include stop, force run, set filter, clear
 results, state retrieval, and MCP call-log retrieval. `engine/start` is rejected
 by the headless dispatcher because the solution is configured at launch.
 Coverage requests return the solution's coverage summary, one file's line
-coverage (optionally with its source), and LCOV or Cobertura exports; the daemon
-also serves the exports over HTTP at `/api/coverage/{lcov|cobertura}`.
+coverage (optionally with its source), and LCOV or Cobertura exports.
 `coverage/getCoveringTests` returns the tests the impact map records as executing
 a file, with their evidence granularity and executed line ranges.
+`coverage/getChangedLines` returns the verdicts for the changed lines of the git
+changes (`base`, `baseRef`), as `get_changed_line_coverage` does (see
+[MCP behavior and limitations](#mcp-behavior-and-limitations)): per file, line
+ranges per verdict, unknown ranges per reason, partial-branch lines and up to 20
+failing tests. File detail is bounded to half the message size limit: files
+past it give only their totals (`detailOmitted`), then are counted in
+`filesOmitted`, with a warning. The overall totals always count every changed line.
 `source/get` returns a source file's lines for the dashboard's stack-trace view;
 it refuses paths that resolve (following symlinks) outside the solution
 directory, files over 1 MB and binary files.
@@ -500,7 +506,21 @@ Test tools (`TestTools`): `verify`, `run_tests`, `get_test_run`, `get_test_resul
 `get_test_history`, `set_test_filter` and `clear_results`. Coverage and selection
 tools (`CoverageTools`): `get_coverage`, `get_changed_line_coverage`,
 `export_coverage`, `plan_affected_tests` and `run_affected_tests`. They use the same
-engine state and pipeline as other clients; MCP does not bypass builds. Test
+engine state and pipeline as other clients; MCP does not bypass builds.
+`get_changed_line_coverage` (`ChangedLineVerdicts`) classifies each changed line
+from the coverage report, the impact map and the latest test results. Stale lines
+and outdated impact evidence never count as covered; in a changed C# file, only
+lines outside the store's stale ranges (unchanged members, remapped) get verdicts.
+Because the impact map records executed methods, a line is covered by passing tests
+only when every current test credited with it passed. A credited test's result is
+looked up in its own project's suite by solution-relative project ID. A run stores its coverage before it replaces
+`TestSuites`, and marks that window with `PistonState.BeginResultsUpdate`/`EndResultsUpdate`.
+The classifier rereads when `ResultsVersion` changes during a read, or when the changed
+lines or the changed files' content differ after it (line numbers must describe the content
+coverage was judged against). Coverage is read off-thread with a bounded, cancellable wait,
+since the store's lock is held while a run stores coverage. If the state does not settle,
+every changed line is `unknown` (`resultsUpdating`, or `stale` while files keep changing)
+rather than combine two runs or two versions of a file. Test
 processes are fresh unless `warmTestHosts` is enabled (see
 [Builds and execution](#builds-and-execution)).
 

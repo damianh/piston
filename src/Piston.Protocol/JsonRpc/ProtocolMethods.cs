@@ -36,6 +36,9 @@ public static class ProtocolMethods
     /// <summary>Request the tests the impact map records as executing a source file.</summary>
     public const string CoverageGetCoveringTests = "coverage/getCoveringTests";
 
+    /// <summary>Request a verdict for each changed line, comparing the working tree with a git base.</summary>
+    public const string CoverageGetChangedLines = "coverage/getChangedLines";
+
     /// <summary>Export the coverage report as LCOV or Cobertura text.</summary>
     public const string CoverageExport = "coverage/export";
 
