@@ -78,6 +78,9 @@ ARCHITECTURE describe the implementation in detail.
   Cobertura export over MCP, HTTP, the protocol and the CLI.
 - An impact map with idle per-test (default) or per-class backfill, and
   changed-line test selection with per-test reasons and conservative fallback.
+- Branch-level attribution in impact-map reasons and changed-line coverage:
+  per-unit, per-line outcome counts (Cobertura does not identify individual
+  outcomes). Backfill re-measures existing units missing branch evidence.
 - Method-level identity for C# coverage evidence: line shifts preserve validated
   member evidence, while edited members are invalidated and unvalidated lines are
   never reused.
@@ -134,9 +137,6 @@ ARCHITECTURE describe the implementation in detail.
 - Validate tool upgrades while sessions are running, including Windows file locks.
 
 ## Later
-
-### Coverage
-- Branch-level attribution in the impact map.
 
 ### Execution
 - Explore MTP server mode further for structured results and stable test

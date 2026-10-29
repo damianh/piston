@@ -171,6 +171,24 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
             _ = await versionCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
 
+        var hasBranches = false;
+        using (var columnsCmd = _connection.CreateCommand())
+        {
+            columnsCmd.CommandText = "PRAGMA table_info(impact_unit_files);";
+            using var reader = await columnsCmd.ExecuteReaderAsync().ConfigureAwait(false);
+            while (await reader.ReadAsync().ConfigureAwait(false))
+            {
+                hasBranches |= string.Equals(reader.GetString(1), "branches", StringComparison.Ordinal);
+            }
+        }
+
+        if (!hasBranches)
+        {
+            using var migrateCmd = _connection.CreateCommand();
+            migrateCmd.CommandText = "ALTER TABLE impact_unit_files ADD COLUMN branches TEXT;";
+            _ = await migrateCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
         // Older databases stored one coverage_map row per test per line, which grows to millions of rows on
         // real solutions. It is only a cache, so drop it; the next run with coverage refills the sets.
         // Seed the run counter from the current max run_id

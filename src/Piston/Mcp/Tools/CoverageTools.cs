@@ -103,7 +103,8 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         "mixedEvidence, testsNotRun, outdatedEvidence or resultsUpdating (a run was publishing results: ask again). " +
         "Only coveredByPassing shows a line is exercised by passing tests; it uses each credited test's latest " +
         "result, so hits kept from an earlier run of unchanged code are judged by later results. Requires the daemon " +
-        "to run with coverage enabled.")]
+        "to run with coverage enabled. Branch lines also list current per-test/unit outcome counts; Cobertura " +
+        "does not identify which outcome was taken.")]
     public async Task<string> GetChangedLineCoverageAsync(
         [Description(BaseRefDescription)] string? baseRef = null,
         [Description(BaseDescription)] string? @base = null,
@@ -176,6 +177,29 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                         ["reason"] = ChangedLineVerdicts.Name(g.Key),
                     })]),
                 ["partialBranches"] = PartialLines(file.Lines.Where(l => l.HasPartialBranches).Select(l => l.Coverage!)),
+                ["branchLines"] = new JsonArray([.. file.Lines
+                    .Where(line => line.Coverage is { BranchesTotal: > 0 })
+                    .GroupJoin(
+                        file.BranchTests
+                            .OrderBy(test => test.ProjectPath, StringComparer.Ordinal)
+                            .ThenBy(test => test.TestFqn, StringComparer.Ordinal)
+                            .SelectMany(test => test.Branches!, (test, branch) => (Test: test, Branch: branch)),
+                        line => line.Line,
+                        attribution => attribution.Branch.Line,
+                        (line, attributions) => (JsonNode)new JsonObject
+                    {
+                        ["line"] = line.Line,
+                        ["covered"] = line.Coverage!.BranchesCovered,
+                        ["total"] = line.Coverage.BranchesTotal,
+                        ["tests"] = new JsonArray([.. attributions.Select(attribution => (JsonNode)new JsonObject
+                        {
+                            ["name"] = attribution.Test.TestFqn,
+                            ["project"] = Relative(attribution.Test.ProjectPath, solutionDirectory),
+                            ["taken"] = attribution.Branch.Covered,
+                            ["total"] = attribution.Branch.Total,
+                            ["granularity"] = attribution.Test.Granularity,
+                        })]),
+                    })]),
                 ["failingTests"] = Strings(failing.Take(MaxFailingTestsPerFile)),
                 ["failingTestsOmitted"] = Math.Max(0, failing.Count - MaxFailingTestsPerFile),
             });
@@ -410,6 +434,14 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                         ["executedLines"] = r.ExecutedLines,
                         ["granularity"] = r.Granularity,
                         ["project"] = Relative(r.ProjectPath, solutionDirectory),
+                        ["branches"] = r.Branches is null
+                            ? null
+                            : new JsonArray([.. r.Branches.Select(branch => (JsonNode)new JsonObject
+                            {
+                                ["line"] = branch.Line,
+                                ["taken"] = branch.Covered,
+                                ["total"] = branch.Total,
+                            })]),
                     })]);
                 }
 

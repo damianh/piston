@@ -529,7 +529,10 @@ public static class DtoMapper
         entry.NoEarlierResults);
 
     public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
-        new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath, reason.Member);
+        new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath, reason.Member,
+            reason.Branches is null
+                ? null
+                : [.. reason.Branches.Select(b => new BranchLineDto(b.Line, b.Covered, b.Total))]);
 
     private static string ProjectId(string solutionPath, string projectPath)
     {

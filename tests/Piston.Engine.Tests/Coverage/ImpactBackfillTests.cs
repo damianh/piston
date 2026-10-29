@@ -23,8 +23,8 @@ public sealed class ImpactBackfillTests
     private static TestResult Test(string fqn, string? method = null) =>
         new(fqn, fqn, TestStatus.Passed, TimeSpan.Zero, null, null, null, null) { Method = method };
 
-    private static ImpactUnitInfo Recorded(string key, bool current, params string[] tests) =>
-        new(key, 1, current, DateTimeOffset.UtcNow, tests);
+    private static ImpactUnitInfo Recorded(string key, bool current, bool hasBranches = true, params string[] tests) =>
+        new(key, 1, current, DateTimeOffset.UtcNow, tests, hasBranches);
 
     [Fact]
     public void Create_PlansEveryClassWithAFilterRunningJustIt()
@@ -55,8 +55,8 @@ public sealed class ImpactBackfillTests
     {
         var plan = ImpactBackfill.Create([Project], [Suite], _ =>
         [
-            Recorded("A.Tests.Foo", current: false, "A.Tests.Foo.One", "A.Tests.Foo.Two(x: 1)", "A.Tests.Foo.Two(x: 2)"),
-            Recorded("A.Tests.Gone", current: true, "A.Tests.Gone.One"),
+            Recorded("A.Tests.Foo", current: false, true, "A.Tests.Foo.One", "A.Tests.Foo.Two(x: 1)", "A.Tests.Foo.Two(x: 2)"),
+            Recorded("A.Tests.Gone", current: true, true, "A.Tests.Gone.One"),
         ], ImpactGranularity.Class);
 
         Assert.Equal(["A.Tests.Outer+Inner", "A.Tests.Foo"], plan.Units.Select(u => u.Key));
@@ -64,8 +64,8 @@ public sealed class ImpactBackfillTests
 
         var current = ImpactBackfill.Create([Project], [Suite], _ =>
         [
-            Recorded("A.Tests.Foo", current: true, "A.Tests.Foo.One", "A.Tests.Foo.Two(x: 1)", "A.Tests.Foo.Two(x: 2)"),
-            Recorded("A.Tests.Outer+Inner", current: true, "Adds numbers"),
+            Recorded("A.Tests.Foo", current: true, true, "A.Tests.Foo.One", "A.Tests.Foo.Two(x: 1)", "A.Tests.Foo.Two(x: 2)"),
+            Recorded("A.Tests.Outer+Inner", current: true, true, "Adds numbers"),
         ], ImpactGranularity.Class);
         Assert.Empty(current.Units);
     }
@@ -75,7 +75,7 @@ public sealed class ImpactBackfillTests
     {
         var plan = ImpactBackfill.Create([Project], [Suite], _ =>
         [
-            Recorded("A.Tests.Foo", current: true, "A.Tests.Foo.One"),
+            Recorded("A.Tests.Foo", current: true, true, "A.Tests.Foo.One"),
         ], ImpactGranularity.Class, new HashSet<(string, string)> { (Project, "A.Tests.Outer+Inner") });
 
         Assert.Equal("A.Tests.Foo", Assert.Single(plan.Units).Key);
@@ -85,7 +85,7 @@ public sealed class ImpactBackfillTests
     public void Create_IgnoresProjectsWithoutResults()
     {
         var plan = ImpactBackfill.Create(["/src/B.Tests/B.Tests.csproj"], [Suite],
-            _ => [Recorded("B.Tests.X", current: true, "B.Tests.X.One")], ImpactGranularity.Class);
+            _ => [Recorded("B.Tests.X", current: true, true, "B.Tests.X.One")], ImpactGranularity.Class);
 
         Assert.Empty(plan.Units);
         Assert.Empty(plan.Obsolete);
@@ -94,4 +94,22 @@ public sealed class ImpactBackfillTests
     [Fact]
     public void Create_RejectsRunGranularity() =>
         Assert.Throws<ArgumentOutOfRangeException>(() => ImpactBackfill.Create([Project], [Suite], _ => [], ImpactGranularity.Run));
+
+    [Fact]
+    public void Create_PlansLegacyUnitsAfterMissingAndOutdatedUnits()
+    {
+        var suite = new TestSuite("A.Tests",
+        [
+            Test("A.Tests.Foo.One"),
+            Test("A.Tests.Outer.Inner"),
+            Test("A.Tests.New.One"),
+        ], DateTimeOffset.UtcNow, TimeSpan.Zero);
+        var plan = ImpactBackfill.Create([Project], [suite], _ =>
+        [
+            Recorded("A.Tests.Foo", current: false, true, "A.Tests.Foo.One"),
+            Recorded("A.Tests.Outer", current: true, false, "A.Tests.Outer.Inner"),
+        ], ImpactGranularity.Class);
+
+        Assert.Equal(["A.Tests.New", "A.Tests.Foo", "A.Tests.Outer"], plan.Units.Select(u => u.Key));
+    }
 }

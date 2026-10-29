@@ -162,6 +162,41 @@ public sealed class CoverageProcessorTests : IDisposable
     }
 
     [Fact]
+    public async Task ProcessCoverageAsync_Impact_RecordsPerUnitBranchCountsIncludingZeroCoverage()
+    {
+        var source = Path.Combine(_tempDir, "BranchCode.cs");
+        File.WriteAllText(source, "class C\n{\n  void M()\n  {\n    if (x) A();\n  }\n}");
+        var xml = WriteCoberturaXml($"""
+            <coverage version="1.9" timestamp="1700000000">
+              <sources><source>{_tempDir}</source></sources>
+              <packages><package name="Lib"><classes>
+                <class filename="BranchCode.cs"><lines>
+                  <line number="5" hits="1" branch="True" condition-coverage="50% (1/2)" />
+                  <line number="6" hits="0" branch="True" condition-coverage="0% (0/2)" />
+                </lines></class>
+              </classes></package></packages>
+            </coverage>
+            """);
+        using var store = new SqliteCoverageStore();
+        await store.InitializeAsync(_tempDir);
+        var impact = new CoverageImpactOptions(
+            [new CoverageRunUnit("/repo/A.Tests.csproj", "A.Test", [xml], ["A.Test"], Merge: false)],
+            ImpactGranularity.Test,
+            DateTime.UtcNow.AddMinutes(1));
+
+        await new CoverageProcessor(new CoberturaParser()).ProcessCoverageAsync(
+            store.CreateRunId(), [xml], ["A.Test"], store, impact: impact);
+
+        var reason = Assert.Single(store.SelectTests([
+            new ChangedFile(source, File.ReadAllText(source).Replace("if (x)", "if (y)", StringComparison.Ordinal)),
+        ]).Tests["A.Test"]);
+        Assert.Equal([new BranchLine(5, 1, 2), new BranchLine(6, 0, 2)], reason.Branches);
+        Assert.Equal([new BranchLine(5, 1, 2), new BranchLine(6, 0, 2)],
+            Assert.Single(store.GetTestsExecuting(source)).Branches);
+        Assert.True(Assert.Single(store.GetUnits("/repo/A.Tests.csproj", ImpactGranularity.Test)).HasBranches);
+    }
+
+    [Fact]
     public async Task ProcessCoverageAsync_EmptyXmlPaths_DoesNotStoreAnything()
     {
         var store = new StubCoverageStore();

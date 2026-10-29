@@ -277,9 +277,12 @@ else
             ? Path.GetRelativePath(root, reason.FilePath)
             : Path.GetFileName(reason.FilePath);
         var who = GranularityBadge.Executor(reason.Granularity);
-        return reason.ExecutedLines is { } executed
+        var selection = reason.ExecutedLines is { } executed
             ? $"{file}: {Lines(reason.ChangedLines)} changed, overlapping {Lines(executed)} that {who} executed"
             : $"{file}: {Lines(reason.ChangedLines)} changed outside every line {who} executed, so every test that executed the file ran";
+        return reason.Branches is { Count: > 0 } branches
+            ? $"{selection}; {string.Join(", ", branches.Select(b => $"{b.Covered} of {b.Total} branch outcomes on {Lines(b.Line.ToString())}"))}"
+            : selection;
     }
 
     private static string Lines(string range) => range.Contains('-', StringComparison.Ordinal) ? $"lines {range}" : $"line {range}";

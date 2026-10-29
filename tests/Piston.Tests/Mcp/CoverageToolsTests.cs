@@ -192,7 +192,13 @@ public sealed class CoverageToolsTests : IDisposable
         engine.CoveringTests[measured] =
         [
             Covering("Lib.Tests.Pass", 2, 2),
-            Covering("Lib.Tests.Fail", 5, 5),
+            Covering("Lib.Tests.Fail", 5, 5) with { Branches = [new(5, 1, 2)] },
+            Covering("Lib.Tests.Fail", 5, 5) with
+            {
+                ProjectPath = Path.Combine(_root, "Other.Tests", "Other.Tests.csproj"),
+                Branches = [new(5, 2, 2)],
+            },
+            Covering("Lib.Tests.Old", 5, 5, current: false) with { Branches = [new(5, 2, 2)] },
             Covering("Lib.Tests.Pass", 4, 4),
             Covering("Lib.Tests.Fail", 4, 4),
         ];
@@ -200,6 +206,8 @@ public sealed class CoverageToolsTests : IDisposable
         [
             new TestSuite("Lib.Tests",
                 [Result("Lib.Tests.Pass", TestStatus.Passed), Result("Lib.Tests.Fail", TestStatus.Failed)],
+                DateTimeOffset.UnixEpoch, TimeSpan.Zero),
+            new TestSuite("Other.Tests", [Result("Lib.Tests.Fail", TestStatus.Failed)],
                 DateTimeOffset.UnixEpoch, TimeSpan.Zero),
         ];
         var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
@@ -222,6 +230,22 @@ public sealed class CoverageToolsTests : IDisposable
         var files = json["files"]!.AsArray();
         Assert.Equal(["Measured.cs", "New.cs"], files.Select(f => f!["path"]!.GetValue<string>()));
         var file = files[0]!;
+        var branch = Assert.Single(file["branchLines"]!.AsArray())!;
+        Assert.Equal((5, 1, 2), (
+            branch["line"]!.GetValue<int>(),
+            branch["covered"]!.GetValue<int>(),
+            branch["total"]!.GetValue<int>()));
+        var attributions = branch["tests"]!.AsArray();
+        Assert.Equal(2, attributions.Count);
+        var attributed = attributions.Single(test => test!["taken"]!.GetValue<int>() == 1)!;
+        var other = attributions.Single(test => test!["taken"]!.GetValue<int>() == 2)!;
+        Assert.Equal("Other.Tests/Other.Tests.csproj", other["project"]!.GetValue<string>());
+        Assert.NotEqual(attributed["project"]!.GetValue<string>(), other["project"]!.GetValue<string>());
+        Assert.Equal(("Lib.Tests.Fail", 1, 2, "test"), (
+            attributed["name"]!.GetValue<string>(),
+            attributed["taken"]!.GetValue<int>(),
+            attributed["total"]!.GetValue<int>(),
+            attributed["granularity"]!.GetValue<string>()));
         Assert.Equal("2", file["coveredByPassing"]!.GetValue<string>());
         Assert.Equal("5", file["coveredOnlyByFailing"]!.GetValue<string>());
         Assert.Equal("3", file["uncovered"]!.GetValue<string>());
@@ -234,6 +258,55 @@ public sealed class CoverageToolsTests : IDisposable
         var unmeasured = files[1]!;
         Assert.False(unmeasured["measured"]!.GetValue<bool>());
         Assert.Equal("notMeasured", Assert.Single(unmeasured["unknown"]!.AsArray())!["reason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public void ChangedLineCoverage_GroupsBranchAttributionsByLineInProjectAndNameOrder()
+    {
+        var file = new ChangedFileVerdicts(Path.Combine(_root, "Code.cs"), true, false, false,
+        [
+            new(2, ChangedLineVerdict.CoveredByPassing, Coverage: new(2, 1, 1, 2)),
+            new(3, ChangedLineVerdict.Uncovered, Coverage: new(3, 0, 0, 2)),
+            new(4, ChangedLineVerdict.CoveredByPassing, Coverage: new(4, 1, 2, 2)),
+        ])
+        {
+            BranchTests =
+            [
+                Covering("Tests.A", 2, 4) with
+                {
+                    ProjectPath = Path.Combine(_root, "B.csproj"),
+                    Branches = [new(2, 2, 2), new(4, 1, 2)],
+                },
+                Covering("Tests.Z", 2, 4) with
+                {
+                    ProjectPath = Path.Combine(_root, "A.csproj"),
+                    Branches = [new(2, 0, 2), new(99, 1, 2)],
+                },
+                Covering("Tests.A", 2, 4) with
+                {
+                    ProjectPath = Path.Combine(_root, "A.csproj"),
+                    Branches = [new(4, 2, 2), new(2, 1, 2)],
+                },
+            ],
+        };
+
+        var json = CoverageTools.ChangedLineCoverage(new("working", [file], []), _root);
+
+        var lines = json["files"]![0]!["branchLines"]!.AsArray();
+        Assert.Equal([2, 3, 4], lines.Select(line => line!["line"]!.GetValue<int>()));
+        Assert.Equal(
+            [("A.csproj", "Tests.A", 1), ("A.csproj", "Tests.Z", 0), ("B.csproj", "Tests.A", 2)],
+            Attributions(lines[0]!));
+        Assert.Empty(lines[1]!["tests"]!.AsArray());
+        Assert.Equal(
+            [("A.csproj", "Tests.A", 2), ("B.csproj", "Tests.A", 1)],
+            Attributions(lines[2]!));
+
+        static IEnumerable<(string Project, string Name, int Taken)> Attributions(JsonNode line) =>
+            line["tests"]!.AsArray().Select(test => (
+                test!["project"]!.GetValue<string>(),
+                test["name"]!.GetValue<string>(),
+                test["taken"]!.GetValue<int>()));
     }
 
     [Fact]
@@ -622,7 +695,7 @@ public sealed class CoverageToolsTests : IDisposable
             AffectedTestFqns = ["Lib.Tests.B.Two", "Lib.Tests.A.One"],
             SelectionReasons = new Dictionary<string, IReadOnlyList<TestSelectionReason>>
             {
-                ["Lib.Tests.A.One"] = [new(lib, "12", "10-14", "class", project)],
+                ["Lib.Tests.A.One"] = [new(lib, "12", "10-14", "class", project, Branches: [new(12, 1, 2)])],
             },
             Explanation = "Tests whose recorded execution touches the changed lines.",
         };
@@ -641,6 +714,9 @@ public sealed class CoverageToolsTests : IDisposable
         var reason = Assert.Single(tests[0]!["reasons"]!.AsArray())!;
         Assert.Equal("src/Lib/Code.cs", (string?)reason["file"]);
         Assert.Equal(("12", "10-14", "class"), ((string?)reason["changedLines"], (string?)reason["executedLines"], (string?)reason["granularity"]));
+        var branch = Assert.Single(reason["branches"]!.AsArray())!;
+        Assert.Equal((12, 1, 2), (
+            branch["line"]!.GetValue<int>(), branch["taken"]!.GetValue<int>(), branch["total"]!.GetValue<int>()));
         Assert.Null(tests[1]!["reasons"]);
     }
 

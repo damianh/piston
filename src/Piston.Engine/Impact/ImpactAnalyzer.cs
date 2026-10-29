@@ -427,7 +427,10 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         reason.ExecutedSpan?.ToString(),
         reason.Granularity.ToString().ToLowerInvariant(),
         reason.ProjectPath,
-        reason.Member);
+        reason.Member,
+        reason.Branches is null
+            ? null
+            : [.. reason.Branches.Select(b => new BranchEvidence(b.Line, b.Covered, b.Total))]);
 
     private static ImpactAnalysisResult FullRunResult() =>
         new([], [], RequiresGraphRebuild: false, IsFullRun: true);

@@ -44,4 +44,8 @@ public sealed record TestSelectionReasonDto(
     string? ExecutedLines,
     string Granularity,
     string ProjectPath,
-    string? Member = null);
+    string? Member = null,
+    IReadOnlyList<BranchLineDto>? Branches = null);
+
+/// <summary>Branch outcomes attributed to a measured test on one source line.</summary>
+public sealed record BranchLineDto(int Line, int Covered, int Total);
