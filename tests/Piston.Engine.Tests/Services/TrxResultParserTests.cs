@@ -195,7 +195,7 @@ public sealed class TrxResultParserTests
     }
 
     [Fact]
-    public void Parse_CombinesStdOutStdErrAndDebugTrace()
+    public void Parse_SeparatesStdOutStdErrAndDebugTrace()
     {
         const string trx = """
             <?xml version="1.0" encoding="UTF-8"?>
@@ -226,16 +226,49 @@ public sealed class TrxResultParserTests
         try
         {
             var tests = new TrxResultParser().Parse(path)[0].Tests;
-            Assert.Equal(
-                string.Join(Environment.NewLine, "to stdout", "to stderr", "to trace"),
-                tests.Single(t => t.FullyQualifiedName.EndsWith(".Logs", StringComparison.Ordinal)).Output);
-            Assert.Equal(
-                "only stderr",
-                tests.Single(t => t.FullyQualifiedName.EndsWith(".ErrOnly", StringComparison.Ordinal)).Output);
+            var logs = tests.Single(t => t.FullyQualifiedName.EndsWith(".Logs", StringComparison.Ordinal));
+            Assert.Equal(string.Join(Environment.NewLine, "to stdout", "to trace"), logs.Output);
+            Assert.Equal("to stderr", logs.ErrorOutput);
+
+            var errorOnly = tests.Single(t => t.FullyQualifiedName.EndsWith(".ErrOnly", StringComparison.Ordinal));
+            Assert.Null(errorOnly.Output);
+            Assert.Equal("only stderr", errorOnly.ErrorOutput);
         }
         finally
         {
             File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void Parse_ResolvesResultFilesRelativeToTheTrxFile()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"piston-trx-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        var trxPath = Path.Combine(directory, "results.trx");
+        const string trx = """
+            <?xml version="1.0" encoding="UTF-8"?>
+            <TestRun xmlns="http://microsoft.com/schemas/VisualStudio/TeamTest/2010">
+              <Results>
+                <UnitTestResult testId="t1" testName="Tests.Captures" outcome="Passed" duration="00:00:00.001">
+                  <ResultFiles><ResultFile path="attachment.txt" /></ResultFiles>
+                </UnitTestResult>
+              </Results>
+              <TestDefinitions><UnitTest id="t1"><TestMethod className="Tests" name="Captures" /></UnitTest></TestDefinitions>
+            </TestRun>
+            """;
+        File.WriteAllText(trxPath, trx);
+        File.WriteAllText(Path.Combine(directory, "attachment.txt"), "artifact");
+        try
+        {
+            var attachment = Assert.Single(new TrxResultParser().Parse(trxPath)[0].Tests[0].Attachments);
+
+            Assert.Equal(Path.Combine(directory, "attachment.txt"), attachment.Path);
+            Assert.Equal("attachment.txt", attachment.DisplayName);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
         }
     }
 }

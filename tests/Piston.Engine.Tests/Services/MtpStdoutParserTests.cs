@@ -227,8 +227,9 @@ public sealed class MtpStdoutParserTests
 
         Assert.NotNull(result);
         Assert.Equal(
-            string.Join(Environment.NewLine, "first line", "", "  indented line", "to stderr"),
+            string.Join(Environment.NewLine, "first line", "", "  indented line"),
             result.Output);
+        Assert.Equal("to stderr", result.ErrorOutput);
         Assert.Null(result.ErrorMessage);
     }
 
@@ -281,6 +282,20 @@ public sealed class MtpStdoutParserTests
     }
 
     [Fact]
+    public void ArtifactSummary_FlushesLastTestAndAssociatesItsAttachment()
+    {
+        var sut = new MtpStdoutParser();
+        _ = sut.ProcessLine("passed Ns.Class.Captures (1ms)");
+        var completed = sut.ProcessLine("  1 file artifacts produced:");
+        _ = sut.ProcessLine("- For test 'Ns.Class.Captures': /tmp/report with spaces.txt");
+
+        Assert.Equal("Ns.Class.Captures", completed?.FullyQualifiedName);
+        var attachment = Assert.Single(sut.Attachments);
+        Assert.Equal("Ns.Class.Captures", attachment.TestName);
+        Assert.Equal("/tmp/report with spaces.txt", attachment.Path);
+    }
+
+    [Fact]
     public void DotnetTestDetailedTranscript_ParsesErrorsAndOutput()
     {
         // Captured from `dotnet test --output Detailed` (.NET 10 SDK, xunit.v3 3.2.2 with CaptureConsole).
@@ -297,6 +312,7 @@ public sealed class MtpStdoutParserTests
             "    before failing",
             "    ",
             "  Error output",
+            "    stderr detail",
             "passed MtpOut.T.Passes (0ms)",
             "  from /tmp/p/bin/Debug/net10.0/MtpOut.dll (net10.0|x64)",
             "  Standard output",
@@ -324,10 +340,12 @@ public sealed class MtpStdoutParserTests
         Assert.Contains("boom", failed.ErrorMessage);
         Assert.Contains("at MtpOut.T.Fails()", failed.StackTrace);
         Assert.Equal("before failing", failed.Output);
+        Assert.Equal("stderr detail", failed.ErrorOutput);
 
         var passed = parsed[1];
         Assert.Equal("MtpOut.T.Passes", passed.FullyQualifiedName);
         Assert.Equal(string.Join(Environment.NewLine, "helper line", "console line"), passed.Output);
+        Assert.Null(passed.ErrorOutput);
     }
 
     [Fact]

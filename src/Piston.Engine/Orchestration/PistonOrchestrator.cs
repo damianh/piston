@@ -24,6 +24,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     private readonly IActivityEventSink _activitySink;
     private readonly IExecutionAdmission _admission;
     internal SavedResultsStore? ResultsStore { get; set; }
+    internal TestArtifactStore? ArtifactStore { get; set; }
 
     private CancellationTokenSource? _cts;
     private volatile bool _stopping;
@@ -131,6 +132,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         _state.SolutionPath = solutionPath;
 
         RestoreSavedResults();
+        ArtifactStore?.Prune(_state.RecentRuns, _state.TestSuites);
 
         var solutionDir = Path.GetDirectoryName(solutionPath)
             ?? throw new ArgumentException("Cannot resolve solution directory.", nameof(solutionPath));
@@ -596,6 +598,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             }
 
             SqliteCoverageStore.Clear(solutionDirectory);
+            ArtifactStore?.Clear();
             _state.HasCoverageData = false;
             _state.CoverageImpactDetail = null;
         }
@@ -982,6 +985,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         TestRunRecord Finish(TestRunStatus status, string? reason, bool computeAfter = true)
         {
             var finished = CompleteRun(run, status, reason, solutionDir, changeGenerationAtStart, computeAfter);
+            ArtifactStore?.Prune(_state.RecentRuns, _state.TestSuites);
 
             // Outputs are reusable only if the sources were stable for the whole run.
             if (builtBaseline is not null && finished.Freshness == ResultFreshness.Current)
@@ -1618,16 +1622,23 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                         OnProjectCompleted = OnProjectCompleted,
                     },
                     ct).ConfigureAwait(false);
-                newSuites = result.Projects.Count > 0
-                    ? result.Projects.SelectMany(project => project.Suites.Select(s => s with
+                coverageReportPaths = result.CoverageReportPaths;
+                projectResults = result.Projects.Select(project =>
+                {
+                    var suites = project.Suites.Select(suite => suite with
                     {
                         ProjectId = TestProjectNames.IsProjectFile(project.ProjectPath)
-                            ? TestProjectNames.ProjectId(solutionDirectory, project.ProjectPath) : s.ProjectId,
+                            ? TestProjectNames.ProjectId(solutionDirectory, project.ProjectPath) : suite.ProjectId,
                         RunId = run.RunId,
-                    })).ToList()
-                    : result.Suites.Select(s => s with { RunId = run.RunId }).ToList();
-                coverageReportPaths = result.CoverageReportPaths;
-                projectResults = result.Projects;
+                    }).ToList();
+                    var retainedSuites = ArtifactStore?.Retain(run.RunId, suites) ?? suites;
+                    return project with { Suites = retainedSuites };
+                }).ToList();
+                newSuites = projectResults.Count > 0
+                    ? projectResults.SelectMany(project => project.Suites).ToList()
+                    : ArtifactStore?.Retain(run.RunId,
+                        result.Suites.Select(suite => suite with { RunId = run.RunId }).ToList())
+                        ?? result.Suites.Select(suite => suite with { RunId = run.RunId }).ToList();
                 runnerError = result.RunnerError;
                 _state.LastTestRunnerError = result.RunnerError;
 
@@ -1649,6 +1660,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
             if (ct.IsCancellationRequested)
             {
+                CleanUpRunnerTemporaryDirectories(projectResults, coverageReportPaths);
                 _state.Phase = PistonPhase.Watching;
                 _state.NotifyChanged();
                 return Finish(TestRunStatus.Cancelled, "Cancelled after test execution; results discarded.");
@@ -1659,10 +1671,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             try
             {
                 (newSuites, retriesSkippedReason) = await RetryFailedTestsAsync(
-                    solutionPath, testTargets, newSuites, projectResults, ct).ConfigureAwait(false);
+                    run.RunId, solutionPath, testTargets, newSuites, projectResults, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
+                CleanUpRunnerTemporaryDirectories(projectResults, coverageReportPaths);
                 _state.Phase = PistonPhase.Watching;
                 _state.NotifyChanged();
                 return Finish(TestRunStatus.Cancelled, "Cancelled while retrying failed tests; results discarded.");
@@ -1717,6 +1730,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     CleanUpCoverageResultsDirs(coverageReportPaths);
                 }
 
+                CleanUpRunnerTemporaryDirectories(projectResults, coverageReportPaths);
                 noEarlierResults = !_state.TestSuites.Any(s => s.Tests.Count > 0) && newSuites.Any(s => s.Tests.Count > 0);
                 (fixedTests, newlyFailingTests) = TestOutcomeChanges.Compare(_state.TestSuites, newSuites);
 
@@ -2099,6 +2113,32 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         foreach (var dir in resultsDirs)
         {
             try { Directory.Delete(dir!, recursive: true); } catch { /* ignore */ }
+        }
+    }
+
+    private static void CleanUpRunnerTemporaryDirectories(
+        IReadOnlyList<ProjectTestResult> projects,
+        IReadOnlyList<string> coverageReportPaths)
+    {
+        var coverageDirectories = coverageReportPaths
+            .Select(CoverageResultsDirectory)
+            .Where(directory => directory is not null)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var directory in projects.SelectMany(project => project.TemporaryDirectories).Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            if (coverageDirectories.Contains(directory))
+            {
+                continue;
+            }
+
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                DiagnosticLog.Instance?.Write("Orchestrator", $"Could not remove temporary test results directory {directory}: {ex.Message}");
+            }
         }
     }
 

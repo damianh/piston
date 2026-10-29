@@ -42,6 +42,29 @@ internal sealed class DashboardHost : IAsyncDisposable
                 ? Results.StatusCode(StatusCodes.Status503ServiceUnavailable)
                 : Results.Json(current, DashboardJsonContext.Default.ExecutionOwnerInfo);
         });
+        _ = _app.MapGet("/artifacts/{runId}/{index:int}", IResult (string runId, int index) =>
+        {
+            var path = router.GetTestArtifact(runId, index);
+            if (path is null)
+            {
+                return Results.NotFound();
+            }
+
+            var extension = Path.GetExtension(path).ToLowerInvariant();
+            var contentType = extension switch
+            {
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".gif" => "image/gif",
+                ".webp" => "image/webp",
+                ".txt" or ".log" or ".csv" => "text/plain; charset=utf-8",
+                _ => "application/octet-stream",
+            };
+            var inline = extension is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp" or ".txt" or ".log" or ".csv";
+            return inline
+                ? Results.File(path, contentType)
+                : Results.File(path, contentType, Path.GetFileName(path));
+        });
         var stopping = _app.Lifetime.ApplicationStopping;
         _ = _app.Map("/ws", async context =>
         {

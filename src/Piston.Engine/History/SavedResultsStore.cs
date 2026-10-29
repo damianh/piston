@@ -322,6 +322,7 @@ internal sealed class SavedResultsStore : IDisposable
         result with
         {
             Output = ClipText(result.Output, MaxOutputLength),
+            ErrorOutput = ClipText(result.ErrorOutput, MaxOutputLength),
             ErrorMessage = ClipText(result.ErrorMessage, MaxErrorLength),
             StackTrace = ClipText(result.StackTrace, MaxErrorLength),
             Attempts = result.Attempts.Select(attempt => attempt with

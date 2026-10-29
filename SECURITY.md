@@ -12,7 +12,7 @@ watches, which means it runs that solution's code, as the user who started it.
 | MCP over streamable HTTP | `http://localhost:5200` | anything on this machine that can connect to loopback |
 
 Both HTTP endpoints listen on `localhost` only and have no authentication. Through them a
-client can read test results, output and coverage, start runs, clear results, change the
+client can read test results, output, retained test artifacts and coverage, start runs, clear results, change the
 filter and user settings, and stop the daemon.
 
 ## Threat model

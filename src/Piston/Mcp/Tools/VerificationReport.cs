@@ -83,11 +83,12 @@ internal static class VerificationReport
                 classifications.TryGetValue((projectId, t.ResultKey), out var c) ? c.Kind : null;
             var repeatedKeys = tests.GroupBy(t => t.ResultKey, StringComparer.Ordinal)
                 .Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet(StringComparer.Ordinal);
-            AppendList(sb, "Failed tests", run.Suites
+            var failedTests = run.Suites
                     .SelectMany(s => s.Tests.Select(t => (Project: s.Name, ProjectId: s.Key, Test: t)))
                     .Where(t => t.Test.Status == TestStatus.Failed)
                     .OrderBy(t => KindOrder(KindOf(t.ProjectId, t.Test)))
-                    .ToList(),
+                    .ToList();
+            AppendList(sb, "Failed tests", failedTests,
                 entry =>
                 {
                     var (project, projectId, test) = entry;
@@ -102,6 +103,10 @@ internal static class VerificationReport
                     var name = repeatedKeys.Contains(test.ResultKey) ? $"{project} [{projectId}] :: {test.ResultKey}" : test.ResultKey;
                     return test.ErrorMessage is { } message ? $"{name}{tag}: {Cap(message)}" : name + tag;
                 });
+            if (failedTests.Count > 0)
+            {
+                _ = sb.AppendLine("Use get_test_result(test) to fetch one test's stdout, stderr, stack trace and attachments.");
+            }
         }
 
         AppendList(sb, "Passed on retry", run.Suites

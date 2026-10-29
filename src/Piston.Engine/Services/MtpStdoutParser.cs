@@ -48,6 +48,10 @@ internal sealed class MtpStdoutParser
         @"^\s*at\s+",
         RegexOptions.Compiled);
 
+    private static readonly Regex ArtifactLineRegex = new(
+        @"^\s*-\s+For test '(.+)':\s*(.+?)\s*$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private const string StandardOutputHeading = "  Standard output";
     private const string ErrorOutputHeading = "  Error output";
     private const string OutputIndentation = "    ";
@@ -62,6 +66,9 @@ internal sealed class MtpStdoutParser
     private readonly BoundedTextBuffer _pendingStdOut = new(RetentionLimits.MaxTestTextLength);
     private readonly BoundedTextBuffer _pendingStdErr = new(RetentionLimits.MaxTestTextLength);
     private BoundedTextBuffer? _currentOutputSection;
+    private readonly List<MtpParsedAttachment> _attachments = [];
+
+    public IReadOnlyList<MtpParsedAttachment> Attachments => _attachments;
 
     /// <summary>
     /// Processes a single stdout line. Returns a completed <see cref="MtpParsedResult"/>
@@ -70,6 +77,18 @@ internal sealed class MtpStdoutParser
     /// </summary>
     public MtpParsedResult? ProcessLine(string line)
     {
+        var artifactMatch = ArtifactLineRegex.Match(line);
+        if (artifactMatch.Success)
+        {
+            _attachments.Add(new(artifactMatch.Groups[1].Value, artifactMatch.Groups[2].Value.Trim()));
+            return null;
+        }
+
+        if (line.Trim().EndsWith("file artifacts produced:", StringComparison.OrdinalIgnoreCase))
+        {
+            return FlushPending();
+        }
+
         // Captured output is indented under its heading; check it first so output text that
         // happens to look like a status or stack-trace line is not misread.
         if (_currentOutputSection is not null)
@@ -163,7 +182,8 @@ internal sealed class MtpStdoutParser
             Source: _pendingSource,
             ErrorMessage: errorMessage,
             StackTrace: stackTrace,
-            Output: JoinOutput(_pendingStdOut, _pendingStdErr),
+            Output: _pendingStdOut.GetHeadTailValue(),
+            ErrorOutput: _pendingStdErr.GetHeadTailValue(),
             TargetFramework: _pendingTargetFramework);
 
         _pendingFqn = null;
@@ -174,74 +194,6 @@ internal sealed class MtpStdoutParser
         _currentOutputSection = null;
 
         return result;
-    }
-
-    private static string? JoinOutput(BoundedTextBuffer stdOut, BoundedTextBuffer stdErr)
-    {
-        var stdoutLength = stdOut.TrimmedLength;
-        var stderrLength = stdErr.TrimmedLength;
-        if (stdoutLength == 0 && stderrLength == 0)
-        {
-            return null;
-        }
-
-        var separatorLength = stdoutLength > 0 && stderrLength > 0 ? Environment.NewLine.Length : 0;
-        var totalLength = stdoutLength + stderrLength + separatorLength;
-        var limit = RetentionLimits.MaxTestTextLength;
-        var headSource = JoinPrefix(stdOut, stdoutLength, stdErr, stderrLength, limit);
-        if (totalLength <= limit)
-        {
-            return headSource;
-        }
-
-        var tailSource = JoinSuffix(stdOut, stdoutLength, stdErr, stderrLength, limit);
-        return RetentionLimits.TruncateHeadTail(headSource, tailSource, totalLength, limit);
-    }
-
-    private static string JoinPrefix(
-        BoundedTextBuffer stdOut, long stdoutLength, BoundedTextBuffer stdErr, long stderrLength, int limit)
-    {
-        var separatorLength = stdoutLength > 0 && stderrLength > 0 ? Environment.NewLine.Length : 0;
-        StringBuilder result = new((int)Math.Min(stdoutLength + stderrLength + separatorLength, limit));
-        var remaining = limit;
-        var fromStdOut = (int)Math.Min(stdoutLength, remaining);
-        _ = result.Append(stdOut.GetPrefix(fromStdOut));
-        remaining -= fromStdOut;
-        if (remaining > 0 && stdoutLength > 0 && stderrLength > 0)
-        {
-            var separator = Environment.NewLine;
-            var count = Math.Min(separator.Length, remaining);
-            _ = result.Append(separator.AsSpan(0, count));
-            remaining -= count;
-        }
-
-        if (remaining > 0)
-        {
-            _ = result.Append(stdErr.GetPrefix((int)Math.Min(stderrLength, remaining)));
-        }
-
-        return result.ToString();
-    }
-
-    private static string JoinSuffix(
-        BoundedTextBuffer stdOut, long stdoutLength, BoundedTextBuffer stdErr, long stderrLength, int limit)
-    {
-        var fromStdErr = (int)Math.Min(stderrLength, limit);
-        var remaining = limit - fromStdErr;
-        var separatorLength = remaining > 0 && stdoutLength > 0 && stderrLength > 0
-            ? Math.Min(Environment.NewLine.Length, remaining)
-            : 0;
-        remaining -= separatorLength;
-        var fromStdOut = (int)Math.Min(stdoutLength, remaining);
-        StringBuilder result = new(fromStdOut + separatorLength + fromStdErr);
-        _ = result.Append(stdOut.GetSuffix(fromStdOut));
-        if (separatorLength > 0)
-        {
-            _ = result.Append(Environment.NewLine.AsSpan(Environment.NewLine.Length - separatorLength));
-        }
-
-        _ = result.Append(stdErr.GetSuffix(fromStdErr));
-        return result.ToString();
     }
 
     private static TestStatus ParseStatus(string value) =>
@@ -291,6 +243,8 @@ internal sealed class MtpStdoutParser
     }
 }
 
+internal sealed record MtpParsedAttachment(string TestName, string Path);
+
 internal sealed class BoundedTextBuffer(int maxLength)
 {
     private readonly StringBuilder _head = new();
@@ -323,6 +277,21 @@ internal sealed class BoundedTextBuffer(int maxLength)
 
         var headLength = (int)Math.Min(trimmedLength, _head.Length);
         return RetentionLimits.TruncateHead(_head.ToString(0, headLength), trimmedLength, maxLength);
+    }
+
+    public string? GetHeadTailValue()
+    {
+        var length = TrimmedLength;
+        if (length == 0)
+        {
+            return null;
+        }
+
+        var headLength = (int)Math.Min(length, _head.Length);
+        var head = _head.ToString(0, headLength);
+        return length <= maxLength
+            ? head
+            : RetentionLimits.TruncateHeadTail(head, GetSuffix(maxLength), length, maxLength);
     }
 
     public string GetPrefix(int length) => length == 0 ? string.Empty : _head.ToString(0, Math.Min(length, _head.Length));
@@ -412,6 +381,7 @@ internal sealed record MtpParsedResult(
     string? ErrorMessage,
     string? StackTrace,
     string? Output = null,
+    string? ErrorOutput = null,
     string? TargetFramework = null)
 {
     /// <summary>Identifies the result within one run: a multi-targeted project reports each test once per framework.</summary>

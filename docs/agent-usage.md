@@ -78,6 +78,10 @@ results. Nothing needs to run before the agent starts. Per process:
 
 `verify` and `get_test_run` replies name the solution (`Solution: …` /
 `"solutionPath"`), including queued runs and runs cancelled before execution.
+Use `get_test_result` to retrieve one test's standard output, standard error,
+failure details and attachment metadata without reading the full run. It accepts
+a fully-qualified name or method name, and can select the active or a specific
+run and disambiguate by project.
 `verify` and `run_tests` accept an optional `expectedSolution`
 (the solution path, its directory or the worktree root; a parent repository of
 a nested worktree does not match). If it does not match, they fail

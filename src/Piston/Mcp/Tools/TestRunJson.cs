@@ -36,6 +36,9 @@ public static class TestRunJson
                 ["status"] = t.Status.ToString(),
                 ["durationMs"] = Math.Round(t.Duration.TotalMilliseconds, 3),
                 ["errorMessage"] = t.ErrorMessage,
+                ["hasOutput"] = !string.IsNullOrEmpty(t.Output),
+                ["hasErrorOutput"] = !string.IsNullOrEmpty(t.ErrorOutput),
+                ["attachmentCount"] = t.Attachments.Count,
                 ["attempts"] = t.Attempts.Count == 0 ? null : new JsonArray(t.Attempts
                     .Select(a => (JsonNode)new JsonObject
                     {

@@ -87,6 +87,9 @@ public interface IEngine : IDisposable
     /// <summary>A run kept in the run history with its per-test results; null when unknown or history is off.</summary>
     Models.StoredRun? GetStoredRun(string runId) => null;
 
+    /// <summary>Returns a retained test attachment's absolute path, or null when it is unavailable.</summary>
+    string? GetTestArtifact(string runId, int index) => null;
+
     // Configuration
     void SetFilter(string? filter);
     void ClearResults();

@@ -146,7 +146,24 @@ public static class DtoMapper
             result.Attempts.Count == 0
                 ? null
                 : [.. result.Attempts.Select(a => new TestAttemptDto(a.Status.ToDto(), a.Duration.TotalMilliseconds, a.ErrorMessage, a.StackTrace))]
-        );
+        )
+        {
+            ErrorOutput = result.ErrorOutput,
+            Attachments = result.Attachments.Select(attachment => new TestAttachmentDto(
+                attachment.RunId,
+                attachment.Index,
+                attachment.DisplayName,
+                attachment.Description,
+                attachment.OriginalPath is not null
+                    ? Path.GetFileName(attachment.OriginalPath)
+                    : attachment.Path is null ? null : Path.GetFileName(attachment.Path),
+                attachment.SizeBytes,
+                attachment.Retained,
+                attachment.NotRetainedReason,
+                attachment.Retained && attachment.RunId is not null
+                    ? $"/artifacts/{Uri.EscapeDataString(attachment.RunId)}/{attachment.Index}"
+                    : null)).ToList(),
+        };
 
     public static TestSuiteDto ToDto(this TestSuite suite) =>
         new(

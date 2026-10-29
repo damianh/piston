@@ -32,7 +32,7 @@ ARCHITECTURE describe the implementation in detail.
   session or when the worktree is deleted, and fails safe ("use `dotnet test`")
   when another process owns the worktree or the engine cannot start.
 - The daemon's HTTP MCP endpoint, sharing one engine with the dashboard.
-- Twelve tools: `verify`, `run_tests`, `get_test_run`, `get_test_results`,
+- Thirteen tools: `verify`, `run_tests`, `get_test_run`, `get_test_result`, `get_test_results`,
   `get_test_history`, `set_test_filter`, `clear_results`, `get_coverage`,
   `get_changed_line_coverage`, `export_coverage`, `plan_affected_tests` and
   `run_affected_tests`.
@@ -43,6 +43,9 @@ ARCHITECTURE describe the implementation in detail.
   and build inputs outside the fingerprint are reported as not covered.
 - An agent setup guide and custom-instructions snippet
   ([agent-usage](agent-usage.md)).
+- `get_test_result` retrieves one test's separate output streams, failure details
+  and attachment metadata; the dashboard shows the same streams and serves
+  retained, size-capped artifacts.
 
 **Run provenance and execution**
 - Every run has a run ID, a trigger, a scope (full, selective or filtered),
@@ -137,7 +140,6 @@ ARCHITECTURE describe the implementation in detail.
 - Explore MTP server mode further for structured results and stable test
   identities; keep VSTest/TRX as the compatibility path. The investigation and
   current decision are in [MTP server-mode investigation](mtp-server-mode.md).
-- Per-test output and relevant artifacts in the MCP tools and the dashboard.
 
 ## Risks and open questions
 

@@ -295,6 +295,28 @@ internal static partial class MtpTestProcessRunner
 
         // Build suites from stdout-parsed results
         var suites = BuildSuitesFromLiveResults(projectPath, liveResults, liveResultsLock);
+        if (parser.Attachments.Count > 0 && suites.Count > 0)
+        {
+            var tests = suites.SelectMany(s => s.Tests).ToList();
+            foreach (var attachment in parser.Attachments)
+            {
+                var matching = tests.Where(test =>
+                    string.Equals(test.DisplayName, attachment.TestName, StringComparison.Ordinal)
+                    || string.Equals(test.FullyQualifiedName, attachment.TestName, StringComparison.Ordinal))
+                    .ToList();
+                if (matching.Count == 1)
+                {
+                    var test = matching[0];
+                    var updated = test with
+                    {
+                        Attachments = [.. test.Attachments, new TestAttachment(attachment.Path, Path.GetFileName(attachment.Path))],
+                    };
+                    tests[tests.IndexOf(test)] = updated;
+                }
+            }
+
+            suites = [suites[0] with { Tests = tests }];
+        }
 
         var totalTests = suites.SelectMany(s => s.Tests).Count();
         log.Write("MtpRunner",
@@ -355,6 +377,7 @@ internal static partial class MtpTestProcessRunner
                 Source: kvp.Value.Source)
             {
                 TargetFramework = multiTargeted ? kvp.Value.TargetFramework : null,
+                ErrorOutput = kvp.Value.ErrorOutput,
             })
             .ToList();
 
