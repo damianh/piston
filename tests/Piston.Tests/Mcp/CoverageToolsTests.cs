@@ -261,6 +261,55 @@ public sealed class CoverageToolsTests : IDisposable
     }
 
     [Fact]
+    public void ChangedLineCoverage_GroupsBranchAttributionsByLineInProjectAndNameOrder()
+    {
+        var file = new ChangedFileVerdicts(Path.Combine(_root, "Code.cs"), true, false, false,
+        [
+            new(2, ChangedLineVerdict.CoveredByPassing, Coverage: new(2, 1, 1, 2)),
+            new(3, ChangedLineVerdict.Uncovered, Coverage: new(3, 0, 0, 2)),
+            new(4, ChangedLineVerdict.CoveredByPassing, Coverage: new(4, 1, 2, 2)),
+        ])
+        {
+            BranchTests =
+            [
+                Covering("Tests.A", 2, 4) with
+                {
+                    ProjectPath = Path.Combine(_root, "B.csproj"),
+                    Branches = [new(2, 2, 2), new(4, 1, 2)],
+                },
+                Covering("Tests.Z", 2, 4) with
+                {
+                    ProjectPath = Path.Combine(_root, "A.csproj"),
+                    Branches = [new(2, 0, 2), new(99, 1, 2)],
+                },
+                Covering("Tests.A", 2, 4) with
+                {
+                    ProjectPath = Path.Combine(_root, "A.csproj"),
+                    Branches = [new(4, 2, 2), new(2, 1, 2)],
+                },
+            ],
+        };
+
+        var json = CoverageTools.ChangedLineCoverage(new("working", [file], []), _root);
+
+        var lines = json["files"]![0]!["branchLines"]!.AsArray();
+        Assert.Equal([2, 3, 4], lines.Select(line => line!["line"]!.GetValue<int>()));
+        Assert.Equal(
+            [("A.csproj", "Tests.A", 1), ("A.csproj", "Tests.Z", 0), ("B.csproj", "Tests.A", 2)],
+            Attributions(lines[0]!));
+        Assert.Empty(lines[1]!["tests"]!.AsArray());
+        Assert.Equal(
+            [("A.csproj", "Tests.A", 2), ("B.csproj", "Tests.A", 1)],
+            Attributions(lines[2]!));
+
+        static IEnumerable<(string Project, string Name, int Taken)> Attributions(JsonNode line) =>
+            line["tests"]!.AsArray().Select(test => (
+                test!["project"]!.GetValue<string>(),
+                test["name"]!.GetValue<string>(),
+                test["taken"]!.GetValue<int>()));
+    }
+
+    [Fact]
     public async Task GetChangedLineCoverage_FileEditedAfterTheRun_IsUnknownStaleNotCovered()
     {
         Git("init", "-q", "-b", "main");

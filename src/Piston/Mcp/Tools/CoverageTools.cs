@@ -179,24 +179,26 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                 ["partialBranches"] = PartialLines(file.Lines.Where(l => l.HasPartialBranches).Select(l => l.Coverage!)),
                 ["branchLines"] = new JsonArray([.. file.Lines
                     .Where(line => line.Coverage is { BranchesTotal: > 0 })
-                    .Select(line => (JsonNode)new JsonObject
+                    .GroupJoin(
+                        file.BranchTests
+                            .OrderBy(test => test.ProjectPath, StringComparer.Ordinal)
+                            .ThenBy(test => test.TestFqn, StringComparer.Ordinal)
+                            .SelectMany(test => test.Branches!, (test, branch) => (Test: test, Branch: branch)),
+                        line => line.Line,
+                        attribution => attribution.Branch.Line,
+                        (line, attributions) => (JsonNode)new JsonObject
                     {
                         ["line"] = line.Line,
                         ["covered"] = line.Coverage!.BranchesCovered,
                         ["total"] = line.Coverage.BranchesTotal,
-                        ["tests"] = new JsonArray([.. file.BranchTests
-                            .OrderBy(test => test.ProjectPath, StringComparer.Ordinal)
-                            .ThenBy(test => test.TestFqn, StringComparer.Ordinal)
-                            .SelectMany(test => test.Branches!
-                                .Where(branch => branch.Line == line.Line)
-                                .Select(branch => (JsonNode)new JsonObject
-                                {
-                                    ["name"] = test.TestFqn,
-                                    ["project"] = Relative(test.ProjectPath, solutionDirectory),
-                                    ["taken"] = branch.Covered,
-                                    ["total"] = branch.Total,
-                                    ["granularity"] = test.Granularity,
-                                }))]),
+                        ["tests"] = new JsonArray([.. attributions.Select(attribution => (JsonNode)new JsonObject
+                        {
+                            ["name"] = attribution.Test.TestFqn,
+                            ["project"] = Relative(attribution.Test.ProjectPath, solutionDirectory),
+                            ["taken"] = attribution.Branch.Covered,
+                            ["total"] = attribution.Branch.Total,
+                            ["granularity"] = attribution.Test.Granularity,
+                        })]),
                     })]),
                 ["failingTests"] = Strings(failing.Take(MaxFailingTestsPerFile)),
                 ["failingTestsOmitted"] = Math.Max(0, failing.Count - MaxFailingTestsPerFile),
