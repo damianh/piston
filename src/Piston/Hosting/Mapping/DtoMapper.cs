@@ -651,7 +651,8 @@ public static class DtoMapper
                     file?.IsPartial ?? false,
                     (file?.Totals ?? ChangedLineTotals.Of([])).ToDto(),
                     withHunks ? [.. hunks.Select(h => ToHunkDto(h, lines))] : [],
-                    HunksOmitted: !withHunks && hunks.Count > 0);
+                    HunksOmitted: !withHunks && hunks.Count > 0,
+                    IsDiverged: result.DivergedFiles.Contains(path));
             }
         }
 

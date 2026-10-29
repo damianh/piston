@@ -509,8 +509,8 @@ public sealed class CoverageCommandTests : IDisposable
         {
             Diff = paths.ToDictionary(p => p, _ => UnifiedDiff.Added([.. lines.Select(n => $"line {n}")])),
         };
-        var result = ChangedLineVerdicts.Classify(changes, _ => null, _ => null, _ => CoveringTestOutcome.NoResult)
-            with { Diff = changes.Diff };
+        var classified = ChangedLineVerdicts.Classify(changes, _ => null, _ => null, _ => CoveringTestOutcome.NoResult);
+        var result = classified with { Diff = changes.Diff };
         var full = result.ToChangeDiffDto("/repo");
         Assert.All(full.Files, f => Assert.Equal(3, f.Hunks.Single().Lines.Count));
         var withHunks = JsonSerializer.SerializeToUtf8Bytes(full.Files[0], JsonRpcSerializer.Options).Length + 1;
@@ -530,6 +530,23 @@ public sealed class CoverageCommandTests : IDisposable
         Assert.Empty(dto.Files[1].Hunks);
         Assert.Equal(3, dto.Files[1].Totals.Unknown);
         Assert.Contains(dto.Warnings, w => w.Contains("1 file(s) give only totals and 1 file(s) are omitted", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ChangeDiff_MarksFilesWhoseRangeVersionDiffersFromTheWorkingTree()
+    {
+        string[] paths = ["/repo/src/Diverged.cs", "/repo/src/Same.cs"];
+        var changes = new ChangedLinesResult("main..feature", paths.ToDictionary(p => p, _ => new SortedSet<int>([1])))
+        {
+            DivergedFiles = new HashSet<string>([paths[0]]),
+            Diff = paths.ToDictionary(p => p, _ => UnifiedDiff.Added(["line 1"])),
+        };
+        var classified = ChangedLineVerdicts.Classify(changes, _ => null, _ => null, _ => CoveringTestOutcome.NoResult);
+
+        var dto = (classified with { Diff = changes.Diff, DivergedFiles = changes.DivergedFiles }).ToChangeDiffDto("/repo");
+
+        Assert.True(dto.Files.Single(f => f.RelativePath == "src/Diverged.cs").IsDiverged);
+        Assert.False(dto.Files.Single(f => f.RelativePath == "src/Same.cs").IsDiverged);
     }
 
     [Fact]

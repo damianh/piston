@@ -217,6 +217,40 @@ public sealed class UnifiedDiffTests : IDisposable
         Assert.Equal([1, 2], withContext.Diff[Path.Combine(root, "New.cs")].AddedLines);
     }
 
+    [Fact]
+    public async Task GetAsync_WithContext_GivesAnUntrackedSymbolicLinkItsTargetPathNotTheTargetsContent()
+    {
+        Git("init", "-q", "-b", "main");
+        await File.WriteAllTextAsync(Path.Combine(_root, "Kept.cs"), "x\n", _ct);
+        Git("add", ".");
+        Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+        var outside = Directory.CreateTempSubdirectory("piston-unified-diff-outside-").FullName;
+        try
+        {
+            var secret = Path.Combine(outside, "secret.txt");
+            await File.WriteAllTextAsync(secret, "do not show\n", _ct);
+            try
+            {
+                _ = File.CreateSymbolicLink(Path.Combine(_root, "Link.cs"), secret);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                Assert.Skip($"Symbolic links cannot be created here: {e.Message}");
+            }
+
+            var changes = await ChangedLines.GetAsync(_root, ChangeBase.Working, null, contextLines: 3, _ct);
+
+            var link = changes.Diff.Single(kv => kv.Key.EndsWith("Link.cs", StringComparison.Ordinal)).Value;
+            var lines = link.Hunks.SelectMany(h => h.Lines).ToList();
+            Assert.Equal([secret], lines.Select(l => l.Text));
+            Assert.DoesNotContain(lines, l => l.Text.Contains("do not show", StringComparison.Ordinal));
+        }
+        finally
+        {
+            Directory.Delete(outside, recursive: true);
+        }
+    }
+
     private void Git(params string[] args)
     {
         var psi = new System.Diagnostics.ProcessStartInfo("git") { WorkingDirectory = _root, RedirectStandardError = true };

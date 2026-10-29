@@ -34,6 +34,10 @@ public sealed record ChangeDiffDto(
 /// <param name="Totals">The file's added lines per verdict; all zero for non-source files.</param>
 /// <param name="Hunks">The file's hunks; empty for binary files and when <paramref name="HunksOmitted"/>.</param>
 /// <param name="HunksOmitted">The file's hunks did not fit the reply; only its totals are given.</param>
+/// <param name="IsDiverged">
+/// A range's version of the file differs from the working tree, so its line numbers do not match the coverage
+/// evidence, which is numbered for the file on disk.
+/// </param>
 public sealed record ChangeDiffFileDto(
     string FilePath,
     string RelativePath,
@@ -44,7 +48,8 @@ public sealed record ChangeDiffFileDto(
     bool IsPartial,
     ChangedLineTotalsDto Totals,
     IReadOnlyList<DiffHunkDto> Hunks,
-    bool HunksOmitted);
+    bool HunksOmitted,
+    bool IsDiverged = false);
 
 /// <summary>A hunk of a unified diff, numbered as in <c>@@ -OldStart,OldCount +NewStart,NewCount @@</c>.</summary>
 public sealed record DiffHunkDto(int OldStart, int OldCount, int NewStart, int NewCount, IReadOnlyList<DiffLineDto> Lines);

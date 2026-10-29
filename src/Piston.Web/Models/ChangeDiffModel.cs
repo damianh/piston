@@ -133,16 +133,22 @@ public static class ChangeDiffModel
 
     /// <summary>
     /// Splits the tests recorded as executing <paramref name="line"/>: credited tests, measured on the file as it is
-    /// now, then outdated ones. Each list is ordered by how precisely it was measured, then by name.
+    /// now, then outdated ones. Each list is ordered by how precisely it was measured, then by name. Outdated ranges
+    /// were measured on other content, so for an <c>outdatedEvidence</c> <paramref name="reason"/> every outdated
+    /// test with a pass or fail is listed, as the verdict weighs them wherever their ranges fall.
     /// </summary>
-    public static LineTests TestsForLine(IEnumerable<CoveringTestDto> tests, int line)
+    public static LineTests TestsForLine(IEnumerable<CoveringTestDto> tests, int line, string? reason = null)
     {
-        var containing = tests
-            .Where(t => t.ExecutedLines.Any(r => r.Start <= line && line <= r.End))
+        var ordered = tests
             .OrderBy(t => GranularityRank(t.Granularity))
             .ThenBy(t => t.TestFqn, StringComparer.Ordinal)
             .ToList();
-        return new([.. containing.Where(t => t.IsCurrent)], [.. containing.Where(t => !t.IsCurrent)]);
+        var outdated = reason == "outdatedEvidence"
+            ? ordered.Where(t => !t.IsCurrent && t.Outcome is "passed" or "failed")
+            : ordered.Where(t => !t.IsCurrent && Contains(t, line));
+        return new([.. ordered.Where(t => t.IsCurrent && Contains(t, line))], [.. outdated]);
+
+        static bool Contains(CoveringTestDto test, int line) => test.ExecutedLines.Any(r => r.Start <= line && line <= r.End);
     }
 
     private static readonly string[] Granularities = ["test", "class", "run"];

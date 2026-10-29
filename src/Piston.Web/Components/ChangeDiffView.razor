@@ -554,7 +554,7 @@
                 var line = file.Hunks.SelectMany(h => h.Lines).FirstOrDefault(l => l.NewLine == lineNumber && l.Kind != "removed");
                 var style = ChangeDiffModel.Style(line?.Verdict);
                 var loaded = _coveringTests.TryGetValue(file.FilePath, out var covering);
-                var tests = ChangeDiffModel.TestsForLine(covering?.Tests ?? [], lineNumber);
+                var tests = ChangeDiffModel.TestsForLine(covering?.Tests ?? [], lineNumber, line?.Reason);
                 var projectPaths = (covering?.Tests ?? []).Select(t => t.ProjectPath).ToList();
             }
             <section class="flex flex-col shrink-0 max-h-[40%] min-h-0 border-t border-gray-800" aria-label="Tests that executed line @lineNumber">
@@ -583,7 +583,13 @@
                             @onclick="() => _picked = null">close</button>
                 </div>
                 <div class="flex-1 min-h-0 overflow-y-auto pb-1">
-                    @if (!loaded)
+                    @if (file.IsDiverged)
+                    {
+                        <div class="text-gray-600 italic px-4 py-1">
+                            The working tree's version of this file differs from the range's, and the tests ran on the working tree, so their evidence cannot be placed on this line.
+                        </div>
+                    }
+                    else if (!loaded)
                     {
                         <div class="text-gray-600 italic px-4 py-1">Loading…</div>
                     }
@@ -601,7 +607,9 @@
                         @if (tests.Outdated.Count > 0)
                         {
                             <div class="px-4 pt-1.5 pb-0.5 text-gray-500 select-none"
-                                 title="Measured on an older version of the file: their ranges include this line number, but it may have been other code">
+                                 title="@(line?.Reason == "outdatedEvidence"
+                                     ? "Measured on an older version of the file, so their ranges cannot be placed on the current lines; the verdict weighs every one of them"
+                                     : "Measured on an older version of the file: their ranges include this line number, but it may have been other code")">
                                 Measured on an older version
                             </div>
                             foreach (var test in tests.Outdated)

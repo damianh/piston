@@ -398,12 +398,20 @@ internal static partial class ChangedLines
         }
     }
 
-    /// <summary>An untracked file as wholly added; binary or unreadable files, and those over 4 MB, have no lines.</summary>
+    /// <summary>
+    /// An untracked file as wholly added; binary or unreadable files, and those over 4 MB, have no lines. A symbolic
+    /// link is its target's path, as git records it, so a link out of the repository does not expose the target.
+    /// </summary>
     private static DiffFile ReadUntracked(string path)
     {
         try
         {
             var info = new FileInfo(path);
+            if (info.LinkTarget is { } target)
+            {
+                return UnifiedDiff.Added([target]);
+            }
+
             if (!info.Exists || info.Length > 4 * 1024 * 1024)
             {
                 return new DiffFile(DiffFileStatus.Added, []);

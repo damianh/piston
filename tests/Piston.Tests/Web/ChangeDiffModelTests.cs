@@ -93,6 +93,26 @@ public sealed class ChangeDiffModelTests
     }
 
     [Fact]
+    public void TestsForLineWithOutdatedEvidenceListsEveryOutdatedTestThatPassedOrFailed()
+    {
+        CoveringTestDto Test(string name, bool current, int start, string outcome) =>
+            new(name, "/t/T.csproj", "test", [new LineRangeDto(start, start)], current, outcome);
+        CoveringTestDto[] tests =
+        [
+            Test("Current", true, 5, "passed"),
+            Test("OldElsewhere", false, 40, "failed"),
+            Test("OldSkipped", false, 40, "skipped"),
+            Test("OldHere", false, 5, "passed"),
+        ];
+
+        var result = ChangeDiffModel.TestsForLine(tests, 5, "outdatedEvidence");
+
+        Assert.Equal(["Current"], result.Credited.Select(t => t.TestFqn));
+        Assert.Equal(["OldElsewhere", "OldHere"], result.Outdated.Select(t => t.TestFqn));
+        Assert.Equal(["OldHere"], ChangeDiffModel.TestsForLine(tests, 5).Outdated.Select(t => t.TestFqn));
+    }
+
+    [Fact]
     public void HighlightKeepsOneTokenListPerLineAndHighlightsEachSideSeparately()
     {
         var hunk = Hunk(

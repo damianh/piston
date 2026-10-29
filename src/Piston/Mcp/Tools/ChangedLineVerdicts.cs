@@ -150,6 +150,9 @@ internal sealed record ChangedLineCoverageResult(
     /// <summary>Each changed file's hunks, by absolute path, when context lines were asked for; otherwise empty.</summary>
     public IReadOnlyDictionary<string, DiffFile> Diff { get; init; } = new Dictionary<string, DiffFile>();
 
+    /// <summary>As <see cref="ChangedLinesResult.DivergedFiles"/>: files whose line numbers do not describe the files on disk.</summary>
+    public IReadOnlySet<string> DivergedFiles { get; init; } = new HashSet<string>();
+
     /// <summary>Unknown lines per reason, every reason included.</summary>
     public IReadOnlyDictionary<UnknownReason, int> UnknownReasons
     {
@@ -221,6 +224,8 @@ internal static class ChangedLineVerdicts
                         .ConfigureAwait(false);
                     if (SameChanges(changes, again) && SameContents(contents, ContentHashes(changes)))
                     {
+                        // The second read's hunks hold the content the verdicts were judged against.
+                        changes = again;
                         result = read;
                         break;
                     }
@@ -263,7 +268,7 @@ internal static class ChangedLineVerdicts
                 "and may change when it finishes.");
         }
 
-        result = result with { Diff = changes.Diff };
+        result = result with { Diff = changes.Diff, DivergedFiles = changes.DivergedFiles };
         return warnings.Count == 0 ? result : result with { Warnings = [.. result.Warnings, .. warnings] };
     }
 
