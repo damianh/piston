@@ -41,6 +41,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     private readonly SemaphoreSlim _runLock = new(1, 1);
     private readonly SemaphoreSlim _resetLock = new(1, 1);
     private readonly SemaphoreSlim _coverageLock = new(1, 1);
+    // Retention, retries and result publication form one transaction with respect to clearing artifacts.
+    private readonly SemaphoreSlim _artifactPublicationLock = new(1, 1);
     private readonly string _engineInstanceId = Guid.NewGuid().ToString("N");
     private readonly object _runRecordsLock = new();
     private readonly Dictionary<string, TaskCompletionSource<TestRunRecord>> _runWaiters = new(StringComparer.Ordinal);
@@ -572,43 +574,64 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             CancelBackfill();
         }
 
-        _coverageLock.Wait();
-        _state.BeginResultsUpdate();
+        _artifactPublicationLock.Wait();
         try
         {
-            lock (_runRecordsLock)
+            _coverageLock.Wait();
+            _state.BeginResultsUpdate();
+            try
             {
-                if (ResultsStore is { } savedResultsStore)
+                lock (_runRecordsLock)
                 {
-                    savedResultsStore.Clear();
-                }
-                else if ((solutionPath ?? _solutionPath) is { } resultsSolutionPath)
-                {
-                    SavedResultsStore.Delete(resultsSolutionPath, message => DiagnosticLog.Instance?.Write("Results", message));
+                    if (ResultsStore is { } savedResultsStore)
+                    {
+                        savedResultsStore.Clear();
+                    }
+                    else if ((solutionPath ?? _solutionPath) is { } resultsSolutionPath)
+                    {
+                        SavedResultsStore.Delete(resultsSolutionPath, message => DiagnosticLog.Instance?.Write("Results", message));
+                    }
+
+                    _state.TestSuites = [];
+                    _state.LastRunTime = null;
+                    if (_state.LastRun is { } lastRun)
+                    {
+                        _state.LastRun = lastRun.Restored ? null : ClearRunArtifacts(lastRun);
+                    }
+
+                    _state.RecentRuns = _state.RecentRuns.Where(run => !run.Restored).Select(ClearRunArtifacts).ToList();
+                    ArtifactStore?.Clear();
                 }
 
-                _state.TestSuites = [];
-                _state.LastRunTime = null;
-                if (_state.LastRun?.Restored == true)
-                {
-                    _state.LastRun = null;
-                }
-
-                _state.RecentRuns = _state.RecentRuns.Where(run => !run.Restored).ToList();
+                SqliteCoverageStore.Clear(solutionDirectory);
+                _state.HasCoverageData = false;
+                _state.CoverageImpactDetail = null;
             }
-
-            SqliteCoverageStore.Clear(solutionDirectory);
-            ArtifactStore?.Clear();
-            _state.HasCoverageData = false;
-            _state.CoverageImpactDetail = null;
+            finally
+            {
+                _state.EndResultsUpdate();
+                _ = _coverageLock.Release();
+            }
         }
         finally
         {
-            _state.EndResultsUpdate();
-            _ = _coverageLock.Release();
+            _ = _artifactPublicationLock.Release();
         }
         _state.NotifyChanged();
     }
+
+    private static TestRunRecord ClearRunArtifacts(TestRunRecord run) => run with
+    {
+        Suites = run.Suites.Select(suite => suite with
+        {
+            Tests = suite.Tests.Select(test => test with
+            {
+                Attachments = test.Attachments.Select(attachment => attachment.Retained
+                    ? attachment with { Path = null, Retained = false, NotRetainedReason = "Results were cleared." }
+                    : attachment).ToList(),
+            }).ToList(),
+        }).ToList(),
+    };
 
     private void RestoreSavedResults()
     {
@@ -981,11 +1004,15 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         PublishActiveRun(run);
 
         BuildBaseline? builtBaseline = null;
+        var artifactPublicationLockHeld = false;
 
         TestRunRecord Finish(TestRunStatus status, string? reason, bool computeAfter = true)
         {
             var finished = CompleteRun(run, status, reason, solutionDir, changeGenerationAtStart, computeAfter);
-            ArtifactStore?.Prune(_state.RecentRuns, _state.TestSuites);
+            lock (_runRecordsLock)
+            {
+                ArtifactStore?.Prune(_state.RecentRuns, _state.TestSuites);
+            }
 
             // Outputs are reusable only if the sources were stable for the whole run.
             if (builtBaseline is not null && finished.Freshness == ResultFreshness.Current)
@@ -1622,6 +1649,16 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                         OnProjectCompleted = OnProjectCompleted,
                     },
                     ct).ConfigureAwait(false);
+                try
+                {
+                    await _artifactPublicationLock.WaitAsync(ct).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    CleanUpRunnerTemporaryDirectories(result.Projects, result.CoverageReportPaths);
+                    throw;
+                }
+                artifactPublicationLockHeld = true;
                 coverageReportPaths = result.CoverageReportPaths;
                 projectResults = result.Projects.Select(project =>
                 {
@@ -1827,6 +1864,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         }
         finally
         {
+            if (artifactPublicationLockHeld)
+            {
+                _ = _artifactPublicationLock.Release();
+            }
+
             try
             {
                 lease.Dispose();
@@ -2494,5 +2536,6 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         _runLock.Dispose();
         _resetLock.Dispose();
         _coverageLock.Dispose();
+        _artifactPublicationLock.Dispose();
     }
 }

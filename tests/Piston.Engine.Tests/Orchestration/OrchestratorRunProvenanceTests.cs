@@ -234,6 +234,114 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         Assert.Null(store.TryLoad());
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ClearResults_serializes_with_artifact_retention_and_retry_publication(bool pauseDuringRetry)
+    {
+        await StartAndWaitForStartupRunAsync();
+        _orchestrator.ArtifactStore = new TestArtifactStore(_root);
+        _orchestrator.RetryFailedTests = pauseDuringRetry ? 1 : 0;
+        _runner.FailingTest = "A.Tests.Test1";
+        _runner.FailuresRemaining = 1;
+        var firstDirectory = Directory.CreateDirectory(Path.Combine(_root, "first")).FullName;
+        var secondDirectory = Directory.CreateDirectory(Path.Combine(_root, "second")).FullName;
+        var first = Path.Combine(firstDirectory, "report.txt");
+        var second = Path.Combine(secondDirectory, "report.txt");
+        File.WriteAllText(first, "first");
+        File.WriteAllText(second, "second");
+        var paused = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var pauseCount = 0;
+        void Pause()
+        {
+            if (Interlocked.Increment(ref pauseCount) != 1)
+            {
+                return;
+            }
+
+            paused.SetResult();
+            Assert.True(release.Wait(TimeSpan.FromSeconds(10), _ct));
+        }
+
+        _runner.Attachments = _ => new PausingAttachments(
+            [new TestAttachment(first), new TestAttachment(second)], pauseDuringRetry ? null : Pause);
+        if (pauseDuringRetry)
+        {
+            _runner.DuringRun = () =>
+            {
+                if (_runner.LastFilter is not null)
+                {
+                    Pause();
+                }
+            };
+        }
+
+        var completion = Task.Run(() => _orchestrator.RequestRunAsync(), _ct);
+        Task? clear = null;
+        try
+        {
+            await paused.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            Assert.Contains(Directory.EnumerateFiles(Path.Combine(_root, ".piston", "artifacts"), "*", SearchOption.AllDirectories),
+                file => File.ReadAllText(file) == "first");
+            var clearing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            clear = Task.Run(() =>
+            {
+                clearing.SetResult();
+                _orchestrator.ClearResults(_root);
+            }, _ct);
+            await clearing.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            Assert.NotSame(clear, await Task.WhenAny(clear, Task.Delay(200, _ct)));
+        }
+        finally
+        {
+            _runner.Attachments = _ => [new TestAttachment(first), new TestAttachment(second)];
+            release.Set();
+            _ = await completion.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            if (clear is not null)
+            {
+                await clear.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            }
+        }
+
+        Assert.Empty(_state.TestSuites);
+        Assert.False(Directory.Exists(Path.Combine(_root, ".piston", "artifacts")));
+        var run = _state.LastRun!;
+        Assert.Equal(pauseDuringRetry ? TestStatus.Passed : TestStatus.Failed,
+            Assert.Single(run.Tests, test => test.FullyQualifiedName == "A.Tests.Test1").Status);
+        var attachments = run.Tests.SelectMany(test => test.Attachments).ToList();
+        Assert.NotEmpty(attachments);
+        Assert.Equal(attachments.Count, attachments.Select(attachment => attachment.Index).Distinct().Count());
+        Assert.All(_state.RecentRuns.SelectMany(record => record.Tests).SelectMany(test => test.Attachments), attachment =>
+        {
+            Assert.False(attachment.Retained);
+            Assert.Null(attachment.Path);
+            Assert.Contains("cleared", attachment.NotRetainedReason, StringComparison.OrdinalIgnoreCase);
+        });
+
+        _runner.DuringRun = null;
+        var later = await _orchestrator.RequestRunAsync();
+        Assert.All(later!.Tests.SelectMany(test => test.Attachments), attachment =>
+        {
+            Assert.True(attachment.Retained);
+            Assert.Equal(File.ReadAllText(attachment.OriginalPath!),
+                File.ReadAllText(_orchestrator.ArtifactStore.Resolve(attachment)!));
+        });
+    }
+
+    private sealed class PausingAttachments(IReadOnlyList<TestAttachment> attachments, Action? pause) : IReadOnlyList<TestAttachment>
+    {
+        public int Count => attachments.Count;
+        public TestAttachment this[int index] => attachments[index];
+        public IEnumerator<TestAttachment> GetEnumerator()
+        {
+            yield return attachments[0];
+            pause?.Invoke();
+            yield return attachments[1];
+        }
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
     private sealed class SnapshotCaptureSuites(IReadOnlyList<TestSuite> suites, Action onEnumerate) : IReadOnlyList<TestSuite>
     {
         public int Count => suites.Count;
@@ -974,6 +1082,7 @@ internal sealed class ProvenanceBuildService : IBuildService
 internal sealed class ProvenanceTestRunner : ITestRunnerService
 {
     public Action? DuringRun { get; set; }
+    public Func<string, IReadOnlyList<TestAttachment>>? Attachments { get; set; }
     public string? FailingTest { get; set; }
     public bool DuplicateFirstTest { get; set; }
     public HashSet<string> ProjectsWithoutResults { get; } = [];
@@ -1063,6 +1172,7 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
                     TimeSpan.FromMilliseconds(1), null, failing && fqn == FailingTest ? "boom" : null, null, null)
                 {
                     TargetFramework = filter is null && fqn == FailingTest ? FailingTestFramework : null,
+                    Attachments = Attachments?.Invoke(path) ?? [],
                 },
             };
             for (var i = 0; i < ExtraFailures; i++)

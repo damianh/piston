@@ -204,7 +204,7 @@ To set up a coding agent, follow [docs/agent-usage.md](docs/agent-usage.md). It 
 | `export_coverage` | Write the coverage report as LCOV or Cobertura (`format`) to `outputPath`, which must be inside the solution directory (default `.piston/coverage/lcov.info` or `cobertura.xml`). Requires coverage. |
 | `plan_affected_tests` | Preview what Piston would build and run for `files` (or git changes, see [git bases](#git-bases)) without running anything, as JSON (`piston.affected-plan/v1`): `scope` (`full`, `projects`, `tests` or `none`), an `explanation`, the projects, any `warnings`, and with coverage the selected tests with changed lines, optional member identities and the granularity of that evidence (`run`, `class` or `test`). |
 | `run_affected_tests` | Run that plan and wait for it: the same JSON plus `run` (ID, status and counts; null when nothing is affected). For example, `base: "branch"` runs the tests affected by everything since the branch left `main`. |
-| `clear_results` | Clear current test suites, last-run timestamp, saved result snapshot, coverage state, and persisted coverage in the current solution directory. A running test run may publish new results afterwards. |
+| `clear_results` | Clear current test suites, last-run timestamp, saved result snapshot, coverage state, persisted coverage, and retained artifacts in the current solution directory. Clearing waits for any attachment-retention and retry-publication transaction already in progress; a run still executing its initial tests may publish new results afterwards. |
 
 Piston provides no code intelligence (diagnostics, rename, semantic search); agents
 can use Roslyn-based tools alongside it.
