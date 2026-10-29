@@ -103,6 +103,42 @@ piston daemon --coverage --mcp-port 5300
 
 ## Web dashboard
 
+### Copilot canvas
+
+This repository includes a project-scoped native canvas extension at
+`.github/extensions/piston-dashboard/`. In a Copilot app/runtime with extension
+canvas support, ask the agent to open the **Piston** canvas (canvas ID
+`piston-dashboard`, for example instance ID `piston-panel`). The extension uses
+the canvas-capable `piston` executable on PATH and the active session's working
+directory, not the extension source directory.
+
+The canvas attaches to an existing owner of that worktree. A daemon already
+serves the dashboard. For a stdio MCP session, opt in with `piston mcp --dashboard`
+(MCP args `["mcp", "--dashboard"]`) or `"dashboard": true` in `.piston.json`.
+This opens an OS-assigned `127.0.0.1` web port for that session; stdio remains
+the MCP transport, and default `piston mcp` sessions still open no web ports.
+
+`piston dashboard --json` only inspects the current worktree's live owner and
+reports `connected`, `disconnected`, `disabled`, or `error`, including the
+dashboard URL when available. It never starts a process, launches a browser,
+or runs tests. The extension also checks the endpoint's worktree, PID and
+ownership generation before attaching, rather than assuming port 5199.
+
+Opening/reloading/resuming the canvas never starts an engine or requests a run.
+Explicit engine startup still performs its normal startup run and starts
+watching. The panel shows a disconnected state and retries when the engine is
+absent, and follows a replacement owner of the same worktree. Closing the panel
+does not stop the owner. The existing dashboard follows the Copilot theme in
+the canvas; standalone browsers retain their saved/system theme preference.
+Agent-facing actions are `refresh` (inspect only), `run`, and `run_failed`;
+the latter reports an error when there are no failed tests.
+
+Only the project extension is included here. Installing it into other projects
+or bundling harness assets with the tool is separate work. Older runtimes without
+extension canvas support can still open the discovered URL in a browser.
+
+### Dashboard controls
+
 The daemon serves a Blazor WebAssembly dashboard (default `http://localhost:5199`) connected over WebSocket. It shows test results, build errors, engine activity, and MCP tool-call history. The Roslyn diagnostic view has been removed. The dashboard and the HTTP MCP endpoint accept only local host names and refuse cross-origin WebSocket and POST requests from web pages; see [SECURITY.md](SECURITY.md).
 
 A strip under the Tests toolbar describes the latest run: what triggered it (`Calc.cs saved`, `run all`, …), its build time, which tests it ran, and the tests it fixed or newly broke (click to select the first), with the run's elapsed time. Clicking any node in the tree shows its details; double-click or the chevron expands or collapses it. A test's details show its captured output (what the test wrote, e.g. via xUnit's `TestContext.Current.TestOutputHelper`) and link to its project. A failed test's stack trace lists its frames; frames in files under the solution directory are clickable and show a syntax-highlighted excerpt of the source around that line (the first such frame is shown by default), with a whole-file toggle and an **Open in editor** link (`vscode://`). The daemon serves only files inside the solution directory. A project, framework, namespace, class, status or pinned node shows its result counts, failures, slowest tests and (for status and pinned groups) the projects they come from. Every details pane has a **Run** button that builds the affected projects and runs just those tests; it is disabled while another run is in progress. The build is skipped (status `Skipped`) when the last successful build covered those projects, its run finished `Current`, and since then the source fingerprint is unchanged, the watcher has seen no change and the test outputs still exist. A run selects tests by name, so a framework node or a multi-targeted test runs on every framework its project targets, and a theory runs all of its cases. Projects are named by file name, so test projects sharing one (e.g. `One/Tests.csproj` and `Two/Tests.csproj`) show as a single node and run together. A project's details also show the run log of its latest run, one process covering all of its target frameworks: the runner Piston chose (VSTest, MTP server or MTP `dotnet test`), the command line, fallbacks, the process's console output and its exit code. Each log keeps the first 1,500 and last 500 lines of a run.
@@ -318,8 +354,10 @@ current directory before resolving the solution and retains that config even
 when `solution` points into another directory, including when the web command
 auto-starts a daemon. Invalid config files are reported
 as errors rather than silently ignored.
-Supplied CLI values override corresponding config values, with two caveats:
+Supplied CLI values override corresponding config values, with these caveats:
 `--coverage` enables coverage but cannot disable a config-enabled value, and
+`--dashboard` similarly enables the MCP dashboard; neither flag disables a
+config-enabled value. Also,
 non-positive debounce/parallelism values fall back to config/defaults. There is
 no implemented `.piston/config.json` or user-global config hierarchy for daemon
 options; dashboard preferences live in the separate [user settings file](#user-settings).
@@ -352,6 +390,7 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `pipeName` | `string` | Override the named pipe name. |
 | `stdio` | `bool` | Use stdin/stdout JSON-RPC transport. |
 | `mcpPort` | `int` | Port for the daemon's MCP server (default 5200). |
+| `dashboard` | `bool` | Expose the stdio MCP session's dashboard on an ephemeral loopback port (default `false`, or enable with `piston mcp --dashboard`). Does not affect daemon hosting. |
 | `testExecutionMode` | `string` | `"Auto"` and `"Process"` currently both route between MTP and VSTest. `"InProcess"` is not implemented and throws at startup. |
 | `testResources` | `array` | Exclusive resources of test projects and overrides of container inference. See [Integration-test resources](#integration-test-resources). |
 | `execution.memoryMb` | `int` | Memory in MiB each run reserves from the machine execution budget (see [Worktree ownership and machine execution budget](#worktree-ownership-and-machine-execution-budget)). Must be positive; required when the budget sets `memoryMb`. A reservation, not a cap. |
@@ -548,7 +587,7 @@ start it again. `.piston/diagnostics.log` records what the daemon did (runner ch
 build skips, fallbacks), rotates at 10 MiB and is truncated on each start along with
 its single rotated backup. Agents should follow the
 [`piston-dashboard` skill](.github/skills/piston-dashboard/SKILL.md), which also
-covers opening the dashboard in a Copilot browser canvas.
+covers opening the native Piston canvas, with a browser fallback.
 
 ### AI agent tooling (roslynk)
 
@@ -556,6 +595,6 @@ The repo pins [roslynk](https://www.nuget.org/packages/roslynk) as a local .NET 
 
 ## Roadmap
 
-Planned work, including a native Copilot canvas for the dashboard and harness
+Planned work, including packaged harness
 integration assets, is in [docs/ROADMAP.md](docs/ROADMAP.md). See
 [ARCHITECTURE.md](ARCHITECTURE.md) for implementation details and limitations.

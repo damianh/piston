@@ -1,0 +1,25 @@
+:root { color-scheme: light dark; }
+body {
+    margin: 0;
+    background: var(--background-color-default, Canvas);
+    color: var(--text-color-default, CanvasText);
+    font: var(--text-body-medium, 14px)/var(--leading-body-medium, 20px) var(--font-sans, system-ui, sans-serif);
+}
+main { max-width: 60ch; padding: 32px 24px; margin-inline: auto; overflow-wrap: anywhere; }
+h1 { margin: 0 0 16px; font-size: 20px; line-height: 28px; font-weight: var(--font-weight-semibold, 600); }
+p { margin: 0 0 16px; }
+button {
+    padding: 8px 12px;
+    border: 1px solid var(--border-color-default, GrayText);
+    border-radius: 6px;
+    background: var(--background-color-default, ButtonFace);
+    color: var(--text-color-default, ButtonText);
+    font: inherit;
+    cursor: pointer;
+}
+button:hover { background: color-mix(in srgb, var(--text-color-default, CanvasText) 8%, var(--background-color-default, Canvas)); }
+button:focus-visible { outline: 2px solid var(--color-focus-outline, Highlight); outline-offset: 3px; }
+button:disabled { cursor: wait; opacity: .65; }
+iframe { position: fixed; inset: 0; width: 100%; height: 100%; border: 0; }
+[hidden] { display: none; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

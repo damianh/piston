@@ -87,4 +87,47 @@ public sealed class MachineOverviewCommandTests : IDisposable
         Assert.Equal("Idle", worktreeDto.State);
         Assert.Equal("http://localhost:5199", worktreeDto.DashboardUrl);
     }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MachineGetOverview_InvalidDashboardMetadataDoesNotHideOwnersOrUsage(bool stale)
+    {
+        var directory = new ExecutionCoordinationDirectory(Path.Combine(_root, "coordination"));
+        directory.EnsureReady();
+        var healthyRoot = Path.Combine(_root, "healthy");
+        var invalidRoot = Path.Combine(_root, "invalid");
+        _ = Directory.CreateDirectory(Path.Combine(healthyRoot, ".git"));
+        _ = Directory.CreateDirectory(Path.Combine(invalidRoot, ".git"));
+        using var healthy = WorktreeOwnership.Acquire(
+            directory, Path.Combine(healthyRoot, "App.slnx"), dashboardUrl: "http://localhost:5199");
+        using var invalid = WorktreeOwnership.Acquire(directory, Path.Combine(invalidRoot, "App.slnx"));
+        invalid.PublishDashboardUrl("http://evil.example:1234");
+        if (stale)
+        {
+            var infoPath = Path.Combine(directory.BaseDirectory, "v1", "owners", $"{invalid.Worktree.Key}.json");
+            var metadata = await File.ReadAllTextAsync(infoPath, _ct);
+            invalid.Dispose();
+            await File.WriteAllTextAsync(infoPath, metadata, _ct);
+        }
+        var dispatcher = new EngineCommandDispatcher(new StubEngine());
+        dispatcher.SetMachineOverviewProvider(ct => MachineExecutionOverviewReader.ReadAsync(directory, ct));
+
+        var response = await dispatcher.HandleCommandAsync(ProtocolMethods.MachineGetOverview, null, _ct);
+        var dto = response!.Deserialize<MachineOverviewDto>(JsonRpcSerializer.Options)!;
+
+        Assert.True(dto.OwnersAvailable);
+        Assert.True(dto.CoordinationAvailable);
+        Assert.Null(dto.Error);
+        Assert.Equal(2, dto.Worktrees.Count);
+        var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        Assert.Equal("http://localhost:5199",
+            Assert.Single(dto.Worktrees, w => pathComparer.Equals(w.WorktreePath, healthyRoot)).DashboardUrl);
+        var invalidDto = Assert.Single(dto.Worktrees, w => pathComparer.Equals(w.WorktreePath, invalidRoot));
+        Assert.Null(invalidDto.DashboardUrl);
+        Assert.Equal(stale ? "Stale" : "Live", invalidDto.Liveness);
+        Assert.NotNull(dto.Budget);
+        _ = Assert.NotNull(dto.Budget.RunningCount);
+        _ = Assert.NotNull(dto.Budget.QueuedCount);
+    }
 }

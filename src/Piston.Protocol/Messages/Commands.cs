@@ -28,7 +28,18 @@ public sealed record SetFilterCommandParams(string? Filter);
 /// <see cref="Dtos.TestResultDto.FullyQualifiedName"/>; null runs every test in them. All cases of a
 /// parameterised test run. A name that, less its argument list, contains a double quote is rejected.
 /// </param>
-public sealed record RunTestsCommand(IReadOnlyList<string> ProjectIds, IReadOnlyList<string>? Tests = null);
+public sealed record RunTestsCommand(IReadOnlyList<string> ProjectIds, IReadOnlyList<string>? Tests = null)
+{
+    public static RunTestsCommand? ForFailed(IReadOnlyList<TestSuiteDto> suites)
+    {
+        var failed = suites
+            .SelectMany(s => s.Tests.Where(t => t.Status == TestStatusDto.Failed).Select(t => (Project: s.ProjectId ?? s.Name, Test: t)))
+            .ToList();
+        return failed.Count == 0 ? null : new RunTestsCommand(
+            [.. failed.Select(f => f.Project).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
+            [.. failed.Select(f => f.Test.FullyQualifiedName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]);
+    }
+}
 
 /// <summary>Parameters for <c>tests/getRunLog</c>: the test project whose latest run log to fetch.</summary>
 /// <param name="ProjectId">The solution-relative project ID, as reported in <see cref="Dtos.TestSuiteDto.ProjectId"/>.</param>

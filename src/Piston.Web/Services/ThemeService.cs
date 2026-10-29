@@ -20,6 +20,7 @@ public sealed class ThemeService(IJSRuntime js)
     private bool _loaded;
 
     public string Preference { get; private set; } = System;
+    public bool IsCanvas { get; private set; }
 
     public event Action? Changed;
 
@@ -31,8 +32,9 @@ public sealed class ThemeService(IJSRuntime js)
         }
 
         _loaded = true;
+        IsCanvas = await js.InvokeAsync<bool>("pistonTheme.isCanvas");
         var saved = await js.InvokeAsync<string>("pistonTheme.get");
-        if (saved != Preference && Preferences.Contains(saved))
+        if (IsCanvas || (saved != Preference && Preferences.Contains(saved)))
         {
             Preference = saved;
             Changed?.Invoke();
@@ -41,7 +43,7 @@ public sealed class ThemeService(IJSRuntime js)
 
     public async Task SetAsync(string preference)
     {
-        if (!Preferences.Contains(preference) || preference == Preference)
+        if (IsCanvas || !Preferences.Contains(preference) || preference == Preference)
         {
             return;
         }

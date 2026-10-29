@@ -26,7 +26,22 @@ public sealed class WorktreeOwnership : IDisposable
     }
 
     public WorktreeIdentity Worktree { get; }
-    public ExecutionOwnerInfo Owner { get; }
+    public ExecutionOwnerInfo Owner { get; private set; }
+
+    public void PublishDashboardUrl(string? url)
+    {
+        ObjectDisposedException.ThrowIf(_disposed != 0, this);
+        var updated = Owner with { DashboardUrl = url };
+        try
+        {
+            WriteInfo(_infoPath, updated);
+            Owner = updated;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new ExecutionCoordinationException($"Cannot publish dashboard endpoint: {ex.Message}", ex);
+        }
+    }
 
     /// <summary>
     /// How long <see cref="Acquire"/> retries a held lock before reporting a conflict. Covers the brief
@@ -90,11 +105,8 @@ public sealed class WorktreeOwnership : IDisposable
     /// Lists ownership records in <paramref name="directory"/>, probing each lock without blocking.
     /// A probe briefly takes an unheld lock; <see cref="Acquire"/> retries briefly to ride over it.
     /// </summary>
-    public static IReadOnlyList<OwnershipRecord> ListOwners(ExecutionCoordinationDirectory directory) =>
-        ListOwners(directory, reportErrors: false);
-
-    internal static IReadOnlyList<OwnershipRecord> ListOwners(
-        ExecutionCoordinationDirectory directory, bool reportErrors)
+    public static IReadOnlyList<OwnershipRecord> ListOwners(
+        ExecutionCoordinationDirectory directory, bool reportErrors = false)
     {
         string[] locks;
         try
@@ -136,6 +148,19 @@ public sealed class WorktreeOwnership : IDisposable
             records.Add(new OwnershipRecord(key, liveness, info));
         }
         return records;
+    }
+
+    public static OwnershipRecord? FindLiveOwner(
+        ExecutionCoordinationDirectory directory, WorktreeIdentity worktree, bool reportErrors = false)
+    {
+        var lockPath = Path.Combine(directory.OwnersDirectory, worktree.Key + ".lock");
+        if (ProbeLock(lockPath, reportErrors) != OwnershipLiveness.Live)
+        {
+            return null;
+        }
+
+        var infoPath = Path.Combine(directory.OwnersDirectory, worktree.Key + ".json");
+        return new OwnershipRecord(worktree.Key, OwnershipLiveness.Live, TryReadInfo(infoPath, reportErrors));
     }
 
     private static OwnershipLiveness ProbeLock(string lockPath, bool reportErrors)
@@ -182,23 +207,32 @@ public sealed class WorktreeOwnership : IDisposable
         _lock.Dispose();
     }
 
-    internal static ExecutionOwnerInfo? TryReadInfo(string infoPath)
+    internal static ExecutionOwnerInfo? TryReadInfo(string infoPath, bool reportErrors = false)
     {
         try
         {
             using var document = JsonDocument.Parse(File.ReadAllBytes(infoPath));
             var root = document.RootElement;
+            string? safeDashboardUrl = null;
+            if (root.TryGetProperty("dashboardUrl", out var dashboardUrl)
+                && dashboardUrl.ValueKind == JsonValueKind.String)
+            {
+                if (TryValidateDashboardUrl(dashboardUrl.GetString(), out var validatedUrl))
+                {
+                    safeDashboardUrl = validatedUrl;
+                }
+                else if (reportErrors)
+                {
+                    throw new ExecutionCoordinationException("The owner advertised an invalid dashboard endpoint.");
+                }
+            }
             return new ExecutionOwnerInfo(
                 root.GetProperty("processId").GetInt32(),
                 root.GetProperty("solutionPath").GetString() ?? "",
                 root.GetProperty("worktreePath").GetString() ?? "",
                 root.GetProperty("acquiredAt").GetDateTimeOffset(),
                 root.TryGetProperty("host", out var host) && host.ValueKind == JsonValueKind.String ? host.GetString() : null,
-                root.TryGetProperty("dashboardUrl", out var dashboardUrl)
-                && dashboardUrl.ValueKind == JsonValueKind.String
-                && TryValidateDashboardUrl(dashboardUrl.GetString(), out var safeDashboardUrl)
-                    ? safeDashboardUrl
-                    : null);
+                safeDashboardUrl);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException
                                        or KeyNotFoundException or InvalidOperationException or FormatException)

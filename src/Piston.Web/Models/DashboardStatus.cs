@@ -91,20 +91,7 @@ public static class DashboardStatus
     }
 
     /// <summary>A run of every failed test, or <see langword="null"/> when none failed.</summary>
-    public static RunTestsCommand? RunFailed(IReadOnlyList<TestSuiteDto> suites)
-    {
-        var failed = suites
-            .SelectMany(s => s.Tests.Where(t => t.Status == TestStatusDto.Failed).Select(t => (Project: s.ProjectId ?? s.Name, Test: t)))
-            .ToList();
-        if (failed.Count == 0)
-        {
-            return null;
-        }
-
-        return new RunTestsCommand(
-            [.. failed.Select(f => f.Project).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
-            [.. failed.Select(f => f.Test.FullyQualifiedName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)]);
-    }
+    public static RunTestsCommand? RunFailed(IReadOnlyList<TestSuiteDto> suites) => RunTestsCommand.ForFailed(suites);
 
     /// <summary>The number of distinct failed tests <see cref="RunFailed"/> runs.</summary>
     public static int FailedCount(IReadOnlyList<TestSuiteDto> suites) =>

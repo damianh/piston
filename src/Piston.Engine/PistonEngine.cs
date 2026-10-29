@@ -208,6 +208,11 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     /// <summary>Worktree ownership held by this engine; null before <see cref="StartAsync"/>.</summary>
     internal WorktreeOwnership? Ownership => _ownership;
 
+    public ExecutionOwnerInfo? OwnerInfo => _ownership?.Owner;
+
+    /// <summary>Advertises a bound dashboard while this engine holds worktree ownership.</summary>
+    public void PublishDashboardUrl(string? url) => _ownership?.PublishDashboardUrl(url);
+
     /// <summary>The machine-wide coordination directory used by this engine.</summary>
     public ExecutionCoordinationDirectory ExecutionCoordinationDirectory => _executionCoordinator.Directory;
 

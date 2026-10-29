@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Piston</title>
+    <link rel="stylesheet" href="shell.css">
+    <script src="shell.js" defer></script>
+</head>
+<body>
+    <main id="connection">
+        <h1>Piston dashboard</h1>
+        <p id="status" role="status" aria-live="polite">Inspecting the current worktree...</p>
+        <p>Opening this panel does not start Piston or run tests.</p>
+        <button id="retry" type="button">Retry connection</button>
+    </main>
+    <iframe id="dashboard" title="Current worktree's Piston dashboard" hidden></iframe>
+    <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+</body>
+</html>

@@ -33,7 +33,9 @@ more than one, add `.piston.json` to the worktree root:
 ```
 
 `solution` is resolved relative to the file. `piston mcp` ignores `mcpPort`,
-`webPort` and `stdio`: it opens no ports and no dashboard.
+`webPort` and `stdio`. By default it opens no web ports. Opt in to the dashboard
+with `"dashboard": true` or `piston mcp --dashboard`; it binds an ephemeral
+`127.0.0.1` web port without changing the MCP stdio transport.
 
 ## 3. Connect the agent
 
@@ -97,7 +99,13 @@ was deleted (`[worktree missing]`).
 
 ### HTTP daemon (humans and the dashboard)
 
-For a dashboard, or to share one engine between a human and an agent, run the HTTP
+For the dashboard attached to an existing stdio session, use its `--dashboard`
+opt-in rather than starting a competing owner. This repository's native
+`piston-dashboard` canvas discovers the active worktree and shows the existing
+web UI, including a disconnected state. `piston dashboard --json` inspects the
+owner without starting an engine or a run. See the [canvas setup](../README.md#copilot-canvas).
+
+To share one engine through HTTP between a human and an agent, run the HTTP
 daemon instead. MCP is always on, at port 5200 by default:
 
 ```sh
@@ -113,7 +121,7 @@ Daemon startup problems fail fast with `error: ...` and exit code 1. For example
 - another Piston process already owns the worktree;
 - a port is already in use.
 
-Piston never edits the agent's configuration and never picks another port. The
+Piston never edits the agent's configuration and never changes the daemon's requested ports. The
 daemon shuts down by itself if its worktree is deleted, which frees its ports and
 ownership. `piston stop` exits 0 only after the daemon has exited, and prints `No
 daemon running` (exit 0) when nothing owns the worktree. While a `piston mcp`

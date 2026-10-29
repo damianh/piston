@@ -15,6 +15,32 @@ public sealed class RunTestsCommandTests
     private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
 
     [Fact]
+    public async Task RunFailed_WithNoFailures_ReportsTheReasonWithoutRunning()
+    {
+        var engine = new StubEngine();
+        var ex = await Assert.ThrowsAsync<JsonRpcException>(() => new EngineCommandDispatcher(engine)
+            .HandleCommandAsync(ProtocolMethods.EngineRunFailed, null, _ct));
+        Assert.Equal("No failed tests to run.", ex.Message);
+        Assert.Null(engine.LastSelection);
+        Assert.False(engine.ForceRunCalled);
+    }
+
+    [Fact]
+    public async Task RunFailed_UsesTheSameSelectionAsTheDashboard()
+    {
+        var engine = new StubEngine();
+        engine.State.TestSuites =
+        [
+            new TestSuite("A.Tests",
+                [new TestResult("A.C.Fail", "Fail", TestStatus.Failed, TimeSpan.Zero, null, null, null, null)],
+                DateTimeOffset.UtcNow, TimeSpan.Zero) { ProjectId = "A.Tests/A.Tests.csproj" },
+        ];
+        _ = await new EngineCommandDispatcher(engine).HandleCommandAsync(ProtocolMethods.EngineRunFailed, null, _ct);
+        Assert.Equal(["A.Tests/A.Tests.csproj"], engine.LastSelection!.ProjectIds);
+        Assert.Equal(["A.C.Fail"], engine.LastSelection.Tests!);
+    }
+
+    [Fact]
     public async Task StartsTheRun_AndRepliesWithoutAwaitingIt()
     {
         var engine = new StubEngine();
