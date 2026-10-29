@@ -78,13 +78,22 @@ ranges per verdict, unknown ranges per reason, partial-branch lines and up to 20
 failing tests. File detail is bounded to half the message size limit: files
 past it give only their totals (`detailOmitted`), then are counted in
 `filesOmitted`, with a warning. The overall totals always count every changed line.
+`coverage/getChangeDiff` (`base`, `baseRef`, `context` of 1 to 20 lines, default 3)
+returns the same changes as unified-diff hunks for the dashboard's Changes view:
+every changed file, including deleted, binary and non-code files, each line with
+its old and new numbers, and each added code line with its verdict, unknown
+reason, hit count and branches. The hunks and the verdicts come from one
+`git diff`, so they agree. It is bounded the same way: past half the message
+size limit a file keeps only its totals (`hunksOmitted`), then files are
+counted in `filesOmitted`. `coverage/getCoveringTests` gives each test's latest
+`outcome` (`passed`, `failed`, `skipped` or `noResult`).
 `source/get` returns a source file's lines for the dashboard's stack-trace view;
 it refuses paths that resolve (following symlinks) outside the solution
 directory, files over 1 MB and binary files.
 Clients receive state, test progress, build errors, and activity notifications.
 `machine/getOverview` reads machine-wide worktree owners, budget, live leases and
 queue tickets for the dashboard. The dashboard presents current test/build state,
-run history and comparison, aggregate coverage with covering tests, activity,
+run history and comparison, aggregate coverage with covering tests, a coverage-aware diff of the changes, activity,
 MCP call history and a Machine tab for the workspace overview.
 
 See [README.md](README.md) for executable commands and the actual configuration

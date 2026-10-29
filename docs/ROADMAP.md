@@ -92,7 +92,9 @@ ARCHITECTURE describe the implementation in detail.
   freshness and failure classification, tracing each failing test to the run
   and edit that broke it.
 - Coverage tab: a grouped file list, highlighted source with hit counts,
-  covering tests per file and line, and backfill progress.
+  covering tests per file and line, and backfill progress; a Changes mode shows
+  the git diff with each changed line's verdict and drills down to its covering
+  tests, also from the Copilot canvas.
 - MCP call history, user settings, keyboard shortcuts and theme-aware styling.
 - Machine tab: owned worktrees and dashboard links, budget use, running work and
   the FIFO queue; `piston status --all` prints the same machine overview.
@@ -131,8 +133,6 @@ ARCHITECTURE describe the implementation in detail.
 ## Later
 
 ### Coverage
-- A coverage-aware diff view in the dashboard and canvas, with drill-down to the
-  covering tests.
 - Branch-level attribution in the impact map.
 
 ### Execution

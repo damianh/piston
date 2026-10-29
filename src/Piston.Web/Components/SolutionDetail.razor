@@ -1,5 +1,6 @@
 @inject EngineClientService Client
 @inject ViewState View
+@inject NavigationManager Nav
 @implements IDisposable
 
 <div class="flex flex-col flex-1 overflow-hidden">
@@ -16,7 +17,7 @@
         }
         else if (_activeTab == DashboardTab.Coverage)
         {
-            <CoverageTab OnOpenTest="OpenTest" />
+            <CoverageTab OnOpenTest="OpenTest" KeyboardEvent="@KeyboardEvent" />
         }
         else if (_activeTab == DashboardTab.Runs)
         {
@@ -43,6 +44,18 @@
     protected override void OnInitialized()
     {
         Client.ActivityEventReceived += OnActivityEvent;
+
+        // A link such as ?tab=coverage&mode=changes&base=branch opens a tab, e.g. from the Copilot canvas.
+        var link = DashboardLink.Parse(new Uri(Nav.Uri).Query);
+        View.ApplyLink(link);
+        if (link.Tab is { } tab && Enum.TryParse<DashboardTab>(tab, ignoreCase: true, out var parsed) && Enum.IsDefined(parsed))
+        {
+            _activeTab = parsed;
+        }
+        else if (link.Mode == CoverageMode.Changes)
+        {
+            _activeTab = DashboardTab.Coverage;
+        }
     }
 
     private void SetTab(DashboardTab tab) => _activeTab = tab;

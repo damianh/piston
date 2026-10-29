@@ -5,6 +5,7 @@ const status = document.getElementById("status");
 const retry = document.getElementById("retry");
 const announcement = document.getElementById("announcement");
 let identity;
+let shownNavigation;
 let loading = false;
 let stopped = false;
 let timer;
@@ -54,13 +55,16 @@ async function update() {
         const state = await response.json();
         if (state.state !== "connected") {
             disconnected(state.message);
-        } else if (identity !== state.identity) {
+        } else if (identity !== state.identity || shownNavigation !== state.navigation?.seq) {
+            const reconnected = identity !== state.identity;
             identity = state.identity;
+            shownNavigation = state.navigation?.seq;
+            const view = state.navigation?.query ? `&${state.navigation.query}` : "";
             status.textContent = "Loading the current worktree's dashboard...";
-            frame.src = `/?pistonCanvas=1&owner=${encodeURIComponent(identity)}`;
+            frame.src = `/?pistonCanvas=1&owner=${encodeURIComponent(identity)}${view}`;
             frame.hidden = false;
             connection.hidden = true;
-            announcement.textContent = "Connected to Piston.";
+            if (reconnected) announcement.textContent = "Connected to Piston.";
         }
     } catch (error) {
         disconnected(`Could not inspect Piston: ${error.message} Retry the connection; if the extension restarted, reopen this canvas.`);

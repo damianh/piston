@@ -31,6 +31,8 @@
     <Compile Include="..\..\src\Piston.Web\Models\TestRetries.cs" Link="Web\TestRetries.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\TestTreeBuilder.cs" Link="Web\TestTreeBuilder.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\ViewState.cs" Link="Web\ViewState.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\ChangeDiffModel.cs" Link="Web\ChangeDiffModel.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\DashboardLink.cs" Link="Web\DashboardLink.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\NodeDetail.cs" Link="Web\NodeDetail.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\ProjectLabels.cs" Link="Web\ProjectLabels.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\ProjectPaths.cs" Link="Web\ProjectPaths.cs" />

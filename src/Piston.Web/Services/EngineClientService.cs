@@ -472,6 +472,22 @@ public sealed class EngineClientService : IAsyncDisposable
     }
 
     /// <summary>
+    /// Requests the diff of the changes against <paramref name="base"/>, with a verdict on each added source line.
+    /// Returns the diff, or why it could not be read (for example, an unknown branch).
+    /// </summary>
+    public async Task<(ChangeDiffDto? Diff, string? Error)> GetChangeDiffAsync(string? @base, string? baseRef)
+    {
+        var response = await SendForResponseAsync(
+            ProtocolMethods.CoverageGetChangeDiff, new GetChangeDiffCommand(@base, baseRef)).ConfigureAwait(false);
+        return response switch
+        {
+            null => (null, "Piston did not respond. Check that the daemon is running."),
+            { Error: { } error } => (null, error.Message),
+            _ => (response.Result?.Deserialize<ChangeDiffDto>(JsonRpcSerializer.Options), null),
+        };
+    }
+
+    /// <summary>
     /// Merges the daemon's retained activity history into the local log so events that
     /// happened before this page connected (e.g. agent MCP calls) appear in the timeline.
     /// </summary>

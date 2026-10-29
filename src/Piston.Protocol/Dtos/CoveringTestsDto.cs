@@ -15,12 +15,17 @@ public sealed record LineRangeDto(int Start, int End);
 /// </param>
 /// <param name="ExecutedLines">Executed method ranges, numbered as in the content that was measured.</param>
 /// <param name="IsCurrent">The ranges line up with the file as it is now.</param>
+/// <param name="Outcome">
+/// The test's latest outcome, as changed-line verdicts judge it: <c>passed</c>, <c>failed</c>, <c>skipped</c>
+/// (skipped everywhere it ran) or <c>noResult</c>. Null from daemons that predate it.
+/// </param>
 public sealed record CoveringTestDto(
     string TestFqn,
     string ProjectPath,
     string Granularity,
     IReadOnlyList<LineRangeDto> ExecutedLines,
-    bool IsCurrent);
+    bool IsCurrent,
+    string? Outcome = null);
 
 /// <summary>The tests recorded as executing a source file.</summary>
 /// <param name="FilePath">Absolute path of the file.</param>

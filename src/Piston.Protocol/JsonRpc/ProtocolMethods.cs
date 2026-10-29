@@ -40,6 +40,9 @@ public static class ProtocolMethods
     /// <summary>Request a verdict for each changed line, comparing the working tree with a git base.</summary>
     public const string CoverageGetChangedLines = "coverage/getChangedLines";
 
+    /// <summary>Request the unified diff of the changes against a git base, with a verdict on each added source line.</summary>
+    public const string CoverageGetChangeDiff = "coverage/getChangeDiff";
+
     /// <summary>Export the coverage report as LCOV or Cobertura text.</summary>
     public const string CoverageExport = "coverage/export";
 

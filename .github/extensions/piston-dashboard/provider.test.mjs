@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 import { createHash } from "node:crypto";
-import { createDashboardCanvas, discover, loopbackEndpoint, probe, rpc } from "./provider.mjs";
+import { changesQuery, createDashboardCanvas, discover, loopbackEndpoint, openQuery, probe, rpc } from "./provider.mjs";
 
 test("discovery preserves validated CLI error responses from exit code 1", async () => {
     const state = { state: "error", message: "The owner advertised an invalid dashboard endpoint." };
@@ -227,4 +227,49 @@ test("RPC uses Piston's string request IDs and propagates protocol results/error
     assert.equal(received.id, "canvas-action");
     error = true;
     await assert.rejects(rpc(endpoint, "engine/runFailed", { timeout: 1000 }), /No failed tests/);
+});
+
+test("changes queries validate base and ref and never accept option-like refs", () => {
+    assert.equal(changesQuery(), "tab=coverage&mode=changes&base=working");
+    assert.equal(changesQuery({ baseRef: "main" }), "tab=coverage&mode=changes&base=branch&ref=main");
+    assert.equal(changesQuery({ base: "working", baseRef: "main" }), "tab=coverage&mode=changes&base=working");
+    assert.equal(changesQuery({ base: "range", baseRef: "HEAD~3..HEAD" }),
+        "tab=coverage&mode=changes&base=range&ref=HEAD%7E3..HEAD");
+    for (const input of [{ base: "staged" }, { base: "range" }, { baseRef: "--output=x" }, { baseRef: "a b" },
+        { baseRef: "x".repeat(201) }, { baseRef: 3 }]) {
+        assert.throws(() => changesQuery(input), /base|range|baseRef/);
+    }
+    assert.equal(openQuery(undefined), undefined);
+    assert.equal(openQuery({}), undefined);
+    assert.equal(openQuery({ view: "dashboard" }), "");
+    assert.equal(openQuery({ view: "changes" }), "tab=coverage&mode=changes&base=working");
+    assert.equal(openQuery({ base: "branch" }), "tab=coverage&mode=changes&base=branch");
+    assert.throws(() => openQuery({ view: "dashboard", base: "branch" }), /only to the changes view/);
+    assert.throws(() => openQuery({ view: "tests" }), /view must be/);
+    assert.throws(() => openQuery([]), /object/);
+});
+
+test("open input and show_changes navigate the panel without running tests", async t => {
+    let runs = 0;
+    const provider = createDashboardCanvas({
+        inspect: async () => connected("http://127.0.0.1:1234/"),
+        check: async state => new URL(state.url),
+        invoke: async () => { runs++; },
+    });
+    t.after(() => provider.dispose());
+    const state = async url => (await fetch(new URL("state", url))).json();
+    const { url } = await provider.open("panel", "/repo/current");
+    assert.deepEqual((await state(url)).navigation, { seq: 0, query: "" });
+    await provider.open("panel", "/repo/current", { view: "changes", base: "branch", baseRef: "main" });
+    assert.deepEqual((await state(url)).navigation,
+        { seq: 1, query: "tab=coverage&mode=changes&base=branch&ref=main" });
+    await provider.open("panel", "/repo/current", {});
+    assert.equal((await state(url)).navigation.seq, 1);
+    const shown = await provider.action("panel", "show_changes", "/repo/current", { base: "working" });
+    assert.equal(shown.shown, "?tab=coverage&mode=changes&base=working");
+    assert.deepEqual((await state(url)).navigation, { seq: 2, query: "tab=coverage&mode=changes&base=working" });
+    await assert.rejects(provider.action("panel", "show_changes", "/repo/current", { baseRef: "-x" }), /baseRef/);
+    await assert.rejects(provider.open("panel", "/repo/current", { view: "changes", base: "nope" }), /base must be/);
+    assert.equal((await state(url)).navigation.seq, 2);
+    assert.equal(runs, 0);
 });
