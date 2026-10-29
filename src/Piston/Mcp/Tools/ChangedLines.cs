@@ -235,16 +235,16 @@ internal static partial class ChangedLines
         }
 
         var diverged = new HashSet<string>(StringComparer.Ordinal);
-        if (newSide is not null && files.Count > 0)
+        if (newSide is not null && (files.Count > 0 || hunks.Count > 0))
         {
             // A range's line numbers are those of its last revision; files that differ in the working tree have
-            // other content at those numbers.
+            // other content at those numbers. Removal-only files have no added lines but still show context lines.
             var differing = await RunGitAsync(
                 top, ["-c", "core.quotepath=off", "diff", "--name-only", "-z", "--no-renames", newSide, "--"], ct).ConfigureAwait(false);
             foreach (var path in differing.Split('\0', StringSplitOptions.RemoveEmptyEntries))
             {
                 var full = Path.GetFullPath(Path.Combine(top, path));
-                if (files.ContainsKey(full))
+                if (files.ContainsKey(full) || hunks.ContainsKey(full))
                 {
                     _ = diverged.Add(full);
                 }
@@ -504,8 +504,8 @@ internal sealed record ChangedLinesResult(string Basis, IReadOnlyDictionary<stri
     public IReadOnlyList<string> Warnings { get; init; } = [];
 
     /// <summary>
-    /// For a range: changed files whose content at the range's last revision differs from the working tree, so their
-    /// line numbers do not describe the files on disk.
+    /// For a range: changed files (in <see cref="Files"/> or <see cref="Diff"/>) whose content at the range's last
+    /// revision differs from the working tree, so their line numbers do not describe the files on disk.
     /// </summary>
     public IReadOnlySet<string> DivergedFiles { get; init; } = new HashSet<string>();
 

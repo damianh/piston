@@ -251,6 +251,25 @@ public sealed class UnifiedDiffTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task GetAsync_WithContext_MarksARemovalOnlyRangeFileThatDiffersInTheWorkingTreeAsDiverged()
+    {
+        Git("init", "-q", "-b", "main");
+        var code = Path.Combine(_root, "R.cs");
+        await File.WriteAllLinesAsync(code, ["a", "b", "c", "d"], _ct);
+        Git("add", ".");
+        Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+        await File.WriteAllLinesAsync(code, ["a", "c", "d"], _ct);
+        Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-am", "remove");
+        await File.WriteAllLinesAsync(code, ["new", "a", "c", "d"], _ct);
+
+        var changes = await ChangedLines.GetAsync(_root, ChangeBase.Range, "HEAD~1..HEAD", contextLines: 3, _ct);
+
+        var path = changes.Diff.Keys.Single(k => k.EndsWith("R.cs", StringComparison.Ordinal));
+        Assert.Empty(changes.Files);
+        Assert.Contains(path, changes.DivergedFiles);
+    }
+
     private void Git(params string[] args)
     {
         var psi = new System.Diagnostics.ProcessStartInfo("git") { WorkingDirectory = _root, RedirectStandardError = true };
