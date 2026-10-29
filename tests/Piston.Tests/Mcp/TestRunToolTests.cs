@@ -312,7 +312,7 @@ public sealed class TestRunToolTests
     [Fact]
     public void SelectionExplanationAndReasonsRoundTripThroughTheProtocolAndMcp()
     {
-        var reason = new TestSelectionReason("/w/src/A.cs", "4", "3-5", "class", "/w/T/T.csproj", [new(4, 1, 2)]);
+        var reason = new TestSelectionReason("/w/src/A.cs", "4", "3-5", "class", "/w/T/T.csproj", Branches: [new(4, 1, 2)]);
         var baseRun = Run("selective", 4, scope: TestRunScope.Selective);
         var run = baseRun with
         {

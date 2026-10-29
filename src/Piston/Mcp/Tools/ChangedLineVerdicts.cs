@@ -126,6 +126,8 @@ internal sealed record ChangedLineTotals(
 internal sealed record ChangedFileVerdicts(
     string FilePath, bool IsMeasured, bool IsStale, bool IsPartial, IReadOnlyList<ChangedLineResult> Lines)
 {
+    public IReadOnlyList<CoveringTest> BranchTests { get; init; } = [];
+
     public ChangedLineTotals Totals => ChangedLineTotals.Of(Lines);
 
     /// <summary>The distinct failing tests credited with any of the file's lines, in ordinal order.</summary>
@@ -420,7 +422,13 @@ internal static class ChangedLineVerdicts
             }
         }
 
-        return new ChangedFileVerdicts(path, IsMeasured: true, coverage.File.IsStale, coverage.File.IsPartial, results);
+        return new ChangedFileVerdicts(path, IsMeasured: true, coverage.File.IsStale, coverage.File.IsPartial, results)
+        {
+            BranchTests = results.Any(line => line.Coverage is { BranchesTotal: > 0 })
+                ? [.. (executors?.Select(e => e.Test) ?? getCoveringTests(path) ?? [])
+                    .Where(test => test.IsCurrent && test.Branches is { Count: > 0 })]
+                : [],
+        };
     }
 
     /// <summary>

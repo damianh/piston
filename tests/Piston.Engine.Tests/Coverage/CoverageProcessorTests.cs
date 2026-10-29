@@ -190,7 +190,9 @@ public sealed class CoverageProcessorTests : IDisposable
         var reason = Assert.Single(store.SelectTests([
             new ChangedFile(source, File.ReadAllText(source).Replace("if (x)", "if (y)", StringComparison.Ordinal)),
         ]).Tests["A.Test"]);
-        Assert.Equal([new BranchLine(5, 1, 2)], reason.Branches);
+        Assert.Equal([new BranchLine(5, 1, 2), new BranchLine(6, 0, 2)], reason.Branches);
+        Assert.Equal([new BranchLine(5, 1, 2), new BranchLine(6, 0, 2)],
+            Assert.Single(store.GetTestsExecuting(source)).Branches);
         Assert.True(Assert.Single(store.GetUnits("/repo/A.Tests.csproj", ImpactGranularity.Test)).HasBranches);
     }
 

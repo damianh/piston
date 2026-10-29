@@ -85,6 +85,18 @@ internal readonly record struct BranchLine(int Line, int Covered, int Total)
                 : branch));
     }
 
+    /// <summary>Retains branch counts only for unambiguously mapped lines in unchanged members.</summary>
+    public static IReadOnlyList<BranchLine> RemapMembers(
+        IEnumerable<BranchLine> branches,
+        SourceMembers oldMembers,
+        SourceMembers currentMembers)
+    {
+        var mapping = oldMembers.MapCoverageLinesTo(currentMembers);
+        return Merge(branches
+            .Where(branch => mapping.ContainsKey(branch.Line))
+            .Select(branch => branch with { Line = mapping[branch.Line] }));
+    }
+
     /// <summary>Maps branch lines through comment or whitespace edits while preserving identical C# tokens.</summary>
     public static IReadOnlyList<BranchLine> RemapEquivalent(
         IEnumerable<BranchLine> branches,
@@ -101,18 +113,21 @@ internal readonly record struct BranchLine(int Line, int Covered, int Total)
 
         var oldText = SourceText.From(oldContent);
         var newText = SourceText.From(newContent);
+        var mappings = oldTokens.Select((token, index) => (
+            OldLine: oldText.Lines.GetLineFromPosition(token.Start).LineNumber + 1,
+            NewLine: newText.Lines.GetLineFromPosition(newTokens[index].Start).LineNumber + 1)).ToArray();
+        var targets = mappings.GroupBy(pair => pair.OldLine)
+            .ToDictionary(group => group.Key, group => group.Select(pair => pair.NewLine).Distinct().ToArray());
+        var sources = mappings.GroupBy(pair => pair.NewLine)
+            .ToDictionary(group => group.Key, group => group.Select(pair => pair.OldLine).Distinct().Count());
         return Merge(branches.Select(branch =>
         {
-            if (branch.Line > oldText.Lines.Count)
+            if (!targets.TryGetValue(branch.Line, out var lines) || lines.Length != 1 || sources[lines[0]] != 1)
             {
                 return branch with { Line = 0 };
             }
 
-            var oldLine = oldText.Lines[branch.Line - 1];
-            var tokenIndex = Array.FindIndex(oldTokens, token => token.Start >= oldLine.Start && token.Start <= oldLine.End);
-            return tokenIndex < 0
-                ? branch with { Line = 0 }
-                : branch with { Line = newText.Lines.GetLineFromPosition(newTokens[tokenIndex].Start).LineNumber + 1 };
+            return branch with { Line = lines[0] };
         }));
     }
 }
