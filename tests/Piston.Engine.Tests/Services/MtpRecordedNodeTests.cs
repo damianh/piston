@@ -29,6 +29,13 @@ public sealed class MtpRecordedNodeTests
         Assert.Equal(discoveredIdentities, Identities(ActionNodes(captures.GetProperty("warm-run"))));
         Assert.Equal(discoveredIdentities, Identities(ActionNodes(captures.GetProperty("warm-rerun"))));
 
+        var sameNameNodes = discoveredNodes
+            .Where(node => Property(node, "location.method") == "SameName")
+            .ToArray();
+        Assert.Equal(2, sameNameNodes.Length);
+        Assert.Equal(hasDisplayNameCollisions,
+            sameNameNodes.Select(node => Property(node, "display-name")).Distinct(StringComparer.Ordinal).Count() == 1);
+
         var discovered = new List<TestResult>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         Assert.True(MtpTestProcessRunner.AddDiscovered(
@@ -41,7 +48,7 @@ public sealed class MtpRecordedNodeTests
         var sameNames = discovered.Where(test => test.DisplayName == "SameName").ToArray();
         Assert.Equal(2, sameNames.Length);
         Assert.Equal(2, sameNames.Select(test => test.Method).Distinct(StringComparer.Ordinal).Count());
-        Assert.Equal(hasDisplayNameCollisions, sameNames.Select(test => test.ResultKey).Distinct(StringComparer.Ordinal).Count() == 1);
+        Assert.Equal(2, sameNames.Select(test => test.ResultKey).Distinct(StringComparer.Ordinal).Count());
 
         var mappedRun = runNodes.Select(node => MtpTestProcessRunner.ToTestResult(node, "probe", TestStatus.NotRun)).ToArray();
         Assert.Contains(mappedRun, test => test.ErrorMessage is not null && test.StackTrace is not null);
