@@ -168,6 +168,155 @@ public sealed class TestRunToolTests
     }
 
     [Fact]
+    public void GetTestResultReturnsOutputAndAttachmentsForTheNewestMatchingRun()
+    {
+        var old = Run("run-old", 1) with
+        {
+            Suites =
+            [
+                new TestSuite("T", [new TestResult("Ns.A.First", "First", TestStatus.Passed, TimeSpan.Zero,
+                    "old stdout", null, null, null)], DateTimeOffset.UnixEpoch, TimeSpan.Zero) { ProjectId = "T/T.csproj" },
+            ],
+        };
+        var latest = Run("run-latest", 2) with
+        {
+            Suites =
+            [
+                new TestSuite("T", [new TestResult("Ns.A.First", "First", TestStatus.Failed, TimeSpan.FromMilliseconds(3),
+                    "stdout", "error", "stack", null)
+                {
+                    ErrorOutput = "stderr",
+                    Attachments =
+                    [
+                        new TestAttachment(".piston/artifacts/run-latest/0003-report.txt", "report.txt", "test report")
+                        {
+                            RunId = "run-latest",
+                            Index = 3,
+                            OriginalPath = "/tmp/report.txt",
+                            SizeBytes = 12,
+                            Retained = true,
+                        },
+                    ],
+                }], DateTimeOffset.UnixEpoch, TimeSpan.Zero) { ProjectId = "T/T.csproj" },
+            ],
+        };
+        var engine = new StubEngine();
+        engine.State.RecentRuns = [latest, old];
+        var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
+
+        using var doc = JsonDocument.Parse(tools.GetTestResult("Ns.A.First"));
+        var root = doc.RootElement;
+        var match = Assert.Single(root.GetProperty("matches").EnumerateArray());
+
+        Assert.Equal("piston.test-result/v1", root.GetProperty("schema").GetString());
+        Assert.Equal("run-latest", root.GetProperty("run").GetProperty("runId").GetString());
+        Assert.Equal("stdout", match.GetProperty("standardOutput").GetString());
+        Assert.Equal("stderr", match.GetProperty("standardError").GetString());
+        Assert.Equal("error", match.GetProperty("errorMessage").GetString());
+        var attachment = Assert.Single(match.GetProperty("attachments").EnumerateArray());
+        Assert.Equal(3, attachment.GetProperty("index").GetInt32());
+        Assert.Equal("report.txt", attachment.GetProperty("fileName").GetString());
+        Assert.True(attachment.GetProperty("retained").GetBoolean());
+    }
+
+    [Fact]
+    public void GetTestResultSupportsActiveRunProjectFilteringAndMethodMatching()
+    {
+        var run = Run("active-run", 3, status: TestRunStatus.Running) with
+        {
+            Suites =
+            [
+                new TestSuite("First", [new TestResult("Ns.Cases.Add(1,2)", "Add(1,2)", TestStatus.Passed,
+                    TimeSpan.Zero, null, null, null, null) { Method = "Ns.Cases.Add" }],
+                    DateTimeOffset.UnixEpoch, TimeSpan.Zero) { ProjectId = "First/Tests.csproj" },
+                new TestSuite("Second", [new TestResult("Ns.Cases.Add(2,3)", "Add(2,3)", TestStatus.Passed,
+                    TimeSpan.Zero, null, null, null, null) { Method = "Ns.Cases.Add" }],
+                    DateTimeOffset.UnixEpoch, TimeSpan.Zero) { ProjectId = "Second/Tests.csproj" },
+            ],
+        };
+        var engine = new StubEngine();
+        engine.State.CurrentRun = run;
+
+        using var doc = JsonDocument.Parse(new TestTools(engine, NullMcpCallRecorder.Instance)
+            .GetTestResult("Ns.Cases.Add", "active", "Second/Tests.csproj"));
+
+        var match = Assert.Single(doc.RootElement.GetProperty("matches").EnumerateArray());
+        Assert.Equal("Second/Tests.csproj", match.GetProperty("projectId").GetString());
+        Assert.Equal("Ns.Cases.Add(2,3)", match.GetProperty("fullyQualifiedName").GetString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GetTestResultKeepsFailureClassificationsBoundToTheProject(bool useSuiteNameFallback)
+    {
+        var firstProject = useSuiteNameFallback ? "One" : "One/Tests.csproj";
+        var secondProject = useSuiteNameFallback ? "Two" : "Two/Tests.csproj";
+        var test = new TestResult("Shared.Test", "Test", TestStatus.Failed,
+            TimeSpan.Zero, null, "boom", null, null);
+        var run = Run("classifications", 1) with
+        {
+            Suites =
+            [
+                new TestSuite(useSuiteNameFallback ? "One" : "Tests", [test],
+                    DateTimeOffset.UnixEpoch, TimeSpan.Zero) { ProjectId = useSuiteNameFallback ? null : firstProject },
+                new TestSuite(useSuiteNameFallback ? "Two" : "Tests", [test],
+                    DateTimeOffset.UnixEpoch, TimeSpan.Zero) { ProjectId = useSuiteNameFallback ? null : secondProject },
+            ],
+            FailureClassifications =
+            [
+                new(useSuiteNameFallback ? "One" : "Tests", "Shared.Test", FailureKind.PreExisting, "old failure")
+                {
+                    ProjectId = firstProject,
+                },
+                new(useSuiteNameFallback ? "Two" : "Tests", "Shared.Test", FailureKind.New, "new failure")
+                {
+                    ProjectId = secondProject,
+                },
+            ],
+        };
+        var engine = new StubEngine();
+        engine.State.RecentRuns = [run];
+
+        using var doc = JsonDocument.Parse(new TestTools(engine, NullMcpCallRecorder.Instance)
+            .GetTestResult("Shared.Test", run.RunId, secondProject));
+
+        var match = Assert.Single(doc.RootElement.GetProperty("matches").EnumerateArray());
+        Assert.Equal("New", match.GetProperty("failureClassification").GetString());
+    }
+
+    [Fact]
+    public void TestResultDtoCarriesSeparateStreamsAndRetainedArtifactUrl()
+    {
+        var result = new TestResult("Ns.Tests.Captures", "Captures", TestStatus.Passed, TimeSpan.Zero,
+            "stdout", null, null, null)
+        {
+            ErrorOutput = "stderr",
+            Attachments =
+            [
+                new TestAttachment(".piston/artifacts/0123456789abcdef0123456789abcdef/0002-report.txt",
+                    "report.txt", "test report")
+                {
+                    RunId = "0123456789abcdef0123456789abcdef",
+                    Index = 2,
+                    OriginalPath = "/tmp/report.txt",
+                    SizeBytes = 12,
+                    Retained = true,
+                },
+            ],
+        };
+
+        var dto = result.ToDto();
+        var attachment = Assert.Single(dto.Attachments);
+
+        Assert.Equal("stdout", dto.Output);
+        Assert.Equal("stderr", dto.ErrorOutput);
+        Assert.Equal("report.txt", attachment.FileName);
+        Assert.Equal("/artifacts/0123456789abcdef0123456789abcdef/2", attachment.Url);
+        Assert.True(attachment.Retained);
+    }
+
+    [Fact]
     public void GetTestRunPreservesSolutionFallbackSuiteIdentities()
     {
         var run = Run("fallback", 1);

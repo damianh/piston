@@ -4,6 +4,7 @@
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json.Nodes;
 using ModelContextProtocol;
 using ModelContextProtocol.Server;
 using Piston.Engine;
@@ -20,6 +21,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
     public const string VerifyTool = "verify";
     public const string GetTestResultsTool = "get_test_results";
     public const string GetTestRunTool = "get_test_run";
+    public const string GetTestResultTool = "get_test_result";
     public const string GetTestHistoryTool = "get_test_history";
     public const string SetTestFilterTool = "set_test_filter";
     public const string ClearResultsTool = "clear_results";
@@ -223,6 +225,113 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         return result;
     }
 
+    [McpServerTool(Name = GetTestResultTool), Description(
+        "Get stdout, stderr, error details and attachments for one test without reading the whole run. " +
+        "Pass a fully-qualified test name (the target framework suffix is optional); parameterized cases " +
+        "match their method and may return multiple results. Empty runId selects the newest retained run " +
+        "containing the test; use \"active\" or a specific run ID to select another run.")]
+    public string GetTestResult(
+        [Description("Fully-qualified test name, or method name to return its parameterized cases.")] string test,
+        [Description("Run ID, \"active\", or empty for the newest retained run containing the test.")] string runId = "",
+        [Description("Optional test project name or solution-relative project ID.")] string? project = null)
+    {
+        availability?.ThrowIfUnavailable();
+        var sw = Stopwatch.StartNew();
+        var query = test?.Trim() ?? "";
+        var projectFilter = string.IsNullOrWhiteSpace(project) ? null : project.Trim();
+        if (query.Length == 0)
+        {
+            throw new McpException("A test name is required.");
+        }
+
+        var key = runId?.Trim() ?? "";
+        var state = engine.State;
+        IReadOnlyList<TestRunRecord> candidates = key switch
+        {
+            "active" => state.CurrentRun is { } active ? [active] : [],
+            "" or "latest" => state.RecentRuns
+                .Concat(state.LastRun is { } last && state.RecentRuns.All(run => run.RunId != last.RunId) ? [last] : [])
+                .ToList(),
+            _ => state.FindRun(key) is { } selected ? [selected] : [],
+        };
+
+        var selectedRun = candidates.FirstOrDefault(run =>
+            run.Suites.Any(suite => ProjectMatches(suite, projectFilter)
+                && suite.Tests.Any(result => MatchesTest(result, query))));
+        if (selectedRun is null)
+        {
+            sw.Stop();
+            var message = key.Length == 0 || key == "latest"
+                ? $"No retained result was found for '{query}'."
+                : $"Test '{query}' was not found in run '{key}'.";
+            recorder.Record(GetTestResultTool, query, message, sw.Elapsed.TotalMilliseconds, false);
+            throw new McpException(message);
+        }
+
+        const int MaxMatches = 20;
+        var allMatches = selectedRun.Suites
+            .Where(suite => ProjectMatches(suite, projectFilter))
+            .SelectMany(suite => suite.Tests
+                .Where(result => MatchesTest(result, query))
+                .Select(result => (Suite: suite, Test: result)));
+        var totalMatches = allMatches.Count();
+        var matches = allMatches.Take(MaxMatches).ToList();
+        var omitted = Math.Max(0, totalMatches - MaxMatches);
+        var matchArray = new JsonArray(matches.Select(item =>
+        {
+            var suite = item.Suite;
+            var result = item.Test;
+            var classification = selectedRun.FailureClassifications.FirstOrDefault(entry =>
+                entry.ProjectId == suite.Key
+                && entry.Test == result.ResultKey)?.Kind.ToString();
+            var attachments = new JsonArray(result.Attachments.Select(attachment => (JsonNode)new JsonObject
+            {
+                ["index"] = attachment.Index,
+                ["displayName"] = attachment.DisplayName,
+                ["description"] = attachment.Description,
+                ["fileName"] = Path.GetFileName(attachment.OriginalPath ?? attachment.Path ?? attachment.DisplayName ?? "attachment"),
+                ["sizeBytes"] = attachment.SizeBytes,
+                ["retained"] = attachment.Retained,
+                ["path"] = attachment.Retained ? attachment.Path : null,
+                ["notRetainedReason"] = attachment.NotRetainedReason,
+            }).ToArray());
+            return (JsonNode)new JsonObject
+            {
+                ["project"] = suite.Name,
+                ["projectId"] = suite.ProjectId,
+                ["fullyQualifiedName"] = result.FullyQualifiedName,
+                ["targetFramework"] = result.TargetFramework,
+                ["displayName"] = result.DisplayName,
+                ["status"] = result.Status.ToString(),
+                ["durationMs"] = Math.Round(result.Duration.TotalMilliseconds, 3),
+                ["errorMessage"] = result.ErrorMessage,
+                ["stackTrace"] = result.StackTrace,
+                ["standardOutput"] = result.Output,
+                ["standardError"] = result.ErrorOutput,
+                ["failureClassification"] = classification,
+                ["attachments"] = attachments,
+            };
+        }).ToArray());
+
+        var response = new JsonObject
+        {
+            ["schema"] = "piston.test-result/v1",
+            ["run"] = new JsonObject
+            {
+                ["runId"] = selectedRun.RunId,
+                ["status"] = selectedRun.Status.ToString(),
+                ["freshness"] = selectedRun.Freshness.ToString(),
+                ["isCurrentFullResult"] = selectedRun.IsCurrentFullResult,
+            },
+            ["matches"] = matchArray,
+            ["omittedMatches"] = omitted,
+        };
+        var resultText = response.ToJsonString();
+        sw.Stop();
+        recorder.Record(GetTestResultTool, query, $"{selectedRun.RunId}: {matches.Count} match(es)", sw.Elapsed.TotalMilliseconds, true);
+        return resultText;
+    }
+
     [McpServerTool(Name = GetTestHistoryTool), Description(
         "Get the recorded results of a test across runs in this worktree (kept outside the checkout, up to the 20 most recent " +
         "per test, retries included), newest first, with run ID, time, status, duration and source fingerprint. Use it to decide " +
@@ -358,6 +467,25 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
                     $"Skipped: {tests.Count(t => t.Status == TestStatus.Skipped)})";
         }
         return text;
+    }
+
+    private static bool ProjectMatches(TestSuite suite, string? project) =>
+        project is null
+        || string.Equals(suite.Name, project, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(suite.ProjectId, project, StringComparison.OrdinalIgnoreCase);
+
+    private static bool MatchesTest(TestResult result, string query)
+    {
+        if (string.Equals(result.ResultKey, query, StringComparison.Ordinal)
+            || string.Equals(result.FullyQualifiedName, query, StringComparison.Ordinal)
+            || string.Equals(result.Method, query, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var openParen = result.FullyQualifiedName.IndexOf('(', StringComparison.Ordinal);
+        return openParen > 0
+            && string.Equals(result.FullyQualifiedName[..openParen], query, StringComparison.Ordinal);
     }
 
     /// <summary>Shorter resource waits are not worth mentioning.</summary>

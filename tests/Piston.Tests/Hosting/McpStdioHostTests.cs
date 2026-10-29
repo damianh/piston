@@ -114,9 +114,12 @@ public sealed class McpStdioHostTests : IDisposable
         }
     }
 
-    private static async Task<(bool IsError, string Text)> CallAsync(McpClient client, string tool)
+    private static async Task<(bool IsError, string Text)> CallAsync(
+        McpClient client,
+        string tool,
+        Dictionary<string, object?>? arguments = null)
     {
-        var result = await client.CallToolAsync(tool, new Dictionary<string, object?>());
+        var result = await client.CallToolAsync(tool, arguments ?? new Dictionary<string, object?>());
         return (result.IsError == true, string.Join("\n", result.Content.OfType<TextContentBlock>().Select(c => c.Text)));
     }
 
@@ -189,9 +192,12 @@ public sealed class McpStdioHostTests : IDisposable
         }, _ct);
         var client = await ConnectAsync();
 
-        foreach (var tool in new[] { "verify", "run_tests", "get_test_run", "get_test_results", "get_test_history", "clear_results" })
+        foreach (var tool in new[] { "verify", "run_tests", "get_test_run", "get_test_result", "get_test_results", "get_test_history", "clear_results" })
         {
-            var (isError, text) = await CallAsync(client, tool);
+            var args = tool == "get_test_result"
+                ? new Dictionary<string, object?> { ["test"] = "Missing.Test" }
+                : null;
+            var (isError, text) = await CallAsync(client, tool, args);
             Assert.True(isError, tool);
             Assert.Contains($"Piston owned by another process (PID {Environment.ProcessId}, daemon", text);
             Assert.Contains("Use `dotnet test` instead.", text);

@@ -291,9 +291,21 @@ internal static partial class MtpTestProcessRunner
             message += $"{Environment.NewLine}Expected: {expected}{Environment.NewLine}Actual:   {actual}";
         }
 
-        var output = string.Join(Environment.NewLine,
-            new[] { StringProperty(node, "standardOutput"), StringProperty(node, "standardError") }
-                .Where(s => !string.IsNullOrEmpty(s)));
+        var output = StringProperty(node, "standardOutput");
+        var errorOutput = StringProperty(node, "standardError");
+        var attachments = new List<TestAttachment>();
+        for (var i = 0; StringProperty(node, $"attachments.{i}.uri") is { } path; i++)
+        {
+            if (Uri.TryCreate(path, UriKind.Absolute, out var uri) && uri.IsFile)
+            {
+                path = uri.LocalPath;
+            }
+
+            attachments.Add(new TestAttachment(
+                path,
+                StringProperty(node, $"attachments.{i}.display-name"),
+                StringProperty(node, $"attachments.{i}.description")));
+        }
 
         return new TestResult(
             name,
@@ -302,14 +314,14 @@ internal static partial class MtpTestProcessRunner
                 : displayName,
             status,
             duration,
-            output.Length == 0
-                ? null
-                : RetentionLimits.TruncateHeadTail(output, RetentionLimits.MaxTestTextLength),
+            RetentionLimits.TruncateHeadTail(string.IsNullOrEmpty(output) ? null : output, RetentionLimits.MaxTestTextLength),
             RetentionLimits.TruncateHead(message, RetentionLimits.MaxTestTextLength),
             RetentionLimits.TruncateHead(StringProperty(node, "error.stacktrace"), RetentionLimits.MaxTestTextLength),
             appPath)
         {
             Method = MethodOf(node),
+            ErrorOutput = RetentionLimits.TruncateHeadTail(string.IsNullOrEmpty(errorOutput) ? null : errorOutput, RetentionLimits.MaxTestTextLength),
+            Attachments = attachments,
         };
     }
 

@@ -34,9 +34,11 @@ public sealed class TrxResultParser : ITestResultParser
                 x => ((string?)x.Method?.Attribute("className") ?? string.Empty, (string?)x.Method?.Attribute("name")));
 
         // Parse UnitTestResult elements
+        var deploymentRoot = (string?)doc.Root?.Element(ns + "TestSettings")
+            ?.Element(ns + "Deployment")?.Attribute("runDeploymentRoot");
         var results = doc
             .Descendants(ns + "UnitTestResult")
-            .Select(r => ParseTestResult(r, methods, ns))
+            .Select(r => ParseTestResult(r, methods, ns, trxFilePath, deploymentRoot))
             .ToList();
 
         // Prefer the TestRun/@name attribute (e.g. "MyProject.Tests@machine 2024-01-01 …")
@@ -64,7 +66,9 @@ public sealed class TrxResultParser : ITestResultParser
     private static TestResult ParseTestResult(
         XElement r,
         Dictionary<string, (string ClassName, string? MethodName)> methods,
-        XNamespace ns)
+        XNamespace ns,
+        string trxFilePath,
+        string? deploymentRoot)
     {
         var testId = (string?)r.Attribute("testId") ?? string.Empty;
         var testName = (string?)r.Attribute("testName") ?? string.Empty;
@@ -87,11 +91,29 @@ public sealed class TrxResultParser : ITestResultParser
 
         var output = r.Element(ns + "Output");
         var capturedOutput = string.Join(Environment.NewLine,
-            new[] { "StdOut", "StdErr", "DebugTrace" }
+            new[] { "StdOut", "DebugTrace" }
                 .Select(name => ((string?)output?.Element(ns + name))?.Trim())
                 .Where(text => !string.IsNullOrEmpty(text)));
+        var capturedErrorOutput = ((string?)output?.Element(ns + "StdErr"))?.Trim();
         var errorMessage = (string?)output?.Element(ns + "ErrorInfo")?.Element(ns + "Message");
         var stackTrace = (string?)output?.Element(ns + "ErrorInfo")?.Element(ns + "StackTrace");
+        var resultsDirectory = Path.GetDirectoryName(Path.GetFullPath(trxFilePath))!;
+        var relativeResultsDirectory = (string?)r.Attribute("relativeResultsDirectory");
+        if (!string.IsNullOrWhiteSpace(deploymentRoot) && !string.IsNullOrWhiteSpace(relativeResultsDirectory))
+        {
+            resultsDirectory = Path.GetFullPath(
+                Path.Combine(deploymentRoot, "In", relativeResultsDirectory), resultsDirectory);
+        }
+
+        var attachments = r.Element(ns + "ResultFiles")?.Elements(ns + "ResultFile")
+            .Select(file => (string?)file.Attribute("path"))
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => new TestAttachment(
+                Path.IsPathFullyQualified(path!)
+                    ? Path.GetFullPath(path!)
+                    : Path.GetFullPath(path!, resultsDirectory),
+                Path.GetFileName(path!)))
+            .ToArray() ?? [];
 
         return new TestResult(
             FullyQualifiedName: fullyQualifiedName,
@@ -112,6 +134,10 @@ public sealed class TrxResultParser : ITestResultParser
         {
             // The logger records the test case's fully qualified name less its class as the method name.
             Method = string.IsNullOrEmpty(methodName) ? null : TestIdentity.Qualify(className, methodName),
+            ErrorOutput = string.IsNullOrWhiteSpace(capturedErrorOutput)
+                ? null
+                : RetentionLimits.TruncateHeadTail(capturedErrorOutput, RetentionLimits.MaxTestTextLength),
+            Attachments = attachments,
         };
     }
 

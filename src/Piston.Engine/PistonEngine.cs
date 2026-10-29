@@ -27,6 +27,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     private readonly IActivityEventSink _activitySink;
     private readonly string _solutionDirectory;
     private readonly string _solutionPath;
+    private readonly TestArtifactStore _artifactStore;
     private readonly MachineExecutionCoordinator _executionCoordinator;
     private readonly string? _ownerHost;
     private readonly string? _ownerDashboardUrl;
@@ -67,6 +68,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         _solutionDirectory = solutionDir;
         _solutionPath = Path.GetFullPath(options.SolutionPath);
         _diagnosticLog = DiagnosticLog.Initialize(solutionDir);
+        _artifactStore = new TestArtifactStore(solutionDir, message => _diagnosticLog.Write("Artifacts", message));
         _diagnosticLog.Write("Engine", $"SolutionPath: {options.SolutionPath}");
         _diagnosticLog.Write("Engine", $"TestExecutionMode: {options.TestExecutionMode}");
         _diagnosticLog.Write("Engine", $"CoverageEnabled: {options.CoverageEnabled}");
@@ -154,6 +156,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             options.CoverageEnabled,
             activitySink,
             _executionCoordinator);
+        _orchestrator.ArtifactStore = _artifactStore;
 
         var sdkVersions = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<string?>>(StringComparer.Ordinal);
         _orchestrator.BackfillGranularity = options.ImpactBackfill switch
@@ -340,6 +343,16 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     public IReadOnlyList<StoredRunSummary>? GetStoredRuns() => _history?.GetRuns();
 
     public StoredRun? GetStoredRun(string runId) => _history?.GetRun(runId);
+
+    public string? GetTestArtifact(string runId, int index)
+    {
+        var attachment = (_state.CurrentRun?.Tests ?? [])
+            .Concat(_state.RecentRuns.SelectMany(run => run.Tests))
+            .Concat(_state.TestSuites.SelectMany(suite => suite.Tests))
+            .SelectMany(test => test.Attachments)
+            .FirstOrDefault(candidate => candidate.RunId == runId && candidate.Index == index);
+        return attachment is null ? null : _artifactStore.Resolve(attachment);
+    }
 
     public Task ForceRunAsync() => _orchestrator.ForceRunAsync();
 

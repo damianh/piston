@@ -107,6 +107,7 @@ internal static class TestProcessRunner
     {
         var resultsDir = Path.Combine(Path.GetTempPath(), $"piston-{Guid.NewGuid():N}");
         _ = Directory.CreateDirectory(resultsDir);
+        var keepResultsDirectory = false;
 
         try
         {
@@ -288,6 +289,8 @@ internal static class TestProcessRunner
             }
 
             var totalTests = suites.SelectMany(s => s.Tests).Count();
+            var hasAttachments = suites.SelectMany(s => s.Tests).Any(t => t.Attachments.Count > 0);
+            keepResultsDirectory = hasAttachments;
             log.Write("VSTestRunner",
                 $"Result: {totalTests} test(s) in {suites.Count} suite(s)");
 
@@ -300,13 +303,17 @@ internal static class TestProcessRunner
             }
 
             log.Complete();
-            return new ProjectTestResult(projectPath, log.AttachTo(suites), runnerError, coverageReportPaths, Crashed: false) { Log = log };
+            return new ProjectTestResult(projectPath, log.AttachTo(suites), runnerError, coverageReportPaths, Crashed: false)
+            {
+                Log = log,
+                TemporaryDirectories = hasAttachments ? [resultsDir] : [],
+            };
         }
         finally
         {
             // Only clean up immediately when we are not returning coverage paths to the caller.
             // When coverage is enabled and paths were found, the caller cleans up the results dir.
-            if (!collectCoverage)
+            if (!collectCoverage && !keepResultsDirectory)
             {
                 try { Directory.Delete(resultsDir, recursive: true); } catch { /* ignore */ }
             }

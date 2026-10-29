@@ -190,6 +190,7 @@ public sealed class SavedResultsStoreTests : IDisposable
                         Result with
                         {
                             Output = new string('o', 5000),
+                            ErrorOutput = new string('r', 5000),
                             ErrorMessage = new string('e', 9000),
                             StackTrace = new string('s', 9000),
                             Attempts = [new(TestStatus.Failed, TimeSpan.FromMilliseconds(10),
@@ -215,6 +216,7 @@ public sealed class SavedResultsStoreTests : IDisposable
         var restored = reader.TryLoad()!;
         var result = Assert.Single(Assert.Single(restored.TestSuites).Tests);
         Assert.EndsWith("[truncated]", result.Output);
+        Assert.EndsWith("[truncated]", result.ErrorOutput);
         Assert.EndsWith("[truncated]", result.ErrorMessage);
         Assert.EndsWith("[truncated]", result.StackTrace);
         var attempt = Assert.Single(result.Attempts);

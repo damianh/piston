@@ -35,6 +35,8 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener? listener =
 
     public int ClientCount => _pipeSessions.Count + _wsSessions.Count;
 
+    internal string? GetTestArtifact(string runId, int index) => engine.GetTestArtifact(runId, index);
+
     public void SetMcpCallTracker(McpCallTracker tracker) =>
         _mcpCallTracker = tracker;
 

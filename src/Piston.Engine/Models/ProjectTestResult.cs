@@ -18,4 +18,7 @@ public sealed record ProjectTestResult(
 
     /// <summary>The exclusive test resources the run held, when it needed any.</summary>
     public TestProjectResources? Resources { get; init; }
+
+    /// <summary>Temporary directories that must remain until Piston has copied test attachments.</summary>
+    public IReadOnlyList<string> TemporaryDirectories { get; init; } = [];
 }

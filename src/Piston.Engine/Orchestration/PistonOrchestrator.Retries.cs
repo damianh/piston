@@ -25,6 +25,7 @@ public sealed partial class PistonOrchestrator
     /// <param name="targets">The run's test targets; null when the run targeted the solution.</param>
     /// <exception cref="OperationCanceledException">The run was cancelled while retrying.</exception>
     private async Task<(IReadOnlyList<TestSuite> Suites, string? SkippedReason)> RetryFailedTestsAsync(
+        string runId,
         string solutionPath,
         IReadOnlyList<string>? targets,
         IReadOnlyList<TestSuite> suites,
@@ -134,12 +135,17 @@ public sealed partial class PistonOrchestrator
                             completed.Add(p);
                         }
                     }, ct).ConfigureAwait(false);
+                    if (ct.IsCancellationRequested)
+                    {
+                        CleanUpRunnerTemporaryDirectories(result.Projects, []);
+                    }
                     ct.ThrowIfCancellationRequested();
 
                     // A retry that crashed, timed out or failed to run proves nothing, even about the tests it passed.
                     if (result.RunnerError is not null
                         || completed.Concat(result.Projects).Any(p => p.Crashed || p.TimedOut is not null || p.RunnerError is not null))
                     {
+                        CleanUpRunnerTemporaryDirectories(result.Projects, []);
                         unretriable.UnionWith(failed.Select(f => f.Test));
                         AddReason(reasons, "A retry crashed, timed out or did not run, so its results were not used and its tests were not retried again.");
                         continue;
@@ -150,6 +156,7 @@ public sealed partial class PistonOrchestrator
                     var retriedKeys = failed.Select(f => (f.Suite, f.Test.ResultKey)).ToHashSet();
                     if (result.Suites.Any(s => s.Tests.Any(t => t.Status == TestStatus.Failed && !retriedKeys.Contains((s.Name, t.ResultKey)))))
                     {
+                        CleanUpRunnerTemporaryDirectories(result.Projects, []);
                         unretriable.UnionWith(failed.Select(f => f.Test));
                         AddReason(reasons, "A retry failed tests that were not being retried, so its results were not used and its tests were not retried again.");
                         continue;
@@ -157,6 +164,12 @@ public sealed partial class PistonOrchestrator
 
                     // Only a result that alone matches the failed test's suite, name and framework counts: a retry
                     // reporting the test twice, or without the framework of a multi-targeted test, is ambiguous.
+                    result = result with
+                    {
+                        Suites = ArtifactStore?.Retain(runId, result.Suites) ?? result.Suites,
+                    };
+                    CleanUpRunnerTemporaryDirectories(result.Projects, []);
+
                     var byKey = result.Suites
                         .SelectMany(s => s.Tests.Select(t => (Suite: s.Name, Test: t)))
                         .GroupBy(r => (r.Suite, r.Test.ResultKey))

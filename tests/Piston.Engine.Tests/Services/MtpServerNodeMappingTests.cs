@@ -71,7 +71,11 @@ public sealed class MtpServerNodeMappingTests
             "assert.expected": "1",
             "assert.actual": "2",
             "error.stacktrace": "at Mt.Deep.A.Th()",
-            "standardOutput": "hello"
+            "standardOutput": "hello",
+            "standardError": "stderr",
+            "attachments.0.uri": "file:///tmp/report.txt",
+            "attachments.0.display-name": "report.txt",
+            "attachments.0.description": "test report"
             """);
 
         var result = MtpTestProcessRunner.ToTestResult(node, "/bin/Mt.dll", TestStatus.Failed);
@@ -86,6 +90,11 @@ public sealed class MtpServerNodeMappingTests
         Assert.Contains("Actual:   2", result.ErrorMessage, StringComparison.Ordinal);
         Assert.Equal("at Mt.Deep.A.Th()", result.StackTrace);
         Assert.Equal("hello", result.Output);
+        Assert.Equal("stderr", result.ErrorOutput);
+        var attachment = Assert.Single(result.Attachments);
+        Assert.EndsWith("report.txt", attachment.Path, StringComparison.Ordinal);
+        Assert.Equal("report.txt", attachment.DisplayName);
+        Assert.Equal("test report", attachment.Description);
         Assert.Equal("/bin/Mt.dll", result.Source);
     }
 

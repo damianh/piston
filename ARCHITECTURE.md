@@ -278,8 +278,14 @@ warm hosts are enabled for MTP), each under `Piston.ProcessHost`:
 
 | Backend | Current mechanism |
 |---|---|
-| VSTest | `dotnet test` on the project/solution target, `--no-build`, normal verbosity, TRX results. The `PistonLive` data collector streams per-test start/end events; stdout is parsed for progress as well. |
-| Microsoft.Testing.Platform (MTP) | Runs the built test app in MTP server mode (JSON-RPC), which reports each test as it starts and finishes. Test identities combine the test class and display name. Falls back to `dotnet test --project <csproj> --no-build` with stdout parsing when the app is not found or server mode fails. Coverage runs stay in server mode: the coverage extension's test host controller connects first as a passive node (`multipleConnectionProvider`) and the test host it relaunches connects next and serves the run. The fallback needs the MTP runner configured in the solution's `global.json`. |
+| VSTest | `dotnet test` on the project/solution target, `--no-build`, normal verbosity, TRX results. The `PistonLive` data collector streams per-test start/end events; stdout is parsed for progress as well. TRX standard output and standard error are retained separately, and per-test result files are copied before the temporary results directory is removed. |
+| Microsoft.Testing.Platform (MTP) | Runs the built test app in MTP server mode (JSON-RPC), which reports each test as it starts and finishes. Test identities combine the test class and display name. Standard output, standard error and attachment metadata are mapped from test nodes. Falls back to `dotnet test --project <csproj> --no-build` with stdout parsing when the app is not found or server mode fails; the parser separates output streams and associates the detailed-output attachment summary with matching tests. Coverage runs stay in server mode: the coverage extension's test host controller connects first as a passive node (`multipleConnectionProvider`) and the test host it relaunches connects next and serves the run. The fallback needs the MTP runner configured in the solution's `global.json`. |
+
+Test attachments are copied into `.piston/artifacts/<runId>/` with limits of 16 MiB
+per file, 32 retained files per test and 256 MiB per run. The store resolves
+downloads only through retained result metadata and checks the path beneath the
+solution's artifact directory; unreferenced run directories and files are pruned
+after restoration and run completion.
 
 See the [MTP server-mode investigation](docs/mtp-server-mode.md) for identity and coverage findings.
 

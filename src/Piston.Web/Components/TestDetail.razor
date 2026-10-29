@@ -176,25 +176,76 @@ else
             </div>
         }
 
-        <!-- Output -->
-        <div>
-            <div class="flex items-center justify-between mb-1">
-                <div class="text-gray-400 font-semibold">Output</div>
-                @if (!string.IsNullOrEmpty(Test.Output))
-                {
+        @if (!string.IsNullOrEmpty(Test.Output))
+        {
+            <div>
+                <div class="flex items-center justify-between mb-1">
+                    <div class="text-gray-400 font-semibold">Standard output</div>
                     <button type="button" class="text-gray-500 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none"
                             @onclick="() => CopyAsync(Test.Output)">Copy</button>
-                }
-            </div>
-            @if (string.IsNullOrEmpty(Test.Output))
-            {
-                <div class="text-gray-600">No output captured for this result.</div>
-            }
-            else
-            {
+                </div>
                 <pre class="bg-gray-900 border border-gray-800 rounded p-3 text-gray-400 text-xs max-h-64 overflow-auto whitespace-pre-wrap break-all">@Test.Output</pre>
-            }
-        </div>
+            </div>
+        }
+        @if (!string.IsNullOrEmpty(Test.ErrorOutput))
+        {
+            <div>
+                <div class="flex items-center justify-between mb-1">
+                    <div class="text-gray-400 font-semibold">Error output</div>
+                    <button type="button" class="text-gray-500 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none"
+                            @onclick="() => CopyAsync(Test.ErrorOutput)">Copy</button>
+                </div>
+                <pre class="bg-gray-900 border border-gray-800 rounded p-3 text-gray-400 text-xs max-h-64 overflow-auto whitespace-pre-wrap break-all">@Test.ErrorOutput</pre>
+            </div>
+        }
+        @if (Test.Attachments.Count > 0)
+        {
+            <div>
+                <div class="text-gray-400 font-semibold mb-1">Attachments</div>
+                <ul class="flex flex-col gap-2">
+                    @foreach (var attachment in Test.Attachments)
+                    {
+                        <li class="bg-gray-900 border border-gray-800 rounded p-2">
+                            @if (attachment.Retained && attachment.Url is { } url)
+                            {
+                                <a class="text-blue-300 underline hover:text-blue-200 break-all" href="@url" target="_blank" rel="noopener noreferrer">
+                                    @(attachment.DisplayName ?? attachment.FileName ?? "Attachment")
+                                </a>
+                                @if (attachment.SizeBytes is { } size)
+                                {
+                                    <span class="text-gray-500 ml-2">@FormatBytes(size)</span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(attachment.Description))
+                                {
+                                    <div class="text-gray-500 mt-1">@attachment.Description</div>
+                                }
+                                @if (IsPreviewableImage(attachment.FileName))
+                                {
+                                    <a class="block mt-2" href="@url" target="_blank" rel="noopener noreferrer">
+                                        <img class="max-h-48 max-w-full object-contain" src="@url"
+                                             alt="@(attachment.DisplayName ?? attachment.FileName ?? "Test attachment")" loading="lazy" />
+                                    </a>
+                                }
+                            }
+                            else
+                            {
+                                <div class="text-gray-300 break-all">@(attachment.DisplayName ?? attachment.FileName ?? "Attachment")</div>
+                                <div class="text-amber-400 mt-1">Not retained: @(attachment.NotRetainedReason ?? "file is unavailable")</div>
+                            }
+                        </li>
+                    }
+                </ul>
+            </div>
+        }
+        @if (string.IsNullOrEmpty(Test.Output) && string.IsNullOrEmpty(Test.ErrorOutput) && Test.Attachments.Count == 0)
+        {
+            <div>
+            <div class="flex items-center justify-between mb-1">
+                    <div class="text-gray-400 font-semibold">Output</div>
+            </div>
+                <div class="text-gray-600">No output captured for this result.</div>
+            </div>
+        }
     </div>
 }
 
@@ -285,4 +336,12 @@ else
     }
 
     private static string FormatDuration(double ms) => TestNode.FormatDuration(ms);
+
+    private static string FormatBytes(long bytes) =>
+        bytes >= 1024 * 1024 ? $"{bytes / (1024d * 1024):F1} MiB"
+        : bytes >= 1024 ? $"{bytes / 1024d:F1} KiB"
+        : $"{bytes} B";
+
+    private static bool IsPreviewableImage(string? fileName) =>
+        fileName is not null && Path.GetExtension(fileName).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp";
 }

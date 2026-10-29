@@ -40,12 +40,13 @@ public sealed class TestToolsTests
 
         _ = tools.GetTestResults();
         _ = Assert.ThrowsAny<Exception>(() => tools.GetTestRun("missing"));
+        _ = Assert.ThrowsAny<Exception>(() => tools.GetTestResult("missing"));
         _ = tools.SetTestFilter("");
         _ = tools.ClearResults();
         _ = await tools.RunTestsAsync(ct: CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2), _ct);
 
         Assert.Equal(
-            ["get_test_results", "get_test_run", "set_test_filter", "clear_results", "run_tests"],
+            ["get_test_results", "get_test_run", "get_test_result", "set_test_filter", "clear_results", "run_tests"],
             recorder.ToolNames);
         Assert.All(recorder.ToolNames, name => Assert.Contains(name, advertised));
     }
