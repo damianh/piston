@@ -150,6 +150,7 @@ public sealed class TestRunToolTests
         Assert.Equal("Completed", root.GetProperty("status").GetString());
         Assert.Equal("Full", root.GetProperty("scope").GetString());
         Assert.True(root.GetProperty("isCurrentFullResult").GetBoolean());
+        Assert.False(root.GetProperty("restored").GetBoolean());
         Assert.Equal(Source.Value, root.GetProperty("sourceAfter").GetProperty("value").GetString());
         Assert.Equal("10.0.401", root.GetProperty("context").GetProperty("sdkVersion").GetString());
         Assert.Equal("/daemon", root.GetProperty("context").GetProperty("workingDirectory").GetString());
@@ -364,15 +365,21 @@ public sealed class TestRunToolTests
     public void GetTestResultsIdentifiesLatestRunAndSuiteRuns()
     {
         var engine = new StubEngine();
-        var run = Run("run-9", 9);
+        var run = Run("run-9", 9) with
+        {
+            Restored = true,
+            Freshness = ResultFreshness.Unknown,
+            FreshnessReason = "Restored from the previous Piston session; not re-verified since restart.",
+        };
         engine.State.LastRun = run;
-        engine.State.TestSuites = run.Suites;
+        engine.State.TestSuites = run.Suites.Select(s => s with { Restored = true }).ToList();
         var tools = new TestTools(engine, NullMcpCallRecorder.Instance);
 
         var result = tools.GetTestResults();
 
         Assert.Contains("Latest Run: run-9 | Status: Completed", result);
-        Assert.Contains("Suite: T [T/T.csproj] (run run-9)", result);
+        Assert.Contains("Restored: Restored from the previous Piston session; not re-verified since restart.", result);
+        Assert.Contains("Suite: T [T/T.csproj] (run run-9) (restored; not re-verified)", result);
         Assert.Contains("may combine several runs", result);
     }
     private static TestRunAdmission QueuedAdmission() => new(

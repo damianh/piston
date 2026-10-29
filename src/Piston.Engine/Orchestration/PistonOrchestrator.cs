@@ -3,6 +3,7 @@
 
 using Piston.Engine.Coverage;
 using Piston.Engine.Execution;
+using Piston.Engine.History;
 using Piston.Engine.Impact;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
@@ -22,6 +23,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     private readonly bool _coverageEnabled;
     private readonly IActivityEventSink _activitySink;
     private readonly IExecutionAdmission _admission;
+    internal SavedResultsStore? ResultsStore { get; set; }
 
     private CancellationTokenSource? _cts;
     private volatile bool _stopping;
@@ -127,6 +129,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     {
         _solutionPath = solutionPath;
         _state.SolutionPath = solutionPath;
+
+        RestoreSavedResults();
 
         var solutionDir = Path.GetDirectoryName(solutionPath)
             ?? throw new ArgumentException("Cannot resolve solution directory.", nameof(solutionPath));
@@ -559,7 +563,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         }
     }
 
-    internal void ClearResults(string solutionDirectory)
+    internal void ClearResults(string solutionDirectory, string? solutionPath = null)
     {
         lock (_lifecycleLock)
         {
@@ -570,9 +574,28 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         _state.BeginResultsUpdate();
         try
         {
+            lock (_runRecordsLock)
+            {
+                if (ResultsStore is { } savedResultsStore)
+                {
+                    savedResultsStore.Clear();
+                }
+                else if ((solutionPath ?? _solutionPath) is { } resultsSolutionPath)
+                {
+                    SavedResultsStore.Delete(resultsSolutionPath, message => DiagnosticLog.Instance?.Write("Results", message));
+                }
+
+                _state.TestSuites = [];
+                _state.LastRunTime = null;
+                if (_state.LastRun?.Restored == true)
+                {
+                    _state.LastRun = null;
+                }
+
+                _state.RecentRuns = _state.RecentRuns.Where(run => !run.Restored).ToList();
+            }
+
             SqliteCoverageStore.Clear(solutionDirectory);
-            _state.TestSuites = [];
-            _state.LastRunTime = null;
             _state.HasCoverageData = false;
             _state.CoverageImpactDetail = null;
         }
@@ -582,6 +605,46 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             _ = _coverageLock.Release();
         }
         _state.NotifyChanged();
+    }
+
+    private void RestoreSavedResults()
+    {
+        try
+        {
+            if (ResultsStore?.TryLoad() is not { } saved)
+            {
+                return;
+            }
+
+            var freshnessReason =
+                $"Restored from the previous Piston session (saved {saved.SavedAt:O}); not re-verified since restart.";
+            var suites = saved.TestSuites.Select(s => s with { Restored = true }).ToList();
+            var lastRun = saved.LastRun is null
+                ? null
+                : saved.LastRun with
+                {
+                    Sequence = 0,
+                    Restored = true,
+                    Freshness = ResultFreshness.Unknown,
+                    FreshnessReason = freshnessReason,
+                    Suites = saved.LastRun.Suites.Select(s => s with { Restored = true }).ToList(),
+                };
+
+            _state.TestSuites = suites;
+            _state.LastRunTime = saved.LastRunTime;
+            _state.LastBuildDuration = saved.LastBuildDuration;
+            _state.LastTestDuration = saved.LastTestDuration;
+            _state.LastBuild = saved.LastBuild;
+            _state.LastRun = lastRun;
+            _state.RecentRuns = lastRun is null ? [] : [lastRun];
+            _state.VerifiedSinceChangeCount = 0;
+            _state.NotifyChanged();
+        }
+        catch (Exception ex) when (ex is not OutOfMemoryException)
+        {
+            DiagnosticLog.Instance?.Write("Results",
+                $"Cannot restore saved results: {ex.GetType().Name}: {ex.Message}; starting without saved results.");
+        }
     }
 
     /// <summary>What a run triggered by changes to <paramref name="filePaths"/> would select, without changing state.</summary>
@@ -1685,7 +1748,10 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             }
             else
             {
-                _state.VerifiedSinceChangeCount = _state.TestSuites.SelectMany(s => s.Tests).Count();
+                _state.VerifiedSinceChangeCount = _state.TestSuites
+                    .Where(s => !s.Restored)
+                    .SelectMany(s => s.Tests)
+                    .Count();
             }
 
             List<TestRunProjectOutcome> outcomes;
@@ -1912,6 +1978,15 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             {
                 _ = waiter.TrySetResult(finished);
             }
+
+            ResultsStore?.Schedule(new SavedResultsSnapshot(
+                DateTimeOffset.UtcNow,
+                _state.LastRunTime,
+                _state.LastBuildDuration,
+                _state.LastTestDuration,
+                _state.LastBuild,
+                _state.TestSuites,
+                _state.LastRun));
         }
 
         _state.NotifyChanged();

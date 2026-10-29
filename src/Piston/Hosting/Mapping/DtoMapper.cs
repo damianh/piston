@@ -155,6 +155,7 @@ public static class DtoMapper
             suite.Timestamp,
             suite.TotalDuration.TotalMilliseconds,
             suite.RunId,
+            suite.Restored,
             suite.ProjectId
         );
 
@@ -364,6 +365,7 @@ public static class DtoMapper
             ChangedFiles: run.ChangedFiles,
             FixedTests: [.. run.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key) { ProjectId = t.ProjectId })],
             NewlyFailingTests: [.. run.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key) { ProjectId = t.ProjectId })],
+            Restored: run.Restored,
             ProjectResources: run.Projects.Any(p => p.Resources is not null || p.SuspectedResourceConflict is not null)
                 ? [.. run.Projects
                     .Where(p => p.Resources is not null || p.SuspectedResourceConflict is not null)

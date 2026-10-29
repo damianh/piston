@@ -183,6 +183,10 @@ Do not treat these as verification:
 - filtered or selective runs;
 - a `run_tests` reply read after further edits.
 
+After a daemon restart, `get_test_results` may immediately return the previous
+session's saved suites. They are marked restored and not re-verified, with
+freshness `Unknown`; `verify` forces a new run rather than reusing them.
+
 `get_test_run("<runId>")` gives the full JSON record behind any reply.
 
 With `TestsFailed`, a `Failure history:` line counts the failures that are

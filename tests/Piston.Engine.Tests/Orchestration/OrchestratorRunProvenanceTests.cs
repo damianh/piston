@@ -2,6 +2,8 @@
 // See LICENSE in the project root for license information.
 
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using Piston.Engine.Execution;
 using Piston.Engine.History;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
@@ -16,6 +18,7 @@ namespace Piston.Engine.Tests.Orchestration;
 /// </summary>
 public sealed class OrchestratorRunProvenanceTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
     private static readonly string[] Projects = ["/src/A.Tests/A.Tests.csproj", "/src/B.Tests/B.Tests.csproj"];
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), $"piston-provenance-{Guid.NewGuid():N}");
@@ -95,6 +98,258 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         Assert.Equal(_root, run!.Context!.WorkingDirectory);
         Assert.Equal(TestProcessRunner.WorkingDirectoryFor(Projects[0]) ?? Environment.CurrentDirectory, run.Context.TestWorkingDirectories![Projects[0]]);
         Assert.Equal(_root, run.Context.TestWorkingDirectories[Projects[1]]);
+    }
+
+    [Theory]
+    [InlineData("test")]
+    [InlineData("blocker")]
+    [InlineData("empty-solution")]
+    [InlineData("empty-project")]
+    [InlineData("invalid-solution")]
+    [InlineData("invalid-project")]
+    public async Task Structurally_invalid_saved_results_do_not_reach_startup_notifications(string corruption)
+    {
+        var savedSuite = new TestSuite("A.Tests",
+            [new TestResult("A.Tests.Test1", "Test1", TestStatus.Passed, TimeSpan.Zero, null, null, null, null)],
+            DateTimeOffset.UtcNow, TimeSpan.Zero);
+        var savedRun = new TestRunRecord
+        {
+            RunId = "saved-run",
+            EngineInstanceId = "saved-engine",
+            Sequence = 1,
+            Trigger = TestRunTrigger.Startup,
+            RequestedAt = DateTimeOffset.UtcNow,
+            Context = new TestRunContext(
+                SolutionPath, [Projects[0]], null, null, null, null, false,
+                "Debug", null, ".NET", "OS", _root),
+            Suites = [savedSuite],
+            Projects =
+            [
+                new(Projects[0], ProjectRunStatus.Completed, 1)
+                {
+                    Resources = new(TestResourceNeeds.None(Projects[0]),
+                        new TestResourceWait(TestResourceWaitState.Acquired, [], false,
+                            [new("database", TestResourceBlockerKind.Held, 1, null, null, DateTimeOffset.UtcNow)],
+                            0, 0, null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow), []),
+                },
+            ],
+        };
+        using (var writer = new SavedResultsStore(SolutionPath, _ => { }))
+        {
+            writer.Schedule(new SavedResultsSnapshot(
+                DateTimeOffset.UtcNow, null, null, null, null, [savedSuite], savedRun));
+        }
+
+        var filePath = Path.Combine(_root, ".piston", "App.results.json");
+        var json = JsonNode.Parse(File.ReadAllText(filePath))!;
+        if (corruption == "blocker")
+        {
+            json["LastRun"]!["Projects"]![0]!["Resources"]!["Wait"]!["BlockedBy"]![0] = null;
+        }
+        else if (corruption == "test")
+        {
+            json["TestSuites"]![0]!["Tests"]![0] = null;
+        }
+        else if (corruption.EndsWith("solution", StringComparison.Ordinal))
+        {
+            json["LastRun"]!["Context"]!["SolutionPath"] = corruption == "empty-solution" ? "" : "\0";
+        }
+        else
+        {
+            json["LastRun"]!["Context"]!["TestProjects"]![0] = corruption == "empty-project" ? "" : "\0";
+        }
+        File.WriteAllText(filePath, json.ToJsonString());
+        using var store = new SavedResultsStore(SolutionPath, _ => { });
+        _orchestrator.ResultsStore = store;
+        _state.StateChanged += () =>
+        {
+            Assert.False(_state.LastRun?.Restored ?? false);
+            foreach (var result in _state.TestSuites.SelectMany(s => s.Tests))
+            {
+                _ = result.FullyQualifiedName.Length;
+            }
+            foreach (var project in _state.LastRun?.Projects ?? [])
+            {
+                foreach (var blocker in project.Resources?.Wait?.BlockedBy ?? [])
+                {
+                    _ = blocker.Resource.Length;
+                }
+            }
+        };
+
+        await StartAndWaitForStartupRunAsync();
+
+        Assert.Equal(TestRunStatus.Completed, _state.LastRun!.Status);
+        Assert.DoesNotContain(_state.TestSuites, suite => suite.Restored);
+    }
+
+    [Fact]
+    public async Task ClearResults_waits_for_snapshot_capture_and_discards_the_pending_save()
+    {
+        await StartAndWaitForStartupRunAsync();
+        using var store = new SavedResultsStore(SolutionPath, _ => { })
+        {
+            SaveDelay = Timeout.InfiniteTimeSpan,
+        };
+        _orchestrator.ResultsStore = store;
+        var capturing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var releaseCapture = new ManualResetEventSlim();
+        var runRecordsLock = typeof(PistonOrchestrator)
+            .GetField("_runRecordsLock", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .GetValue(_orchestrator)!;
+        _state.TestSuites = new SnapshotCaptureSuites(_state.TestSuites, () =>
+        {
+            capturing.SetResult();
+            Assert.True(Monitor.IsEntered(runRecordsLock), "Snapshot capture must share ClearResults' run-record lock.");
+            Assert.True(releaseCapture.Wait(TimeSpan.FromSeconds(10), _ct));
+        });
+        _build.Fail = true;
+        var completion = Task.Run(() => _orchestrator.RequestRunAsync(), _ct);
+        Task? clear = null;
+        try
+        {
+            await capturing.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            var clearing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            clear = Task.Run(() =>
+            {
+                clearing.SetResult();
+                _orchestrator.ClearResults(_root);
+            }, _ct);
+            await clearing.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+            Assert.NotSame(clear, await Task.WhenAny(clear, Task.Delay(TimeSpan.FromMilliseconds(200), _ct)));
+        }
+        finally
+        {
+            releaseCapture.Set();
+            _ = await completion.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            if (clear is not null)
+            {
+                await clear.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            }
+        }
+
+        store.Dispose();
+        Assert.Empty(_state.TestSuites);
+        Assert.Null(store.TryLoad());
+    }
+
+    private sealed class SnapshotCaptureSuites(IReadOnlyList<TestSuite> suites, Action onEnumerate) : IReadOnlyList<TestSuite>
+    {
+        public int Count => suites.Count;
+        public TestSuite this[int index] => suites[index];
+
+        public IEnumerator<TestSuite> GetEnumerator()
+        {
+            onEnumerate();
+            return suites.GetEnumerator();
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    [Fact]
+    public async Task Selective_run_after_failed_startup_does_not_count_restored_tests_as_verified()
+    {
+        using (var writer = new SavedResultsStore(SolutionPath, _ => { }))
+        {
+            var suites = Projects.Select(project =>
+            {
+                var name = Path.GetFileNameWithoutExtension(project);
+                return new TestSuite(name,
+                    [new TestResult($"{name}.Test1", "Test1", TestStatus.Passed, TimeSpan.Zero, null, null, null, null)],
+                    DateTimeOffset.UtcNow, TimeSpan.Zero)
+                {
+                    ProjectId = TestProjectNames.ProjectId(_root, project),
+                };
+            }).ToList();
+            writer.Schedule(new SavedResultsSnapshot(
+                DateTimeOffset.UtcNow, null, null, null, null, suites, null));
+        }
+
+        using var store = new SavedResultsStore(SolutionPath, _ => { });
+        _orchestrator.ResultsStore = store;
+        _build.Fail = true;
+        await StartAndWaitForStartupRunAsync();
+
+        Assert.Equal(TestRunStatus.BuildFailed, _state.LastRun!.Status);
+        Assert.All(_state.TestSuites, suite => Assert.True(suite.Restored));
+        Assert.Equal(0, _state.VerifiedSinceChangeCount);
+        Assert.Null(_state.LastFileChangeTime);
+
+        _build.Fail = false;
+        var run = await _orchestrator.RunSelectedAsync(new TestSelection([TestProjectNames.ProjectId(_root, Projects[0])]));
+
+        Assert.Equal(TestRunStatus.Completed, run.Status);
+        Assert.False(Assert.Single(_state.TestSuites, suite => suite.Name == "A.Tests").Restored);
+        Assert.True(Assert.Single(_state.TestSuites, suite => suite.Name == "B.Tests").Restored);
+        Assert.Equal(1, _state.VerifiedSinceChangeCount);
+        Assert.Null(_state.LastFileChangeTime);
+    }
+
+    [Fact]
+    public async Task Restored_results_are_unknown_until_startup_run_replaces_them()
+    {
+        var savedStore = new SavedResultsStore(SolutionPath, _ => { });
+        savedStore.Schedule(new SavedResultsSnapshot(
+            DateTimeOffset.UtcNow,
+            DateTimeOffset.UtcNow,
+            TimeSpan.FromMilliseconds(1),
+            TimeSpan.FromMilliseconds(2),
+            new BuildResult(BuildStatus.Succeeded, [], [], TimeSpan.FromMilliseconds(1)),
+            [new TestSuite("A.Tests",
+                [new TestResult("A.Tests.Test1", "Test1", TestStatus.Failed, TimeSpan.FromMilliseconds(2), null, "failed before restart", null, null)],
+                DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(2))
+            {
+                ProjectId = TestProjectNames.ProjectId(_root, Projects[0]),
+            }],
+            new TestRunRecord
+            {
+                RunId = "previous-run",
+                EngineInstanceId = "previous-engine",
+                Sequence = 7,
+                Trigger = TestRunTrigger.Startup,
+                Status = TestRunStatus.Completed,
+                Freshness = ResultFreshness.Current,
+                RequestedAt = DateTimeOffset.UtcNow,
+                CompletedAt = DateTimeOffset.UtcNow,
+                Suites = [new TestSuite("A.Tests",
+                    [new TestResult("A.Tests.Test1", "Test1", TestStatus.Failed, TimeSpan.FromMilliseconds(2), null, "failed before restart", null, null)],
+                    DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(2))
+                {
+                    ProjectId = TestProjectNames.ProjectId(_root, Projects[0]),
+                }],
+            }));
+        savedStore.Dispose();
+
+        using var store = new SavedResultsStore(SolutionPath, _ => { });
+        _orchestrator.ResultsStore = store;
+        var releaseGraph = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _impact.Initialization = releaseGraph.Task;
+        try
+        {
+            await _orchestrator.StartAsync(SolutionPath);
+
+            Assert.True(_state.LastRun!.Restored);
+            Assert.Equal(0, _state.LastRun.Sequence);
+            Assert.Equal(ResultFreshness.Unknown, _state.LastRun.Freshness);
+            Assert.False(_state.LastRun.IsCurrentFullResult);
+            Assert.True(Assert.Single(_state.TestSuites).Restored);
+            Assert.Equal("previous-run", _state.FindRun("previous-run")!.RunId);
+
+            _ = releaseGraph.TrySetResult();
+            await WaitForAsync(() => _state.LastRun is { RunId: not "previous-run", Status: TestRunStatus.Completed });
+
+            Assert.False(_state.LastRun!.Restored);
+            Assert.Equal(ResultFreshness.Current, _state.LastRun.Freshness);
+            Assert.Equal(1, _state.LastRun.Sequence);
+            Assert.Contains(_state.LastRun.FixedTests, result => result.Key == "A.Tests.Test1");
+            Assert.DoesNotContain(_state.TestSuites, suite => suite.Restored);
+        }
+        finally
+        {
+            _ = releaseGraph.TrySetResult();
+        }
     }
 
     [Fact]

@@ -204,6 +204,9 @@ public sealed record TestRunRecord
     public required TestRunTrigger Trigger { get; init; }
     public TestRunStatus Status { get; init; } = TestRunStatus.Queued;
 
+    /// <summary>True when restored from a prior daemon session and not re-verified since restart.</summary>
+    public bool Restored { get; init; }
+
     /// <summary>Human-readable reason for a non-<see cref="TestRunStatus.Completed"/> status.</summary>
     public string? StatusReason { get; init; }
 
@@ -295,6 +298,7 @@ public sealed record TestRunRecord
     /// </summary>
     public bool IsCurrentFullResult =>
         Status == TestRunStatus.Completed
+        && !Restored
         && IsFullScope
         && Freshness == ResultFreshness.Current
         && DuplicateTestIds.Count == 0

@@ -105,7 +105,8 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         }
     }
 
-    [McpServerTool(Name = GetTestResultsTool), Description("Get current test results from the last test run.")]
+    [McpServerTool(Name = GetTestResultsTool), Description(
+        "Get accumulated test results. After a daemon restart, restored results are explicitly marked as not re-verified.")]
     public string GetTestResults()
     {
         availability?.ThrowIfUnavailable();
@@ -117,6 +118,11 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         _ = sb.AppendLine($"Passed: {state.TotalPassed}, Failed: {state.TotalFailed}, Skipped: {state.TotalSkipped}");
         _ = sb.AppendLine($"Tests: {state.CompletedTests}/{state.TotalExpectedTests}");
         _ = sb.AppendLine($"Latest {DescribeRun(state.LastRun, includeCounts: false)}");
+        if (state.LastRun is { Restored: true, FreshnessReason: { } restoredReason })
+        {
+            _ = sb.AppendLine($"Restored: {restoredReason}");
+        }
+
         if (state.CurrentRun is { } active)
         {
             _ = sb.AppendLine($"Active {DescribeRun(active, includeCounts: false)}");
@@ -150,7 +156,10 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
 
         foreach (var suite in state.TestSuites)
         {
-            _ = sb.AppendLine($"\nSuite: {suite.Name}" + (suite.ProjectId is null ? "" : $" [{suite.ProjectId}]") + (suite.RunId is null ? "" : $" (run {suite.RunId})"));
+            _ = sb.AppendLine($"\nSuite: {suite.Name}" +
+                (suite.ProjectId is null ? "" : $" [{suite.ProjectId}]") +
+                (suite.RunId is null ? "" : $" (run {suite.RunId})") +
+                (suite.Restored ? " (restored; not re-verified)" : ""));
             foreach (var test in suite.Tests)
             {
                 _ = sb.Append($"  [{test.Status}] {test.DisplayName}");

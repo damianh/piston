@@ -213,6 +213,17 @@ public sealed class HostHelpersTests : IDisposable
     }
 
     [Theory]
+    [InlineData(null, true)]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void ResultsArePersistedUnlessConfiguredOff(bool? configured, bool expected)
+    {
+        var config = new Piston.Hosting.Configuration.PistonConfig { PersistResults = configured };
+
+        Assert.Equal(expected, HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config).PersistResults);
+    }
+
+    [Theory]
     [InlineData(null, 0)]
     [InlineData(0, 0)]
     [InlineData(3, 3)]
