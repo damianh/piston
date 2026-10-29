@@ -22,15 +22,29 @@
   <ItemGroup>
     <ProjectReference Include="..\Piston.Engine\Piston.Engine.csproj" />
     <ProjectReference Include="..\Piston.Protocol\Piston.Protocol.csproj" />
-    <!-- Piston.Web is published and its static files are copied to wwwroot -->
+    <!--
+      Piston.Web is published and its static files are copied to wwwroot (see BlazorWebUI.targets).
+      This reference only orders the build; Private="false" stops its runtimeconfig and json
+      content from being copied into this project's output and the packed tool.
+    -->
     <ProjectReference Include="..\Piston.Web\Piston.Web.csproj"
                       ReferenceOutputAssembly="false"
+                      Private="false"
                       SkipGetTargetFrameworkProperties="true" />
   </ItemGroup>
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
       <_Parameter1>Piston.Tests</_Parameter1>
     </AssemblyAttribute>
+  </ItemGroup>
+
+  <!-- Harness integration assets installed by `piston init`. The canvas is the repository's own extension. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Integration\Assets\SKILL.md" LogicalName="Piston.Integration/skill/SKILL.md" />
+    <EmbeddedResource Include="..\..\.github\extensions\piston-dashboard\*"
+                      Exclude="..\..\.github\extensions\piston-dashboard\*.test.mjs"
+                      LogicalName="Piston.Integration/canvas/%(Filename)%(Extension)"
+                      Link="Integration\Assets\canvas\%(Filename)%(Extension)" />
   </ItemGroup>
 
   <!-- Publish Piston.Web and copy its wwwroot output to our wwwroot -->

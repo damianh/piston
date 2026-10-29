@@ -10,18 +10,32 @@
             @if (history.Flaky)
             {
                 <span class="px-1 rounded text-[10px] font-normal bg-yellow-500/15 text-yellow-400"
-                      title="Passed and failed on the same source within its recorded runs">flaky</span>
+                      title="@TestRetries.FlakyTitle(history.Flakiness)">flaky</span>
             }
         </div>
         @if (Mark is { FailureKind: { } kind } mark && TestHistoryStrip.KindLabel(kind) is { } label)
         {
             <div class="text-gray-400 mb-1"><span class="@KindClass(kind)">@label</span>: @mark.Evidence</div>
         }
+        @if (history.Flakiness is { } evidence)
+        {
+            if (Mark?.FailureKind != "Flaky")
+            {
+                <div class="text-gray-400 mb-1"><span class="text-yellow-400">flaky</span>: @evidence.Summary</div>
+            }
+            if (evidence.Outcomes.Count > 0)
+            {
+                <details class="text-gray-500 mb-1">
+                    <summary class="cursor-pointer hover:text-gray-300">Evidence: @evidence.Passed passed, @evidence.Failed failed</summary>
+                    <pre class="mt-1 whitespace-pre-wrap font-mono">@TestRetries.DescribeOutcomes(evidence)</pre>
+                </details>
+            }
+        }
         <div class="flex items-center gap-3">
             <div class="flex items-center gap-0.5" role="list" aria-label="Recorded results, oldest first">
                 @foreach (var run in history.Runs)
                 {
-                    <span role="listitem" class="w-2.5 h-2.5 rounded-sm @TestHistoryStrip.SquareClass(run.Status)"
+                    <span role="listitem" class="w-2.5 h-2.5 @(run.Attempt > 0 ? "rounded-full" : "rounded-sm") @TestHistoryStrip.SquareClass(run.Status)"
                           title="@Describe(run)"><span class="sr-only">@Describe(run)</span></span>
                 }
             </div>
@@ -90,14 +104,15 @@
         if (key == TestKey && project == Project)
         {
             // The key names one framework's results, so the match is exact.
-            _history = result?.Tests.FirstOrDefault(t => t.Test == key && (project is null || t.Project == project)) is { Runs.Count: > 0 } h ? h : null;
+            _history = result?.Tests.FirstOrDefault(t => t.Test == key && (project is null || (t.ProjectId ?? t.Project) == project)) is { Runs.Count: > 0 } h ? h : null;
         }
     }
 
     private static string Describe(TestHistoryEntryDto run)
     {
         var duration = run.Status is "Passed" or "Failed" ? $" in {TestNode.FormatDuration(run.DurationMs)}" : "";
-        return $"{run.Status}{duration}, {run.At.ToLocalTime():yyyy-MM-dd HH:mm:ss}, run {run.RunId}";
+        var retry = run.Attempt > 0 ? $" (retry {run.Attempt})" : "";
+        return $"{run.Status}{duration}, {run.At.ToLocalTime():yyyy-MM-dd HH:mm:ss}, run {run.RunId}{retry}";
     }
 
     private static string KindClass(string kind) => kind switch

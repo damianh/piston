@@ -3,8 +3,10 @@
 
 using Piston.Engine;
 using Piston.Engine.Coverage;
+using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Hosting.Services;
+using Piston.Mcp.Tools;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
@@ -13,6 +15,61 @@ namespace Piston.Hosting.Mapping;
 
 public static class DtoMapper
 {
+    public static MachineOverviewDto ToDto(this MachineExecutionOverview overview)
+    {
+        var running = overview.Running
+            .Select(entry => entry.ToMachineEntryDto(overview.Owners))
+            .ToList();
+        var queue = overview.Queue
+            .Select(entry => entry.ToMachineEntryDto(overview.Owners))
+            .ToList();
+        var worktrees = overview.Owners
+            .Select(owner =>
+            {
+                var info = owner.Owner;
+                var runningHere = info is not null && running.Any(entry => entry.ProcessId == info.ProcessId);
+                var queuedHere = info is not null ? queue.FirstOrDefault(entry => entry.ProcessId == info.ProcessId) : null;
+                var state = owner.Liveness == OwnershipLiveness.Stale ? "Stale"
+                    : info is null || !overview.CoordinationAvailable ? "Unknown"
+                    : runningHere ? "Running"
+                    : queuedHere is not null ? "Queued"
+                    : "Idle";
+                return new MachineWorktreeDto(
+                    owner.Key,
+                    owner.Liveness.ToString(),
+                    info?.ProcessId,
+                    info?.SolutionPath,
+                    info?.WorktreePath,
+                    info?.AcquiredAt,
+                    info?.Host,
+                    info?.DashboardUrl,
+                    info?.ProcessId == Environment.ProcessId,
+                    state,
+                    queuedHere?.QueuePosition);
+            })
+            .OrderBy(worktree => worktree.WorktreePath, StringComparer.Ordinal)
+            .ToList();
+        var budget = overview.Budget is { } value
+            ? new MachineBudgetDto(
+                value.CpuSlots, value.MemoryMb, overview.CpuSlotsInUse, overview.MemoryMbInUse,
+                overview.CoordinationAvailable ? running.Count : null,
+                overview.CoordinationAvailable ? queue.Count : null, value.Source)
+            : null;
+
+        return new MachineOverviewDto(
+            overview.CapturedAt, budget, worktrees, running, queue, overview.Error,
+            overview.CoordinationAvailable, overview.OwnersAvailable);
+    }
+
+    private static MachineExecutionEntryDto ToMachineEntryDto(
+        this MachineExecutionEntry entry, IReadOnlyList<OwnershipRecord> owners)
+    {
+        var worktree = owners.FirstOrDefault(owner => owner.Key == entry.WorktreeKey)?.Owner?.WorktreePath;
+        return new MachineExecutionEntryDto(
+            entry.Sequence, entry.RunId, entry.ProcessId, entry.CpuSlots, entry.MemoryMb,
+            entry.WorktreeKey, worktree, entry.QueuePosition);
+    }
+
     public static ActivityEvent ToDto(this EngineActivityEvent activity)
     {
         var dto = activity switch
@@ -22,7 +79,7 @@ public static class DtoMapper
             FileChangesDetectedActivityEvent changed =>
                 ActivityEventFactory.FileChangesDetected(changed.SolutionPath, changed.ChangedFiles),
             BuildCompletedActivityEvent build =>
-                ActivityEventFactory.BuildCompleted(build.SolutionPath, build.Succeeded, build.DurationMs, build.Errors),
+                ActivityEventFactory.BuildCompleted(build.SolutionPath, build.Succeeded, build.DurationMs, build.Errors, build.ErrorCount),
             TestRunCompletedActivityEvent tests =>
                 ActivityEventFactory.TestRunCompleted(tests.SolutionPath, tests.Passed, tests.Failed, tests.Skipped,
                     tests.DurationMs, tests.Failures.Select(f => new TestFailureData(f.FullyQualifiedName, f.Message)).ToList()),
@@ -71,6 +128,7 @@ public static class DtoMapper
         ProjectRunStatus.Failed => ProjectRunStatusDto.Failed,
         ProjectRunStatus.Crashed => ProjectRunStatusDto.Crashed,
         ProjectRunStatus.TimedOut => ProjectRunStatusDto.TimedOut,
+        ProjectRunStatus.WaitingForResources => ProjectRunStatusDto.WaitingForResources,
         _ => ProjectRunStatusDto.Pending,
     };
 
@@ -84,7 +142,10 @@ public static class DtoMapper
             result.ErrorMessage,
             result.StackTrace,
             result.Source,
-            result.TargetFramework
+            result.TargetFramework,
+            result.Attempts.Count == 0
+                ? null
+                : [.. result.Attempts.Select(a => new TestAttemptDto(a.Status.ToDto(), a.Duration.TotalMilliseconds, a.ErrorMessage, a.StackTrace))]
         );
 
     public static TestSuiteDto ToDto(this TestSuite suite) =>
@@ -93,7 +154,9 @@ public static class DtoMapper
             suite.Tests.Select(t => t.ToDto()).ToList(),
             suite.Timestamp,
             suite.TotalDuration.TotalMilliseconds,
-            suite.RunId
+            suite.RunId,
+            suite.Restored,
+            suite.ProjectId
         );
 
     /// <summary>
@@ -210,14 +273,14 @@ public static class DtoMapper
     }
 
     /// <summary>
-    /// The log of the latest run of the test project named <paramref name="project"/> (one process covers
+    /// The log of the latest run of the test project identified by <paramref name="projectId"/> (one process covers
     /// all of its target frameworks), or <see langword="null"/> when none was recorded.
     /// </summary>
-    public static ExecutionLogDto? FindRunLog(this PistonState state, string project)
+    public static ExecutionLogDto? FindRunLog(this PistonState state, string projectId)
     {
         // A selective run leaves the project's untouched results in the previous suite, so take the latest.
         var latest = state.TestSuites
-            .Where(s => s.ExecutionLog is not null && string.Equals(s.Name, project, StringComparison.Ordinal))
+            .Where(s => s.ExecutionLog is not null && string.Equals(s.Key, projectId, StringComparison.Ordinal))
             .MaxBy(s => s.Timestamp);
 
         return latest?.ExecutionLog!.ToDto(latest.RunId);
@@ -228,25 +291,38 @@ public static class DtoMapper
 
     public static StoredRunSummaryDto ToDto(this StoredRunSummary run) => new(
         run.RunId, run.Trigger.ToString(), run.Status.ToString(), run.Scope?.ToString(), run.IsFullScope, run.Freshness.ToString(),
-        run.RequestedAt, run.CompletedAt, run.Source, run.Passed, run.Failed, run.Skipped);
+        run.RequestedAt, run.CompletedAt, run.Source, run.Passed, run.Failed, run.Skipped, run.Retried, run.PassedOnRetry);
 
     public static StoredRunDto ToDto(this StoredRun run) => new(
         run.Summary.ToDto(),
-        [.. run.Results.Select(r => new StoredTestResultDto(r.Project, r.Test, r.Status.ToString(), r.DurationMs, r.ErrorMessage, r.StackTrace))]);
+        [.. run.Results.Select(r => new StoredTestResultDto(r.Project, r.Test, r.Status.ToString(), r.DurationMs, r.ErrorMessage, r.StackTrace,
+            r.Attempts is { Count: > 0 } attempts ? [.. attempts.Select(a => new StoredAttemptDto(a.Status.ToString(), a.DurationMs, a.ErrorMessage))] : null,
+            r.ProjectId))]);
 
     public static TestHistoryDto ToDto(this TestHistory history) => new(
         history.Project, history.Test, history.Flaky,
-        [.. history.Runs.Select(e => new TestHistoryEntryDto(e.RunId, e.At, e.Status.ToString(), e.DurationMs, e.Source))]);
+        [.. history.Runs.Select(e => new TestHistoryEntryDto(e.RunId, e.At, e.Status.ToString(), e.DurationMs, e.Source, e.Attempt))],
+        history.Flakiness?.ToDto(), history.ProjectId);
+
+    public static FlakyEvidenceDto ToDto(this FlakinessEvidence evidence) => new(
+        evidence.Source, evidence.Passed, evidence.Failed, evidence.RetryOutcomes, evidence.OtherWorktrees, evidence.Describe(),
+        [.. evidence.Outcomes.Select(o => new FlakyOutcomeDto(o.RunId, o.At, o.Status.ToString(), o.Attempt, o.Worktree))]);
 
     /// <summary>One mark per test that is failing now or flaky.</summary>
     public static List<TestMarkDto> ToMarks(IReadOnlyList<FailureClassification> failures, IReadOnlyList<TestHistory> flaky)
     {
-        var flakyKeys = flaky.Select(f => (f.Project, f.Test)).ToHashSet();
+        var flakyByKey = flaky.GroupBy(f => (f.ProjectId, f.Test)).ToDictionary(g => g.Key, g => g.First().Flakiness);
         var marks = failures
-            .Select(f => new TestMarkDto(f.Project, f.Test, f.Kind.ToString(), f.Evidence, flakyKeys.Contains((f.Project, f.Test))))
+            .Select(f =>
+            {
+                var evidence = f.Flakiness ?? flakyByKey.GetValueOrDefault((f.ProjectId, f.Test));
+                return new TestMarkDto(f.Project, f.Test, f.Kind.ToString(), f.Evidence,
+                    evidence is not null || flakyByKey.ContainsKey((f.ProjectId, f.Test)), evidence?.ToDto(), f.ProjectId);
+            })
             .ToList();
-        var failing = failures.Select(f => (f.Project, f.Test)).ToHashSet();
-        marks.AddRange(flaky.Where(f => !failing.Contains((f.Project, f.Test))).Select(f => new TestMarkDto(f.Project, f.Test, null, null, Flaky: true)));
+        var failing = failures.Select(f => (f.ProjectId, f.Test)).ToHashSet();
+        marks.AddRange(flaky.Where(f => !failing.Contains((f.ProjectId, f.Test)))
+            .Select(f => new TestMarkDto(f.Project, f.Test, null, null, Flaky: true, f.Flakiness?.ToDto(), f.ProjectId)));
         return marks;
     }
 
@@ -273,7 +349,7 @@ public static class DtoMapper
             SourceAfter: run.SourceAfter?.ToDto(),
             SourceChangeObserved: run.SourceChangeObserved,
             EffectiveFilter: run.Context?.EffectiveFilter,
-            TestProjects: run.Context?.TestProjects,
+            TestProjects: run.Context?.TestProjects?.Select(path => ProjectId(run.Context.SolutionPath, path)).ToList(),
             TotalTests: tests.Count,
             Passed: tests.Count(t => t.Status == TestStatus.Passed),
             Failed: tests.Count(t => t.Status == TestStatus.Failed),
@@ -287,28 +363,427 @@ public static class DtoMapper
                 kv => (IReadOnlyList<TestSelectionReasonDto>)[.. kv.Value.Select(r => r.ToDto())],
                 StringComparer.Ordinal),
             ChangedFiles: run.ChangedFiles,
-            FixedTests: [.. run.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))],
-            NewlyFailingTests: [.. run.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key))]);
+            FixedTests: [.. run.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key) { ProjectId = t.ProjectId })],
+            NewlyFailingTests: [.. run.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key) { ProjectId = t.ProjectId })],
+            Restored: run.Restored,
+            ProjectResources: run.Projects.Any(p => p.Resources is not null || p.SuspectedResourceConflict is not null)
+                ? [.. run.Projects
+                    .Where(p => p.Resources is not null || p.SuspectedResourceConflict is not null)
+                    .Select(p => p.ToResourcesDto())]
+                : null,
+            RetryLimit: run.RetryLimit,
+            RetriesSkippedReason: run.RetriesSkippedReason,
+            PassedOnRetry: tests.Count(t => t.Status == TestStatus.Passed && t.Attempts.Count > 0),
+            Projects: [.. run.Projects.Select(project => new TestRunProjectOutcomeDto(
+                project.ProjectPath,
+                project.ProjectId,
+                project.Status.ToString(),
+                project.TestCount,
+                project.NoTestsReason,
+                project.TimedOut?.Test,
+                project.TimedOut is { } timeout ? timeout.Limit.TotalMilliseconds : null))]);
     }
 
-    public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
+    public static TestProjectResourcesDto ToResourcesDto(this TestRunProjectOutcome project) =>
         new(
-            reason.FilePath,
-            reason.ChangedLines,
-            reason.ExecutedLines,
-            reason.Granularity,
-            reason.ProjectPath,
+            ProjectPath: project.ProjectPath,
+            Keys: project.Resources?.Needs.Keys ?? [],
+            UsesContainers: project.Resources?.Needs.UsesContainers ?? false,
+            Reasons: project.Resources?.Needs.Reasons ?? [],
+            Wait: project.Resources?.Wait?.ToDto(),
+            Warnings: project.Resources?.Warnings ?? [],
+            SuspectedConflict: project.SuspectedResourceConflict);
+
+    public static TestResourceWaitDto ToDto(this TestResourceWait wait) =>
+        new(
+            State: wait.State.ToString(),
+            Keys: wait.Keys,
+            UsesContainers: wait.UsesContainers,
+            BlockedBy: [.. wait.BlockedBy.Select(b => new TestResourceBlockerDto(b.Resource, b.Kind.ToString(), b.ProcessId, b.Worktree, b.Project, b.Since))],
+            QueuedAhead: wait.QueuedAhead,
+            ContainerSlotsInUse: wait.ContainerSlotsInUse,
+            ContainerSlotBudget: wait.ContainerSlotBudget,
+            WaitingSince: wait.WaitingSince,
+            AcquiredAt: wait.AcquiredAt,
+            WaitedMs: wait.Waited?.TotalMilliseconds);
+
+    /// <summary>
+    /// Most bytes one page of the session timeline may take once serialized. Half the named-pipe message limit
+    /// leaves room for the JSON-RPC envelope, and is well under the dashboard's WebSocket limit.
+    /// </summary>
+    internal const long SessionTimelinePageBudget = MessageFramer.DefaultMaxMessageSize / 2;
+
+    /// <summary>
+    /// A page of the session timeline: the runs requested after <paramref name="afterSequence"/>, in request order, up
+    /// to <paramref name="budget"/> serialized bytes.
+    /// </summary>
+    /// <param name="inRunHistory">Whether a run is still kept in the run history, which retains fewer runs than the timeline.</param>
+    public static SessionTimelineDto ToSessionTimelineDto(
+        this PistonState state,
+        long? afterSequence,
+        Func<string, bool> inRunHistory,
+        long budget = SessionTimelinePageBudget)
+    {
+        // Read the entries before the dropped count, so a concurrent trim overstates rather than hides dropped runs.
+        var timeline = state.SessionTimeline;
+        var dropped = state.SessionTimelineDroppedRuns;
+        var entries = new List<SessionTimelineEntryDto>();
+        long size = 0;
+        var hasMore = false;
+        foreach (var entry in timeline.Where(e => afterSequence is null || e.Sequence > afterSequence).OrderBy(e => e.Sequence))
+        {
+            var dto = entry.ToDto() with { InRunHistory = entry.InRunHistory && inRunHistory(entry.RunId) };
+            var bytes = SerializedSize(dto);
+            if (entries.Count > 0 && size + bytes > budget)
+            {
+                hasMore = true;
+                break;
+            }
+
+            if (bytes > budget)
+            {
+                (dto, bytes) = TrimToBudget(dto, budget);
+            }
+
+            entries.Add(dto);
+            size += bytes;
+        }
+
+        long? oldest = timeline.Count > 0 ? timeline.Min(e => e.Sequence) : null;
+        return new(state.SessionStartedAt, state.SolutionPath, entries, hasMore, dropped, oldest);
+    }
+
+    /// <summary>
+    /// Halves an oversized entry's lists until it fits. The totals are kept, so clients see the lists as truncated.
+    /// </summary>
+    private static (SessionTimelineEntryDto Entry, long Bytes) TrimToBudget(SessionTimelineEntryDto dto, long budget)
+    {
+        var keep = Math.Max(Math.Max(dto.ChangedFiles.Count, dto.NewlyFailingTests.Count), Math.Max(dto.FixedTests.Count, dto.FailureClassifications.Count));
+        var bytes = SerializedSize(dto);
+        while (bytes > budget && keep > 0)
+        {
+            keep /= 2;
+            dto = dto with
+            {
+                ChangedFiles = [.. dto.ChangedFiles.Take(keep)],
+                NewlyFailingTests = [.. dto.NewlyFailingTests.Take(keep)],
+                FixedTests = [.. dto.FixedTests.Take(keep)],
+                FailureClassifications = [.. dto.FailureClassifications.Take(keep)],
+            };
+            bytes = SerializedSize(dto);
+        }
+
+        return (dto, bytes);
+    }
+
+    private static long SerializedSize(SessionTimelineEntryDto dto) =>
+        System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(dto, JsonRpcSerializer.Options).LongLength;
+
+    public static SessionTimelineEntryDto ToDto(this SessionTimelineEntry entry) => new(
+        entry.RunId,
+        entry.Sequence,
+        entry.Trigger.ToString(),
+        entry.Status.ToString(),
+        entry.StatusReason,
+        entry.Scope?.ToString(),
+        entry.IsFullScope,
+        entry.IsFiltered,
+        entry.Freshness.ToString(),
+        entry.FreshnessReason,
+        entry.RequestedAt,
+        entry.StartedAt,
+        entry.CompletedAt,
+        entry.SourceBefore,
+        entry.SourceAfter,
+        entry.SourceChangeObserved,
+        entry.ChangedFiles,
+        entry.ChangedFileCount,
+        entry.BuildStatus?.ToString(),
+        entry.BuildErrorCount,
+        entry.Passed,
+        entry.Failed,
+        entry.Skipped,
+        [.. entry.NewlyFailingTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key) { ProjectId = t.ProjectId })],
+        entry.NewlyFailingCount,
+        [.. entry.FixedTests.Select(t => new TestOutcomeReferenceDto(t.Project, t.Key) { ProjectId = t.ProjectId })],
+        entry.FixedCount,
+        [.. entry.FailureClassifications.Select(c => new FailureClassificationDto(c.Project, c.Test, c.Kind.ToString(), c.Evidence, c.ProjectId))],
+        entry.InRunHistory,
+        entry.NoEarlierResults);
+
+    public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
+        new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath, reason.Member,
             reason.Branches is null
                 ? null
                 : [.. reason.Branches.Select(b => new BranchLineDto(b.Line, b.Covered, b.Total))]);
 
-    public static CoveringTestsDto ToCoveringTestsDto(string filePath, IReadOnlyList<CoveringTest>? tests) =>
+    private static string ProjectId(string solutionPath, string projectPath)
+    {
+        var solutionDirectory = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? Path.GetFullPath(solutionPath);
+        return Path.GetRelativePath(solutionDirectory, Path.GetFullPath(projectPath, solutionDirectory)).Replace('\\', '/');
+    }
+
+    internal static CoveringTestsDto ToCoveringTestsDto(
+        string filePath, IReadOnlyList<CoveringTest>? tests, Func<CoveringTest, CoveringTestOutcome>? outcome = null) =>
         new(filePath, [.. (tests ?? []).Select(t => new CoveringTestDto(
             t.TestFqn,
             t.ProjectPath,
             t.Granularity,
             [.. t.ExecutedLines.Select(r => new LineRangeDto(r.Start, r.End))],
-            t.IsCurrent))]);
+            t.IsCurrent,
+            outcome is null ? null : ChangedLineVerdicts.Name(outcome(t))))]);
+
+    /// <summary>The changed-line coverage reply when coverage is disabled.</summary>
+    public static ChangedLineCoverageDto DisabledChangedLineCoverage { get; } =
+        new(false, null, new ChangedLineTotalsDto(0, 0, 0, 0, 0, 0), new Dictionary<string, int>(), [], 0, []);
+
+    /// <summary>
+    /// Most bytes the changed files may take once serialized. Half the named-pipe message limit leaves room for
+    /// the rest of the reply and its JSON-RPC envelope.
+    /// </summary>
+    internal const long ChangedLineFilesBudget = MessageFramer.DefaultMaxMessageSize / 2;
+
+    /// <summary>
+    /// Maps the verdicts to line ranges per file. Files are added in path order while they fit in
+    /// <paramref name="budget"/> serialized bytes: a file whose detail does not fit keeps only its totals, and once
+    /// even that does not fit the remaining files are omitted. The reply's totals always count every line.
+    /// </summary>
+    internal static ChangedLineCoverageDto ToDto(
+        this ChangedLineCoverageResult result, string solutionDirectory, long budget = ChangedLineFilesBudget)
+    {
+        var files = new List<ChangedLineFileDto>();
+        var detailOmitted = 0;
+        long used = 0;
+        foreach (var file in result.Files)
+        {
+            var dto = file.ToDto(solutionDirectory, withDetail: true);
+            var size = SerializedSize(dto);
+            if (used + size > budget)
+            {
+                dto = file.ToDto(solutionDirectory, withDetail: false);
+                size = SerializedSize(dto);
+                if (used + size > budget)
+                {
+                    break;
+                }
+
+                detailOmitted++;
+            }
+
+            files.Add(dto);
+            used += size;
+        }
+
+        var filesOmitted = result.Files.Count - files.Count;
+        var warnings = result.Warnings.ToList();
+        if (filesOmitted > 0 || detailOmitted > 0)
+        {
+            warnings.Add(
+                $"The reply is too large to list every changed line: {detailOmitted} file(s) give only totals and " +
+                $"{filesOmitted} file(s) are omitted. The totals count every changed line.");
+        }
+
+        return new(
+            Enabled: true,
+            Base: result.Basis,
+            Totals: result.Totals.ToDto(),
+            UnknownReasons: result.UnknownReasons.ToDictionary(
+                kv => ChangedLineVerdicts.Name(kv.Key)!, kv => kv.Value, StringComparer.Ordinal),
+            Files: files,
+            FilesOmitted: filesOmitted,
+            Warnings: warnings);
+
+        static long SerializedSize(ChangedLineFileDto dto) =>
+            System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(dto, JsonRpcSerializer.Options).Length + 1;
+    }
+
+    /// <summary>The change diff reply when coverage is disabled.</summary>
+    public static ChangeDiffDto DisabledChangeDiff { get; } =
+        new(false, null, new ChangedLineTotalsDto(0, 0, 0, 0, 0, 0), new Dictionary<string, int>(), [], 0, []);
+
+    /// <summary>
+    /// Maps the diff, with each added source line's verdict, to a reply. Files are added in path order while they
+    /// fit in <paramref name="budget"/> serialized bytes: a file whose hunks do not fit keeps only its totals, and
+    /// once even that does not fit the remaining files are omitted. The reply's totals always count every line.
+    /// </summary>
+    internal static ChangeDiffDto ToChangeDiffDto(
+        this ChangedLineCoverageResult result, string solutionDirectory, long budget = ChangedLineFilesBudget)
+    {
+        var verdicts = result.Files.ToDictionary(f => f.FilePath, StringComparer.Ordinal);
+        var paths = result.Diff.Keys
+            .Union(verdicts.Keys, StringComparer.Ordinal)
+            .Select(p => (Path: p, Relative: Path.GetRelativePath(solutionDirectory, p).Replace('\\', '/')))
+            .OrderBy(p => p.Relative, StringComparer.Ordinal)
+            .ToList();
+
+        var files = new List<ChangeDiffFileDto>();
+        var hunksOmitted = 0;
+        long used = 0;
+        foreach (var (path, relative) in paths)
+        {
+            var diff = result.Diff.GetValueOrDefault(path);
+            var file = verdicts.GetValueOrDefault(path);
+            var dto = ToFileDto(withHunks: true);
+            var size = SerializedSize(dto);
+            if (used + size > budget)
+            {
+                dto = ToFileDto(withHunks: false);
+                size = SerializedSize(dto);
+                if (used + size > budget)
+                {
+                    break;
+                }
+
+                hunksOmitted++;
+            }
+
+            files.Add(dto);
+            used += size;
+
+            ChangeDiffFileDto ToFileDto(bool withHunks)
+            {
+                var hunks = diff?.Hunks ?? [];
+                var lines = file?.Lines.ToDictionary(l => l.Line);
+                return new(
+                    path,
+                    relative,
+                    StatusName(diff?.Status ?? DiffFileStatus.Modified),
+                    ChangedLineVerdicts.IsCodeFile(path),
+                    file?.IsMeasured ?? false,
+                    file?.IsStale ?? false,
+                    file?.IsPartial ?? false,
+                    (file?.Totals ?? ChangedLineTotals.Of([])).ToDto(),
+                    withHunks ? [.. hunks.Select(h => ToHunkDto(h, lines))] : [],
+                    HunksOmitted: !withHunks && hunks.Count > 0,
+                    IsDiverged: result.DivergedFiles.Contains(path));
+            }
+        }
+
+        var filesOmitted = paths.Count - files.Count;
+        var warnings = result.Warnings.ToList();
+        if (filesOmitted > 0 || hunksOmitted > 0)
+        {
+            warnings.Add(
+                $"The diff is too large to show in full: {hunksOmitted} file(s) give only totals and " +
+                $"{filesOmitted} file(s) are omitted. The totals count every changed line.");
+        }
+
+        return new(
+            Enabled: true,
+            Base: result.Basis,
+            Totals: result.Totals.ToDto(),
+            UnknownReasons: result.UnknownReasons.ToDictionary(
+                kv => ChangedLineVerdicts.Name(kv.Key)!, kv => kv.Value, StringComparer.Ordinal),
+            Files: files,
+            FilesOmitted: filesOmitted,
+            Warnings: warnings);
+
+        static DiffHunkDto ToHunkDto(DiffHunk hunk, Dictionary<int, ChangedLineResult>? verdicts) =>
+            new(hunk.OldStart, hunk.OldCount, hunk.NewStart, hunk.NewCount, [.. hunk.Lines.Select(line =>
+            {
+                var kind = line.Kind switch
+                {
+                    DiffLineKind.Added => "added",
+                    DiffLineKind.Removed => "removed",
+                    _ => "context",
+                };
+                if (line.Kind != DiffLineKind.Added || line.NewLine is not { } number
+                    || verdicts?.GetValueOrDefault(number) is not { } verdict)
+                {
+                    return new DiffLineDto(kind, line.OldLine, line.NewLine, line.Text);
+                }
+
+                var coverage = verdict.Coverage;
+                return new DiffLineDto(
+                    kind,
+                    line.OldLine,
+                    line.NewLine,
+                    line.Text,
+                    ChangedLineVerdicts.Name(verdict.Verdict),
+                    ChangedLineVerdicts.Name(verdict.Reason),
+                    coverage?.HitCount,
+                    coverage is { BranchesTotal: > 0 } ? coverage.BranchesCovered : null,
+                    coverage is { BranchesTotal: > 0 } ? coverage.BranchesTotal : null);
+            })]);
+
+        static string StatusName(DiffFileStatus status) => status switch
+        {
+            DiffFileStatus.Added => "added",
+            DiffFileStatus.Deleted => "deleted",
+            DiffFileStatus.Binary => "binary",
+            _ => "modified",
+        };
+
+        static long SerializedSize(ChangeDiffFileDto dto) =>
+            System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(dto, JsonRpcSerializer.Options).Length + 1;
+    }
+
+    private static ChangedLineFileDto ToDto(this ChangedFileVerdicts file, string solutionDirectory, bool withDetail)
+    {
+        var failing = file.FailingTests();
+        var failingListed = withDetail ? Math.Min(failing.Count, CoverageTools.MaxFailingTestsPerFile) : 0;
+        return new(
+            file.FilePath,
+            Path.GetRelativePath(solutionDirectory, file.FilePath).Replace('\\', '/'),
+            file.IsMeasured,
+            file.IsStale,
+            file.IsPartial,
+            file.Totals.ToDto(),
+            CoveredByPassing: Ranges(ChangedLineVerdict.CoveredByPassing),
+            CoveredOnlyByFailing: Ranges(ChangedLineVerdict.CoveredOnlyByFailing),
+            Uncovered: Ranges(ChangedLineVerdict.Uncovered),
+            NonExecutable: Ranges(ChangedLineVerdict.NonExecutable),
+            Unknown: withDetail
+                ? [.. file.Lines
+                    .Where(l => l.Verdict == ChangedLineVerdict.Unknown)
+                    .GroupBy(l => l.Reason)
+                    .OrderBy(g => g.Min(l => l.Line))
+                    .Select(g => new ChangedLineUnknownDto(ChangedLineVerdicts.Name(g.Key)!, LineRanges(g.Select(l => l.Line))))]
+                : [],
+            PartialBranches: withDetail
+                ? [.. file.Lines.Where(l => l.HasPartialBranches)
+                    .Select(l => new ChangedLineBranchesDto(l.Line, l.Coverage!.BranchesCovered, l.Coverage.BranchesTotal))]
+                : [],
+            FailingTests: [.. failing.Take(failingListed)],
+            FailingTestsOmitted: failing.Count - failingListed,
+            DetailOmitted: !withDetail);
+
+        List<LineRangeDto> Ranges(ChangedLineVerdict verdict) =>
+            withDetail ? LineRanges(file.Lines.Where(l => l.Verdict == verdict).Select(l => l.Line)) : [];
+    }
+
+    /// <summary>Collapses line numbers into ordered, inclusive ranges of consecutive lines.</summary>
+    private static List<LineRangeDto> LineRanges(IEnumerable<int> lines)
+    {
+        var ranges = new List<LineRangeDto>();
+        int? start = null, previous = null;
+        foreach (var line in lines.Order())
+        {
+            if (previous is { } p && line <= p + 1)
+            {
+                previous = Math.Max(p, line);
+                continue;
+            }
+
+            if (start is { } s)
+            {
+                ranges.Add(new LineRangeDto(s, previous!.Value));
+            }
+
+            start = previous = line;
+        }
+
+        if (start is { } last)
+        {
+            ranges.Add(new LineRangeDto(last, previous!.Value));
+        }
+
+        return ranges;
+    }
+
+    private static ChangedLineTotalsDto ToDto(this ChangedLineTotals totals) =>
+        new(totals.ChangedLines, totals.CoveredByPassing, totals.CoveredOnlyByFailing, totals.Uncovered,
+            totals.NonExecutable, totals.Unknown);
 
     public static TestRunAdmissionDto ToDto(this TestRunAdmission admission) =>
         new(
@@ -331,7 +806,9 @@ public static class DtoMapper
             result.Status.ToDto(),
             result.Errors,
             result.Warnings,
-            result.Duration.TotalMilliseconds
+            result.Duration.TotalMilliseconds,
+            result.OmittedErrors,
+            result.OmittedWarnings
         );
 
     public static StateSnapshotNotification ToSnapshot(this PistonState state) =>
@@ -372,7 +849,12 @@ public static class DtoMapper
                 : null,
             LongestRunningTest: state.LongestRunningTest is { } running
                 ? new RunningTestDto(running.Name, running.ProjectPath, running.StartedAt, running.PossiblyHanging)
-                : null
+                : null,
+            ProjectResourceWaits: state.ProjectResourceWaits.Count > 0
+                ? state.ProjectResourceWaits.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToDto())
+                : null,
+            RetryStatus: state.RetryStatus,
+            TimelineRevision: state.SessionTimelineRevision
         );
 
     public static CoverageSummaryDto ToCoverageSummaryDto(CoverageReportSnapshot? report, string? solutionDirectory) =>
@@ -418,5 +900,8 @@ public static class DtoMapper
                 coverage.File.FilePath,
                 [.. coverage.Lines.Select(l => l.ToDto())],
                 coverage.File.ToDto(solutionDirectory),
-                includeSource ? SourceFileReader.Read(coverage.File.FilePath, solutionDirectory).Lines : null);
+                includeSource ? SourceFileReader.Read(coverage.File.FilePath, solutionDirectory).Lines : null)
+            {
+                StaleLines = [.. coverage.StaleLines.Select(range => new LineRangeDto(range.Start, range.End))],
+            };
 }

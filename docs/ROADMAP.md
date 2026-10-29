@@ -50,6 +50,11 @@ ARCHITECTURE describe the implementation in detail.
   freshness, its own build diagnostics, and fixed and newly failing tests.
 - One owner per worktree through OS file locks, and a machine-wide CPU/memory
   admission budget (`budget.json`) with visible FIFO queueing.
+- Integration-test resource scheduling: container use inferred from package
+  references, per-repository isolation of container test projects, exclusive
+  `port:`/`container:`/`resource:` keys and overrides in `testResources`, an
+  optional `containerSlots` budget, visible waits, and port-probe and
+  conflict-signature hints.
 - Correct selective builds: one solution-filter build of the affected projects,
   then no-build test execution.
 - VSTest and Microsoft.Testing.Platform routing, with opt-in warm MTP test hosts.
@@ -61,6 +66,9 @@ ARCHITECTURE describe the implementation in detail.
 - Persistent per-worktree run history outside the checkout, grouped by repository.
 - Failures classified as new, pre-existing, flaky (same fingerprint, both
   outcomes) or unknown, in `verify`, `get_test_run` and `get_test_history`.
+- Flakiness evidence on every flaky label: counts, source, outcomes from other
+  worktrees of the repository, and opt-in in-run retries of failed tests
+  (`retryFailures`), reported in MCP and the dashboard.
 
 **Coverage and selection**
 - Solution line and branch coverage stored in `.piston/piston.db`, with LCOV and
@@ -70,44 +78,55 @@ ARCHITECTURE describe the implementation in detail.
 - Branch-level attribution in impact-map reasons and changed-line coverage:
   per-unit, per-line outcome counts (Cobertura does not identify individual
   outcomes). Backfill re-measures existing units missing branch evidence.
+- Method-level identity for C# coverage evidence: line shifts preserve validated
+  member evidence, while edited members are invalidated and unvalidated lines are
+  never reused.
 - Git bases (`working`, `branch`, `range`) for affected-test planning and
   changed-line coverage.
+- A verdict for each changed line: covered by passing tests, covered only by
+  failing tests, uncovered, non-executable, or unknown with a reason (stale, not
+  measured, no or mixed test evidence), over MCP and the protocol.
 
 **Dashboard**
 - Tests tab: a virtualized tree, run strip, failure diffs, a stack-trace source
   view, a history strip and new/flaky filters.
 - Runs tab: browse and compare kept runs.
+- Timeline tab: the daemon session's edits and runs with their outcomes,
+  freshness and failure classification, tracing each failing test to the run
+  and edit that broke it.
 - Coverage tab: a grouped file list, highlighted source with hit counts,
-  covering tests per file and line, and backfill progress.
+  covering tests per file and line, and backfill progress; a Changes mode shows
+  the git diff with each changed line's verdict and drills down to its covering
+  tests, also from the Copilot canvas.
 - MCP call history, user settings, keyboard shortcuts and theme-aware styling.
+- Machine tab: owned worktrees and dashboard links, budget use, running work and
+  the FIFO queue; `piston status --all` prints the same machine overview.
 
 **Distribution and CI**
 - A framework-dependent .NET tool (`Piston` package, `piston` command) attached
   to GitHub Releases.
 - CI on Linux and Windows, driven by a file-based `build.cs`. Packed-tool smoke
   tests run the MSTest, NUnit, xUnit v3 and TUnit samples through `piston daemon`
-  and through `verify` over `piston mcp` on Linux, Windows and macOS.
+  and through `verify` over `piston mcp`, and install the harness assets with
+  `piston init`, on Linux, Windows and macOS.
+
+**Project-scoped Copilot canvas**
+- A thin `.github/extensions/piston-dashboard/` extension hosts the existing
+  web UI with an independent connection shell and worktree-owner discovery.
+- Stdio MCP can opt in to an ephemeral loopback dashboard with `--dashboard`
+  or `.piston.json`'s `dashboard: true`; no daemon attachment or second engine.
+- Inspection-only open/refresh/reconnect, explicit run/run-failed actions,
+  disconnected recovery, shared failed-test selection and host-following themes.
+
+**Harness integration assets**
+- `piston init copilot|claude` prints the MCP entry, the `piston` skill (the
+  `verify` contract) and, for Copilot, the canvas extension, all embedded in the
+  tool. It installs them only with `--write`, at user or repository scope.
+- Merges only the `piston` MCP entry; content that differs is kept unless `--force`.
+  Claude Code's user config is never edited; the `claude mcp add` command is printed.
+- Claude Code and generic MCP clients are documented in `docs/agent-usage.md`.
 
 ## Near-term
-
-### Native Copilot canvas
-Show the dashboard as a Copilot app canvas rather than a browser tab the agent
-opens by hand (today's `piston-dashboard` skill).
-
-- Ship a thin canvas extension that hosts the existing web UI. Do not build a
-  second UI.
-- Decide how a stdio `piston mcp` session, which opens no ports today, exposes the
-  dashboard: an opt-in loopback web port, or attaching to a daemon.
-- Validate canvas reload/resume, the disconnected state, actions such as run and
-  run failed, theme integration and accessibility.
-- Opening the canvas only inspects state. It must not start continuous test
-  execution on its own.
-
-### Harness integration assets
-- Ship Copilot assets with the tool: an MCP config snippet, a skill or custom
-  instructions for the `verify` contract, and the canvas registration.
-- Document Claude Code and generic MCP clients.
-- Never edit harness configuration without explicit opt-in.
 
 ### Distribution
 - Publish to NuGet.org: reserve the package ID and use the opt-in release path.
@@ -116,34 +135,11 @@ opens by hand (today's `piston-dashboard` skill).
 
 ## Later
 
-### Coverage
-- A verdict for each changed line: covered by passing tests, covered only by
-  failing tests, uncovered, non-executable, or unknown/stale.
-- A coverage-aware diff view in the dashboard and canvas, with drill-down to the
-  covering tests.
-- Method-level identity, so line shifts do not invalidate evidence. Never reuse old
-  line evidence without validated remapping.
-
-### Memory
-- A declared baseline: the merge-base with a configured base ref, run in a
-  Piston-managed worktree, so "new versus pre-existing" does not depend on this
-  worktree's own history.
-- Richer flakiness evidence (retries, repeated outcomes across worktrees of one
-  repository).
-
 ### Execution
 - Explore MTP server mode further for structured results and stable test
-  identities; keep VSTest/TRX as the compatibility path.
-- Integration-test resources: infer likely needs (containers, exclusive
-  resources) from package references, with explicit overrides, and schedule
-  them within the budget. Address fixed-port and container-name conflicts
-  conservatively.
+  identities; keep VSTest/TRX as the compatibility path. The investigation and
+  current decision are in [MTP server-mode investigation](mtp-server-mode.md).
 - Per-test output and relevant artifacts in the MCP tools and the dashboard.
-
-### Dashboard
-- A session timeline: edits, runs, outcomes, freshness and failure classification.
-- A workspace overview: owned worktrees on the machine, queued and running work,
-  and budget use.
 
 ## Risks and open questions
 

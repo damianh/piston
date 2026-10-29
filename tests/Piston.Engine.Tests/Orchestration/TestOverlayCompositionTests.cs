@@ -60,6 +60,40 @@ public sealed class TestOverlayCompositionTests
     }
 
     [Fact]
+    public void ProjectsWithTheSameFileNameKeepTheirOwnTestsAndIdentity()
+    {
+        var solutionDirectory = Path.Combine(Path.GetTempPath(), "piston-overlay");
+        var first = Path.Combine(solutionDirectory, "One", "Tests.csproj");
+        var second = Path.Combine(solutionDirectory, "Two", "Tests.csproj");
+        var overlay = PistonOrchestrator.ComposeTestOverlay(
+            [
+                new TestSuite("Tests", [Test("Shared.Test", TestStatus.Passed)], DateTimeOffset.UnixEpoch, TimeSpan.Zero)
+                    { ProjectId = "One/Tests.csproj" },
+                new TestSuite("Tests", [Test("Shared.Test", TestStatus.Passed)], DateTimeOffset.UnixEpoch, TimeSpan.Zero)
+                    { ProjectId = "Two/Tests.csproj" },
+            ],
+            new Dictionary<string, IReadOnlyList<TestResult>>
+            {
+                [first] = [Test("Shared.Test")],
+                [second] = [Test("Shared.Test")],
+            },
+            new Dictionary<string, IReadOnlyList<TestSuite>>
+            {
+                [first] = [Suite("Tests", Test("Shared.Test", TestStatus.Failed))],
+                [second] = [Suite("Tests", Test("Shared.Test", TestStatus.Passed))],
+            },
+            filtered: false,
+            out _,
+            out _,
+            solutionDirectory: solutionDirectory);
+
+        Assert.Equal(["One/Tests.csproj", "Two/Tests.csproj"], overlay.Select(s => s.ProjectId));
+        Assert.Equal(
+            [TestStatus.Failed, TestStatus.Passed],
+            overlay.Select(s => Assert.Single(s.Tests).Status));
+    }
+
+    [Fact]
     public void FilteredRun_KnownTestsOutsideTheFilterKeepTheirLastStatus()
     {
         var overlay = PistonOrchestrator.ComposeTestOverlay(

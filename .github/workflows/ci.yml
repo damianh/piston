@@ -35,6 +35,11 @@ jobs:
         run: dotnet run build.cs -- build
       - name: Test
         run: dotnet run build.cs -- test --skip-dependencies
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Test canvas provider
+        run: node --test .github/extensions/piston-dashboard/provider.test.mjs .github/extensions/piston-dashboard/theme.test.mjs
 
   smoke:
     name: Smoke test samples (${{ matrix.os }})
@@ -62,6 +67,9 @@ jobs:
         # An MCP client calls verify over stdio; it must report TestsFailed for a completed full-scope run with the
         # same counts.
         run: dotnet run build.cs -- smoke-mcp --skip-dependencies
+      - name: Install the harness assets with piston init
+        # The packed tool installs its embedded skill, canvas and MCP entry into temporary locations, idempotently.
+        run: dotnet run build.cs -- smoke-init --skip-dependencies
 
   check-formatting:
     name: Check formatting

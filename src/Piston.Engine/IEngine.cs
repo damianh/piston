@@ -60,6 +60,9 @@ public interface IEngine : IDisposable
     /// </summary>
     IReadOnlyList<Coverage.CoveringTest>? GetCoveringTests(string filePath) => null;
 
+    /// <summary>Absolute paths of the solution's test projects. Null when unsupported or not yet known.</summary>
+    IReadOnlyList<string>? GetTestProjectPaths() => null;
+
     /// <summary>
     /// Returns what a run triggered by changes to <paramref name="filePaths"/> (absolute, or relative to the solution
     /// directory) would build and test, without running anything or changing any state. Null when unsupported.
@@ -70,7 +73,7 @@ public interface IEngine : IDisposable
     /// Recorded results of a test in this worktree's run history, matched by fully-qualified name. Null when
     /// history is off or unsupported.
     /// </summary>
-    IReadOnlyList<Models.TestHistory>? GetTestHistory(string test, string? project = null) => null;
+    IReadOnlyList<Models.TestHistory>? GetTestHistory(string test, string? projectId = null) => null;
 
     /// <summary>Tests that passed and failed on the same source within their recorded history; null when history is off.</summary>
     IReadOnlyList<Models.TestHistory>? GetFlakyTests() => null;

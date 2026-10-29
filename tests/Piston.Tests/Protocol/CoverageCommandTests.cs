@@ -5,7 +5,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Piston.Engine.Coverage;
+using Piston.Hosting.Mapping;
 using Piston.Hosting.Protocol;
+using Piston.Mcp.Tools;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
@@ -19,7 +21,15 @@ public sealed class CoverageCommandTests : IDisposable
     private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
     private readonly string _root = Directory.CreateTempSubdirectory("piston-coverage-cmd-").FullName;
 
-    public void Dispose() => Directory.Delete(_root, recursive: true);
+    public void Dispose()
+    {
+        foreach (var file in Directory.EnumerateFiles(_root, "*", SearchOption.AllDirectories))
+        {
+            File.SetAttributes(file, FileAttributes.Normal);
+        }
+
+        Directory.Delete(_root, recursive: true);
+    }
 
     private static CoverageFileSummary Summary(string path, int total, int covered, bool stale = false) =>
         new(path, "Lib", total, covered, 4, 3, stale, IsPartial: false, "hash", 3, DateTimeOffset.UnixEpoch);
@@ -187,6 +197,359 @@ public sealed class CoverageCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task GetChangedLines_WithCoverageDisabled_ReportsDisabled()
+    {
+        var dispatcher = new EngineCommandDispatcher(new StubEngine());
+
+        var result = await dispatcher.HandleCommandAsync(ProtocolMethods.CoverageGetChangedLines, null, _ct);
+
+        Assert.False(result!["enabled"]!.GetValue<bool>());
+        Assert.Equal(0, result["totals"]!["changedLines"]!.GetValue<int>());
+        Assert.Empty(result["files"]!.AsArray());
+    }
+
+    [Fact]
+    public async Task GetChangedLines_RequestedWhileARunHoldsTheCoverageLock_IsCancellable()
+    {
+        Git("init", "-q", "-b", "main");
+        var path = Path.Combine(_root, "A.cs");
+        await File.WriteAllLinesAsync(path, ["a"], _ct);
+        Git("add", ".");
+        Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+        await File.WriteAllLinesAsync(path, ["A"], _ct);
+
+        var engine = new StubEngine { CoverageReport = new CoverageReportSnapshot([]) };
+        engine.State.SolutionPath = Path.Combine(_root, "App.slnx");
+        using var release = new ManualResetEventSlim();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+        engine.OnGetCoverageReport = () =>
+        {
+            CoverageToolsTests.CancelAndBlock(cts, release);
+            return engine.CoverageReport;
+        };
+        engine.OnGetFileCoverage = _ => CoverageToolsTests.CancelAndBlock(cts, release);
+        var dispatcher = new EngineCommandDispatcher(engine);
+        try
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            _ = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => dispatcher.HandleCommandAsync(
+                ProtocolMethods.CoverageGetChangedLines, JsonNode.Parse("""{"base":"working"}"""), cts.Token));
+
+            Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(10), $"Took {stopwatch.Elapsed}.");
+        }
+        finally
+        {
+            release.Set();
+        }
+    }
+
+    [Theory]
+    [InlineData("""{"base":1}""")]
+    [InlineData("""{"baseRef":false}""")]
+    public async Task GetChangedLines_WronglyTypedParams_AreInvalidParams(string @params)
+    {
+        var engine = new StubEngine { CoverageReport = new CoverageReportSnapshot([]) };
+        engine.State.SolutionPath = Path.Combine(_root, "App.slnx");
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var ex = await Assert.ThrowsAsync<JsonRpcException>(() => dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageGetChangedLines, JsonNode.Parse(@params), _ct));
+
+        Assert.Equal(JsonRpcErrorCodes.InvalidParams, ex.Code);
+    }
+
+    [Fact]
+    public async Task GetChangedLines_OptionLikeBase_IsInvalidParams()
+    {
+        var engine = new StubEngine { CoverageReport = new CoverageReportSnapshot([]) };
+        engine.State.SolutionPath = Path.Combine(_root, "App.slnx");
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var ex = await Assert.ThrowsAsync<JsonRpcException>(() => dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageGetChangedLines, JsonNode.Parse("""{"base":"--output=/tmp/x"}"""), _ct));
+
+        Assert.Equal(JsonRpcErrorCodes.InvalidParams, ex.Code);
+    }
+
+    [Fact]
+    public async Task GetChangedLines_ReturnsLineRangesPerVerdict()
+    {
+        Git("init", "-q", "-b", "main");
+        var path = Path.Combine(_root, "src", "A.cs");
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllLinesAsync(path, ["a", "b", "c", "d"], _ct);
+        Git("add", ".");
+        Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+        await File.WriteAllLinesAsync(path, ["A", "B", "C", "D"], _ct);
+
+        var engine = new StubEngine { CoverageReport = new CoverageReportSnapshot([]) };
+        engine.State.SolutionPath = Path.Combine(_root, "App.slnx");
+        engine.FileCoverage[path] = new FileCoverageSnapshot(Summary(path, 3, 2), [new(1, 2, 1, 2), new(2, 1), new(3, 0)]);
+        engine.CoveringTests[path] = [new CoveringTest("T.Fail", "/t/T.csproj", "test", [new CoveredLineRange(1, 2)], IsCurrent: true)];
+        engine.State.TestSuites =
+        [
+            new Engine.Models.TestSuite(
+                "T",
+                [new Engine.Models.TestResult("T.Fail", "Fail", Engine.Models.TestStatus.Failed, TimeSpan.Zero, null, null, null, null)],
+                DateTimeOffset.UnixEpoch,
+                TimeSpan.Zero),
+        ];
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var node = await dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageGetChangedLines, JsonNode.Parse("""{"base":"working"}"""), _ct);
+        var result = node.Deserialize<ChangedLineCoverageDto>(JsonRpcSerializer.Options)!;
+
+        Assert.True(result.Enabled);
+        Assert.Equal(new ChangedLineTotalsDto(4, 0, 2, 1, 1, 0), result.Totals);
+        Assert.Equal(0, result.UnknownReasons["stale"]);
+        Assert.Equal(0, result.FilesOmitted);
+        var file = Assert.Single(result.Files);
+        Assert.Equal("src/A.cs", file.RelativePath);
+        Assert.False(file.DetailOmitted);
+        Assert.Empty(file.CoveredByPassing);
+        Assert.Equal([new LineRangeDto(1, 2)], file.CoveredOnlyByFailing);
+        Assert.Equal([new LineRangeDto(3, 3)], file.Uncovered);
+        Assert.Equal([new LineRangeDto(4, 4)], file.NonExecutable);
+        Assert.Empty(file.Unknown);
+        Assert.Equal([new ChangedLineBranchesDto(1, 1, 2)], file.PartialBranches);
+        Assert.Equal(["T.Fail"], file.FailingTests);
+        Assert.Equal(0, file.FailingTestsOmitted);
+    }
+
+    [Fact]
+    public void ChangedLines_ManyLinesAndRepeatedFailingTests_FitInOneMessageWithExactTotals()
+    {
+        const int Files = 20, LinesPerFile = 5_000, FailingTests = 50;
+        var failing = Enumerable.Range(0, FailingTests)
+            .Select(i => new CoveringTest($"T.{new string('x', 300)}.Fail{i:D3}", "/t/T.csproj", "test", [new CoveredLineRange(1, LinesPerFile)], IsCurrent: true))
+            .ToList();
+        // Odd lines ran under failing tests and even lines did not, so no two adjacent lines share a verdict.
+        var lineCoverage = Enumerable.Range(1, LinesPerFile).Select(n => new LineCoverage(n, n % 2)).ToList();
+        var paths = Enumerable.Range(0, Files).Select(i => $"/repo/src/F{i:D2}.cs").ToList();
+        var changes = new ChangedLinesResult(
+            "working tree",
+            paths.ToDictionary(p => p, _ => new SortedSet<int>(Enumerable.Range(1, LinesPerFile))));
+
+        var dto = ChangedLineVerdicts.Classify(
+                changes,
+                p => new FileCoverageSnapshot(Summary(p, LinesPerFile, LinesPerFile / 2), lineCoverage),
+                _ => failing,
+                _ => CoveringTestOutcome.Failed)
+            .ToDto("/repo");
+
+        var size = JsonRpcSerializer.Serialize(new JsonRpcResponse("1", JsonSerializer.SerializeToNode(dto, JsonRpcSerializer.Options))).Length;
+        TestContext.Current.TestOutputHelper?.WriteLine($"Serialized reply: {size} bytes");
+        Assert.True(size < MessageFramer.DefaultMaxMessageSize, $"{size} bytes");
+        Assert.Equal(new ChangedLineTotalsDto(Files * LinesPerFile, 0, Files * LinesPerFile / 2, Files * LinesPerFile / 2, 0, 0), dto.Totals);
+        Assert.Equal(Files, dto.Files.Count + dto.FilesOmitted);
+        Assert.Contains(dto.Files, f => f.DetailOmitted);
+        Assert.Contains(dto.Warnings, w => w.Contains("too large", StringComparison.Ordinal));
+
+        var first = dto.Files[0];
+        Assert.False(first.DetailOmitted);
+        Assert.Equal(LinesPerFile / 2, first.CoveredOnlyByFailing.Count);
+        Assert.Equal(CoverageTools.MaxFailingTestsPerFile, first.FailingTests.Count);
+        Assert.Equal(FailingTests - CoverageTools.MaxFailingTestsPerFile, first.FailingTestsOmitted);
+        Assert.All(dto.Files, f => Assert.Equal(LinesPerFile, f.Totals.ChangedLines));
+    }
+
+    [Fact]
+    public void ChangedLines_OverBudget_KeepsTotalsThenOmitsFiles()
+    {
+        var paths = Enumerable.Range(0, 3).Select(i => $"/repo/src/F{i}.cs").ToList();
+        var changes = new ChangedLinesResult(
+            "working tree", paths.ToDictionary(p => p, _ => new SortedSet<int>([1, 3, 5, 7, 9])));
+        var result = ChangedLineVerdicts.Classify(changes, _ => null, _ => null, _ => CoveringTestOutcome.NoResult);
+        var full = result.ToDto("/repo");
+        var detailSize = JsonSerializer.SerializeToUtf8Bytes(full.Files[0], JsonRpcSerializer.Options).Length + 1;
+        var summarySize = JsonSerializer.SerializeToUtf8Bytes(
+            full.Files[1] with { Unknown = [], FailingTests = [], DetailOmitted = true }, JsonRpcSerializer.Options).Length + 1;
+
+        var dto = result.ToDto("/repo", budget: detailSize + summarySize);
+
+        Assert.Equal(new ChangedLineTotalsDto(15, 0, 0, 0, 0, 15), dto.Totals);
+        Assert.Equal(15, dto.UnknownReasons["notMeasured"]);
+        Assert.Equal(2, dto.Files.Count);
+        Assert.Equal(1, dto.FilesOmitted);
+        Assert.False(dto.Files[0].DetailOmitted);
+        Assert.Equal("notMeasured", Assert.Single(dto.Files[0].Unknown).Reason);
+        Assert.True(dto.Files[1].DetailOmitted);
+        Assert.Empty(dto.Files[1].Unknown);
+        Assert.Equal(5, dto.Files[1].Totals.Unknown);
+        Assert.Contains(dto.Warnings, w => w.Contains("1 file(s) give only totals and 1 file(s) are omitted", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetCoveringTests_GivesEachTestsLatestOutcome()
+    {
+        var engine = new StubEngine();
+        engine.CoveringTests["A.cs"] =
+        [
+            new CoveringTest("T.Pass", "/t/T.csproj", "test", [new CoveredLineRange(1, 1)], IsCurrent: true),
+            new CoveringTest("T.Fail", "/t/T.csproj", "test", [new CoveredLineRange(1, 1)], IsCurrent: true),
+            new CoveringTest("T.Gone", "/t/T.csproj", "test", [new CoveredLineRange(1, 1)], IsCurrent: true),
+        ];
+        engine.State.TestSuites =
+        [
+            new Engine.Models.TestSuite(
+                "T",
+                [
+                    new Engine.Models.TestResult("T.Pass", "Pass", Engine.Models.TestStatus.Passed, TimeSpan.Zero, null, null, null, null),
+                    new Engine.Models.TestResult("T.Fail", "Fail", Engine.Models.TestStatus.Failed, TimeSpan.Zero, null, null, null, null),
+                ],
+                DateTimeOffset.UnixEpoch,
+                TimeSpan.Zero),
+        ];
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var result = await dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageGetCoveringTests, JsonNode.Parse("""{"filePath":"A.cs"}"""), _ct);
+
+        var outcomes = result!["tests"]!.AsArray().ToDictionary(
+            t => t!["testFqn"]!.GetValue<string>(), t => t!["outcome"]?.GetValue<string>());
+        Assert.Equal("passed", outcomes["T.Pass"]);
+        Assert.Equal("failed", outcomes["T.Fail"]);
+        Assert.Equal("noResult", outcomes["T.Gone"]);
+    }
+
+    [Fact]
+    public async Task GetChangeDiff_WithCoverageDisabled_ReportsDisabled()
+    {
+        var dispatcher = new EngineCommandDispatcher(new StubEngine());
+
+        var result = await dispatcher.HandleCommandAsync(ProtocolMethods.CoverageGetChangeDiff, null, _ct);
+
+        Assert.False(result!["enabled"]!.GetValue<bool>());
+        Assert.Empty(result["files"]!.AsArray());
+    }
+
+    [Theory]
+    [InlineData("""{"base":"--output=/tmp/x"}""")]
+    [InlineData("""{"base":"range"}""")]
+    [InlineData("""{"context":"three"}""")]
+    public async Task GetChangeDiff_InvalidParams_AreRejected(string @params)
+    {
+        var engine = new StubEngine { CoverageReport = new CoverageReportSnapshot([]) };
+        engine.State.SolutionPath = Path.Combine(_root, "App.slnx");
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var ex = await Assert.ThrowsAsync<JsonRpcException>(() => dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageGetChangeDiff, JsonNode.Parse(@params), _ct));
+
+        Assert.Equal(JsonRpcErrorCodes.InvalidParams, ex.Code);
+    }
+
+    [Fact]
+    public async Task GetChangeDiff_ReturnsHunksWithAVerdictOnEachAddedSourceLine()
+    {
+        Git("init", "-q", "-b", "main");
+        var path = Path.Combine(_root, "src", "A.cs");
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllLinesAsync(path, ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"], _ct);
+        await File.WriteAllLinesAsync(Path.Combine(_root, "README.md"), ["old"], _ct);
+        Git("add", ".");
+        Git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init");
+        await File.WriteAllLinesAsync(path, ["a", "B", "C", "d", "e", "f", "g", "h", "i", "j"], _ct);
+        await File.WriteAllLinesAsync(Path.Combine(_root, "README.md"), ["new"], _ct);
+
+        var engine = new StubEngine { CoverageReport = new CoverageReportSnapshot([]) };
+        engine.State.SolutionPath = Path.Combine(_root, "App.slnx");
+        engine.FileCoverage[path] = new FileCoverageSnapshot(Summary(path, 2, 1), [new(2, 3, 1, 2), new(3, 0)]);
+        engine.CoveringTests[path] = [new CoveringTest("T.Pass", "/t/T.csproj", "test", [new CoveredLineRange(2, 2)], IsCurrent: true)];
+        engine.State.TestSuites =
+        [
+            new Engine.Models.TestSuite(
+                "T",
+                [new Engine.Models.TestResult("T.Pass", "Pass", Engine.Models.TestStatus.Passed, TimeSpan.Zero, null, null, null, null)],
+                DateTimeOffset.UnixEpoch,
+                TimeSpan.Zero),
+        ];
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var node = await dispatcher.HandleCommandAsync(
+            ProtocolMethods.CoverageGetChangeDiff, JsonNode.Parse("""{"base":"working","context":2}"""), _ct);
+        var result = node.Deserialize<ChangeDiffDto>(JsonRpcSerializer.Options)!;
+
+        Assert.True(result.Enabled);
+        Assert.Equal(new ChangedLineTotalsDto(2, 1, 0, 1, 0, 0), result.Totals);
+        Assert.Equal(0, result.FilesOmitted);
+        Assert.Equal(["README.md", "src/A.cs"], result.Files.Select(f => f.RelativePath));
+
+        var readme = result.Files[0];
+        Assert.False(readme.IsCode);
+        Assert.All(readme.Hunks.SelectMany(h => h.Lines), l => Assert.Null(l.Verdict));
+        Assert.Contains(readme.Hunks.SelectMany(h => h.Lines), l => l is { Kind: "added", Text: "new" });
+
+        var code = result.Files[1];
+        Assert.True(code.IsCode);
+        Assert.True(code.IsMeasured);
+        Assert.Equal("modified", code.Status);
+        var lines = Assert.Single(code.Hunks).Lines;
+        Assert.Equal(
+            [
+                new DiffLineDto("context", 1, 1, "a"),
+                new DiffLineDto("removed", 2, null, "b"),
+                new DiffLineDto("removed", 3, null, "c"),
+                new DiffLineDto("added", null, 2, "B", "coveredByPassing", null, 3, 1, 2),
+                new DiffLineDto("added", null, 3, "C", "uncovered", null, 0),
+                new DiffLineDto("context", 4, 4, "d"),
+                new DiffLineDto("context", 5, 5, "e"),
+            ],
+            lines);
+        Assert.DoesNotContain("\"verdict\"", node!["files"]![0]!.ToJsonString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChangeDiff_OverBudget_DropsHunksThenOmitsFiles()
+    {
+        var paths = Enumerable.Range(0, 3).Select(i => $"/repo/src/F{i}.cs").ToList();
+        var lines = new[] { 1, 2, 3 };
+        var changes = new ChangedLinesResult("working tree", paths.ToDictionary(p => p, _ => new SortedSet<int>(lines)))
+        {
+            Diff = paths.ToDictionary(p => p, _ => UnifiedDiff.Added([.. lines.Select(n => $"line {n}")])),
+        };
+        var classified = ChangedLineVerdicts.Classify(changes, _ => null, _ => null, _ => CoveringTestOutcome.NoResult);
+        var result = classified with { Diff = changes.Diff };
+        var full = result.ToChangeDiffDto("/repo");
+        Assert.All(full.Files, f => Assert.Equal(3, f.Hunks.Single().Lines.Count));
+        var withHunks = JsonSerializer.SerializeToUtf8Bytes(full.Files[0], JsonRpcSerializer.Options).Length + 1;
+        var totalsOnly = JsonSerializer.SerializeToUtf8Bytes(
+            full.Files[1] with { Hunks = [], HunksOmitted = true }, JsonRpcSerializer.Options).Length + 1;
+
+        var dto = result.ToChangeDiffDto("/repo", budget: withHunks + totalsOnly);
+
+        Assert.Equal(full.Totals, dto.Totals);
+        Assert.Equal(9, dto.Totals.Unknown);
+        Assert.Equal(2, dto.Files.Count);
+        Assert.Equal(1, dto.FilesOmitted);
+        Assert.False(dto.Files[0].HunksOmitted);
+        Assert.Equal("unknown", dto.Files[0].Hunks[0].Lines[0].Verdict);
+        Assert.Equal("notMeasured", dto.Files[0].Hunks[0].Lines[0].Reason);
+        Assert.True(dto.Files[1].HunksOmitted);
+        Assert.Empty(dto.Files[1].Hunks);
+        Assert.Equal(3, dto.Files[1].Totals.Unknown);
+        Assert.Contains(dto.Warnings, w => w.Contains("1 file(s) give only totals and 1 file(s) are omitted", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ChangeDiff_MarksFilesWhoseRangeVersionDiffersFromTheWorkingTree()
+    {
+        string[] paths = ["/repo/src/Diverged.cs", "/repo/src/Same.cs"];
+        var changes = new ChangedLinesResult("main..feature", paths.ToDictionary(p => p, _ => new SortedSet<int>([1])))
+        {
+            DivergedFiles = new HashSet<string>([paths[0]]),
+            Diff = paths.ToDictionary(p => p, _ => UnifiedDiff.Added(["line 1"])),
+        };
+        var classified = ChangedLineVerdicts.Classify(changes, _ => null, _ => null, _ => CoveringTestOutcome.NoResult);
+
+        var dto = (classified with { Diff = changes.Diff, DivergedFiles = changes.DivergedFiles }).ToChangeDiffDto("/repo");
+
+        Assert.True(dto.Files.Single(f => f.RelativePath == "src/Diverged.cs").IsDiverged);
+        Assert.False(dto.Files.Single(f => f.RelativePath == "src/Same.cs").IsDiverged);
+    }
+
+    [Fact]
     public async Task Export_ReturnsLcovContent()
     {
         var engine = new StubEngine();
@@ -285,5 +648,19 @@ public sealed class CoverageCommandTests : IDisposable
 
         Assert.Equal(JsonRpcErrorCodes.InvalidParams, badFormat.Code);
         Assert.Contains("disabled", disabled.Message, StringComparison.Ordinal);
+    }
+
+    private void Git(params string[] args)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("git") { WorkingDirectory = _root, RedirectStandardError = true };
+        foreach (var arg in args)
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        var error = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        Assert.True(process.ExitCode == 0, error);
     }
 }

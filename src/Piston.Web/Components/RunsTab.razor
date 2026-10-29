@@ -1,4 +1,5 @@
 @inject EngineClientService Client
+@inject ViewState View
 @implements IDisposable
 
 <div class="flex flex-col h-full overflow-hidden text-xs">
@@ -44,6 +45,10 @@
                                 {
                                     <span class="text-gray-500 ml-1">@run.Skipped</span>
                                 }
+                                @if (run.Retried > 0)
+                                {
+                                    <span class="text-yellow-400 ml-1" title="@DescribeRetries(run)">↻@run.Retried</span>
+                                }
                             </span>
                         </button>
                     }
@@ -67,6 +72,10 @@
                             <span class="text-gray-400 tabular-nums">@TestNode.FormatDuration((completed - summary.RequestedAt).TotalMilliseconds)</span>
                         }
                         <span class="text-gray-500" title="Whether the results matched the source when the run finished">@summary.Freshness</span>
+                        @if (summary.Retried > 0)
+                        {
+                            <span class="text-yellow-400">@DescribeRetries(summary)</span>
+                        }
                         @if (summary.Source is { } source)
                         {
                             <span class="text-gray-500 font-mono" title="Source fingerprint @source">@Short(source)</span>
@@ -120,10 +129,18 @@
                                 <div class="flex items-center gap-2">
                                     <span class="w-14 shrink-0 @StatusText(result.Status)">@result.Status</span>
                                     <button class="truncate text-left text-gray-200 hover:underline" title="@result.Project :: @result.Test"
-                                            @onclick="() => OnOpenTest.InvokeAsync(new TestReference(result.Project, result.Test))">@result.Test</button>
+                                            @onclick="() => OnOpenTest.InvokeAsync(new TestReference(result.ProjectId ?? result.Project, result.Test))">@result.Test</button>
                                     <span class="flex-1"></span>
                                     <span class="text-yellow-600 tabular-nums shrink-0">@TestNode.FormatDuration(result.DurationMs)</span>
                                 </div>
+                                @if (TestRetries.Describe(result) is { } retried)
+                                {
+                                    <div class="ml-16 text-yellow-400">↻ @retried</div>
+                                    @foreach (var (attempt, index) in result.Attempts!.Select((a, i) => (a, i)))
+                                    {
+                                        <div class="ml-20 text-gray-500 truncate" title="@attempt.ErrorMessage">Attempt @(index + 1): @TestRetries.FirstLine(attempt.ErrorMessage, attempt.Status)</div>
+                                    }
+                                }
                                 @if (result.ErrorMessage is { Length: > 0 } error)
                                 {
                                     <pre class="ml-16 mt-0.5 mb-1 whitespace-pre-wrap text-red-300/90 font-mono max-h-24 overflow-y-auto">@error</pre>
@@ -168,8 +185,13 @@
     {
         _runs = await Client.GetStoredRunsAsync();
         var latest = _runs?.Runs.FirstOrDefault();
+        var revealed = View.TakeRevealedRun();
+        if (revealed is not null && _runs?.Runs.Any(r => r.RunId == revealed) == true)
+        {
+            await SelectRunAsync(revealed);
+        }
         // Follow the newest run unless the user picked an older one.
-        if (latest is not null && (_selectedId is null || _selectedId == PreviousLatest))
+        else if (latest is not null && (_selectedId is null || _selectedId == PreviousLatest))
         {
             await SelectRunAsync(latest.RunId);
         }
@@ -264,6 +286,9 @@
         var scope = run.IsFullScope ? "all tests" : run.Scope == "Selective" ? "affected tests" : "selected tests";
         return $"{trigger} · {scope}";
     }
+
+    private static string DescribeRetries(StoredRunSummaryDto run) =>
+        $"{run.Retried} retried, {run.PassedOnRetry} passed on retry";
 
     private static string FormatTime(DateTimeOffset time)
     {

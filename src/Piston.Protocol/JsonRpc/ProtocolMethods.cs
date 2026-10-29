@@ -26,6 +26,7 @@ public static class ProtocolMethods
 
     /// <summary>Start a run of selected tests; replies once the run is requested, without awaiting it.</summary>
     public const string EngineRunTests = "engine/runTests";
+    public const string EngineRunFailed = "engine/runFailed";
 
     /// <summary>Request per-file coverage data for the given source file.</summary>
     public const string CoverageGetForFile = "coverage/getForFile";
@@ -35,6 +36,12 @@ public static class ProtocolMethods
 
     /// <summary>Request the tests the impact map records as executing a source file.</summary>
     public const string CoverageGetCoveringTests = "coverage/getCoveringTests";
+
+    /// <summary>Request a verdict for each changed line, comparing the working tree with a git base.</summary>
+    public const string CoverageGetChangedLines = "coverage/getChangedLines";
+
+    /// <summary>Request the unified diff of the changes against a git base, with a verdict on each added source line.</summary>
+    public const string CoverageGetChangeDiff = "coverage/getChangeDiff";
 
     /// <summary>Export the coverage report as LCOV or Cobertura text.</summary>
     public const string CoverageExport = "coverage/export";
@@ -53,6 +60,12 @@ public static class ProtocolMethods
 
     /// <summary>Request the recorded results of a test.</summary>
     public const string HistoryGetTestHistory = "history/getTestHistory";
+
+    /// <summary>
+    /// Request a page of the session timeline: terminal runs since the engine started, with their edits and outcome
+    /// changes. Pages are bounded in size; request the next with the last entry's sequence while <c>hasMore</c> is set.
+    /// </summary>
+    public const string SessionGetTimeline = "session/getTimeline";
 
     // Notifications (server → client, no response)
 
@@ -93,6 +106,9 @@ public static class ProtocolMethods
 
     /// <summary>Read the machine-wide user settings and the file they live in.</summary>
     public const string SettingsGet = "settings/get";
+
+    /// <summary>Read machine-wide worktree owners, execution reservations and budget use.</summary>
+    public const string MachineGetOverview = "machine/getOverview";
 
     /// <summary>Merge the non-null fields of a partial settings object into the machine-wide user settings; returns the result and the file path.</summary>
     public const string SettingsUpdate = "settings/update";

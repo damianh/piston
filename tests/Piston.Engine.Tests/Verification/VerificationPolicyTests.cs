@@ -53,6 +53,27 @@ public sealed class VerificationPolicyTests
     }
 
     [Theory]
+    [InlineData(ResultFreshness.Unknown)]
+    [InlineData(ResultFreshness.Current)]
+    public void Decide_DoesNotReuseRestoredRun(ResultFreshness freshness)
+    {
+        var restored = Run() with
+        {
+            Restored = true,
+            Freshness = freshness,
+            FreshnessReason = "Restored from disk; not re-verified.",
+        };
+
+        var decision = VerificationPolicy.Decide(Source, null, [restored], null, false);
+
+        Assert.Equal(VerificationAction.RequestForced, decision.Action);
+        Assert.False(restored.IsCurrentFullResult);
+        var evaluation = VerificationPolicy.Evaluate(restored, Source);
+        Assert.Equal(VerificationVerdict.Stale, evaluation.Verdict);
+        Assert.Equal(restored.FreshnessReason, evaluation.Reason);
+    }
+
+    [Theory]
     [InlineData(TestRunStatus.Completed)]
     [InlineData(TestRunStatus.BuildFailed)]
     public void Decide_DoesNotReuseRunWithoutItsOwnInputCoverage(TestRunStatus status)

@@ -51,7 +51,7 @@ else
                     <button type="button"
                             class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300 focus-visible:decoration-gray-300 focus:outline-none"
                             title="Show project details and its run log"
-                            @onclick="() => OnShowProject.InvokeAsync(Project)">@Project</button>
+                            @onclick="() => OnShowProject.InvokeAsync(Project)">                            @(ProjectLabel ?? Project)</button>
                 </div>
             }
             @if (Test.TargetFramework is { } framework)
@@ -65,6 +65,37 @@ else
         </div>
 
         <HistoryStrip TestKey="@Test.Key" Project="@Project" />
+
+        @if (Test.Status == TestStatusDto.Failed && Project is not null && OnTraceTest.HasDelegate)
+        {
+            <div>
+                <button type="button"
+                        class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300 focus-visible:decoration-gray-300 focus:outline-none"
+                        title="Show the run that started this failure and the edit before it"
+                        @onclick="() => OnTraceTest.InvokeAsync(new TestReference(Project, Test.Key))">Trace in timeline</button>
+            </div>
+        }
+
+        <!-- Earlier attempts when the test was retried within the run -->
+        @if (Test.Attempts is { Count: > 0 } attempts)
+        {
+            <div>
+                <div class="text-gray-400 font-semibold mb-1">Retries <span class="font-normal text-yellow-400">@TestRetries.Describe(Test)</span></div>
+                <ol class="flex flex-col gap-1">
+                    @for (var i = 0; i < attempts.Count; i++)
+                    {
+                        var attempt = attempts[i];
+                        <li>
+                            <div class="text-gray-400">Attempt @(i + 1): <span class="@(attempt.Status == TestStatusDto.Failed ? "text-red-400" : "text-gray-300")">@attempt.Status</span> in @FormatDuration(attempt.DurationMs)</div>
+                            @if (!string.IsNullOrEmpty(attempt.ErrorMessage))
+                            {
+                                <pre class="bg-gray-900 border border-gray-800 rounded p-2 text-red-300 text-xs max-h-32 overflow-auto whitespace-pre-wrap break-all">@attempt.ErrorMessage</pre>
+                            }
+                        </li>
+                    }
+                </ol>
+            </div>
+        }
 
         <!-- Why the last run selected it -->
         @if (SelectionReasons is { Count: > 0 } reasons)
@@ -172,9 +203,13 @@ else
 
     /// <summary>The project that produced <see cref="Test"/>'s result.</summary>
     [Parameter] public string? Project { get; set; }
+    [Parameter] public string? ProjectLabel { get; set; }
 
     /// <summary>Shows a project's details, including its run log.</summary>
     [Parameter] public EventCallback<string> OnShowProject { get; set; }
+
+    /// <summary>Follows the test in the Timeline tab.</summary>
+    [Parameter] public EventCallback<TestReference> OnTraceTest { get; set; }
 
     /// <summary>False while a run is in progress or the daemon is unreachable.</summary>
     [Parameter] public bool CanRun { get; set; }

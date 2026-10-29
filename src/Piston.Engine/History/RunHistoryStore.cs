@@ -6,18 +6,20 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Piston.Engine.Execution;
 using Piston.Engine.Models;
+using Piston.Engine.Services;
 
 namespace Piston.Engine.History;
 
 /// <summary>
 /// Persistent per-test results and recent runs of one solution in one worktree, used to classify failures
-/// as new, pre-existing or flaky. One process writes the file at a time (an exclusive <c>.lock</c> next to
+/// as new, pre-existing or flaky. Flaky detection also reads, read-only, the histories the repository's other
+/// worktrees keep for the same solution. One process writes the file at a time (an exclusive <c>.lock</c> next to
 /// it); a second process loads it read-only and keeps its own records in memory. Saves are debounced and
 /// atomic (temp file, then replace).
 /// </summary>
 internal sealed class RunHistoryStore : IDisposable
 {
-    public const int FormatVersion = 1;
+    public const int FormatVersion = 2;
 
     /// <summary>Results kept per test, which is also the window flaky detection looks at.</summary>
     public const int MaxEntriesPerTest = 20;
@@ -40,21 +42,25 @@ internal sealed class RunHistoryStore : IDisposable
     private readonly object _gate = new();
     private readonly object _saveGate = new();
     private readonly Dictionary<(string Project, string Test), List<TestHistoryEntry>> _tests = [];
+    private HashSet<string> _knownProjectIds = new(StringComparer.Ordinal);
     private readonly List<StoredRun> _runs = []; // oldest first
     private readonly HashSet<string> _recordedRunIds = new(StringComparer.Ordinal);
     private readonly FileStream? _lock;
+    private readonly SiblingHistories _siblings;
     private readonly Action<string>? _log;
     private readonly TimeProvider _time;
     private readonly string? _solutionPath;
     private readonly Timer _saveTimer;
     private bool _dirty;
     private bool _disposed;
+    private bool _legacyProjects;
 
     private RunHistoryStore(HistoryLocation location, string? solutionPath, FileStream? @lock, Action<string>? log, TimeProvider time)
     {
         Location = location;
         _solutionPath = solutionPath;
         _lock = @lock;
+        _siblings = new SiblingHistories(location, log);
         _log = log;
         _time = time;
         _saveTimer = new Timer(_ => Save(), null, Timeout.Infinite, Timeout.Infinite);
@@ -101,16 +107,17 @@ internal sealed class RunHistoryStore : IDisposable
     }
 
     /// <summary>
-    /// Classifies the run's failed tests against the history recorded before it, then records the run.
-    /// Runs without any passed, failed or skipped test are not recorded. Recording a run twice is a no-op
+    /// Classifies the run's failed tests (including tests that failed and then passed on retry) against the history
+    /// recorded before it and the histories of the repository's other worktrees, then records the run, one entry per
+    /// attempt. Runs without any passed, failed or skipped test are not recorded. Recording a run twice is a no-op
     /// that classifies nothing.
     /// </summary>
     public IReadOnlyList<FailureClassification> Record(TestRunRecord run)
     {
         var results = run.Suites
-            .SelectMany(s => s.Tests.Select(t => (Project: s.Name, Test: t)))
+            .SelectMany(s => s.Tests.Select(t => (Project: s.Name, ProjectId: s.Key, Test: t)))
             .Where(r => r.Test.Status is TestStatus.Passed or TestStatus.Failed or TestStatus.Skipped)
-            .GroupBy(r => (r.Project, r.Test.ResultKey))
+            .GroupBy(r => (r.ProjectId, r.Test.ResultKey))
             .Select(g => g.Last())
             .ToList();
         if (results.Count == 0)
@@ -121,41 +128,51 @@ internal sealed class RunHistoryStore : IDisposable
         var at = run.CompletedAt ?? _time.GetUtcNow();
         var source = run.Freshness == ResultFreshness.Current ? run.SourceAfter?.Value : null;
         var classifications = new List<FailureClassification>();
+        var siblings = SiblingSnapshot();
 
         lock (_gate)
         {
+            if (_legacyProjects)
+            {
+                _log?.Invoke("Run history migration is waiting for complete project discovery; this run is not recorded.");
+                return [];
+            }
+
             if (!_recordedRunIds.Add(run.RunId))
             {
                 return [];
             }
 
-            foreach (var (project, test) in results)
+            foreach (var (project, projectId, test) in results)
             {
-                var key = (project, test.ResultKey);
+                var key = (projectId, test.ResultKey);
                 var entries = _tests.TryGetValue(key, out var existing) ? existing : _tests[key] = [];
-                var entry = new TestHistoryEntry(run.RunId, at, test.Status, Math.Round(test.Duration.TotalMilliseconds, 3), source);
-                if (test.Status == TestStatus.Failed)
+                var current = test.Attempts
+                    .Select((a, i) => new TestHistoryEntry(run.RunId, at, a.Status, Math.Round(a.Duration.TotalMilliseconds, 3), source, i))
+                    .Append(new TestHistoryEntry(run.RunId, at, test.Status, Math.Round(test.Duration.TotalMilliseconds, 3), source, test.Attempts.Count))
+                    .ToList();
+                if (current.Any(e => e.Status == TestStatus.Failed))
                 {
-                    classifications.Add(Classify(project, test.ResultKey, entries, entry));
+                    classifications.Add(Classify(project, test.ResultKey, entries, current, siblings.GetValueOrDefault(key) ?? []) with { ProjectId = projectId });
                 }
 
-                entries.Add(entry);
+                entries.AddRange(current);
                 if (entries.Count > MaxEntriesPerTest)
                 {
                     entries.RemoveRange(0, entries.Count - MaxEntriesPerTest);
                 }
             }
 
+            var retried = results.Where(r => r.Test.Attempts.Count > 0).ToList();
             _runs.Add(new StoredRun(
                 new StoredRunSummary(
                     run.RunId, run.Trigger, run.Status, run.Scope, run.IsFullScope, run.Freshness, run.RequestedAt, run.CompletedAt, source,
                     results.Count(r => r.Test.Status == TestStatus.Passed),
                     results.Count(r => r.Test.Status == TestStatus.Failed),
-                    results.Count(r => r.Test.Status == TestStatus.Skipped)),
-                [.. results.Select(r => r.Test.Status == TestStatus.Failed
-                    ? new StoredTestResult(r.Project, r.Test.ResultKey, r.Test.Status, Math.Round(r.Test.Duration.TotalMilliseconds, 3),
-                        Clip(r.Test.ErrorMessage, MaxMessageLength), Clip(r.Test.StackTrace, MaxStackTraceLength))
-                    : new StoredTestResult(r.Project, r.Test.ResultKey, r.Test.Status, Math.Round(r.Test.Duration.TotalMilliseconds, 3)))]));
+                    results.Count(r => r.Test.Status == TestStatus.Skipped),
+                    retried.Count,
+                    retried.Count(r => r.Test.Status == TestStatus.Passed)),
+                [.. results.Select(r => ToStored(r.Project, r.Test) with { ProjectId = r.ProjectId })]));
             if (_runs.Count > MaxStoredRuns)
             {
                 _runs.RemoveRange(0, _runs.Count - MaxStoredRuns);
@@ -167,42 +184,73 @@ internal sealed class RunHistoryStore : IDisposable
         return classifications;
     }
 
+    private static StoredTestResult ToStored(string project, TestResult test)
+    {
+        var attempts = test.Attempts.Count == 0
+            ? null
+            : test.Attempts
+                .Select(a => new StoredAttempt(a.Status, Math.Round(a.Duration.TotalMilliseconds, 3),
+                    a.Status == TestStatus.Failed ? Clip(a.ErrorMessage, MaxMessageLength) : null))
+                .ToList();
+        return test.Status == TestStatus.Failed
+            ? new StoredTestResult(project, test.ResultKey, test.Status, Math.Round(test.Duration.TotalMilliseconds, 3),
+                Clip(test.ErrorMessage, MaxMessageLength), Clip(test.StackTrace, MaxStackTraceLength), attempts)
+            : new StoredTestResult(project, test.ResultKey, test.Status, Math.Round(test.Duration.TotalMilliseconds, 3), Attempts: attempts);
+    }
+
     /// <summary>Recorded results of a test, matched by fully-qualified name (with or without target framework).</summary>
     /// <param name="test">Fully-qualified name.</param>
-    /// <param name="project">Test project name; null matches any project.</param>
-    public IReadOnlyList<TestHistory> GetTestHistory(string test, string? project = null)
+    /// <param name="projectId">Solution-relative test project ID; null matches any project.</param>
+    public IReadOnlyList<TestHistory> GetTestHistory(string test, string? projectId = null)
     {
+        var siblings = SiblingSnapshot();
         lock (_gate)
         {
+            if (projectId is not null && _knownProjectIds.Count > 0 && !_knownProjectIds.Contains(projectId)
+                && !_tests.Keys.Any(key => string.Equals(key.Project, projectId, StringComparison.Ordinal)))
+            {
+                throw new ArgumentException($"'{projectId}' is not a test project ID in this solution.", nameof(projectId));
+            }
+
             return [.. _tests
-                .Where(pair => (project is null || string.Equals(pair.Key.Project, project, StringComparison.OrdinalIgnoreCase))
+                .Where(pair => (projectId is null || string.Equals(pair.Key.Project, projectId, StringComparison.Ordinal))
                     && (string.Equals(pair.Key.Test, test, StringComparison.Ordinal)
                         || pair.Key.Test.StartsWith(test + " [", StringComparison.Ordinal)))
                 .OrderBy(pair => pair.Key.Project, StringComparer.Ordinal)
                 .ThenBy(pair => pair.Key.Test, StringComparer.Ordinal)
-                .Select(pair => new TestHistory(pair.Key.Project, pair.Key.Test, [.. pair.Value], FindFlakyPair(pair.Value) is not null))];
+                .Select(pair => new TestHistory(ProjectName(pair.Key.Project), pair.Key.Test, [.. pair.Value],
+                    FindFlakiness(pair.Value, siblings.GetValueOrDefault(pair.Key) ?? []))
+                {
+                    ProjectId = pair.Key.Project,
+                })];
         }
     }
 
-    /// <summary>Tests currently classified as flaky.</summary>
+    /// <summary>Tests currently classified as flaky, with the evidence.</summary>
     public IReadOnlyList<TestHistory> GetFlakyTests()
     {
+        var siblings = SiblingSnapshot();
         lock (_gate)
         {
             return [.. _tests
-                .Where(pair => FindFlakyPair(pair.Value) is not null)
                 .OrderBy(pair => pair.Key.Project, StringComparer.Ordinal)
                 .ThenBy(pair => pair.Key.Test, StringComparer.Ordinal)
-                .Select(pair => new TestHistory(pair.Key.Project, pair.Key.Test, [.. pair.Value], Flaky: true))];
+                .Select(pair => new TestHistory(ProjectName(pair.Key.Project), pair.Key.Test, [.. pair.Value],
+                    FindFlakiness(pair.Value, siblings.GetValueOrDefault(pair.Key) ?? []))
+                {
+                    ProjectId = pair.Key.Project,
+                })
+                .Where(h => h.Flaky)];
         }
     }
 
     /// <summary>
     /// The classification of each test whose latest recorded result is a failure, judged against the entries
-    /// before that failure, as the run that recorded it classified it.
+    /// before that run, together with the other worktrees' results.
     /// </summary>
     public IReadOnlyList<FailureClassification> GetLatestFailures()
     {
+        var siblings = SiblingSnapshot();
         lock (_gate)
         {
             var failures = new List<FailureClassification>();
@@ -211,11 +259,90 @@ internal sealed class RunHistoryStore : IDisposable
                 var last = entries.FindLastIndex(e => e.Status is TestStatus.Passed or TestStatus.Failed);
                 if (last >= 0 && entries[last].Status == TestStatus.Failed)
                 {
-                    failures.Add(Classify(key.Project, key.Test, entries[..last], entries[last]));
+                    var runId = entries[last].RunId;
+                    var first = last;
+                    while (first > 0 && entries[first - 1].RunId == runId)
+                    {
+                        first--;
+                    }
+
+                    failures.Add(Classify(ProjectName(key.Project), key.Test, entries[..first], entries[first..(last + 1)], siblings.GetValueOrDefault(key) ?? []) with { ProjectId = key.Project });
                 }
             }
 
             return failures;
+        }
+    }
+
+    /// <summary>
+    /// Resolves v1 short-name keys once the solution's test projects are available. Ambiguous or removed
+    /// project names cannot safely be assigned and are discarded.
+    /// </summary>
+    public void ResolveLegacyProjects(IReadOnlyList<string> projectPaths, string solutionDirectory)
+    {
+        lock (_gate)
+        {
+            _knownProjectIds = projectPaths
+                .Select(path => TestProjectNames.ProjectId(solutionDirectory, path))
+                .ToHashSet(StringComparer.Ordinal);
+            if (!_legacyProjects)
+            {
+                return;
+            }
+
+            var idsByName = _knownProjectIds
+                .GroupBy(ProjectName, StringComparer.Ordinal)
+                .ToDictionary(group => group.Key, group => group.ToList(), StringComparer.Ordinal);
+
+            string? Resolve(string legacyName) =>
+                idsByName.TryGetValue(legacyName, out var ids) && ids.Count == 1 ? ids[0] : null;
+
+            var migratedTests = new Dictionary<(string Project, string Test), List<TestHistoryEntry>>();
+            var dropped = 0;
+            foreach (var (key, entries) in _tests)
+            {
+                if (Resolve(key.Project) is { } id)
+                {
+                    migratedTests[(id, key.Test)] = entries;
+                }
+                else
+                {
+                    dropped++;
+                }
+            }
+
+            _tests.Clear();
+            foreach (var (key, entries) in migratedTests)
+            {
+                _tests[key] = entries;
+            }
+
+            for (var i = 0; i < _runs.Count; i++)
+            {
+                var run = _runs[i];
+                var results = new List<StoredTestResult>();
+                foreach (var result in run.Results)
+                {
+                    if (Resolve(result.ProjectId) is { } id)
+                    {
+                        results.Add(result with { Project = ProjectName(id), ProjectId = id });
+                    }
+                    else
+                    {
+                        dropped++;
+                    }
+                }
+
+                _runs[i] = run with { Results = results };
+            }
+
+            _legacyProjects = false;
+            if (dropped > 0)
+            {
+                _log?.Invoke($"Dropped {dropped} legacy run-history result(s) whose project name was ambiguous or no longer exists.");
+            }
+
+            ScheduleSaveLocked();
         }
     }
 
@@ -237,17 +364,56 @@ internal sealed class RunHistoryStore : IDisposable
         }
     }
 
-    /// <summary>Classifies a failure from the entries recorded before it and the failure itself.</summary>
-    internal static FailureClassification Classify(string project, string test, IReadOnlyList<TestHistoryEntry> before, TestHistoryEntry failure)
+    private IReadOnlyDictionary<(string Project, string Test), IReadOnlyList<SiblingEntry>> SiblingSnapshot()
     {
-        var window = before.Skip(Math.Max(0, before.Count - (MaxEntriesPerTest - 1))).Append(failure).ToList();
-        if (FindFlakyPair(window) is var (passed, failed))
+        try
         {
-            return new FailureClassification(project, test, FailureKind.Flaky,
-                $"Passed (run {passed.RunId}, {Format(passed.At)}) and failed (run {failed.RunId}, {Format(failed.At)}) on the same source {Short(passed.Source)}.");
+            // A removed worktree's file is never saved again, so its entries never age out on their own.
+            var cutoff = _time.GetUtcNow() - Retention;
+            var snapshot = _siblings.Snapshot();
+            if (snapshot.Values.All(entries => entries.All(e => e.Entry.At >= cutoff)))
+            {
+                return snapshot;
+            }
+
+            return snapshot
+                .Select(pair => (pair.Key, Entries: (IReadOnlyList<SiblingEntry>)[.. pair.Value.Where(e => e.Entry.At >= cutoff)]))
+                .Where(pair => pair.Entries.Count > 0)
+                .ToDictionary(pair => pair.Key, pair => pair.Entries);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            _log?.Invoke($"Cannot read the run histories of other worktrees: {ex.Message}");
+            return new Dictionary<(string Project, string Test), IReadOnlyList<SiblingEntry>>();
+        }
+    }
+
+    /// <summary>Classifies a run's results of a test that failed at least once, from the entries recorded before the run.</summary>
+    /// <param name="before">This worktree's entries recorded before the run, oldest first.</param>
+    /// <param name="current">The run's entries, one per attempt; the last is the final result.</param>
+    /// <param name="siblings">The test's results recorded by other worktrees of the repository.</param>
+    internal static FailureClassification Classify(
+        string project,
+        string test,
+        IReadOnlyList<TestHistoryEntry> before,
+        IReadOnlyList<TestHistoryEntry> current,
+        IReadOnlyList<SiblingEntry>? siblings = null)
+    {
+        var window = before.Skip(Math.Max(0, before.Count - Math.Max(0, MaxEntriesPerTest - current.Count))).Concat(current).ToList();
+        if (FindFlakiness(window, siblings ?? []) is { } flakiness)
+        {
+            var lastPass = flakiness.Outcomes.FirstOrDefault(o => o.Status == TestStatus.Passed);
+            var lastFailure = flakiness.Outcomes.FirstOrDefault(o => o.Status == TestStatus.Failed);
+            var latest = lastPass is null || lastFailure is null
+                ? ""
+                : $" Last passed in {Describe(lastPass)}; last failed in {Describe(lastFailure)}.";
+            return new FailureClassification(project, test, FailureKind.Flaky, flakiness.Describe() + latest, flakiness);
         }
 
-        var decided = before.Where(e => e.Status is TestStatus.Passed or TestStatus.Failed).ToList();
+        // Earlier runs are judged by their final result: a test that passed on retry passed in that run.
+        var decided = before
+            .Where((e, i) => (i == before.Count - 1 || before[i + 1].RunId != e.RunId) && e.Status is TestStatus.Passed or TestStatus.Failed)
+            .ToList();
         if (decided.Count == 0)
         {
             return new FailureClassification(project, test, FailureKind.Unknown, "No earlier result is recorded for this test in this worktree.");
@@ -260,38 +426,67 @@ internal sealed class RunHistoryStore : IDisposable
                 $"Passed in the previous run that ran it (run {previous.RunId}, {Format(previous.At)}).");
         }
 
-        var lastPass = decided.LastOrDefault(e => e.Status == TestStatus.Passed);
-        var firstFailure = lastPass is null ? decided[0] : decided[decided.IndexOf(lastPass) + 1];
-        var failures = decided.Count - (lastPass is null ? 0 : decided.IndexOf(lastPass) + 1);
+        var lastPassed = decided.LastOrDefault(e => e.Status == TestStatus.Passed);
+        var firstFailure = lastPassed is null ? decided[0] : decided[decided.IndexOf(lastPassed) + 1];
+        var failures = decided.Count - (lastPassed is null ? 0 : decided.IndexOf(lastPassed) + 1);
         var since = $"Also failed in {failures} earlier run(s), first in run {firstFailure.RunId} ({Format(firstFailure.At)})";
-        return new FailureClassification(project, test, FailureKind.PreExisting, lastPass is null
+        return new FailureClassification(project, test, FailureKind.PreExisting, lastPassed is null
             ? $"{since}; no pass is recorded."
-            : $"{since}; last passed in run {lastPass.RunId} ({Format(lastPass.At)}).");
+            : $"{since}; last passed in run {lastPassed.RunId} ({Format(lastPassed.At)}).");
     }
 
-    /// <summary>A pass and a failure on the same source fingerprint, newest first; null when there is none.</summary>
-    private static (TestHistoryEntry Passed, TestHistoryEntry Failed)? FindFlakyPair(IReadOnlyList<TestHistoryEntry> entries)
+    /// <summary>
+    /// Flaky evidence for a test: the newest source fingerprint on which it both passed and failed, counting this
+    /// worktree's entries and other worktrees' results; otherwise the newest run whose retries both passed and failed
+    /// (the same build). Null when there is neither.
+    /// </summary>
+    internal static FlakinessEvidence? FindFlakiness(IReadOnlyList<TestHistoryEntry> entries, IReadOnlyList<SiblingEntry> siblings)
     {
-        for (var i = entries.Count - 1; i >= 0; i--)
-        {
-            var e = entries[i];
-            if (e.Source is null || e.Status is not (TestStatus.Passed or TestStatus.Failed))
-            {
-                continue;
-            }
+        var outcomes = entries
+            .Where(e => e.Status is TestStatus.Passed or TestStatus.Failed)
+            .Select(e => (e.Source, Outcome: new FlakyOutcome(e.RunId, e.At, e.Status, e.Attempt, null)))
+            .Concat(siblings
+                .Where(s => s.Entry.Source is not null && s.Entry.Status is TestStatus.Passed or TestStatus.Failed)
+                .Select(s => (s.Entry.Source, Outcome: new FlakyOutcome(s.Entry.RunId, s.Entry.At, s.Entry.Status, s.Entry.Attempt, s.Worktree))))
+            .ToList();
 
-            for (var j = i - 1; j >= 0; j--)
-            {
-                var other = entries[j];
-                if (other.Source == e.Source && other.Status is (TestStatus.Passed or TestStatus.Failed) && other.Status != e.Status)
-                {
-                    return e.Status == TestStatus.Passed ? (e, other) : (other, e);
-                }
-            }
+        static bool BothOutcomes(IEnumerable<FlakyOutcome> group) =>
+            group.Any(o => o.Status == TestStatus.Passed) && group.Any(o => o.Status == TestStatus.Failed);
+
+        var bySource = outcomes
+            .Where(o => o.Source is not null)
+            .GroupBy(o => o.Source!, StringComparer.Ordinal)
+            .Where(g => BothOutcomes(g.Select(x => x.Outcome)))
+            .OrderByDescending(g => g.Max(x => x.Outcome.At))
+            .FirstOrDefault();
+        if (bySource is not null)
+        {
+            return Evidence(bySource.Key, [.. bySource.Select(x => x.Outcome)]);
         }
 
-        return null;
+        var byRun = outcomes
+            .Where(o => o.Outcome.Worktree is null)
+            .GroupBy(o => o.Outcome.RunId, StringComparer.Ordinal)
+            .Where(g => BothOutcomes(g.Select(x => x.Outcome)))
+            .OrderByDescending(g => g.Max(x => x.Outcome.At))
+            .FirstOrDefault();
+        return byRun is null ? null : Evidence(null, [.. byRun.Select(x => x.Outcome)]);
     }
+
+    private static FlakinessEvidence Evidence(string? source, List<FlakyOutcome> outcomes) => new(
+        source,
+        outcomes.Count(o => o.Status == TestStatus.Passed),
+        outcomes.Count(o => o.Status == TestStatus.Failed),
+        outcomes.Count(o => o.Attempt > 0),
+        [.. outcomes.Select(o => o.Worktree).OfType<string>().Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
+        [.. outcomes
+            .OrderByDescending(o => o.At)
+            .ThenByDescending(o => o.Attempt)
+            .Take(FlakinessEvidence.MaxOutcomes)]);
+
+    private static string Describe(FlakyOutcome outcome) =>
+        $"run {outcome.RunId}{(outcome.Attempt > 0 ? $" retry {outcome.Attempt}" : "")}" +
+        $"{(outcome.Worktree is { } worktree ? $" in worktree {worktree}" : "")} ({Format(outcome.At)})";
 
     private static string Format(DateTimeOffset at) => at.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss'Z'", CultureInfo.InvariantCulture);
 
@@ -387,12 +582,13 @@ internal sealed class RunHistoryStore : IDisposable
                 model = JsonSerializer.Deserialize<FileModel>(stream, JsonOptions);
             }
 
-            if (model is null || model.Version != FormatVersion)
+            if (model is null || model.Version is not (1 or FormatVersion))
             {
                 _log?.Invoke($"Ignoring run history {Location.FilePath}: unsupported format version {model?.Version}.");
                 return;
             }
 
+            _legacyProjects = model.Version == 1;
             FromModel(model);
             _log?.Invoke($"Loaded run history for {_tests.Count} test(s) and {_runs.Count} run(s) from {Location.FilePath}.");
         }
@@ -454,6 +650,7 @@ internal sealed class RunHistoryStore : IDisposable
                     Status = Code(e.Status),
                     DurationMs = e.DurationMs,
                     Source = e.Source,
+                    Attempt = e.Attempt == 0 ? null : e.Attempt,
                 })],
             })
             .ToList();
@@ -461,7 +658,7 @@ internal sealed class RunHistoryStore : IDisposable
         var runs = _runs.Select(r => new RunModel
         {
             Summary = r.Summary,
-            Projects = [.. r.Results.Select(t => Name(t.Project))],
+            Projects = [.. r.Results.Select(t => Name(t.ProjectId))],
             Tests = [.. r.Results.Select(t => Name(t.Test))],
             Statuses = new string([.. r.Results.Select(t => Code(t.Status))]),
             DurationsMs = [.. r.Results.Select(t => t.DurationMs)],
@@ -469,6 +666,14 @@ internal sealed class RunHistoryStore : IDisposable
                 .Select((t, i) => (t, i))
                 .Where(x => x.t.ErrorMessage is not null || x.t.StackTrace is not null)
                 .ToDictionary(x => x.i.ToString(CultureInfo.InvariantCulture), x => new ErrorModel { Message = x.t.ErrorMessage, StackTrace = x.t.StackTrace }),
+            Attempts = r.Results.Any(t => t.Attempts is { Count: > 0 })
+                ? r.Results
+                    .Select((t, i) => (t, i))
+                    .Where(x => x.t.Attempts is { Count: > 0 })
+                    .ToDictionary(x => x.i.ToString(CultureInfo.InvariantCulture), x => x.t.Attempts!
+                        .Select(a => new AttemptModel { Status = Code(a.Status), DurationMs = a.DurationMs, Message = a.ErrorMessage })
+                        .ToList())
+                : null,
         }).ToList();
 
         return new FileModel
@@ -490,7 +695,7 @@ internal sealed class RunHistoryStore : IDisposable
         foreach (var test in model.Tests ?? [])
         {
             _tests[(names[test.Project], names[test.Test])] = [.. (test.Runs ?? [])
-                .Select(e => new TestHistoryEntry(e.RunId, e.At, Status(e.Status), e.DurationMs, e.Source))];
+                .Select(e => new TestHistoryEntry(e.RunId, e.At, Status(e.Status), e.DurationMs, e.Source, e.Attempt ?? 0))];
         }
 
         foreach (var run in model.Runs ?? [])
@@ -504,8 +709,15 @@ internal sealed class RunHistoryStore : IDisposable
             for (var i = 0; i < run.Tests.Length; i++)
             {
                 var error = run.Errors?.GetValueOrDefault(i.ToString(CultureInfo.InvariantCulture));
+                var attempts = run.Attempts?.GetValueOrDefault(i.ToString(CultureInfo.InvariantCulture));
+                var project = names[run.Projects[i]];
                 results.Add(new StoredTestResult(
-                    names[run.Projects[i]], names[run.Tests[i]], Status(run.Statuses[i]), run.DurationsMs[i], error?.Message, error?.StackTrace));
+                    model.Version == 1 ? project : ProjectName(project),
+                    names[run.Tests[i]], Status(run.Statuses[i]), run.DurationsMs[i], error?.Message, error?.StackTrace,
+                    attempts is null ? null : [.. attempts.Select(a => new StoredAttempt(Status(a.Status), a.DurationMs, a.Message))])
+                {
+                    ProjectId = project,
+                });
             }
 
             _runs.Add(new StoredRun(run.Summary, results));
@@ -517,6 +729,43 @@ internal sealed class RunHistoryStore : IDisposable
             _ = _recordedRunIds.Add(entry.RunId);
         }
     }
+
+    /// <summary>
+    /// Reads another worktree's history file without locking it: its worktree path and the entries that carry a
+    /// source fingerprint. Throws when the file cannot be read or parsed.
+    /// </summary>
+    internal static (string? WorktreePath, IReadOnlyDictionary<(string Project, string Test), IReadOnlyList<TestHistoryEntry>> Tests) ReadSourcedEntries(string path)
+    {
+        FileModel? model;
+        using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete, 64 * 1024))
+        {
+            model = JsonSerializer.Deserialize<FileModel>(stream, JsonOptions);
+        }
+
+        if (model is null || model.Version != FormatVersion)
+        {
+            throw new InvalidDataException($"unsupported format version {model?.Version}");
+        }
+
+        var names = model.Names ?? [];
+        var tests = new Dictionary<(string Project, string Test), IReadOnlyList<TestHistoryEntry>>();
+        foreach (var test in model.Tests ?? [])
+        {
+            var entries = (test.Runs ?? [])
+                .Where(e => e.Source is not null)
+                .Select(e => new TestHistoryEntry(e.RunId, e.At, Status(e.Status), e.DurationMs, e.Source, e.Attempt ?? 0))
+                .ToList();
+            if (entries.Count > 0)
+            {
+                tests[(names[test.Project], names[test.Test])] = entries;
+            }
+        }
+
+        return (model.WorktreePath, tests);
+    }
+
+    private static string ProjectName(string projectId) =>
+        TestProjectNames.IsProjectFile(projectId) ? TestProjectNames.SuiteName(projectId) : projectId;
 
     private static char Code(TestStatus status) => status switch
     {
@@ -560,6 +809,7 @@ internal sealed class RunHistoryStore : IDisposable
         public char Status { get; set; }
         public double DurationMs { get; set; }
         public string? Source { get; set; }
+        public int? Attempt { get; set; }
     }
 
     private sealed class RunModel
@@ -570,6 +820,14 @@ internal sealed class RunHistoryStore : IDisposable
         public string Statuses { get; set; } = "";
         public double[] DurationsMs { get; set; } = [];
         public Dictionary<string, ErrorModel>? Errors { get; set; }
+        public Dictionary<string, List<AttemptModel>>? Attempts { get; set; }
+    }
+
+    private sealed class AttemptModel
+    {
+        public char Status { get; set; }
+        public double DurationMs { get; set; }
+        public string? Message { get; set; }
     }
 
     private sealed class ErrorModel

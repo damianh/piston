@@ -56,3 +56,36 @@ html, body {
 .status-skipped { color: #fbbf24; }
 .status-notrun  { color: #6b7280; }
 .status-stale   { opacity: 0.5; }
+
+/* The canvas shell forwards only the documented Copilot theme contract. */
+html[data-piston-canvas] .font-sans {
+    font-family: var(--font-sans, system-ui, sans-serif);
+}
+html[data-piston-canvas] .font-mono {
+    font-family: var(--font-mono, ui-monospace, monospace);
+}
+html[data-piston-canvas] .bg-gray-950 {
+    background-color: var(--background-color-default, rgb(var(--gray-950)));
+}
+html[data-piston-canvas] .bg-gray-900,
+html[data-piston-canvas] .bg-gray-800 {
+    background-color: color-mix(in srgb, var(--text-color-default, rgb(var(--gray-100))) 5%, var(--background-color-default, rgb(var(--gray-950))));
+}
+html[data-piston-canvas] .text-gray-100,
+html[data-piston-canvas] .text-gray-200,
+html[data-piston-canvas] .text-gray-300 {
+    color: var(--text-color-default, rgb(var(--gray-100)));
+}
+html[data-piston-canvas] .text-gray-400,
+html[data-piston-canvas] .text-gray-500,
+html[data-piston-canvas] .text-gray-600 {
+    color: var(--text-color-muted, rgb(var(--gray-400)));
+}
+html[data-piston-canvas] .border-gray-700,
+html[data-piston-canvas] .border-gray-800 {
+    border-color: var(--border-color-default, rgb(var(--gray-700)));
+}
+html[data-piston-canvas] :focus-visible {
+    outline: 2px solid var(--color-focus-outline, Highlight);
+    outline-offset: 2px;
+}

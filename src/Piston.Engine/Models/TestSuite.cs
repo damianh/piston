@@ -12,8 +12,17 @@ public sealed record TestSuite(
     TimeSpan TotalDuration
 )
 {
+    /// <summary>Solution-relative project path that identifies the project, when known.</summary>
+    public string? ProjectId { get; init; }
+
+    /// <summary>Stable key for this suite, falling back to its name for non-project targets.</summary>
+    public string Key => ProjectId ?? Name;
+
     /// <summary>Identifier of the <see cref="TestRunRecord"/> that produced this suite, when known.</summary>
     public string? RunId { get; init; }
+
+    /// <summary>True when restored from disk and not re-verified since the daemon restart.</summary>
+    public bool Restored { get; init; }
 
     /// <summary>What Piston did to run the process that produced this suite, when it was recorded.</summary>
     [JsonIgnore]

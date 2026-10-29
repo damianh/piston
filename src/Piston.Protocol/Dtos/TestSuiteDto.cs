@@ -8,5 +8,7 @@ public sealed record TestSuiteDto(
     IReadOnlyList<TestResultDto> Tests,
     DateTimeOffset Timestamp,
     double TotalDurationMs,
-    string? RunId = null
+    string? RunId = null,
+    bool Restored = false,
+    string? ProjectId = null
 );

@@ -18,9 +18,10 @@ public static class ActivityEventFactory
         Build(ActivityEventTypes.FileChangesDetected, solutionPath,
             new FileChangesDetectedData(files, files.Count));
 
-    public static ActivityEvent BuildCompleted(string? solutionPath, bool succeeded, double durationMs, IReadOnlyList<string> errors) =>
+    public static ActivityEvent BuildCompleted(
+        string? solutionPath, bool succeeded, double durationMs, IReadOnlyList<string> errors, int? errorCount = null) =>
         Build(ActivityEventTypes.BuildCompleted, solutionPath,
-            new BuildCompletedData(succeeded, durationMs, errors.Count, errors));
+            new BuildCompletedData(succeeded, durationMs, errorCount ?? errors.Count, errors));
 
     public static ActivityEvent TestRunCompleted(string? solutionPath, int passed, int failed, int skipped, double durationMs, IReadOnlyList<TestFailureData> failures) =>
         Build(ActivityEventTypes.TestRunCompleted, solutionPath,

@@ -9,5 +9,10 @@ window.pistonScroll = {
         } else if (index >= 0) {
             scroller.scrollTop = Math.max(0, index * rowHeight - scroller.clientHeight / 2 + rowHeight / 2);
         }
+    },
+
+    // Scrolls an element, e.g. a timeline entry another entry links to, into view.
+    revealElement(id) {
+        document.getElementById(id)?.scrollIntoView({ block: "center" });
     }
 };

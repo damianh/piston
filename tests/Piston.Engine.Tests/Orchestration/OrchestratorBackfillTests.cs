@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Collections.Concurrent;
 using Piston.Engine.Coverage;
 using Piston.Engine.Impact;
 using Piston.Engine.Models;
@@ -98,6 +99,48 @@ public sealed class OrchestratorBackfillTests : IDisposable
         Assert.Empty(_processor.Recorded);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BackfillResourceWait_IsPublishedAndCleared_OnAcquisitionOrCancellation(bool cancel)
+    {
+        _runner.ReportResourceWaits = true;
+        _runner.BlockFiltered = cancel;
+        var observed = new ConcurrentQueue<(ProjectRunStatus? Status, bool Waiting)>();
+        _state.StateChanged += () =>
+        {
+            if (_state.ImpactBackfill is not null)
+            {
+                observed.Enqueue((
+                    _state.ProjectStatuses.TryGetValue(Project, out var status) ? status : null,
+                    _state.ProjectResourceWaits.ContainsKey(Project)));
+            }
+        };
+        await StartAsync();
+        if (cancel)
+        {
+            await _runner.FilteredStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            Assert.True(_state.ProjectResourceWaits.ContainsKey(Project));
+            _orchestrator.BackfillGranularity = null;
+            _ = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            Assert.True(_runner.FilteredCancelled);
+        }
+        else
+        {
+            await WaitForAsync(() => _processor.Recorded.Count == 2);
+        }
+
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        Assert.Contains((ProjectRunStatus.WaitingForResources, true), observed);
+        if (!cancel)
+        {
+            Assert.Contains((ProjectRunStatus.Pending, false), observed);
+            Assert.Contains((ProjectRunStatus.Running, false), observed);
+        }
+        Assert.Empty(_state.ProjectResourceWaits);
+        Assert.Equal(ProjectRunStatus.Completed, _state.ProjectStatuses[Project]);
+    }
+
     [Fact]
     public async Task IsOffWithoutAGranularity()
     {
@@ -106,6 +149,21 @@ public sealed class OrchestratorBackfillTests : IDisposable
         await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
 
         Assert.All(_runner.Filters, f => Assert.Null(f));
+    }
+
+    [Fact]
+    public async Task ARunPublishesItsCoverageAndResultsAsOneResultsUpdate()
+    {
+        _orchestrator.BackfillGranularity = null;
+        var observed = new List<(bool Publishing, int Suites)>();
+        _processor.OnProcess = () => observed.Add((_state.IsPublishingResults, _state.TestSuites.Count));
+
+        await StartAsync();
+
+        Assert.Equal((true, 0), Assert.Single(observed));
+        Assert.False(_state.IsPublishingResults);
+        Assert.Equal(2, _state.ResultsVersion);
+        Assert.NotEmpty(_state.TestSuites);
     }
 
     [Fact]
@@ -135,6 +193,7 @@ public sealed class OrchestratorBackfillTests : IDisposable
 
         public List<string?> Filters { get; } = [];
         public bool BlockFiltered { get; set; }
+        public bool ReportResourceWaits { get; set; }
         public TaskCompletionSource FilteredStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool FilteredCancelled { get; private set; }
 
@@ -146,13 +205,27 @@ public sealed class OrchestratorBackfillTests : IDisposable
             Action<IReadOnlyList<TestSuite>>? onProgress, CancellationToken ct) =>
             RunTestsAsync(solutionPath, testProjectPaths, filter, collectCoverage, onProgress, null, ct);
 
+        public Task<TestRunResult> RunTestsAsync(
+            string solutionPath, IReadOnlyList<string>? testProjectPaths, string? filter, bool collectCoverage,
+            Action<IReadOnlyList<TestSuite>>? onProgress, Action<ProjectTestResult>? onProjectCompleted, CancellationToken ct) =>
+            RunTestsAsync(solutionPath, testProjectPaths, filter, collectCoverage,
+                new TestRunCallbacks { OnProjectCompleted = onProjectCompleted }, ct);
+
         public async Task<TestRunResult> RunTestsAsync(
             string solutionPath, IReadOnlyList<string>? testProjectPaths, string? filter, bool collectCoverage,
-            Action<IReadOnlyList<TestSuite>>? onProgress, Action<ProjectTestResult>? onProjectCompleted, CancellationToken ct)
+            TestRunCallbacks callbacks, CancellationToken ct)
         {
             lock (Filters)
             {
                 Filters.Add(filter);
+            }
+
+            if (filter is not null && ReportResourceWaits)
+            {
+                callbacks.OnProjectWaiting?.Invoke(Project, new TestResourceWait(
+                    TestResourceWaitState.Waiting, ["port:5432"], false,
+                    [new TestResourceBlocker("port:5432", TestResourceBlockerKind.Held, 42, "/other", "/other/A.Tests.csproj", DateTimeOffset.UtcNow)],
+                    0, 0, null, DateTimeOffset.UtcNow, null));
             }
 
             if (filter is not null && BlockFiltered)
@@ -169,6 +242,8 @@ public sealed class OrchestratorBackfillTests : IDisposable
                 }
             }
 
+            callbacks.OnProjectResourcesAcquired?.Invoke(Project);
+            callbacks.OnProjectStarted?.Invoke(Project);
             var prefix = filter?.Replace("FullyQualifiedName~", "", StringComparison.Ordinal);
             var suite = new TestSuite("A.Tests",
                 [.. Tests.Where(t => prefix is null || t.StartsWith(prefix, StringComparison.Ordinal))
@@ -176,7 +251,7 @@ public sealed class OrchestratorBackfillTests : IDisposable
                 DateTimeOffset.UtcNow, TimeSpan.Zero);
             string[] reports = collectCoverage ? [$"/nowhere/{Guid.NewGuid():N}.cobertura.xml"] : [];
             var project = new ProjectTestResult(Project, [suite], null, reports, Crashed: false);
-            onProjectCompleted?.Invoke(project);
+            callbacks.OnProjectCompleted?.Invoke(project);
             return new TestRunResult([suite], null, reports) { Projects = [project] };
         }
 
@@ -189,9 +264,15 @@ public sealed class OrchestratorBackfillTests : IDisposable
     {
         public List<CoverageImpactOptions> Recorded { get; } = [];
 
+        public Action? OnProcess { get; set; }
+
         public Task ProcessCoverageAsync(
             long runId, IReadOnlyList<string> coberturaXmlPaths, IReadOnlyList<string> testFqns, ICoverageStore store,
-            bool isFullRun, string? sourceRoot, CoverageImpactOptions? impact) => Task.CompletedTask;
+            bool isFullRun, string? sourceRoot, CoverageImpactOptions? impact)
+        {
+            OnProcess?.Invoke();
+            return Task.CompletedTask;
+        }
 
         public async Task RecordImpactAsync(long runId, CoverageImpactOptions impact, IImpactMapStore store, string? sourceRoot)
         {

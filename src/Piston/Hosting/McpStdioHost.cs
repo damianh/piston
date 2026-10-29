@@ -7,6 +7,9 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Piston.Engine;
 using Piston.Engine.Execution;
+using Piston.Hosting.Configuration;
+using Piston.Hosting.Protocol;
+using Piston.Hosting.Services;
 using Piston.Mcp;
 
 namespace Piston.Hosting;
@@ -40,6 +43,8 @@ public sealed class McpStdioHostOptions
     /// <summary>On Unix, exit when the parent process (the agent) dies even if stdin stays open.</summary>
     public bool MonitorParentProcess { get; init; } = true;
 
+    public bool Dashboard { get; init; }
+
     /// <summary>Diagnostic log sink; must not write to stdout.</summary>
     public Action<string> Log { get; init; } = message => Console.Error.WriteLine(message);
 }
@@ -57,6 +62,11 @@ public sealed class McpStdioHost
 
     private readonly McpStdioHostOptions _options;
     private readonly Action<string> _log;
+    private DashboardHost? _dashboard;
+    private ProtocolRouter? _router;
+    private readonly CancellationTokenSource _dashboardLifetime = new();
+    private Task _routerTask = Task.CompletedTask;
+    private McpCallTracker? _callTracker;
 
     public McpStdioHost(McpStdioHostOptions options)
     {
@@ -88,7 +98,7 @@ public sealed class McpStdioHost
                 .AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace)
                 .SetMinimumLevel(LogLevel.Warning);
             _ = builder.Services.AddSingleton<IEngine>(engine ?? (IEngine)new UnavailableEngine());
-            _ = builder.Services.AddPistonMcpTools(availability: Availability)
+            _ = builder.Services.AddPistonMcpTools(_callTracker, availability: Availability)
                 .WithStreamServerTransport(
                     _options.Input ?? Console.OpenStandardInput(),
                     _options.Output ?? Console.OpenStandardOutput());
@@ -124,6 +134,8 @@ public sealed class McpStdioHost
         finally
         {
             monitor?.Dispose();
+            await StopDashboardAsync(engine).ConfigureAwait(false);
+            _dashboardLifetime.Dispose();
             if (engine is not null)
             {
                 // Cancels runs (killing build/test process trees), drains them, then releases ownership.
@@ -153,9 +165,13 @@ public sealed class McpStdioHost
         PistonEngine? engine = null;
         try
         {
-            engine = new PistonEngine(engineOptions);
+            var activity = new ActivityEventSinkProxy();
+            engine = new PistonEngine(engineOptions, activity);
             _log($"[piston] Starting engine for: {solutionPath}");
-            await engine.StartAsync(solutionPath).ConfigureAwait(false);
+            var startingEngine = engine;
+            await engine.StartAsync(solutionPath, _options.Dashboard
+                ? () => StartDashboardAsync(startingEngine, activity)
+                : null).ConfigureAwait(false);
             return engine;
         }
         catch (WorktreeOwnershipConflictException ex)
@@ -170,9 +186,68 @@ public sealed class McpStdioHost
         _log($"[piston] {Availability.Reason}");
         if (engine is not null)
         {
+            await StopDashboardAsync(engine).ConfigureAwait(false);
             await engine.DisposeAsync().ConfigureAwait(false);
         }
         return null;
+    }
+
+    private async Task StartDashboardAsync(PistonEngine engine, ActivityEventSinkProxy activity)
+    {
+        _router = new ProtocolRouter(engine);
+        _router.SetMachineOverviewProvider(
+            ct => MachineExecutionOverviewReader.ReadAsync(engine.ExecutionCoordinationDirectory, ct));
+        activity.SetSink(_router);
+        _callTracker = new McpCallTracker(_router.Emit, _options.SolutionPath!);
+        _router.SetMcpCallTracker(_callTracker);
+        try
+        {
+            if (UserSettingsStore.ResolveDefaultPath() is { } path)
+            {
+                _router.SetUserSettingsStore(new UserSettingsStore(path));
+            }
+            else
+            {
+                _log("[piston] No application-data folder; machine-wide settings are unavailable.");
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            _log($"[piston] Machine-wide settings are unavailable: {ex.Message}");
+        }
+        _routerTask = _router.RunAsync(_dashboardLifetime.Token);
+        _dashboard = new DashboardHost();
+        await _dashboard.StartAsync(_router, "http://127.0.0.1:0", () => engine.OwnerInfo, _dashboardLifetime.Token).ConfigureAwait(false);
+        engine.PublishDashboardUrl(_dashboard.Url);
+        _log($"[piston] Dashboard: {_dashboard.Url}");
+    }
+
+    private async Task StopDashboardAsync(PistonEngine? engine)
+    {
+        if (_dashboard is not null)
+        {
+            try
+            {
+                engine?.PublishDashboardUrl(null);
+            }
+            catch (ExecutionCoordinationException ex)
+            {
+                _log($"[piston] Could not withdraw dashboard endpoint: {ex.Message}");
+            }
+            await _dashboard.DisposeAsync().ConfigureAwait(false);
+            _dashboard = null;
+        }
+        await _dashboardLifetime.CancelAsync().ConfigureAwait(false);
+        try
+        {
+            await _routerTask.ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_dashboardLifetime.IsCancellationRequested) { }
+        if (_router is not null)
+        {
+            await _router.DisposeAsync().ConfigureAwait(false);
+            _router = null;
+        }
     }
 
     private WorktreePresenceMonitor StartPresenceMonitor(PistonEngine engine, TaskCompletionSource shutdown)

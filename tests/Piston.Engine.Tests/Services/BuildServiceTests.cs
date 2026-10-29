@@ -15,6 +15,31 @@ public sealed class BuildServiceOutputParsingTests
     // against a minimal in-memory project written to a temp directory.
 
     [Fact]
+    public void Aggregate_CapsDiagnosticsAndPreservesOmittedCounts()
+    {
+        var first = new BuildResult(BuildStatus.Failed,
+            Enumerable.Range(0, RetentionLimits.MaxBuildDiagnostics).Select(i => $"e{i}").ToList(),
+            Enumerable.Range(0, RetentionLimits.MaxBuildDiagnostics).Select(i => $"w{i}").ToList(), TimeSpan.FromSeconds(1))
+        {
+            OmittedErrors = 2,
+            OmittedWarnings = 3,
+        };
+        var second = new BuildResult(BuildStatus.Failed, ["extra error"], ["extra warning"], TimeSpan.FromSeconds(2))
+        {
+            OmittedErrors = 5,
+            OmittedWarnings = 7,
+        };
+
+        var result = BuildService.Aggregate([first, second], cancelled: false);
+
+        Assert.Equal(RetentionLimits.MaxBuildDiagnostics, result.Errors.Count);
+        Assert.Equal(8, result.OmittedErrors);
+        Assert.Equal(RetentionLimits.MaxBuildDiagnostics, result.Warnings.Count);
+        Assert.Equal(11, result.OmittedWarnings);
+        Assert.Equal(TimeSpan.FromSeconds(3), result.Duration);
+    }
+
+    [Fact]
     public async Task BuildAsync_ParallelMsBuildNodes_DisablesNodeReuseAndCompletes()
     {
         var root = Directory.CreateTempSubdirectory("piston-build-node-reuse-test-").FullName;

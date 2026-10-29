@@ -18,8 +18,23 @@ public sealed record ExportCoverageCommand(string Format, string? ExportId = nul
 /// <param name="FilePath">Absolute path, or a path relative to the solution directory.</param>
 public sealed record GetCoveringTestsCommand(string FilePath);
 
+/// <summary>Request a verdict for each changed line of the changed source files.</summary>
+/// <param name="Base"><c>working</c>, <c>branch</c> or <c>range</c>; null means working, or branch when <paramref name="BaseRef"/> is set.</param>
+/// <param name="BaseRef">For branch: the branch or commit to compare against. For range: the range or commit.</param>
+public sealed record GetChangedLineCoverageCommand(string? Base = null, string? BaseRef = null);
+
+/// <summary>Request the unified diff of the changes, with a verdict for each added line of the changed source files.</summary>
+/// <param name="Base"><c>working</c>, <c>branch</c> or <c>range</c>; null means working, or branch when <paramref name="BaseRef"/> is set.</param>
+/// <param name="BaseRef">For branch: the branch or commit to compare against. For range: the range or commit.</param>
+/// <param name="Context">Unchanged lines shown around each change, from 1 to 20.</param>
+public sealed record GetChangeDiffCommand(string? Base = null, string? BaseRef = null, int Context = 3);
+
 public sealed record GetStoredRunCommand(string RunId);
 
 /// <param name="Test">Fully-qualified name; a multi-targeted test's results under every framework match.</param>
 /// <param name="Project">Test project name; null matches any.</param>
-public sealed record GetTestHistoryCommand(string Test, string? Project = null);
+public sealed record GetTestHistoryCommand(string Test, string? ProjectId = null);
+
+/// <summary>Request a page of the session timeline.</summary>
+/// <param name="AfterSequence">Return only runs requested after this sequence (the last entry of the previous page); null starts from the oldest.</param>
+public sealed record GetSessionTimelineCommand(long? AfterSequence = null);

@@ -23,10 +23,16 @@ internal sealed class StubEngine : IEngine
     public IReadOnlyList<TestHistory>? Histories { get; set; }
 
     public string? LastHistoryProject { get; private set; }
+    public ArgumentException? GetTestHistoryError { get; set; }
 
     public IReadOnlyList<TestHistory>? GetTestHistory(string test, string? project = null)
     {
         LastHistoryProject = project;
+        if (GetTestHistoryError is { } error)
+        {
+            throw error;
+        }
+
         return Histories?.Where(h => h.Test == test || h.Test.StartsWith(test + " [", StringComparison.Ordinal)).ToList();
     }
 
@@ -109,13 +115,27 @@ internal sealed class StubEngine : IEngine
         State.TotalExpectedTests = 0;
     }
 
-    /// <summary>Coverage report returned by <see cref="GetCoverageReport"/>; null means coverage is disabled.</summary>
-    public Engine.Coverage.CoverageReportSnapshot? CoverageReport { get; set; }
+    /// <summary>
+    /// Coverage report returned by <see cref="GetCoverageReport"/>; null means coverage is disabled. Setting it also
+    /// sets <see cref="PistonState.CoverageEnabled"/>, as the engine does.
+    /// </summary>
+    public Engine.Coverage.CoverageReportSnapshot? CoverageReport
+    {
+        get;
+        set
+        {
+            field = value;
+            State.CoverageEnabled = value is not null;
+        }
+    }
+
+    /// <summary>Replaces <see cref="CoverageReport"/> in <see cref="GetCoverageReport"/>, e.g. to block like the coverage lock.</summary>
+    public Func<Engine.Coverage.CoverageReportSnapshot?>? OnGetCoverageReport { get; set; }
 
     /// <summary>Per-file coverage returned by <see cref="GetFileCoverage"/>, keyed by the requested path.</summary>
     public Dictionary<string, Engine.Coverage.FileCoverageSnapshot> FileCoverage { get; } = [];
 
-    public Engine.Coverage.CoverageReportSnapshot? GetCoverageReport() => CoverageReport;
+    public Engine.Coverage.CoverageReportSnapshot? GetCoverageReport() => OnGetCoverageReport is { } get ? get() : CoverageReport;
 
     /// <summary>Plan returned by <see cref="PlanAffected"/>.</summary>
     public ImpactAnalysisResult? AffectedPlan { get; set; }
@@ -129,14 +149,25 @@ internal sealed class StubEngine : IEngine
         return AffectedPlan;
     }
 
-    public Engine.Coverage.FileCoverageSnapshot? GetFileCoverage(string filePath) =>
-        FileCoverage.GetValueOrDefault(filePath);
+    /// <summary>Called with the requested path before <see cref="GetFileCoverage"/> returns, e.g. to publish a run mid-read.</summary>
+    public Action<string>? OnGetFileCoverage { get; set; }
+
+    public Engine.Coverage.FileCoverageSnapshot? GetFileCoverage(string filePath)
+    {
+        OnGetFileCoverage?.Invoke(filePath);
+        return FileCoverage.GetValueOrDefault(filePath);
+    }
 
     /// <summary>Covering tests returned by <see cref="GetCoveringTests"/>, keyed by the requested path.</summary>
     public Dictionary<string, IReadOnlyList<Engine.Coverage.CoveringTest>> CoveringTests { get; } = [];
 
     public IReadOnlyList<Engine.Coverage.CoveringTest>? GetCoveringTests(string filePath) =>
         CoveringTests.GetValueOrDefault(filePath);
+
+    /// <summary>Test project paths returned by <see cref="GetTestProjectPaths"/>.</summary>
+    public IReadOnlyList<string>? TestProjectPaths { get; set; }
+
+    public IReadOnlyList<string>? GetTestProjectPaths() => TestProjectPaths;
 
     public void Dispose() { }
 }

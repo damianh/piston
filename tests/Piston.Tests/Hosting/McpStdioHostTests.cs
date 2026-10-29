@@ -37,6 +37,7 @@ public sealed class McpStdioHostTests : IDisposable
             Input = _toServer.Reader.AsStream(),
             Output = _toClient.Writer.AsStream(),
             MonitorParentProcess = false,
+            Dashboard = options.Dashboard,
             Log = options.Log ?? (_ => { }),
         });
         return (host, host.RunAsync(ct));
@@ -44,6 +45,74 @@ public sealed class McpStdioHostTests : IDisposable
 
     private Task<McpClient> ConnectAsync() => McpClient.CreateAsync(
         new StreamClientTransport(_toServer.Writer.AsStream(), _toClient.Reader.AsStream()));
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Dashboard_IsOptInAndStopsWithTheSession(bool enabled)
+    {
+        var solution = CreateWorktree("dashboard");
+        var directory = new ExecutionCoordinationDirectory(Path.Combine(_root, "dashboard-coordination"));
+        var (_, run) = Start(new McpStdioHostOptions
+        {
+            SolutionPath = solution,
+            Dashboard = enabled,
+            EngineOptions = new PistonOptions
+            {
+                SolutionPath = solution,
+                ExecutionCoordinationDirectory = directory.BaseDirectory,
+                OwnerHost = McpStdioHost.OwnerHost,
+            },
+        }, _ct);
+        var client = await ConnectAsync();
+        var endpoint = DashboardDiscovery.Inspect(solution, directory);
+        Assert.Equal(enabled ? "connected" : "disabled", endpoint.State);
+        if (enabled)
+        {
+            Assert.StartsWith("http://127.0.0.1:", endpoint.Url);
+            using var http = new HttpClient();
+            var json = await http.GetStringAsync($"{endpoint.Url}/api/dashboard", _ct);
+            Assert.Contains("\"worktreePath\"", json);
+            using var ws = new System.Net.WebSockets.ClientWebSocket();
+            await ws.ConnectAsync(new Uri(endpoint.Url!.Replace("http:", "ws:") + "/ws"), _ct);
+            var buffer = new byte[64 * 1024];
+            var response = await ws.ReceiveAsync(buffer.AsMemory(), _ct);
+            Assert.Contains("engine/stateSnapshot", System.Text.Encoding.UTF8.GetString(buffer, 0, response.Count));
+            await ws.SendAsync(
+                """{"jsonrpc":"2.0","id":"machine-overview","method":"machine/getOverview"}"""u8.ToArray().AsMemory(),
+                System.Net.WebSockets.WebSocketMessageType.Text, true, _ct);
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(10));
+            while (true)
+            {
+                using var message = new MemoryStream();
+                do
+                {
+                    response = await ws.ReceiveAsync(buffer.AsMemory(), timeout.Token);
+                    Assert.Equal(System.Net.WebSockets.WebSocketMessageType.Text, response.MessageType);
+                    message.Write(buffer, 0, response.Count);
+                } while (!response.EndOfMessage);
+                using var document = System.Text.Json.JsonDocument.Parse(message.ToArray());
+                if (!document.RootElement.TryGetProperty("id", out var id) || id.GetString() != "machine-overview")
+                {
+                    continue;
+                }
+                Assert.False(document.RootElement.TryGetProperty("error", out _), document.RootElement.ToString());
+                Assert.Equal(System.Text.Json.JsonValueKind.Array,
+                    document.RootElement.GetProperty("result").GetProperty("worktrees").ValueKind);
+                break;
+            }
+        }
+        await client.DisposeAsync();
+        await _toServer.Writer.CompleteAsync();
+        Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(30), _ct));
+        Assert.Empty(WorktreeOwnership.ListOwners(directory));
+        if (enabled)
+        {
+            using var http = new HttpClient();
+            _ = await Assert.ThrowsAsync<HttpRequestException>(() => http.GetAsync($"{endpoint.Url}/api/dashboard", _ct));
+        }
+    }
 
     private static async Task<(bool IsError, string Text)> CallAsync(McpClient client, string tool)
     {

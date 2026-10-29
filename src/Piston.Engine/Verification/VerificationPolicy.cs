@@ -51,7 +51,7 @@ public static class VerificationPolicy
         // never hides a newer failure for the same source. Present coverage says nothing about inputs
         // outside the fingerprint when the candidate ran, so the run must carry its own coverage.
         var newest = recentRuns.FirstOrDefault(r =>
-            r.IsFullScope && r.Freshness == ResultFreshness.Current && r.SourceAfter == current);
+            !r.Restored && r.IsFullScope && r.Freshness == ResultFreshness.Current && r.SourceAfter == current);
 
         return newest is not null && newest.InputCoverageVerified && IsReusable(newest)
             && CoversTestProjects(newest, requiredTestProjects)
@@ -87,10 +87,10 @@ public static class VerificationPolicy
                 "Run selection does not cover every test project in the refreshed solution graph.");
         }
 
-        if (run.Freshness != ResultFreshness.Current)
+        if (run.Restored || run.Freshness != ResultFreshness.Current)
         {
             return new(VerificationVerdict.Stale, true,
-                run.FreshnessReason ?? $"Run freshness is {run.Freshness}.");
+                run.FreshnessReason ?? (run.Restored ? "Restored results have not been re-verified." : $"Run freshness is {run.Freshness}."));
         }
 
         if (current is null)

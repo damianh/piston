@@ -26,6 +26,10 @@ public sealed class ViewState
     public TestMarkDto? GetTestMark(string? project, string testKey) =>
         project is null ? null : TestMarks.GetValueOrDefault((project, testKey));
 
+    /// <summary>Test projects waiting for exclusive test resources, keyed by project ID (see <see cref="ResourceWaitText.ByProjectId"/>).</summary>
+    public IReadOnlyDictionary<string, TestResourceWaitDto> ResourceWaits { get; set; } =
+        new Dictionary<string, TestResourceWaitDto>();
+
     /// <summary>Show only failing tests whose previous result passed (with <see cref="OnlyFlaky"/>, either kind).</summary>
     public bool OnlyNewFailures { get; set; }
 
@@ -103,6 +107,39 @@ public sealed class ViewState
             ? DefaultCoverageSplitRightPercent
             : DefaultSplitBottomPercent;
 
+    // ── Coverage tab: changes ──
+
+    public CoverageMode CoverageMode { get; set; } = CoverageMode.Files;
+
+    /// <summary><c>working</c>, <c>branch</c> or <c>range</c> (see <see cref="ChangeDiffModel.Bases"/>).</summary>
+    public string ChangeBase { get; set; } = ChangeDiffModel.Working;
+
+    /// <summary>The branch or commit for <c>branch</c>, or the range for <c>range</c>; null for the default branch.</summary>
+    public string? ChangeBaseRef { get; set; }
+
+    /// <summary>Show only files and hunks with lines no passing test proves.</summary>
+    public bool ChangesOnlyUnproven { get; set; }
+
+    /// <summary>Applies a dashboard link's Coverage mode and change base.</summary>
+    public void ApplyLink(DashboardLink link)
+    {
+        if (link.Mode is { } mode)
+        {
+            CoverageMode = mode;
+        }
+
+        if (link.Base is { } @base)
+        {
+            ChangeBase = @base;
+            ChangeBaseRef = @base == ChangeDiffModel.Working ? null : link.BaseRef;
+        }
+        else if (link.BaseRef is { } baseRef)
+        {
+            ChangeBase = ChangeDiffModel.Branch;
+            ChangeBaseRef = baseRef;
+        }
+    }
+
     // ── Pinned tests ──
     public HashSet<string> PinnedTestFqns { get; } = new(StringComparer.Ordinal);
 
@@ -121,6 +158,24 @@ public sealed class ViewState
         RevealSelectedTest = true;
     }
 
+    // ── Links into the Runs and Timeline tabs ──
+
+    /// <summary>A run another tab opened; the Runs tab selects it once it is listed.</summary>
+    public string? RevealedRunId { get; private set; }
+
+    public void RevealRun(string runId) => RevealedRunId = runId;
+
+    /// <summary>Returns <see cref="RevealedRunId"/> and clears it, so the run is selected only once.</summary>
+    public string? TakeRevealedRun()
+    {
+        var runId = RevealedRunId;
+        RevealedRunId = null;
+        return runId;
+    }
+
+    /// <summary>The test the Timeline tab follows, highlighting the runs and edits that changed its outcome.</summary>
+    public TestReference? TracedTest { get; set; }
+
     public TestResultDto? FindSelectedTest(IEnumerable<TestSuiteDto> suites)
     {
         if (SelectedTestKey is not { } key)
@@ -128,7 +183,7 @@ public sealed class ViewState
             return null;
         }
 
-        var tests = suites.Where(s => SelectedTestProject is null || s.Name == SelectedTestProject)
+        var tests = suites.Where(s => SelectedTestProject is null || (s.ProjectId ?? s.Name) == SelectedTestProject)
             .SelectMany(s => s.Tests).ToList();
         return tests.FirstOrDefault(t => t.Key == key)
             ?? tests.FirstOrDefault(t => t.FullyQualifiedName == key
@@ -197,11 +252,13 @@ public sealed class ViewState
         new(DetailPosition == DetailPosition.Bottom ? DetailPanePosition.Bottom : DetailPanePosition.Right);
 }
 
-/// <summary>A test result key scoped to its suite name, independent of the host's project path separators.</summary>
+/// <summary>A test result key scoped to its project identity, independent of the host's project path separators.</summary>
 public sealed record TestReference(string Project, string Key)
 {
-    public static TestReference FromProjectPath(string projectPath, string key) =>
-        new(Path.GetFileNameWithoutExtension(projectPath.Replace('\\', '/')), key);
+    public static TestReference FromProjectPath(string projectPath, string key, string? solutionPath = null) =>
+        new(solutionPath is null
+            ? Path.GetFileNameWithoutExtension(projectPath.Replace('\\', '/'))
+            : ProjectPaths.ProjectId(projectPath, solutionPath), key);
 }
 
 public enum DetailPosition

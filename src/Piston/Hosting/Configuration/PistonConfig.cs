@@ -48,6 +48,15 @@ public sealed class PistonConfig
     /// </summary>
     public bool? History { get; set; }
 
+    /// <summary>Save the latest test results between daemon restarts. Default true.</summary>
+    public bool? PersistResults { get; set; }
+
+    /// <summary>
+    /// How many times a run re-runs its failed tests, without rebuilding, to gather flakiness evidence: 0 to 3.
+    /// A test that passes on a retry counts as passed and is reported as passed on retry. Default 0 (off).
+    /// </summary>
+    public int? RetryFailures { get; set; }
+
     /// <summary>
     /// Keep Microsoft.Testing.Platform test apps running in server mode between runs, so later runs skip
     /// host start-up. Default false.
@@ -84,6 +93,9 @@ public sealed class PistonConfig
     /// </summary>
     public int? McpPort { get; set; }
 
+    /// <summary>Opt in to an ephemeral loopback dashboard for <c>piston mcp</c>.</summary>
+    public bool? Dashboard { get; set; }
+
     /// <summary>
     /// Test execution mode. Accepted values: "Auto", "Process", "InProcess".
     /// Stored as a string to avoid a type dependency on <c>Piston.Engine</c>.
@@ -92,6 +104,31 @@ public sealed class PistonConfig
 
     /// <summary>Machine-wide execution admission settings for this daemon.</summary>
     public PistonExecutionConfig? Execution { get; set; }
+
+    /// <summary>
+    /// Overrides of the shared resources Piston infers for test projects, applied in order to the projects
+    /// each entry's glob matches.
+    /// </summary>
+    public List<PistonTestResourceConfig>? TestResources { get; set; }
+}
+
+/// <summary>A <c>testResources</c> entry of <c>.piston.json</c>.</summary>
+public sealed class PistonTestResourceConfig
+{
+    /// <summary>Property names an entry may use; anything else is rejected.</summary>
+    public static readonly IReadOnlyList<string> PropertyNames = ["projects", "exclusive", "containers", "isolation"];
+
+    /// <summary>Glob over project paths relative to the solution directory, e.g. <c>tests/**/*.IntegrationTests.csproj</c>.</summary>
+    public string? Projects { get; set; }
+
+    /// <summary>Exclusive resources: <c>port:5432</c>, <c>container:orders-db</c>, <c>resource:shared-queue</c>.</summary>
+    public List<string>? Exclusive { get; set; }
+
+    /// <summary>Overrides whether the projects use containers (counted against the machine's <c>containerSlots</c>).</summary>
+    public bool? Containers { get; set; }
+
+    /// <summary>"repository" (one run per repository at a time) or "none".</summary>
+    public string? Isolation { get; set; }
 }
 
 /// <summary>The <c>execution</c> section of <c>.piston.json</c>.</summary>

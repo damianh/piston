@@ -1,0 +1,17 @@
+{
+  "outcome": "TimedOut",
+  "error": "MTP server did not respond while collecting coverage before the probe timeout.",
+  "nodeCount": 0,
+  "coverageReportCount": 0,
+  "hostOutputLineCount": 2,
+  "serverConnectMessageCount": 2,
+  "nodes": [],
+  "dotnetTestFallback": {
+    "exitCode": 2,
+    "coverageReportCount": 1,
+    "total": 9,
+    "failed": 2,
+    "passed": 6,
+    "skipped": 1
+  }
+}

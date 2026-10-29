@@ -84,20 +84,74 @@ public sealed class VerifyToolTests
         var run = Run() with
         {
             Suites = projects.Select(project => new TestSuite(project,
-                [Test("Shared.Test", TestStatus.Failed)], DateTimeOffset.UnixEpoch, TimeSpan.Zero)).ToList(),
+                [Test("Shared.Test", TestStatus.Failed)], DateTimeOffset.UnixEpoch, TimeSpan.Zero)
+            {
+                ProjectId = $"tests/{project}/{project}.csproj",
+            }).ToList(),
             FailureClassifications = projects.Select(project => new FailureClassification(project, "Shared.Test",
-                project == "New" ? FailureKind.New : FailureKind.PreExisting, "history")).ToList(),
+                project == "New" ? FailureKind.New : FailureKind.PreExisting, "history")
+            {
+                ProjectId = $"tests/{project}/{project}.csproj",
+            }).ToList(),
         };
 
         var text = await VerifyAsync(new(VerificationVerdict.TestsFailed, "21 test(s) failed.",
             VerificationSource.Forced, 1, run, Source));
 
         Assert.Contains("Failure history: 1 new, 20 pre-existing", text);
-        var newlyFailed = text.IndexOf("  - New :: Shared.Test [new]", StringComparison.Ordinal);
-        var old = text.IndexOf("  - Old0 :: Shared.Test [pre-existing]", StringComparison.Ordinal);
+        var newlyFailed = text.IndexOf("  - New [tests/New/New.csproj] :: Shared.Test [new]", StringComparison.Ordinal);
+        var old = text.IndexOf("  - Old0 [tests/Old0/Old0.csproj] :: Shared.Test [pre-existing]", StringComparison.Ordinal);
         Assert.True(newlyFailed >= 0 && old > newlyFailed, text);
-        Assert.DoesNotContain("Old19 ::", text);
+        Assert.DoesNotContain("Old19 [tests/Old19/Old19.csproj]", text);
         Assert.Contains("... 1 more", text);
+    }
+
+    [Fact]
+    public async Task Passed_ListsTestsThatPassedOnRetryWithTheirEvidence()
+    {
+        var retried = Test("A.Wobbly", TestStatus.Passed) with
+        {
+            Attempts = [new TestAttempt(TestStatus.Failed, TimeSpan.Zero, "first try\nmore", null)],
+        };
+        var evidence = new FlakinessEvidence(null, 1, 1, 1, [], [new("run-7", DateTimeOffset.UnixEpoch, TestStatus.Failed, 0, null)]);
+        var run = Run(tests: [retried, Test("A.Steady", TestStatus.Passed)]) with
+        {
+            FailureClassifications = [new("T", "A.Wobbly", FailureKind.Flaky, evidence.Describe(), evidence)],
+            RetryLimit = 2,
+        };
+
+        var text = await VerifyAsync(new(VerificationVerdict.Passed, null, VerificationSource.Forced, 1, run, Source));
+
+        Assert.StartsWith("Verdict: Passed", text);
+        Assert.Contains("Passed on retry (1):", text);
+        Assert.Contains("  - A.Wobbly: passed on attempt 2 after 1 failure(s) [flaky: 1 passed/1 failed in retries of one run]: first try", text);
+        Assert.DoesNotContain("A.Steady:", text);
+        Assert.DoesNotContain("Failure history", text);
+    }
+
+    [Fact]
+    public async Task TestsFailed_TagsRetriedFailuresAndFlakyEvidenceAndSkippedRetries()
+    {
+        var failed = Test("A.Broken", TestStatus.Failed, "still") with
+        {
+            Attempts = [new TestAttempt(TestStatus.Failed, TimeSpan.Zero, "first", null)],
+        };
+        var evidence = new FlakinessEvidence(new string('b', 64), 3, 2, 0, ["feature-x"], []);
+        var run = Run(tests: [failed, Test("A.Other", TestStatus.Failed, "nope")]) with
+        {
+            FailureClassifications =
+            [
+                new("T", "A.Broken", FailureKind.PreExisting, "failed before"),
+                new("T", "A.Other", FailureKind.Flaky, evidence.Describe(), evidence),
+            ],
+            RetriesSkippedReason = "Too many failures to retry.",
+        };
+
+        var text = await VerifyAsync(new(VerificationVerdict.TestsFailed, "2 test(s) failed.", VerificationSource.Forced, 1, run, Source));
+
+        Assert.Contains("  - A.Broken [pre-existing] (failed all 2 attempts): still", text);
+        Assert.Contains("  - A.Other [flaky: 3 passed/2 failed on bbbbbbbbbbbb, other worktrees: feature-x]: nope", text);
+        Assert.Contains("Retries skipped: Too many failures to retry.", text);
     }
 
     [Fact]
@@ -131,13 +185,17 @@ public sealed class VerifyToolTests
     [Fact]
     public async Task BuildFailed_ListsBuildErrorsOfThatRun()
     {
-        var build = new BuildResult(BuildStatus.Failed, ["/w/A.cs(3,5): error CS0103: The name 'x' does not exist"], [], TimeSpan.Zero);
+        var build = new BuildResult(BuildStatus.Failed, ["/w/A.cs(3,5): error CS0103: The name 'x' does not exist"], [], TimeSpan.Zero)
+        {
+            OmittedErrors = 4,
+        };
         var text = await VerifyAsync(new(VerificationVerdict.BuildFailed, "Build failed.",
             VerificationSource.Forced, 1, Run(TestRunStatus.BuildFailed, build), Source));
 
         Assert.Contains("Verdict: BuildFailed", text);
         Assert.Contains("Build errors (1):", text);
         Assert.Contains("error CS0103", text);
+        Assert.Contains("... 4 more build error(s) omitted", text);
     }
 
     [Fact]

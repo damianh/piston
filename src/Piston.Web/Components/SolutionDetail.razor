@@ -1,5 +1,6 @@
 @inject EngineClientService Client
 @inject ViewState View
+@inject NavigationManager Nav
 @implements IDisposable
 
 <div class="flex flex-col flex-1 overflow-hidden">
@@ -12,15 +13,23 @@
         }
         else if (_activeTab == DashboardTab.Tests)
         {
-            <TestsTab KeyboardEvent="@KeyboardEvent" />
+            <TestsTab KeyboardEvent="@KeyboardEvent" OnTraceTest="TraceTest" />
         }
         else if (_activeTab == DashboardTab.Coverage)
         {
-            <CoverageTab OnOpenTest="OpenTest" />
+            <CoverageTab OnOpenTest="OpenTest" KeyboardEvent="@KeyboardEvent" />
         }
         else if (_activeTab == DashboardTab.Runs)
         {
             <RunsTab OnOpenTest="OpenTest" />
+        }
+        else if (_activeTab == DashboardTab.Timeline)
+        {
+            <TimelineTab OnOpenTest="OpenTest" OnOpenRun="OpenRun" />
+        }
+        else if (_activeTab == DashboardTab.Machine)
+        {
+            <MachineTab />
         }
     </div>
 
@@ -35,6 +44,18 @@
     protected override void OnInitialized()
     {
         Client.ActivityEventReceived += OnActivityEvent;
+
+        // A link such as ?tab=coverage&mode=changes&base=branch opens a tab, e.g. from the Copilot canvas.
+        var link = DashboardLink.Parse(new Uri(Nav.Uri).Query);
+        View.ApplyLink(link);
+        if (link.Tab is { } tab && Enum.TryParse<DashboardTab>(tab, ignoreCase: true, out var parsed) && Enum.IsDefined(parsed))
+        {
+            _activeTab = parsed;
+        }
+        else if (link.Mode == CoverageMode.Changes)
+        {
+            _activeTab = DashboardTab.Coverage;
+        }
     }
 
     private void SetTab(DashboardTab tab) => _activeTab = tab;
@@ -43,6 +64,18 @@
     {
         View.RevealTest(test);
         _activeTab = DashboardTab.Tests;
+    }
+
+    private void OpenRun(string runId)
+    {
+        View.RevealRun(runId);
+        _activeTab = DashboardTab.Runs;
+    }
+
+    private void TraceTest(TestReference test)
+    {
+        View.TracedTest = test;
+        _activeTab = DashboardTab.Timeline;
     }
 
     private void OnActivityEvent(ActivityEvent _) { /* keeps badge counts fresh if needed */ }

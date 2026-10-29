@@ -10,13 +10,12 @@ CI). It contains one test project per framework, all on Microsoft.Testing.Platfo
 | `XUnitV3Sample` | xUnit v3 | the `xunit.v3.mtp-v2` package |
 | `TUnitSample` | TUnit | the `TUnit` package |
 
-Each has three tests, `<Framework>Passes`, `<Framework>Fails` (deliberately) and `<Framework>Skipped`, so the smoke
+Each has three tests, `Passes`, `Fails` (deliberately) and `Skipped`, so the smoke
 tests expect 12 tests: 4 passed, 4 failed and 4 skipped, from both `piston daemon` and `verify` over `piston mcp`. The
 failures are intentional, so the samples are not part of `Piston.slnx` and are not run by `dotnet test`.
 
-The test names differ per framework because MSTest, NUnit and TUnit report bare method names as test IDs over the
-Microsoft.Testing.Platform server protocol. Names repeated across projects would show up as duplicate test IDs, and
-`verify` would report `Incomplete`.
+All four projects use the same test method names. The MTP server-mode runner qualifies each display name with its
+class name, so the tests remain distinct across frameworks and projects.
 
 `.editorconfig` here sets `root = true`, so builds do not read the repository's `.editorconfig`, which lies outside
 the samples' source fingerprint (`verify` would report `NotFullScope`).

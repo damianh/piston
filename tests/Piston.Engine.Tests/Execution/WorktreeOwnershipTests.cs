@@ -355,4 +355,51 @@ public sealed class WorktreeOwnershipTests : IDisposable
         Assert.Equal("mcp", ex.Owner!.Host);
         Assert.Contains("Piston mcp process", ex.Message);
     }
+
+    [Theory]
+    [InlineData("https://example.com")]
+    [InlineData("http://loopback:5199")]
+    public void Acquire_RecordsOnlyValidatedLocalDashboardUrls(string invalidUrl)
+    {
+        var solution = CreateSolution(CreateWorktree("dashboard"));
+        using var owner = WorktreeOwnership.Acquire(_directory, solution, "daemon", dashboardUrl: "http://localhost:5199/");
+
+        var record = Assert.Single(WorktreeOwnership.ListOwners(_directory));
+        Assert.Equal("http://localhost:5199", record.Owner!.DashboardUrl);
+
+        var infoPath = Path.Combine(_directory.OwnersDirectory, owner.Worktree.Key + ".json");
+        var json = File.ReadAllText(infoPath).Replace(
+            "http://localhost:5199", invalidUrl, StringComparison.Ordinal);
+        File.WriteAllText(infoPath, json);
+
+        record = Assert.Single(WorktreeOwnership.ListOwners(_directory));
+        Assert.Null(record.Owner!.DashboardUrl);
+        Assert.Equal(solution, record.Owner.SolutionPath);
+    }
+
+    [Theory]
+    [InlineData("http://localhost:5199")]
+    [InlineData("http://127.0.0.1:5199")]
+    [InlineData("http://[::1]:5199")]
+    public void Acquire_AcceptsLoopbackDashboardUrls(string url)
+    {
+        var solution = CreateSolution(CreateWorktree("local-url"));
+        using var owner = WorktreeOwnership.Acquire(_directory, solution, dashboardUrl: url);
+
+        Assert.Equal(url, Assert.Single(WorktreeOwnership.ListOwners(_directory)).Owner!.DashboardUrl);
+    }
+
+    [Theory]
+    [InlineData("https://localhost:5199")]
+    [InlineData("http://example.com:5199")]
+    [InlineData("http://loopback:5199")]
+    [InlineData("javascript:alert(1)")]
+    [InlineData("http://localhost:5199/admin")]
+    public void Acquire_RejectsNonLocalDashboardUrls(string url)
+    {
+        var solution = CreateSolution(CreateWorktree("invalid-url"));
+
+        _ = Assert.Throws<ArgumentException>(() =>
+            WorktreeOwnership.Acquire(_directory, solution, dashboardUrl: url));
+    }
 }

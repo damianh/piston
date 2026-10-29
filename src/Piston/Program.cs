@@ -11,6 +11,7 @@ using Piston.Hosting;
 using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
 using Piston.Hosting.Protocol;
+using Piston.Integration;
 using Piston.Protocol.Dtos;
 using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
@@ -72,13 +73,16 @@ var webPortOpt = new Option<int>(
     description: "Port for the web UI and WebSocket server.",
     getDefaultValue: () => 5199);
 
+var dashboardOpt = new Option<bool>("--dashboard",
+    "Expose this MCP session's dashboard on an ephemeral loopback port.");
+
 var forceOpt = new Option<bool>(
     name: "--force",
     description: "Terminate a live owner that cannot be stopped over its pipe (SIGTERM, then kill after 10s).");
 
 var allOpt = new Option<bool>(
     name: "--all",
-    description: "List every Piston process (daemons and `piston mcp` sessions) that owns a worktree.");
+    description: "List owned worktrees, running and queued work, and machine budget use.");
 
 // ── Root command (default: web UI with auto-start) ─────────────────────────────
 
@@ -180,6 +184,7 @@ var mcpCmd = new Command("mcp",
     coverageOpt,
     parallelismOpt,
     configDirectoryOpt,
+    dashboardOpt,
 };
 
 mcpCmd.SetHandler(async ctx =>
@@ -190,10 +195,33 @@ mcpCmd.SetHandler(async ctx =>
     var coverage = ctx.ParseResult.GetValueForOption(coverageOpt);
     var parallelism = ctx.ParseResult.GetValueForOption(parallelismOpt);
     var configDirectory = ctx.ParseResult.GetValueForOption(configDirectoryOpt);
-    ctx.ExitCode = await RunMcpAsync(solutionFile, debounceMs, filter, coverage, parallelism, configDirectory);
+    ctx.ExitCode = await RunMcpAsync(solutionFile, debounceMs, filter, coverage, parallelism, configDirectory,
+        ctx.ParseResult.GetValueForOption(dashboardOpt));
 });
 
 rootCommand.AddCommand(mcpCmd);
+
+var jsonOpt = new Option<bool>("--json", "Write machine-readable dashboard discovery state.");
+var dashboardCmd = new Command("dashboard", "Inspect the current worktree's dashboard without starting Piston.")
+{
+    solutionArg,
+    jsonOpt,
+};
+dashboardCmd.SetHandler(ctx =>
+{
+    var result = DashboardDiscovery.Inspect(
+        ctx.ParseResult.GetValueForArgument(solutionArg)?.FullName ?? Directory.GetCurrentDirectory());
+    if (ctx.ParseResult.GetValueForOption(jsonOpt))
+    {
+        Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result, DashboardJsonContext.Default.DashboardEndpoint));
+    }
+    else
+    {
+        Console.WriteLine(result.Url ?? result.Message);
+    }
+    ctx.ExitCode = result.State == "error" ? 1 : 0;
+});
+rootCommand.AddCommand(dashboardCmd);
 
 // ── stop subcommand ────────────────────────────────────────────────────────────
 
@@ -229,7 +257,7 @@ statusCmd.SetHandler(async ctx =>
     var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
     var pipeName = ctx.ParseResult.GetValueForOption(pipeNameOpt);
     var all = ctx.ParseResult.GetValueForOption(allOpt);
-    var exitCode = all ? RunStatusAll() : await RunStatusAsync(solutionFile, pipeName);
+    var exitCode = all ? await RunStatusAllAsync() : await RunStatusAsync(solutionFile, pipeName);
     ctx.ExitCode = exitCode;
 });
 
@@ -266,6 +294,50 @@ coverageExportCmd.SetHandler(async ctx =>
 });
 
 rootCommand.AddCommand(coverageExportCmd);
+
+// ── init subcommand ───────────────────────────────────────────────────────────
+
+var initWriteOpt = new Option<bool>("--write",
+    "Write the assets. Without it, only report what would change; nothing is written.");
+var initScopeOpt = new Option<string>("--scope", () => "user",
+    "user: the harness's user configuration directory. repo: the current directory (the repository root).")
+    .FromAmong("user", "repo");
+var initForceOpt = new Option<bool>("--force",
+    "With --write, overwrite Piston's MCP entry and asset files when their content differs.");
+var initDashboardOpt = new Option<bool>("--dashboard",
+    "Start `piston mcp` with --dashboard so the session serves the dashboard (needed by the canvas).");
+
+var initCmd = new Command("init",
+    "Print or (with --write) install Piston's agent integration assets. Never changes configuration without --write.");
+foreach (var (name, harness, description) in new[]
+{
+    ("copilot", Harness.Copilot, "GitHub Copilot: the MCP server entry, the `piston` skill and the Piston dashboard canvas."),
+    ("claude", Harness.Claude, "Claude Code: the `piston` skill and, at repo scope, the .mcp.json server entry."),
+})
+{
+    var harnessCmd = new Command(name, description) { initWriteOpt, initScopeOpt, initForceOpt, initDashboardOpt };
+    harnessCmd.SetHandler(ctx =>
+    {
+        var options = new InitOptions(
+            harness,
+            ctx.ParseResult.GetValueForOption(initScopeOpt) == "repo" ? InitScope.Repo : InitScope.User,
+            ctx.ParseResult.GetValueForOption(initWriteOpt),
+            ctx.ParseResult.GetValueForOption(initForceOpt),
+            ctx.ParseResult.GetValueForOption(initDashboardOpt));
+        try
+        {
+            ctx.ExitCode = HarnessInit.Run(options, InitLocations.FromEnvironment(Directory.GetCurrentDirectory()), Console.Out);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            Console.Error.WriteLine($"error: {ex.Message}");
+            ctx.ExitCode = 1;
+        }
+    });
+    initCmd.AddCommand(harnessCmd);
+}
+
+rootCommand.AddCommand(initCmd);
 
 return await rootCommand.InvokeAsync(args);
 
@@ -346,7 +418,9 @@ static async Task RunDaemonAsync(
     try
     {
         (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
-        options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config, "daemon");
+        options = HostHelpers.BuildOptions(
+            solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config, "daemon",
+            $"http://localhost:{webPort}");
     }
     catch (InvalidOperationException ex)
     {
@@ -552,7 +626,8 @@ static async Task<int> RunMcpAsync(
     string? cliFilter,
     bool cliCoverage,
     int cliParallelism,
-    string? configDirectory)
+    string? configDirectory,
+    bool dashboard)
 {
     // stdout carries MCP JSON-RPC only: anything written through Console.Out goes to stderr instead.
     var stdout = Console.OpenStandardOutput();
@@ -578,6 +653,7 @@ static async Task<int> RunMcpAsync(
     try
     {
         (solutionPath, var config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
+        dashboard |= config.Dashboard ?? false;
         options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config,
             McpStdioHost.OwnerHost);
         if (!HostHelpers.DotnetSdkAvailable())
@@ -597,6 +673,7 @@ static async Task<int> RunMcpAsync(
         StartupError = startupError,
         Input = stdin,
         Output = stdout,
+        Dashboard = dashboard,
     });
     return await host.RunAsync(cts.Token);
 }
@@ -947,25 +1024,19 @@ static bool PrintOwners(string path)
     return owners.Count > 0;
 }
 
-static int RunStatusAll()
+static async Task<int> RunStatusAllAsync()
 {
-    var records = OwnerLookup.ListAll();
-    var live = records.Where(r => r.Liveness == OwnershipLiveness.Live).ToList();
-    var stale = records.Where(r => r.Liveness == OwnershipLiveness.Stale).ToList();
-    if (live.Count == 0)
+    MachineExecutionOverview overview;
+    try
     {
-        Console.WriteLine("No Piston process owns a worktree.");
+        overview = await MachineExecutionOverviewReader.ReadAsync(ExecutionCoordinationDirectory.ResolveDefault());
+    }
+    catch (ExecutionCoordinationException ex)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 1;
     }
 
-    foreach (var record in live)
-    {
-        Console.WriteLine($"Live : {OwnerLookup.Describe(record)}");
-    }
-
-    foreach (var record in stale)
-    {
-        Console.WriteLine($"Stale: {OwnerLookup.Describe(record)} (owner exited without cleanup; harmless)");
-    }
-
+    Console.Write(StatusAllFormatter.Format(overview));
     return 0;
 }

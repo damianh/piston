@@ -68,20 +68,82 @@ Implemented protocol operations include stop, force run, set filter, clear
 results, state retrieval, and MCP call-log retrieval. `engine/start` is rejected
 by the headless dispatcher because the solution is configured at launch.
 Coverage requests return the solution's coverage summary, one file's line
-coverage (optionally with its source), and LCOV or Cobertura exports; the daemon
-also serves the exports over HTTP at `/api/coverage/{lcov|cobertura}`.
+coverage (optionally with its source), and LCOV or Cobertura exports.
 `coverage/getCoveringTests` returns the tests the impact map records as executing
 a file, with their evidence granularity and executed line ranges.
+`coverage/getChangedLines` returns the verdicts for the changed lines of the git
+changes (`base`, `baseRef`), as `get_changed_line_coverage` does (see
+[MCP behavior and limitations](#mcp-behavior-and-limitations)): per file, line
+ranges per verdict, unknown ranges per reason, partial-branch lines and up to 20
+failing tests. File detail is bounded to half the message size limit: files
+past it give only their totals (`detailOmitted`), then are counted in
+`filesOmitted`, with a warning. The overall totals always count every changed line.
+`coverage/getChangeDiff` (`base`, `baseRef`, `context` of 1 to 20 lines, default 3)
+returns the same changes as unified-diff hunks for the dashboard's Changes view:
+every changed file, including deleted, binary and non-code files, each line with
+its old and new numbers, and each added code line with its verdict, unknown
+reason, hit count and branches. The hunks and the verdicts come from one
+`git diff`, so they agree. It is bounded the same way: past half the message
+size limit a file keeps only its totals (`hunksOmitted`), then files are
+counted in `filesOmitted`. `coverage/getCoveringTests` gives each test's latest
+`outcome` (`passed`, `failed`, `skipped` or `noResult`).
 `source/get` returns a source file's lines for the dashboard's stack-trace view;
 it refuses paths that resolve (following symlinks) outside the solution
 directory, files over 1 MB and binary files.
 Clients receive state, test progress, build errors, and activity notifications.
-The dashboard presents current test/build state, run history and comparison,
-aggregate coverage with covering tests, activity, and MCP call history.
+`machine/getOverview` reads machine-wide worktree owners, budget, live leases and
+queue tickets for the dashboard. The dashboard presents current test/build state,
+run history and comparison, aggregate coverage with covering tests, a coverage-aware diff of the changes, activity,
+MCP call history and a Machine tab for the workspace overview.
 
 See [README.md](README.md) for executable commands and the actual configuration
 shape. The daemon's `--stdio` JSON-RPC transport is not MCP; the stdio MCP server
 is the separate `piston mcp` command.
+
+## Native Copilot canvas and dashboard hosting
+
+The project-scoped `.github/extensions/piston-dashboard/` extension renders the
+existing `Piston.Web` dashboard, not a second UI. `DashboardHost` shares static
+file serving, CSP, request guards and WebSocket routing between `DaemonHost` and
+`McpStdioHost`. The latter opts in with `--dashboard` or `.piston.json`'s
+`dashboard: true`, binding `127.0.0.1:0` and publishing the assigned address.
+Default stdio sessions continue to open no web ports.
+
+**Decision:** expose an opt-in loopback web endpoint in the existing stdio
+owner, rather than attaching that session to a daemon. This preserves one engine
+per owning process, stdio lifetime/availability behavior and exclusive worktree
+ownership. No second owner is launched for a canvas.
+
+The ownership sidecar carries an optional `dashboardUrl`, atomically replaced
+without changing the ownership lock or acquisition timestamp. `piston dashboard
+--json` discovers a live lock for the canonical current worktree and returns an
+explicit connected/disconnected/disabled/error state. Records without an endpoint
+remain compatible. Unheld locks and non-loopback URLs are not attachment targets.
+The read-only `/api/dashboard` endpoint reports the owner's worktree, PID and
+acquisition timestamp; the extension checks them before using the endpoint.
+
+The extension keeps a small loopback connection shell independent of the engine.
+It proxies HTTP assets and WebSockets to only that verified owner, validates its
+own Host/Origin, and translates same-origin headers only after validation.
+It does not accept a caller-supplied upstream URL or disable the upstream guards.
+The shell forwards documented canvas theme tokens into the same-origin dashboard.
+Standalone theme storage remains separate from the canvas's host-following mode.
+
+The shell inspects periodically and on refresh, shows actionable disconnected
+states even when the engine was absent at first load, and replaces the embedded
+document when ownership changes. Rehydration resolves the active worktree again;
+instance IDs identify panels, not durable engine state. Closing a panel tears
+down its server/connections, not the engine. Open, refresh and reconnect issue no
+run commands. Only explicit `run`/`run_failed` actions or existing dashboard
+controls request tests; failed-test selection is shared in `RunTestsCommand`.
+Execution controls are inert while the shared dashboard is disconnected.
+
+The packed tool embeds a copy of the extension (without its tests) and the
+`piston` skill in `Piston.dll`. It installs them only on request:
+`piston init copilot --write` writes them under `$COPILOT_HOME` (or the current
+repository with `--scope repo`). An existing file whose content differs is kept
+unless `--force` is given. The extension requires a runtime with extension canvas
+support and a canvas-capable `piston` on PATH. The SDK canvas API is experimental.
 
 ## Engine pipeline
 
@@ -155,28 +217,35 @@ counts are not additive across tests.
 
 - **Recording.** After a coverage run, the orchestrator records one `run` unit per
   test project from that project's reports. A full run in which all the project's
-  tests ran cleanly replaces the unit; other runs merge into it, first remapping
-  earlier spans and branch lines onto the new content with a line diff. Branch
-  evidence replaced by a code edit is discarded; comment and whitespace edits
-  remap lines through unchanged C# tokens. The SQLite `branches` column is
-  nullable so existing databases can be migrated without invalidating selection:
+  tests ran cleanly replaces the unit; other runs merge it by C# member identity.
+  Each executed member is keyed by its containing namespace/type, signature and
+  token hash. Earlier spans are carried forward only through unchanged members;
+  evidence that cannot be validated becomes file-level rather than being shifted
+  by an unvalidated line diff. Branch counts are carried forward only on
+  unambiguously mapped lines in unchanged members. The nullable SQLite `branches`
+  column is added to existing member-aware databases without invalidating selection:
   null means unknown, and an empty value means measured with no branch lines.
+  Zero-hit branch observations do not make a test an executor of a file: rows
+  without executed spans are excluded from selection, invalidation and executor
+  lookup. Ambiguous line splits or joins discard old branch counts.
 - **Backfill.** `run` evidence credits every executed line to every test of the
   project. When the daemon is idle, `ImpactBackfill` plans class (or test) units
   that are missing or outdated, and the orchestrator runs each with a name filter
-  and coverage, recording a `class`/`test` unit. Legacy units without branch
-  data are re-measured after missing and outdated units. A unit is skipped when
-  not every planned test ran. Any new run cancels the backfill; progress is
-  published as `ImpactBackfill` in the state snapshot. A completed pass logs
-  elapsed time and approximate bytes for spans, branches and snapshots.
-- **Selection.** `SelectTests` diffs each changed file against each unit's
-  snapshot. A unit whose executed spans overlap the changed lines selects its tests,
-  with a `TestSelectionReason` (changed lines, executed span, granularity and any
-  branch counts on the changed lines); a change outside every span selects every
-  test that executed the file. Branch counts enrich reasons only and do not alter
-  selection. Current finer evidence about a test overrides coarser evidence.
-  Analyzing a change marks the file's class and test units dirty, so the `run`
-  unit decides until they are remeasured.
+  and coverage, recording a `class`/`test` unit. Legacy units without branch data
+  are re-measured after missing and outdated units. A unit is skipped when not every
+  planned test ran. Any new run cancels the backfill; progress is published as
+  `ImpactBackfill` in the state snapshot. A completed pass logs elapsed time and
+  approximate bytes for spans, branches and snapshots.
+- **Selection.** `SelectTests` compares member keys and body hashes against each
+  unit's snapshot. A changed or removed executed member selects its tests and
+  includes the member identity and recorded branch counts in its `TestSelectionReason`; edits outside
+  recorded members conservatively select every test that executed the file.
+  Current finer evidence about a test overrides coarser evidence. A line insertion
+  that leaves member identities and bodies unchanged remaps its spans without
+  dirtying the class/test units. Analyzing a change dirties units when their
+  executed member or non-member syntax changes, or declarations are added or
+  removed: even unchanged callers can bind differently after an overload is added.
+  Branch counts enrich reasons only and do not alter selection.
 - **Abstaining.** A changed test file, a changed file with no recording, or more
   than `ImpactAnalysisResult.MaxFilteredTests` (100) selected tests falls back to
   project selection, and the run records why (`SelectionExplanation`). Without an
@@ -242,7 +311,9 @@ warm hosts are enabled for MTP), each under `Piston.ProcessHost`:
 | Backend | Current mechanism |
 |---|---|
 | VSTest | `dotnet test` on the project/solution target, `--no-build`, normal verbosity, TRX results. The `PistonLive` data collector streams per-test start/end events; stdout is parsed for progress as well. |
-| Microsoft.Testing.Platform (MTP) | Runs the built test app in MTP server mode (JSON-RPC), which reports each test as it starts and finishes. Falls back to `dotnet test --project <csproj> --no-build` with stdout parsing when the app is not found or server mode fails, and always uses `dotnet test` for coverage. The fallback needs the MTP runner configured in the solution's `global.json`. |
+| Microsoft.Testing.Platform (MTP) | Runs the built test app in MTP server mode (JSON-RPC), which reports each test as it starts and finishes. Test identities combine the test class and display name. Falls back to `dotnet test --project <csproj> --no-build` with stdout parsing when the app is not found or server mode fails. Coverage runs stay in server mode: the coverage extension's test host controller connects first as a passive node (`multipleConnectionProvider`) and the test host it relaunches connects next and serves the run. The fallback needs the MTP runner configured in the solution's `global.json`. |
+
+See the [MTP server-mode investigation](docs/mtp-server-mode.md) for identity and coverage findings.
 
 When the graph identifies an MTP output path, the composite strategy selects
 MTP; otherwise it selects VSTest. `Auto` and the currently named `Process` mode
@@ -305,7 +376,10 @@ errors; schema errors and access denial fail immediately.
 `PistonEngine.StartAsync` validates the budget, then takes
 `WorktreeOwnership`. That is an exclusive lock on
 `owners/<sha256(canonical worktree)>.lock`, plus a JSON sidecar with PID, solution,
-worktree and acquisition time used in conflict messages. The canonical worktree is
+worktree, acquisition time, host kind and (for daemons) local dashboard URL used in
+conflict messages and the machine overview. Dashboard URLs are accepted only when
+they use HTTP on localhost or a loopback address with no path, query or credentials.
+The canonical worktree is
 the solution path with symlinks resolved, walked up to the first `.git` directory
 or file, including solution-file symlinks. Without one, it is the solution directory.
 Windows paths are case-folded; macOS uses `F_GETPATH` to preserve actual directory
@@ -346,6 +420,54 @@ unrecognised held entries, IO) fault the run with an explicit reason. Only a mis
 budget file selects the default; unreadable files do not. Build/test cancellation
 waits for the killed runner to exit before the pipeline releases its lease.
 
+`MachineExecutionOverviewReader` takes `admission.lock` briefly and reads the
+same live ticket and lease names without cleaning up stale files. It reports CPU
+and memory use from held leases, FIFO queue positions, and owner-to-entry matches
+by PID. The dashboard polls `machine/getOverview` only while the Machine tab is
+open; a 500 ms lock timeout or invalid budget is returned as visible overview
+error text rather than silently inventing resource values. A failed coordination
+scan discards partial entries and marks availability false; usage and counts are
+unknown, and live owners are not labelled idle. `piston status --all`
+uses the same reader.
+Ownership scan availability is tracked separately: unreadable owner directories
+or locks produce a visible error and unknown ownership, not an empty-success list.
+Filesystem probes distinguish missing directories from access and I/O failures.
+
+**Test resources** (`MachineResourceCoordinator`, behind the internal
+`ITestResourceGate`) schedule test projects, not runs. `TestResourceInference`
+resolves a project's `TestResourceNeeds` from its direct package references
+(`ImpactAnalyzer.GetTestProjectFacts`) and the ordered `testResources` rules:
+container packages imply `UsesContainers` and, unless `isolation` is `none`, the
+key `project:<repo label>-<sha256(repository)[..12]>/<path relative to the
+worktree root>`, which is identical in every worktree of the repository (the
+repository is the git common directory, or the worktree root outside git).
+`TestResourceKey` normalises `port:`, `container:` and `resource:` keys.
+`TestResourceResolver` combines all test projects' needs for a whole-solution
+target. `TestRunnerService` acquires a project's resources before its
+`TestProcessPool` slot, so a waiting project does not occupy a slot, and releases
+them before `OnProjectCompleted`; discovery is not gated.
+
+The coordinator uses `v1/resource-queue/*.ticket`, `v1/resource-leases/*.lease`
+and its own `resources.lock`, so admission's scan never sees resource entries.
+Entries are named `<seq>_<pid>_<guid>` and held open exclusively like admission
+entries. Because held files cannot be read by other processes, each has a
+`<name>.json` sidecar (keys, containers, PID, worktree, project, times) written
+before the entry is created and deleted after it is closed, both under the lock;
+a held entry without a readable sidecar is ignored. On each 100 ms poll it deletes
+unheld entries and orphan sidecars, then grants the ticket when no lease shares a
+key, no earlier ticket shares a key, and, if it needs containers and
+`budget.json` sets `containerSlots`, container leases plus earlier container
+tickets are below the limit. Runs take all resources at once and conflicting
+tickets are ordered by sequence, so there is no deadlock and no starvation.
+Grants create the lease and release the ticket. Blockers (held or queued, with
+PID, worktree and project) are reported through `TestRunCallbacks.OnProjectWaiting`
+into `PistonState.ProjectResourceWaits` and `ProjectRunStatus.WaitingForResources`.
+After the grant, declared `port:` keys are probed by binding a listener; a bound
+port is a warning on `TestProjectResources`, not a failure.
+`ResourceConflictScanner` matches failed projects' runner errors, failure
+messages, output and log against port/container-name conflict signatures and
+records `SuspectedResourceConflict` on the `TestRunProjectOutcome`.
+
 Limits: budgets are admission reservations, not OS resource caps. Liveness
 means "process alive", so a hung daemon keeps its lease. Orphaned children of a
 crashed daemon are not counted. Coordination is per OS user and needs a local
@@ -360,14 +482,17 @@ path passes `--coverage --coverage-output-format cobertura` when the test app
 references `Microsoft.Testing.Extensions.CodeCoverage`, running it through
 `dotnet test` rather than server mode. Both produce Cobertura XML, which
 `CoverageProcessor` parses and merges across reports, dropping files outside the
-solution directory.
+solution directory. A probe of the current MTP coverage extension stalled in
+server mode without producing test updates or a report; see the
+[MTP server-mode investigation](docs/mtp-server-mode.md) before changing this
+fallback.
 
 When enabled, `SqliteCoverageStore` creates `<solution-directory>/.piston/piston.db`
 and uses WAL mode. Its tables are:
 
 | Table | Stored data |
 |---|---|
-| `coverage_files` | Per-file line/branch totals, module, content hash, stale and partial flags. |
+| `coverage_files` | Per-file line/branch totals, module, content and snapshot hashes, stale and partial flags. |
 | `coverage_lines` | Per-line hits and branch counts: the merged report. |
 | `coverage_sets` | One row per file-level attribution set: run ID and granularity (always `run`). |
 | `coverage_set_tests` | The tests credited with a set. |
@@ -375,14 +500,18 @@ and uses WAL mode. Its tables are:
 | `coverage_summary` | File path, last run ID, last-updated timestamp. |
 | `impact_units` | One row per impact unit: test project, granularity, unit key, run ID, dirty flag. |
 | `impact_unit_tests` | The tests a unit measured. |
-| `impact_unit_files` | Per unit and file: the executed line spans and the snapshot they are numbered against. |
-| `impact_snapshots` | File content by hash, so later edits can be diffed against what was measured. |
+| `impact_unit_files` | Per unit and file: executed member keys, fallback spans and the snapshot they were measured against. |
+| `impact_snapshots` | Deduplicated file content by hash, shared by the report and impact map. |
 
 The report tables answer the dashboard, `get_coverage`, changed-line coverage and
 exports. A full, unfiltered run replaces them. A selective run merges its hits
-into files whose content hash is unchanged, and replaces (and marks partial) files
-that are new or changed. A file whose content no longer matches its hash is
-reported stale.
+into files whose source is unchanged, or remaps earlier hits through unchanged
+C# members when source has moved, provided non-member syntax is unchanged. Only
+one-to-one line mappings preserve counts; ambiguous split or joined lines remain
+stale until remeasured. Hits from edited members are dropped. Unvalidated
+current lines are returned as stale ranges; changed-line coverage can still report
+lines whose member identity and body are unchanged. Exports continue to omit stale
+files.
 
 The set tables hold coarse file-level attribution: every covered line of a run is credited to every test of that run. Tests that share one
 line list share one set, so a run stores its covered lines once rather than once
@@ -390,7 +519,8 @@ per test. Processing replaces old associations for files present in new coverage
 data and prunes sets left without lines. Hit counts are association values, not
 independently measured per-test execution counts. Databases from older versions
 held a per-test `coverage_map` table; it is dropped on startup and refilled by the
-next coverage run. The store serializes all use of its connection, since the
+next coverage run. A schema-version change drops these derived coverage caches;
+the next coverage run and idle backfill rebuild them. The store serializes all use of its connection, since the
 orchestrator and the impact analyzer call it from different threads.
 
 Clearing results deletes every coverage table's rows transactionally using a
@@ -402,7 +532,7 @@ Within an engine, coverage processing and its availability-state publication
 are serialized with clearing, so a cleared commit cannot later publish a stale
 coverage indicator.
 
-The engine keeps test results, timings, and build state in memory. Coverage run
+The engine keeps most controller state in memory. Coverage run
 IDs are seeded from the database, but they do not constitute test-run history.
 
 Run history (`RunHistoryStore`) is the durable test-result record. It is a JSON
@@ -418,7 +548,18 @@ tests, classifies each failure against the earlier entries (`New`,
 `PreExisting`, `Flaky` or `Unknown`) and attaches the result to the
 `TestRunRecord` as `FailureClassifications`. A test is flaky only when it passed
 and failed on the same `SourceAfter` fingerprint, and only `Current` runs record a
-fingerprint. Saves are debounced and atomic (temp file then rename); each test
+fingerprint. Outcomes on that fingerprint recorded by other worktrees of the
+repository count too: `SiblingHistories` reads the sibling history files in the
+repository folder (read-only, shared, cached by write time) outside the store's
+lock. A test that both passed and failed across in-run retries is flaky even
+without a fingerprint, since every attempt used the same build. Each flaky
+classification carries `FlakinessEvidence` (counts, source, retry outcomes, other
+worktrees and the newest outcomes). With `retryFailures` set, the orchestrator
+re-runs a run's failed tests (`PistonOrchestrator.Retries.cs`) after test
+execution and before coverage processing and the post-run fingerprint, filtered
+to those tests and without coverage; the final attempt is the result and the
+earlier ones are `TestResult.Attempts`. The store writes one entry per attempt,
+and per-test entry limits count attempts. Saves are debounced and atomic (temp file then rename); each test
 keeps 20 entries, the file keeps 50 runs with per-test results and clipped errors,
 and tests unseen for 30 days are pruned. The file stores each project and test
 name once and runs in columns. A history failure is logged and never fails a run.
@@ -428,6 +569,19 @@ name once and runs in columns. A history failure is logged and never fails a run
 result failed its classification (`GetLatestFailures`) plus the flaky tests, for
 the Tests tab's badges and filters; `history/getTestHistory` gives one test's
 entries for its history strip.
+
+The latest aggregate test tree, last terminal run record, build result and run
+timings are also persisted to `.piston/<solution>.results.json` by
+`SavedResultsStore`. Saves are debounced and atomically replaced. Saved test
+output and errors are clipped, build diagnostics are capped, and run logs,
+`RecentRuns` history and the project graph are not included. The
+`persistResults` setting defaults to true. On startup, the saved suites and last
+run are restored with `Restored = true` and `Freshness = Unknown`; consumers
+must not treat them as verified. A later selective run can leave untouched suites
+marked restored, while a full startup run replaces them. A changed engine
+informational version, unsupported file format, different solution path or
+corrupt file is diagnosed and ignored without blocking startup. `clear_results`
+deletes the saved result file even when persistence is disabled.
 
 There is no run-metadata table, preferences table, or graph cache. Coverage persistence alone is not full
 controller-state recovery. `.piston.json` is the actual optional configuration
@@ -451,7 +605,21 @@ Test tools (`TestTools`): `verify`, `run_tests`, `get_test_run`, `get_test_resul
 `get_test_history`, `set_test_filter` and `clear_results`. Coverage and selection
 tools (`CoverageTools`): `get_coverage`, `get_changed_line_coverage`,
 `export_coverage`, `plan_affected_tests` and `run_affected_tests`. They use the same
-engine state and pipeline as other clients; MCP does not bypass builds. Test
+engine state and pipeline as other clients; MCP does not bypass builds.
+`get_changed_line_coverage` (`ChangedLineVerdicts`) classifies each changed line
+from the coverage report, the impact map and the latest test results. Stale lines
+and outdated impact evidence never count as covered; in a changed C# file, only
+lines outside the store's stale ranges (unchanged members, remapped) get verdicts.
+Because the impact map records executed methods, a line is covered by passing tests
+only when every current test credited with it passed. A credited test's result is
+looked up in its own project's suite by solution-relative project ID. A run stores its coverage before it replaces
+`TestSuites`, and marks that window with `PistonState.BeginResultsUpdate`/`EndResultsUpdate`.
+The classifier rereads when `ResultsVersion` changes during a read, or when the changed
+lines or the changed files' content differ after it (line numbers must describe the content
+coverage was judged against). Coverage is read off-thread with a bounded, cancellable wait,
+since the store's lock is held while a run stores coverage. If the state does not settle,
+every changed line is `unknown` (`resultsUpdating`, or `stale` while files keep changing)
+rather than combine two runs or two versions of a file. Test
 processes are fresh unless `warmTestHosts` is enabled (see
 [Builds and execution](#builds-and-execution)).
 
@@ -479,6 +647,24 @@ MCP adds `build` (null before a build result is captured) to the existing v1
 document. Raw diagnostic lines retain MSBuild's ID and file/line/column location.
 A build failure uses the same source-freshness computation as test completion;
 `Current` build diagnostics do not make `isCurrentFullResult` true.
+
+Every test suite also carries its short display `Name` and a `ProjectId`: the
+project path relative to the solution directory, with `/` separators and the
+project-file extension (for example, `tests/One/Tests.csproj`). The ID is the
+key for `engine/runTests`, `tests/getRunLog`, history, and dashboard selection;
+short names are not accepted for targeted requests. The dashboard displays the
+short name unless another project shares it, in which case it adds the relative
+path; labels normalize daemon path separators regardless of the browser's platform.
+Duplicate test IDs are detected within each project, not across projects. When
+the runner falls back to a solution target without project IDs, suite names remain
+the fallback identities for logs and flattened test results.
+Run history format v2 stores project IDs, and retained history remains queryable
+by ID after a project is renamed or removed. On loading v1 history, a short
+name is migrated only when it identifies exactly one current test project,
+after a successful build and post-restore graph refresh. While project discovery
+is incomplete, legacy data is left unchanged and new runs are not recorded in
+history, with a diagnostic explaining why. Ambiguous or removed projects are dropped only once
+the complete project list is available.
 
 `set_test_filter` changes the active filter but does not itself run tests.
 `clear_results` clears in-memory suites, the last-run timestamp, coverage state,
@@ -518,5 +704,5 @@ admission budget described above.
 
 Aspire is one possible integration-test example for the generic runner. There
 is no Aspire-specific lifecycle, service orchestration, or dedicated
-integration contract. Planned work, including a native Copilot canvas for the
-dashboard, is in [docs/ROADMAP.md](docs/ROADMAP.md).
+integration contract. Planned work is in
+[docs/ROADMAP.md](docs/ROADMAP.md).

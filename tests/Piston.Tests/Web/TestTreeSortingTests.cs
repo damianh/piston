@@ -71,6 +71,40 @@ public sealed class TestTreeSortingTests
     }
 
     [Fact]
+    public void DuplicateShortNamesHaveSeparateNodesAndDisambiguatedLabels()
+    {
+        TestSuiteDto[] suites =
+        [
+            Suite("Tests", Test("N.C.One", 1)) with { ProjectId = "One/Tests.csproj" },
+            Suite("Tests", Test("N.C.Two", 1)) with { ProjectId = "Two/Tests.csproj" },
+        ];
+
+        var roots = TestTreeBuilder.Build(suites, null, new ViewState(), null);
+
+        Assert.Equal(["suite:One/Tests.csproj", "suite:Two/Tests.csproj"], roots.Select(node => node.ExpansionKey));
+        Assert.Equal(["Tests (One/Tests.csproj)", "Tests (Two/Tests.csproj)"], roots.Select(node => node.Label));
+        var detail = NodeDetail.For(roots[1].ExpansionKey!, suites, suites, roots);
+        Assert.Equal("Tests (Two/Tests.csproj)", detail!.Title);
+        Assert.Equal(["Two/Tests.csproj"], detail.Run!.ProjectIds);
+    }
+
+    [Fact]
+    public void LiveOverlayPreservesSharedTestsInOtherProjects()
+    {
+        var first = Suite("Tests", Test("Shared.Test", 1)) with { ProjectId = "One/Tests.csproj" };
+        var second = first with { ProjectId = "Two/Tests.csproj" };
+        var live = first with { Tests = [Test("Shared.Test", 0, TestStatusDto.Running)] };
+
+        var overlay = TestTreeBuilder.WithLiveOverlay([first, second], [live]);
+        var roots = TestTreeBuilder.Build(overlay, null, new ViewState(), null);
+
+        Assert.Equal(["suite:One/Tests.csproj", "suite:Two/Tests.csproj"], roots.Select(n => n.ExpansionKey));
+        Assert.Equal([TestStatusDto.Running, TestStatusDto.Passed], roots.Select(n => Assert.Single(n.Tests()).Status));
+        var view = new ViewState { SelectedTestProject = second.ProjectId, SelectedTestKey = "Shared.Test" };
+        Assert.Same(second.Tests[0], view.FindSelectedTest(overlay));
+    }
+
+    [Fact]
     public void DurationSortOrdersNestedGroupsAndIgnoresRunningDurations()
     {
         var view = new ViewState();

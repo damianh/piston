@@ -4,7 +4,7 @@ const token = (name) => `rgb(var(--${name}) / <alpha-value>)`;
 const scale = (hue, steps) => Object.fromEntries(steps.map((s) => [s, token(`${hue}-${s}`)]));
 
 module.exports = {
-  content: ["./**/*.razor", "./wwwroot/index.html"],
+  content: ["./**/*.razor", "./Models/**/*.cs", "./wwwroot/index.html"],
   darkMode: "class",
   theme: {
     extend: {

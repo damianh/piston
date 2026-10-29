@@ -79,6 +79,7 @@ internal sealed record ImpactReason(
     LineSpan? ExecutedSpan,
     ImpactGranularity Granularity,
     string ProjectPath,
+    string? Member = null,
     IReadOnlyList<BranchLine>? Branches = null);
 
 /// <summary>The tests a set of changes affects, according to the impact map.</summary>

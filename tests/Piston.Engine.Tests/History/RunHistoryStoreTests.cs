@@ -10,6 +10,7 @@ namespace Piston.Engine.Tests.History;
 public sealed class RunHistoryStoreTests : IDisposable
 {
     private const string Project = "App.Tests";
+    private const string ProjectId = "App.Tests/App.Tests.csproj";
     private const string Test = "App.Tests.CalculatorTests.Adds";
 
     private readonly string _root = Path.Combine(Path.GetTempPath(), "piston-history-tests", Guid.NewGuid().ToString("N"));
@@ -134,6 +135,24 @@ public sealed class RunHistoryStoreTests : IDisposable
     }
 
     [Fact]
+    public void HistoryOfRemovedProjects_RemainsQueryableByItsStoredId()
+    {
+        using (var store = Open())
+        {
+            _ = store.Record(Run("s1", TestStatus.Passed));
+        }
+
+        using var reopened = Open();
+        reopened.ResolveLegacyProjects(
+            [Path.Combine(Path.GetDirectoryName(_solution)!, "Renamed", "Tests.csproj")],
+            Path.GetDirectoryName(_solution)!);
+
+        Assert.Equal(ProjectId, Assert.Single(reopened.GetTestHistory(Test, ProjectId)).ProjectId);
+        Assert.Empty(reopened.GetTestHistory(Test, "Renamed/Tests.csproj"));
+        _ = Assert.Throws<ArgumentException>(() => reopened.GetTestHistory(Test, "Unknown/Tests.csproj"));
+    }
+
+    [Fact]
     public void Entries_per_test_and_stored_runs_are_capped()
     {
         using var store = Open();
@@ -170,6 +189,94 @@ public sealed class RunHistoryStoreTests : IDisposable
         Assert.Equal("boom", result.ErrorMessage);
         Assert.Equal("at Adds()", result.StackTrace);
         Assert.Equal(FailureKind.PreExisting, Assert.Single(reopened.Record(Run("s3", TestStatus.Failed))).Kind);
+    }
+
+    [Fact]
+    public void FallbackSuiteNames_PreserveDotsBeforeAndAfterReopening()
+    {
+        var passed = FallbackRun(TestStatus.Passed);
+        var failed = FallbackRun(TestStatus.Failed);
+        using (var store = Open())
+        {
+            _ = store.Record(passed);
+            _ = store.Record(failed);
+            AssertNames(store);
+        }
+
+        using var reopened = Open();
+        AssertNames(reopened);
+
+        TestRunRecord FallbackRun(TestStatus status)
+        {
+            var run = Run("same", status);
+            return run with { Suites = [run.Suites[0] with { ProjectId = null }] };
+        }
+
+        void AssertNames(RunHistoryStore store)
+        {
+            var history = Assert.Single(store.GetTestHistory(Test, Project));
+            Assert.Equal(Project, history.Project);
+            Assert.Equal(Project, history.ProjectId);
+            Assert.Equal(Project, Assert.Single(store.GetLatestFailures()).Project);
+            Assert.Equal(Project, Assert.Single(store.GetFlakyTests()).Project);
+            var result = Assert.Single(Assert.IsType<StoredRun>(store.GetRun(failed.RunId)).Results);
+            Assert.Equal(Project, result.Project);
+            Assert.Equal(Project, result.ProjectId);
+        }
+    }
+
+    [Fact]
+    public void VersionOneHistory_MigratesUniqueProjectNamesToIds()
+    {
+        var location = HistoryLocation.Resolve(BaseDirectory, _solution);
+        _ = Directory.CreateDirectory(location.Directory);
+        File.WriteAllText(location.FilePath, LegacyFile());
+
+        using (var store = Open())
+        {
+            Assert.Equal(Project, Assert.Single(Assert.IsType<StoredRun>(store.GetRun("legacy-run")).Results).Project);
+            store.ResolveLegacyProjects([Path.Combine(Path.GetDirectoryName(_solution)!, "App.Tests", "App.Tests.csproj")],
+                Path.GetDirectoryName(_solution)!);
+            store.Save();
+
+            var history = Assert.Single(store.GetTestHistory(Test, ProjectId));
+            Assert.Equal(ProjectId, history.ProjectId);
+            AssertLegacyRun(store);
+        }
+
+        using var reopened = Open();
+        AssertLegacyRun(reopened);
+        Assert.Contains("\"Version\":2", File.ReadAllText(location.FilePath), StringComparison.Ordinal);
+
+        static void AssertLegacyRun(RunHistoryStore store)
+        {
+            var run = Assert.IsType<StoredRun>(store.GetRun("legacy-run"));
+            var result = Assert.Single(run.Results);
+            Assert.Equal(ProjectId, result.ProjectId);
+            Assert.Equal(Project, result.Project);
+            Assert.Equal(Test, result.Test);
+            Assert.Equal(TestStatus.Passed, result.Status);
+            Assert.Equal(12.5, result.DurationMs);
+        }
+    }
+
+    [Fact]
+    public void VersionOneHistory_DropsProjectNamesThatAreNowAmbiguous()
+    {
+        var location = HistoryLocation.Resolve(BaseDirectory, _solution);
+        _ = Directory.CreateDirectory(location.Directory);
+        File.WriteAllText(location.FilePath, LegacyFile());
+
+        using var store = Open();
+        store.ResolveLegacyProjects(
+            [
+                Path.Combine(Path.GetDirectoryName(_solution)!, "App.Tests", "App.Tests.csproj"),
+                Path.Combine(Path.GetDirectoryName(_solution)!, "Other", "App.Tests.csproj"),
+            ],
+            Path.GetDirectoryName(_solution)!);
+
+        Assert.Empty(store.GetTestHistory(Test));
+        Assert.Empty(Assert.IsType<StoredRun>(store.GetRun("legacy-run")).Results);
     }
 
     [Fact]
@@ -216,6 +323,188 @@ public sealed class RunHistoryStoreTests : IDisposable
         Assert.Contains(messages, m => m.Contains(location.FilePath, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Passing_on_retry_is_flaky_from_in_run_evidence_even_without_a_source()
+    {
+        using var store = Open();
+        var run = Run("s1", TestStatus.Passed, attempts: [TestStatus.Failed], freshness: ResultFreshness.Stale);
+
+        var classification = Assert.Single(store.Record(run));
+
+        Assert.Equal(FailureKind.Flaky, classification.Kind);
+        var evidence = Assert.IsType<FlakinessEvidence>(classification.Flakiness);
+        Assert.Null(evidence.Source);
+        Assert.Equal((1, 1, 1), (evidence.Passed, evidence.Failed, evidence.RetryOutcomes));
+        Assert.Contains("retries of the same build", classification.Evidence, StringComparison.Ordinal);
+        var history = Assert.Single(store.GetTestHistory(Test));
+        Assert.Equal([(TestStatus.Failed, 0), (TestStatus.Passed, 1)], history.Runs.Select(e => (e.Status, e.Attempt)));
+        Assert.True(history.Flaky);
+        var summary = Assert.Single(store.GetRuns());
+        Assert.Equal((1, 1, 0), (summary.Retried, summary.PassedOnRetry, summary.Failed));
+    }
+
+    [Fact]
+    public void Retry_attempts_survive_save_and_reopen()
+    {
+        var run = Run("s1", TestStatus.Passed, attempts: [TestStatus.Failed, TestStatus.Failed]);
+        using (var store = Open())
+        {
+            _ = store.Record(run);
+        }
+
+        using var reopened = Open();
+        var history = Assert.Single(reopened.GetTestHistory(Test));
+        Assert.Equal(ProjectId, history.ProjectId);
+        Assert.Equal([0, 1, 2], history.Runs.Select(e => e.Attempt));
+        var result = Assert.Single(Assert.IsType<StoredRun>(reopened.GetRun(run.RunId)).Results);
+        Assert.Equal(ProjectId, result.ProjectId);
+        Assert.Equal(TestStatus.Passed, result.Status);
+        var attempts = Assert.IsType<IReadOnlyList<StoredAttempt>>(result.Attempts, exactMatch: false);
+        Assert.Equal([TestStatus.Failed, TestStatus.Failed], attempts.Select(a => a.Status));
+        Assert.Equal("boom", attempts[0].ErrorMessage);
+        Assert.Equal(1, reopened.GetRuns()[0].PassedOnRetry);
+    }
+
+    [Fact]
+    public void Earlier_runs_are_judged_by_their_final_result()
+    {
+        using var store = Open();
+        _ = store.Record(Run("s1", TestStatus.Passed));
+        Assert.Equal(FailureKind.New, Assert.Single(store.Record(Run("s2", TestStatus.Failed, attempts: [TestStatus.Failed]))).Kind);
+
+        var classification = Assert.Single(store.Record(Run("s3", TestStatus.Failed)));
+
+        Assert.Equal(FailureKind.PreExisting, classification.Kind);
+        Assert.Contains("1 earlier run(s)", classification.Evidence, StringComparison.Ordinal);
+        Assert.Equal(FailureKind.PreExisting, Assert.Single(store.GetLatestFailures()).Kind);
+    }
+
+    [Fact]
+    public void Flaky_evidence_counts_the_outcomes_on_the_source()
+    {
+        using var store = Open();
+        _ = store.Record(Run("same", TestStatus.Passed));
+        _ = store.Record(Run("same", TestStatus.Passed));
+        _ = store.Record(Run("other", TestStatus.Failed));
+
+        var classification = Assert.Single(store.Record(Run("same", TestStatus.Failed)));
+
+        var evidence = Assert.IsType<FlakinessEvidence>(classification.Flakiness);
+        Assert.Equal("same", evidence.Source);
+        Assert.Equal((2, 1, 0), (evidence.Passed, evidence.Failed, evidence.RetryOutcomes));
+        Assert.Empty(evidence.OtherWorktrees);
+        Assert.Equal(3, evidence.Outcomes.Count);
+        Assert.Equal(TestStatus.Failed, evidence.Outcomes[0].Status);
+        Assert.Contains("Passed 2 and failed 1 time(s)", classification.Evidence, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Outcomes_in_another_worktree_on_the_same_source_count_as_flaky_evidence()
+    {
+        var other = CreateLinkedWorktree("feature");
+        using (var sibling = RunHistoryStore.Open(BaseDirectory, other, time: _time))
+        {
+            _ = sibling.Record(Run("same", TestStatus.Passed));
+        }
+
+        using var store = Open();
+        var classification = Assert.Single(store.Record(Run("same", TestStatus.Failed)));
+
+        Assert.Equal(FailureKind.Flaky, classification.Kind);
+        var evidence = Assert.IsType<FlakinessEvidence>(classification.Flakiness);
+        Assert.Equal(["feature"], evidence.OtherWorktrees);
+        Assert.Equal((1, 1), (evidence.Passed, evidence.Failed));
+        Assert.Contains(evidence.Outcomes, o => o.Worktree == "feature" && o.Status == TestStatus.Passed);
+        Assert.Contains("other worktrees: feature", classification.Evidence, StringComparison.Ordinal);
+        Assert.True(Assert.Single(store.GetTestHistory(Test)).Flaky);
+        _ = Assert.Single(store.GetFlakyTests());
+    }
+
+    [Fact]
+    public void Outcomes_in_another_worktree_older_than_the_retention_are_not_flaky_evidence()
+    {
+        var other = CreateLinkedWorktree("feature");
+        using (var sibling = RunHistoryStore.Open(BaseDirectory, other, time: _time))
+        {
+            _ = sibling.Record(Run("same", TestStatus.Passed));
+        }
+        _time.Now += RunHistoryStore.Retention + TimeSpan.FromDays(1);
+
+        using var store = Open();
+
+        Assert.Equal(FailureKind.Unknown, Assert.Single(store.Record(Run("same", TestStatus.Failed))).Kind);
+    }
+
+    [Fact]
+    public void Another_project_with_the_same_name_in_another_worktree_is_not_flaky_evidence()
+    {
+        var other = CreateLinkedWorktree("feature");
+        using (var sibling = RunHistoryStore.Open(BaseDirectory, other, time: _time))
+        {
+            var run = Run("same", TestStatus.Passed);
+            _ = sibling.Record(run with
+            {
+                Suites = [Assert.Single(run.Suites) with { ProjectId = "Other/App.Tests.csproj" }],
+            });
+        }
+
+        using var store = Open();
+        var classification = Assert.Single(store.Record(Run("same", TestStatus.Failed)));
+
+        Assert.Equal(ProjectId, classification.ProjectId);
+        Assert.Equal(FailureKind.Unknown, classification.Kind);
+        Assert.Null(classification.Flakiness);
+        Assert.Empty(store.GetFlakyTests());
+    }
+
+    [Fact]
+    public void Outcomes_of_a_deleted_history_of_another_worktree_stop_counting()
+    {
+        var other = CreateLinkedWorktree("feature");
+        using (var sibling = RunHistoryStore.Open(BaseDirectory, other, time: _time))
+        {
+            _ = sibling.Record(Run("same", TestStatus.Passed));
+        }
+
+        using var store = Open();
+        Assert.Equal(FailureKind.Flaky, Assert.Single(store.Record(Run("same", TestStatus.Failed))).Kind);
+
+        File.Delete(HistoryLocation.Resolve(BaseDirectory, other).FilePath);
+
+        Assert.NotEqual(FailureKind.Flaky, Assert.Single(store.Record(Run("same", TestStatus.Failed))).Kind);
+    }
+
+    [Fact]
+    public void Another_worktree_with_a_different_source_is_not_flaky_evidence()
+    {
+        var other = CreateLinkedWorktree("feature");
+        using (var sibling = RunHistoryStore.Open(BaseDirectory, other, time: _time))
+        {
+            _ = sibling.Record(Run("theirs", TestStatus.Passed));
+        }
+
+        using var store = Open();
+
+        Assert.Equal(FailureKind.Unknown, Assert.Single(store.Record(Run("mine", TestStatus.Failed))).Kind);
+    }
+
+    [Fact]
+    public void An_unreadable_history_of_another_worktree_is_ignored()
+    {
+        var other = CreateLinkedWorktree("feature");
+        var location = HistoryLocation.Resolve(BaseDirectory, other);
+        _ = Directory.CreateDirectory(location.Directory);
+        File.WriteAllText(location.FilePath, "{ not json");
+        var messages = new List<string>();
+        using var store = RunHistoryStore.Open(BaseDirectory, _solution, messages.Add, _time);
+        store.SaveDelay = TimeSpan.FromMinutes(10);
+
+        Assert.Equal(FailureKind.Unknown, Assert.Single(store.Record(Run("s1", TestStatus.Failed))).Kind);
+        _ = store.GetFlakyTests();
+
+        _ = Assert.Single(messages, m => m.Contains(location.FilePath, StringComparison.Ordinal));
+    }
+
     public void Dispose()
     {
         try
@@ -234,7 +523,27 @@ public sealed class RunHistoryStoreTests : IDisposable
         return store;
     }
 
-    private TestRunRecord Run(string source, TestStatus status, string? targetFramework = null)
+    // Makes the fixture's worktree a git repository and adds a linked worktree of it; returns its solution path.
+    private string CreateLinkedWorktree(string name)
+    {
+        var gitDir = Path.Combine(_root, "repo", ".git");
+        var worktreeGitDir = Path.Combine(gitDir, "worktrees", name);
+        _ = Directory.CreateDirectory(worktreeGitDir);
+        File.WriteAllText(Path.Combine(worktreeGitDir, "commondir"), "../..");
+        var worktree = Path.Combine(_root, name);
+        _ = Directory.CreateDirectory(worktree);
+        File.WriteAllText(Path.Combine(worktree, ".git"), $"gitdir: {worktreeGitDir}");
+        var solution = Path.Combine(worktree, "App.slnx");
+        File.WriteAllText(solution, "<Solution />");
+        return solution;
+    }
+
+    private TestRunRecord Run(
+        string source,
+        TestStatus status,
+        string? targetFramework = null,
+        IReadOnlyList<TestStatus>? attempts = null,
+        ResultFreshness freshness = ResultFreshness.Current)
     {
         _sequence++;
         _time.Now += TimeSpan.FromMinutes(1);
@@ -242,6 +551,7 @@ public sealed class RunHistoryStoreTests : IDisposable
             status == TestStatus.Failed ? "boom" : null, status == TestStatus.Failed ? "at Adds()" : null, null)
         {
             TargetFramework = targetFramework,
+            Attempts = [.. (attempts ?? []).Select(a => new TestAttempt(a, TimeSpan.FromMilliseconds(10), a == TestStatus.Failed ? "boom" : null, null))],
         };
         return new TestRunRecord
         {
@@ -250,13 +560,51 @@ public sealed class RunHistoryStoreTests : IDisposable
             Sequence = _sequence,
             Trigger = TestRunTrigger.Forced,
             Status = TestRunStatus.Completed,
-            Freshness = ResultFreshness.Current,
+            Freshness = freshness,
             RequestedAt = _time.Now,
             CompletedAt = _time.Now,
             SourceAfter = new SourceFingerprint("sha256", source, 1),
-            Suites = [new TestSuite(Project, [result], _time.Now, result.Duration)],
+            Suites = [new TestSuite(Project, [result], _time.Now, result.Duration) { ProjectId = ProjectId }],
         };
     }
+
+    private string LegacyFile() => """
+        {
+          "Version": 1,
+          "Names": ["App.Tests", "App.Tests.CalculatorTests.Adds"],
+          "Tests": [
+            {
+              "Project": 0,
+              "Test": 1,
+              "Runs": [
+                { "RunId": "legacy-run", "At": "2025-01-01T00:00:00+00:00", "Status": "P", "DurationMs": 12.5 }
+              ]
+            }
+          ],
+          "Runs": [
+            {
+              "Summary": {
+                "RunId": "legacy-run",
+                "Trigger": 0,
+                "Status": 0,
+                "Scope": null,
+                "IsFullScope": true,
+                "Freshness": 0,
+                "RequestedAt": "2025-01-01T00:00:00+00:00",
+                "CompletedAt": "2025-01-01T00:00:00+00:00",
+                "Source": null,
+                "Passed": 1,
+                "Failed": 0,
+                "Skipped": 0
+              },
+              "Projects": [0],
+              "Tests": [1],
+              "Statuses": "P",
+              "DurationsMs": [12.5]
+            }
+          ]
+        }
+        """;
 
     private sealed class ManualTime(DateTimeOffset now) : TimeProvider
     {

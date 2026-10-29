@@ -14,7 +14,8 @@ dotnet tool install -g Piston --version 0.1.0 --add-source ./packages --no-cache
 To pick up a rebuilt package, pack with a new version (`-p:Version=0.1.0-dev.2`) and
 run `dotnet tool update -g Piston --version 0.1.0-dev.2 --add-source ./packages`.
 Alternatively, uninstall first. To uninstall, run `dotnet tool uninstall -g Piston`
-and remove the `piston` entry from your MCP config (section 3).
+and remove the `piston` entry from your MCP config, plus any `skills/piston` and
+`extensions/piston-dashboard` folders that `piston init` installed (section 3).
 
 A local install (`--tool-path ./tools`) also works. Then point the MCP `command`
 at that path instead of `piston`.
@@ -33,9 +34,54 @@ more than one, add `.piston.json` to the worktree root:
 ```
 
 `solution` is resolved relative to the file. `piston mcp` ignores `mcpPort`,
-`webPort` and `stdio`: it opens no ports and no dashboard.
+`webPort` and `stdio`. By default it opens no web ports. Opt in to the dashboard
+with `"dashboard": true` or `piston mcp --dashboard`; it binds an ephemeral
+`127.0.0.1` web port without changing the MCP stdio transport.
 
 ## 3. Connect the agent
+
+### Quick setup with `piston init`
+
+The tool carries its harness assets: the MCP server entry, a `piston` skill
+that teaches the verification contract (section 4), and, for Copilot, the
+`piston-dashboard` canvas. `piston init` prints what it would install and where;
+it changes nothing until you add `--write`:
+
+```sh
+piston init copilot                  # dry run: the MCP entry and every target file
+piston init copilot --write          # install for every Copilot session (user scope)
+piston init claude --write           # Claude Code: the skill, plus the `claude mcp add` command to run
+piston init claude --write --scope repo   # this repository: .mcp.json and .claude/skills/piston
+```
+
+| Option | Effect |
+|---|---|
+| `--write` | Write the files. Without it, `piston init` only prints. |
+| `--scope user` (default) | Copilot: `$COPILOT_HOME` (default `~/.copilot`): `mcp-config.json`, `skills/piston/` and `extensions/piston-dashboard/`. Claude Code: `$CLAUDE_CONFIG_DIR/skills/piston/` (default `~/.claude`). |
+| `--scope repo` | The current directory: `.mcp.json` (shared by Copilot and Claude Code), plus `.github/skills/piston/` and `.github/extensions/piston-dashboard/` for Copilot, or `.claude/skills/piston/` for Claude Code. Commit them to share the setup. |
+| `--dashboard` | Register `piston mcp --dashboard`, so each session serves the dashboard the canvas shows. |
+| `--force` | Replace a file or `piston` entry whose content differs from the bundled one. |
+
+`piston init` merges only the `piston` entry into `mcpServers` and keeps every other
+server. Files that already match are reported `unchanged`, so rerunning is safe. A
+file or entry that differs (your own edits, or an older Piston's assets) is left as
+it is and reported. With `--write` the command then exits 1 until you rerun it
+with `--force`. A config file that is not plain JSON with an `mcpServers` object
+(for example one with comments) is never rewritten. `piston init` reports it as
+`invalid` and exits 1; add the entry by hand.
+
+At user scope, `piston init claude` does not edit `~/.claude.json`, which also
+holds Claude Code's other state. It prints the registration command instead:
+
+```sh
+claude mcp add --scope user --transport stdio piston -- piston mcp
+```
+
+Start a new agent session after installing. Copilot loads project MCP servers from
+`.mcp.json` only in trusted folders, and Claude Code asks you to approve a
+project's `.mcp.json` servers on first use.
+
+### GitHub Copilot CLI (manual setup)
 
 Add one global entry to `~/.copilot/mcp-config.json`, merged with the existing
 servers rather than replacing them:
@@ -53,9 +99,54 @@ servers rather than replacing them:
 }
 ```
 
-Copilot CLI starts stdio MCP servers with the working directory set to the session's
-worktree. Each session therefore gets its own `piston mcp` process, engine and
-results. Nothing needs to run before the agent starts. Per process:
+For the skill and canvas without `piston init`, copy this repository's
+`src/Piston/Integration/Assets/SKILL.md` to `~/.copilot/skills/piston/SKILL.md`, and
+`.github/extensions/piston-dashboard/` (without the `*.test.mjs` files) to
+`~/.copilot/extensions/piston-dashboard/`.
+
+### Claude Code (manual setup)
+
+Run the `claude mcp add` command above, or add the same server to a repository's
+`.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "piston": {
+      "type": "stdio",
+      "command": "piston",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Copy the skill to `~/.claude/skills/piston/SKILL.md` (or `.claude/skills/piston/`
+in the repository). `piston mcp` resolves the solution from its working
+directory, so start Claude Code from the worktree root.
+
+### Other MCP clients
+
+Any MCP client that can launch a stdio server works:
+
+- **Command.** `piston` with arguments `mcp` (add `--dashboard` for the web
+  dashboard).
+- **Working directory.** The worktree root, which is where the solution is resolved
+  (section 2). Alternatively, pass the solution path: `piston mcp path/to/App.slnx`.
+- **One process per session.** Each agent session needs its own process. Do not
+  share one stdio server between worktrees.
+- **Instructions.** Give the agent the [custom instructions snippet](#custom-instructions-snippet)
+  or the `piston` skill text.
+
+A client that only speaks HTTP can use the [HTTP daemon](#http-daemon-humans-and-the-dashboard)
+instead.
+
+### What each `piston mcp` process does
+
+Copilot CLI and Claude Code start stdio MCP servers in the session's working
+directory, normally the worktree. Each session therefore gets its own `piston mcp`
+process, engine and results. Nothing needs to run before the agent starts. Per
+process:
 
 - **Startup.** It takes worktree ownership, does a full startup build + test run,
   then reruns on file changes (the same behaviour as the daemon).
@@ -97,7 +188,13 @@ was deleted (`[worktree missing]`).
 
 ### HTTP daemon (humans and the dashboard)
 
-For a dashboard, or to share one engine between a human and an agent, run the HTTP
+For the dashboard attached to an existing stdio session, use its `--dashboard`
+opt-in rather than starting a competing owner. This repository's native
+`piston-dashboard` canvas discovers the active worktree and shows the existing
+web UI, including a disconnected state. `piston dashboard --json` inspects the
+owner without starting an engine or a run. See the [canvas setup](../README.md#copilot-canvas).
+
+To share one engine through HTTP between a human and an agent, run the HTTP
 daemon instead. MCP is always on, at port 5200 by default:
 
 ```sh
@@ -113,7 +210,7 @@ Daemon startup problems fail fast with `error: ...` and exit code 1. For example
 - another Piston process already owns the worktree;
 - a port is already in use.
 
-Piston never edits the agent's configuration and never picks another port. The
+Piston edits an agent's configuration only through `piston init … --write`, and never changes the daemon's requested ports. The
 daemon shuts down by itself if its worktree is deleted, which frees its ports and
 ownership. `piston stop` exits 0 only after the daemon has exited, and prints `No
 daemon running` (exit 0) when nothing owns the worktree. While a `piston mcp`
@@ -171,20 +268,40 @@ source builds and all tests pass. Every other verdict is not a pass:
 An `Admission:` line means the run waited for the machine execution budget (queue
 position and wait time). That is expected under load, not a failure.
 
+A `Test resources:` list reports test projects that waited for exclusive test
+resources (containers, fixed ports) held by runs in other worktrees, which is
+also expected, plus warnings and failures that look like port or container name
+conflicts. For a suspected conflict, declare the resource in `testResources` in
+`.piston.json` (see the README's *Integration-test resources*) rather than
+retrying in a loop.
+
 Do not treat these as verification:
 - `get_test_results`: accumulated state that may combine several runs;
 - filtered or selective runs;
 - a `run_tests` reply read after further edits.
 
+After a daemon restart, `get_test_results` may immediately return the previous
+session's saved suites. They are marked restored and not re-verified, with
+freshness `Unknown`; `verify` forces a new run rather than reusing them.
+
 `get_test_run("<runId>")` gives the full JSON record behind any reply.
 
 With `TestsFailed`, a `Failure history:` line counts the failures that are
 `new` (the test passed in its previous recorded run in this worktree),
-`pre-existing`, `flaky` (passed and failed on the same source) or `unknown`
-(no earlier result), and each failed test carries its class, new ones first.
+`pre-existing`, `flaky` (passed and failed on the same source, in this or
+another worktree of the repository, or across retries in one run) or `unknown`
+(no earlier result), and each failed test carries its class, new ones first. A
+flaky tag carries its evidence, such as `[flaky: 3 passed/2 failed on
+0123456789ab, other worktrees: feature-x]`.
 Fix new failures first; they are the ones your change most likely caused.
-`get_test_history("<test>")` shows a test's recorded results. A pre-existing
-or flaky failure is still a failure: it does not make the verdict a pass.
+`get_test_history("<test>")` shows a test's recorded results and the evidence
+behind a flaky label. A pre-existing or flaky failure is still a failure: it
+does not make the verdict a pass.
+
+When the project sets `retryFailures`, failed tests are re-run within the run. A
+test that passes on a retry counts as passed, but `verify` lists it under
+`Passed on retry` with its failure message: mention it when you report the
+result, because it is flaky.
 
 A tool *error* (not a verdict) is also not a pass. Examples: ownership by another
 process, a deleted worktree, a startup failure, or a solution mismatch. On any of
@@ -200,8 +317,8 @@ changes (`base`: `working`, `branch` or `range`, with `baseRef`):
 - `plan_affected_tests` previews what Piston would build and run, and why;
 - `run_affected_tests` runs that plan and waits for it.
 
-With coverage enabled, `get_changed_line_coverage` reports which changed lines
-the tests executed. It takes no `files`: it always reads the git changes given
+With coverage enabled, `get_changed_line_coverage` gives each changed line a
+verdict (see below). It takes no `files`: it always reads the git changes given
 by `base` and `baseRef`.
 
 Selection by changed lines is a heuristic, and an affected-test result does not
@@ -209,10 +326,69 @@ count as verification, even when the plan's scope is `full`. Finish with `verify
 [Coverage and impact selection](../README.md#coverage-and-impact-selection) for
 how tests are selected and for the other tools.
 
+### Changed-line coverage verdicts
+
+`get_changed_line_coverage` (schema `piston.changed-line-coverage/v2`) classifies
+every changed line of every changed `.cs`, `.fs` or `.vb` file. The same verdicts
+are available to protocol clients as `coverage/getChangedLines`, and as a diff
+(`coverage/getChangeDiff`) in the dashboard's Coverage › Changes view, which the
+`piston-dashboard` canvas opens with `{"view":"changes"}` or its `show_changes`
+action.
+
+| Verdict | Meaning |
+|---|---|
+| `coveredByPassing` | The line ran, and every current test credited with executing it passed. |
+| `coveredOnlyByFailing` | The line ran, and every current test credited with executing it failed. The file's `failingTests` names them. |
+| `uncovered` | The line is executable and no test that ran executed it. |
+| `nonExecutable` | The file was measured as it is now and the line has no sequence point, for example a blank line, a comment or most declarations. |
+| `unknown` | The evidence cannot prove anything about the line; `reason` says why. |
+
+| Unknown reason | Meaning | What to do |
+|---|---|---|
+| `stale` | The line's code changed after it was measured, so the coverage describes old code (lines in unchanged C# members keep their remapped coverage and get verdicts); or, for a `range`, the file differs between the range's last commit and the working tree, so the changed line numbers do not match the measured file; or the file kept changing while the verdicts were read (every changed line is then `stale`). | Run the affected tests (`run_affected_tests`) and ask again. |
+| `notMeasured` | No coverage run measured the file, for example it is not compiled into a tested assembly. | Run the tests, or accept that the file is not covered by tests. |
+| `noTestEvidence` | The line ran, but the impact map has no current record of which tests executed it. | Run the affected tests. |
+| `mixedEvidence` | Passing and failing tests are both credited with the line. | Fix the failing tests, then ask again. |
+| `testsNotRun` | A credited test has no result yet (or is still running), or every credited test was skipped. | Run the affected tests. |
+| `outdatedEvidence` | Evidence recorded against older content may credit other tests with the line, and their results would change the verdict. | Run the affected tests. |
+| `resultsUpdating` | A run was publishing new coverage and test results while the verdicts were read, so the coverage and its tests' results may come from different runs. Every changed line is then `unknown`. | Ask again when the run finishes. |
+
+Each file reports `measured`, `isStale`, `isPartial` (only a selective run measured
+it, so tests that did not run may cover more), per-verdict line ranges, `unknown`
+groups with their reason, and `partialBranches` (covered lines where some
+branches never ran). The top level has `totals` and an `unknownReasons` count for
+every reason. Warnings explain caveats, such as a run in progress.
+
+How to read the verdicts:
+
+- Only `coveredByPassing` means passing tests executed the line. Never describe
+  an `unknown` line as covered, and never treat a `stale` line's old coverage as
+  evidence about the current code. A file with `isStale` can still have verdicts
+  for changed lines in members whose code is unchanged since it was measured.
+- The impact map records which methods each test (or test class, or whole test
+  project run) executed, not individual lines. A test can be credited with a line
+  of a method it entered without executing that line. Because of this, a line is
+  `coveredByPassing` only when every credited test passed; any mix gives `unknown`.
+- A credited test's result is its latest result in its own test project. A test
+  with no result there counts as not run, even if another project has a test of
+  the same name. Projects are told apart by their solution-relative paths, so
+  `One/Tests.csproj` and `Two/Tests.csproj` keep separate results. Results
+  recorded without a project path are matched by project file name, and count
+  as not run when two projects share that name.
+- Known limitation: while a file's content is unchanged, a selective run adds its
+  hits to the stored coverage instead of replacing them, and the coverage does not
+  record which run hit each line. Verdicts use each credited test's latest result.
+  So if a test failed in a run that executed a line and later passed a selective
+  rerun that did not execute it, the line can still be `coveredByPassing`. A full,
+  unfiltered run replaces every file's coverage and removes such hits.
+- Coverage verdicts describe test reach, not correctness. They do not replace
+  `verify`.
+
 ## Custom instructions snippet
 
-Paste into the repository's agent instructions (for example
-`.github/copilot-instructions.md`):
+`piston init` installs the `piston` skill, which carries these rules in more
+detail. For agents without skills, paste this into the repository's agent
+instructions (for example `.github/copilot-instructions.md`):
 
 ```markdown
 ## Testing with Piston
@@ -223,7 +399,7 @@ Paste into the repository's agent instructions (for example
 - Only `Verdict: Passed` with `Counts as full verification: yes` counts as passing.
 - On `TestsFailed` / `BuildFailed`, fix the listed tests or errors and call
   `verify` again.
-- On `Stale`, `Cancelled` or `TimedOut`, call `verify` again; do not report success.
+- On `Stale` or `TimedOut`, call `verify` again; do not report success.
 - Do not use `get_test_results` or filtered runs as proof that everything passes,
   and do not set test filters while verifying.
 - The `Solution:` line in the reply must be this worktree's solution.
