@@ -14,7 +14,8 @@ dotnet tool install -g Piston --version 0.1.0 --add-source ./packages --no-cache
 To pick up a rebuilt package, pack with a new version (`-p:Version=0.1.0-dev.2`) and
 run `dotnet tool update -g Piston --version 0.1.0-dev.2 --add-source ./packages`.
 Alternatively, uninstall first. To uninstall, run `dotnet tool uninstall -g Piston`
-and remove the `piston` entry from your MCP config (section 3).
+and remove the `piston` entry from your MCP config, plus any `skills/piston` and
+`extensions/piston-dashboard` folders that `piston init` installed (section 3).
 
 A local install (`--tool-path ./tools`) also works. Then point the MCP `command`
 at that path instead of `piston`.
@@ -39,6 +40,49 @@ with `"dashboard": true` or `piston mcp --dashboard`; it binds an ephemeral
 
 ## 3. Connect the agent
 
+### Quick setup with `piston init`
+
+The tool carries its harness assets: the MCP server entry, a `piston` skill
+that teaches the verification contract (section 4), and, for Copilot, the
+`piston-dashboard` canvas. `piston init` prints what it would install and where;
+it changes nothing until you add `--write`:
+
+```sh
+piston init copilot                  # dry run: the MCP entry and every target file
+piston init copilot --write          # install for every Copilot session (user scope)
+piston init claude --write           # Claude Code: the skill, plus the `claude mcp add` command to run
+piston init claude --write --scope repo   # this repository: .mcp.json and .claude/skills/piston
+```
+
+| Option | Effect |
+|---|---|
+| `--write` | Write the files. Without it, `piston init` only prints. |
+| `--scope user` (default) | Copilot: `$COPILOT_HOME` (default `~/.copilot`): `mcp-config.json`, `skills/piston/` and `extensions/piston-dashboard/`. Claude Code: `$CLAUDE_CONFIG_DIR/skills/piston/` (default `~/.claude`). |
+| `--scope repo` | The current directory: `.mcp.json` (shared by Copilot and Claude Code), plus `.github/skills/piston/` and `.github/extensions/piston-dashboard/` for Copilot, or `.claude/skills/piston/` for Claude Code. Commit them to share the setup. |
+| `--dashboard` | Register `piston mcp --dashboard`, so each session serves the dashboard the canvas shows. |
+| `--force` | Replace a file or `piston` entry whose content differs from the bundled one. |
+
+`piston init` merges only the `piston` entry into `mcpServers` and keeps every other
+server. Files that already match are reported `unchanged`, so rerunning is safe. A
+file or entry that differs (your own edits, or an older Piston's assets) is left as
+it is and reported. With `--write` the command then exits 1 until you rerun it
+with `--force`. A config file that is not plain JSON with an `mcpServers` object
+(for example one with comments) is never rewritten. `piston init` reports it as
+`invalid` and exits 1; add the entry by hand.
+
+At user scope, `piston init claude` does not edit `~/.claude.json`, which also
+holds Claude Code's other state. It prints the registration command instead:
+
+```sh
+claude mcp add --scope user --transport stdio piston -- piston mcp
+```
+
+Start a new agent session after installing. Copilot loads project MCP servers from
+`.mcp.json` only in trusted folders, and Claude Code asks you to approve a
+project's `.mcp.json` servers on first use.
+
+### GitHub Copilot CLI (manual setup)
+
 Add one global entry to `~/.copilot/mcp-config.json`, merged with the existing
 servers rather than replacing them:
 
@@ -55,9 +99,54 @@ servers rather than replacing them:
 }
 ```
 
-Copilot CLI starts stdio MCP servers with the working directory set to the session's
-worktree. Each session therefore gets its own `piston mcp` process, engine and
-results. Nothing needs to run before the agent starts. Per process:
+For the skill and canvas without `piston init`, copy this repository's
+`src/Piston/Integration/Assets/SKILL.md` to `~/.copilot/skills/piston/SKILL.md`, and
+`.github/extensions/piston-dashboard/` (without the `*.test.mjs` files) to
+`~/.copilot/extensions/piston-dashboard/`.
+
+### Claude Code (manual setup)
+
+Run the `claude mcp add` command above, or add the same server to a repository's
+`.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "piston": {
+      "type": "stdio",
+      "command": "piston",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Copy the skill to `~/.claude/skills/piston/SKILL.md` (or `.claude/skills/piston/`
+in the repository). `piston mcp` resolves the solution from its working
+directory, so start Claude Code from the worktree root.
+
+### Other MCP clients
+
+Any MCP client that can launch a stdio server works:
+
+- **Command.** `piston` with arguments `mcp` (add `--dashboard` for the web
+  dashboard).
+- **Working directory.** The worktree root, which is where the solution is resolved
+  (section 2). Alternatively, pass the solution path: `piston mcp path/to/App.slnx`.
+- **One process per session.** Each agent session needs its own process. Do not
+  share one stdio server between worktrees.
+- **Instructions.** Give the agent the [custom instructions snippet](#custom-instructions-snippet)
+  or the `piston` skill text.
+
+A client that only speaks HTTP can use the [HTTP daemon](#http-daemon-humans-and-the-dashboard)
+instead.
+
+### What each `piston mcp` process does
+
+Copilot CLI and Claude Code start stdio MCP servers in the session's working
+directory, normally the worktree. Each session therefore gets its own `piston mcp`
+process, engine and results. Nothing needs to run before the agent starts. Per
+process:
 
 - **Startup.** It takes worktree ownership, does a full startup build + test run,
   then reruns on file changes (the same behaviour as the daemon).
@@ -121,7 +210,7 @@ Daemon startup problems fail fast with `error: ...` and exit code 1. For example
 - another Piston process already owns the worktree;
 - a port is already in use.
 
-Piston never edits the agent's configuration and never changes the daemon's requested ports. The
+Piston edits an agent's configuration only through `piston init … --write`, and never changes the daemon's requested ports. The
 daemon shuts down by itself if its worktree is deleted, which frees its ports and
 ownership. `piston stop` exits 0 only after the daemon has exited, and prints `No
 daemon running` (exit 0) when nothing owns the worktree. While a `piston mcp`
@@ -294,8 +383,9 @@ How to read the verdicts:
 
 ## Custom instructions snippet
 
-Paste into the repository's agent instructions (for example
-`.github/copilot-instructions.md`):
+`piston init` installs the `piston` skill, which carries these rules in more
+detail. For agents without skills, paste this into the repository's agent
+instructions (for example `.github/copilot-instructions.md`):
 
 ```markdown
 ## Testing with Piston
@@ -306,7 +396,7 @@ Paste into the repository's agent instructions (for example
 - Only `Verdict: Passed` with `Counts as full verification: yes` counts as passing.
 - On `TestsFailed` / `BuildFailed`, fix the listed tests or errors and call
   `verify` again.
-- On `Stale`, `Cancelled` or `TimedOut`, call `verify` again; do not report success.
+- On `Stale` or `TimedOut`, call `verify` again; do not report success.
 - Do not use `get_test_results` or filtered runs as proof that everything passes,
   and do not set test filters while verifying.
 - The `Solution:` line in the reply must be this worktree's solution.

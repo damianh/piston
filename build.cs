@@ -4,7 +4,8 @@
 
 // Build script: `dotnet run build.cs -- [targets] [Bullseye options]`; `--list-targets` lists the targets.
 // The smoke targets pack and install the tool, then run samples/Samples.slnx (MSTest, NUnit, xUnit v3 and TUnit,
-// each with one passing, one deliberately failing and one skipped test) through `piston daemon` and `piston mcp`.
+// each with one passing, one deliberately failing and one skipped test) through `piston daemon` and `piston mcp`,
+// and install the harness assets with `piston init` into temporary locations.
 
 #:package Bullseye
 #:package ModelContextProtocol.Core
@@ -71,7 +72,10 @@ Target("smoke-daemon", "Run the samples through `piston daemon` and check the st
 Target("smoke-mcp", "Call `verify` on the samples through `piston mcp` (stdio) and check the verdict and counts.",
     dependsOn: ["install-tool"], SmokeMcpAsync);
 
-Target("smoke", "Run both smoke tests.", dependsOn: ["smoke-daemon", "smoke-mcp"]);
+Target("smoke-init", "Install the harness assets with `piston init` into temporary locations and check them.",
+    dependsOn: ["install-tool"], SmokeInitAsync);
+
+Target("smoke", "Run the smoke tests.", dependsOn: ["smoke-daemon", "smoke-mcp", "smoke-init"]);
 
 Target("default", dependsOn: ["test", "check-formatting"]);
 
@@ -219,6 +223,74 @@ async Task SmokeMcpAsync()
     }
 
     Console.WriteLine("MCP smoke test passed.");
+}
+
+// The packed tool must carry its own assets: install them for Copilot (user scope) and Claude Code (repo scope)
+// into temporary locations, check the files, then check a second run changes nothing.
+async Task SmokeInitAsync()
+{
+    var root = Path.Combine(Path.GetTempPath(), $"piston-smoke-init-{Guid.NewGuid():N}");
+    var copilotHome = Path.Combine(root, "copilot");
+    var repo = Path.Combine(root, "repo");
+    _ = Directory.CreateDirectory(repo);
+    try
+    {
+        async Task<string> InitAsync(params string[] arguments)
+        {
+            Console.WriteLine($"> {tool} {string.Join(' ', arguments)}");
+            var (output, error) = await ReadAsync(tool, arguments, workingDirectory: repo,
+                configureEnvironment: env =>
+                {
+                    env["COPILOT_HOME"] = copilotHome;
+                    env["CLAUDE_CONFIG_DIR"] = Path.Combine(root, "claude");
+                });
+            Console.WriteLine(output + error);
+            return output;
+        }
+
+        string[] copilot = ["init", "copilot", "--write"];
+        string[] claude = ["init", "claude", "--write", "--scope", "repo"];
+        _ = await InitAsync(copilot);
+        _ = await InitAsync(claude);
+
+        string[] files =
+        [
+            Path.Combine(copilotHome, "mcp-config.json"),
+            Path.Combine(copilotHome, "skills", "piston", "SKILL.md"),
+            Path.Combine(copilotHome, "extensions", "piston-dashboard", "extension.mjs"),
+            Path.Combine(copilotHome, "extensions", "piston-dashboard", "shell.html"),
+            Path.Combine(repo, ".mcp.json"),
+            Path.Combine(repo, ".claude", "skills", "piston", "SKILL.md"),
+        ];
+        var problems = files.Where(f => !File.Exists(f)).Select(f => $"missing {f}").ToList();
+        foreach (var config in files.Where(f => f.EndsWith("json", StringComparison.Ordinal) && File.Exists(f)))
+        {
+            if (!File.ReadAllText(config).Contains("\"piston\"", StringComparison.Ordinal))
+            {
+                problems.Add($"{config} has no piston server");
+            }
+        }
+
+        foreach (var arguments in new[] { copilot, claude })
+        {
+            var rerun = await InitAsync(arguments);
+            if (!rerun.Contains("unchanged", StringComparison.Ordinal) || rerun.Contains("created", StringComparison.Ordinal))
+            {
+                problems.Add($"`piston {string.Join(' ', arguments)}` was not idempotent");
+            }
+        }
+
+        if (problems.Count > 0)
+        {
+            throw new SmokeTestException($"Init smoke test failed: {string.Join("; ", problems)}");
+        }
+    }
+    finally
+    {
+        DeleteDirectory(root);
+    }
+
+    Console.WriteLine("Init smoke test passed.");
 }
 
 Process StartPiston(StringBuilder output, params string[] arguments)

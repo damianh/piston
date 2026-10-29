@@ -67,6 +67,9 @@ jobs:
         # An MCP client calls verify over stdio; it must report TestsFailed for a completed full-scope run with the
         # same counts.
         run: dotnet run build.cs -- smoke-mcp --skip-dependencies
+      - name: Install the harness assets with piston init
+        # The packed tool installs its embedded skill, canvas and MCP entry into temporary locations, idempotently.
+        run: dotnet run build.cs -- smoke-init --skip-dependencies
 
   check-formatting:
     name: Check formatting

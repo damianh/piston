@@ -64,6 +64,9 @@ piston status [<solution>] [--all]
 
 # Export the running daemon's coverage report (stdout unless -o is given)
 piston coverage-export [<solution>] [--format lcov|cobertura] [-o <file>]
+
+# Print (or, with --write, install) the MCP entry, skill and canvas for an agent harness
+piston init copilot|claude [--write] [--scope user|repo] [--force] [--dashboard]
 ```
 
 `piston status --all` lists every live worktree owner (PID, `mcp` or `daemon`, solution, worktree and dashboard URL where available), stale ownership records, running reservations, FIFO queue order and CPU/memory use against the machine budget. The dashboard's **Machine** tab shows the same overview and links to local dashboards. `piston mcp` sessions have no dashboard URL. If a worktree's owner cannot be reached over the daemon pipe (for example a `piston mcp` process, or a daemon whose worktree was deleted), `piston stop` prints the owner's PID, solution and worktree and exits 1; `piston stop --force` sends SIGTERM and kills the process if it has not exited.
@@ -71,6 +74,8 @@ piston coverage-export [<solution>] [--format lcov|cobertura] [-o <file>]
 `piston status` prints the daemon's PID, solution, phase, web and MCP URLs, and its latest and active run. `piston stop` asks the daemon to shut down, then waits for its process to exit. It exits 0 only once the process has exited, so the ports are free; with no daemon running it prints `No daemon running` and also exits 0. Startup failures exit with code 1 and an `error:` message: a worktree that already has a daemon, or an occupied `--mcp-port`/`--web-port`. Endpoints bind after worktree ownership is taken and before the startup run, so a port conflict starts no build or test run.
 
 `piston coverage-export` asks the running daemon for its coverage report and writes it as LCOV (default) or Cobertura XML, for editors, CI or ReportGenerator. Files changed since they were measured are left out. Large exports are transferred in bounded chunks from one snapshot, so they can exceed the pipe's per-message size limit without mixing measurements from different runs. It exits 1 when no daemon is running or coverage is disabled.
+
+`piston init` sets up a coding agent harness without hand-editing files. It prints the MCP server entry and the files it would install. Only with `--write` does it merge the `piston` entry into the MCP config (keeping other servers) and install the `piston` skill and, for Copilot, the canvas extension. `--scope user` (default) targets `~/.copilot` or `~/.claude`; `--scope repo` targets the current directory. Content that differs from the bundled assets is reported and left alone unless `--force` is given. See [Connect the agent](docs/agent-usage.md#3-connect-the-agent).
 
 `<solution>` is a path to a `.sln`, `.slnx`, or `.slnf` file. An explicit argument wins; otherwise Piston uses the `solution` field in the current directory's `.piston.json`, resolved relative to that file. Without a configured path, exactly one solution must exist in the current directory; multiple candidates require an explicit or configured path. A missing or invalid configured solution is an error, not a discovery fallback.
 
@@ -106,7 +111,10 @@ piston daemon --coverage --mcp-port 5300
 ### Copilot canvas
 
 This repository includes a project-scoped native canvas extension at
-`.github/extensions/piston-dashboard/`. In a Copilot app/runtime with extension
+`.github/extensions/piston-dashboard/`, and the packed tool carries a copy:
+`piston init copilot --write` installs it into `~/.copilot/extensions/` for every
+project (or, with `--scope repo`, into the current repository's
+`.github/extensions/`). In a Copilot app/runtime with extension
 canvas support, ask the agent to open the **Piston** canvas (canvas ID
 `piston-dashboard`, for example instance ID `piston-panel`). The extension uses
 the canvas-capable `piston` executable on PATH and the active session's working
@@ -133,9 +141,8 @@ the canvas; standalone browsers retain their saved/system theme preference.
 Agent-facing actions are `refresh` (inspect only), `run`, and `run_failed`;
 the latter reports an error when there are no failed tests.
 
-Only the project extension is included here. Installing it into other projects
-or bundling harness assets with the tool is separate work. Older runtimes without
-extension canvas support can still open the discovered URL in a browser.
+Older runtimes without extension canvas support can still open the discovered
+URL in a browser.
 
 ### Dashboard controls
 
@@ -169,7 +176,7 @@ and tool installations use this generated file and do not require Node.js.
 
 ## MCP server (AI agents)
 
-For coding agents, use the stdio server: configure `piston mcp` once, globally, as a local MCP server. Copilot CLI's `~/.copilot/mcp-config.json` would then contain:
+For coding agents, use the stdio server: configure `piston mcp` once, globally, as a local MCP server. `piston init copilot --write` (or `piston init claude --write`) does this and installs the `piston` skill. Copilot CLI's `~/.copilot/mcp-config.json` would then contain:
 
 ```json
 { "mcpServers": { "piston": { "type": "local", "command": "piston", "args": ["mcp"], "tools": ["*"] } } }
@@ -185,7 +192,7 @@ If another Piston process already owns the worktree, or the engine cannot start,
 
 The daemon always exposes an HTTP MCP endpoint backed by the running engine, on port 5200 unless `--mcp-port` (or `mcpPort` in `.piston.json`) says otherwise. Connect at `http://localhost:5200` (the root endpoint, not `/mcp`). The daemon retains current state. Runs launch `dotnet build` and fresh test processes, unless [warm test hosts](#warm-test-hosts) are enabled for MTP projects.
 
-To set up a coding agent, follow [docs/agent-usage.md](docs/agent-usage.md). It covers setup, the verification contract and a custom-instructions snippet.
+To set up a coding agent (Copilot CLI, Claude Code or another MCP client), follow [docs/agent-usage.md](docs/agent-usage.md). It covers setup, the verification contract and a custom-instructions snippet.
 
 | Tool | Description |
 |---|---|
@@ -557,13 +564,15 @@ to prevent persistent nodes retaining redirected output pipes after `dotnet` exi
 ### Framework smoke tests
 
 [`samples/Samples.slnx`](samples/README.md) holds an MSTest, NUnit, xUnit v3 and TUnit project, each with one passing,
-one deliberately failing and one skipped test. CI packs the tool, installs it and runs two smoke tests on Linux,
+one deliberately failing and one skipped test. CI packs the tool, installs it and runs three smoke tests on Linux,
 Windows and macOS:
 
 - `smoke-daemon` starts `piston daemon` on the samples, waits for the startup run and checks its counts (12 tests:
   4 passed, 4 failed, 4 skipped, across 4 suites).
 - `smoke-mcp` starts `piston mcp` on the samples as an MCP client over stdio and calls `verify`. It must report
   `TestsFailed` for a completed full-scope run with the same counts.
+- `smoke-init` runs `piston init copilot --write` and `piston init claude --write --scope repo` against temporary
+  locations, checks the installed files, and checks that a second run changes nothing.
 
 To run them locally (with no other Piston process owning this worktree):
 
@@ -595,6 +604,5 @@ The repo pins [roslynk](https://www.nuget.org/packages/roslynk) as a local .NET 
 
 ## Roadmap
 
-Planned work, including packaged harness
-integration assets, is in [docs/ROADMAP.md](docs/ROADMAP.md). See
+Planned work is in [docs/ROADMAP.md](docs/ROADMAP.md). See
 [ARCHITECTURE.md](ARCHITECTURE.md) for implementation details and limitations.

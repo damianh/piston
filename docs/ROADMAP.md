@@ -102,7 +102,8 @@ ARCHITECTURE describe the implementation in detail.
   to GitHub Releases.
 - CI on Linux and Windows, driven by a file-based `build.cs`. Packed-tool smoke
   tests run the MSTest, NUnit, xUnit v3 and TUnit samples through `piston daemon`
-  and through `verify` over `piston mcp` on Linux, Windows and macOS.
+  and through `verify` over `piston mcp`, and install the harness assets with
+  `piston init`, on Linux, Windows and macOS.
 
 **Project-scoped Copilot canvas**
 - A thin `.github/extensions/piston-dashboard/` extension hosts the existing
@@ -111,15 +112,16 @@ ARCHITECTURE describe the implementation in detail.
   or `.piston.json`'s `dashboard: true`; no daemon attachment or second engine.
 - Inspection-only open/refresh/reconnect, explicit run/run-failed actions,
   disconnected recovery, shared failed-test selection and host-following themes.
-- Packaged installation into other projects remains under harness integration.
+
+**Harness integration assets**
+- `piston init copilot|claude` prints the MCP entry, the `piston` skill (the
+  `verify` contract) and, for Copilot, the canvas extension, all embedded in the
+  tool. It installs them only with `--write`, at user or repository scope.
+- Merges only the `piston` MCP entry; content that differs is kept unless `--force`.
+  Claude Code's user config is never edited; the `claude mcp add` command is printed.
+- Claude Code and generic MCP clients are documented in `docs/agent-usage.md`.
 
 ## Near-term
-
-### Harness integration assets
-- Ship Copilot assets with the tool: an MCP config snippet, a skill or custom
-  instructions for the `verify` contract, and the canvas registration.
-- Document Claude Code and generic MCP clients.
-- Never edit harness configuration without explicit opt-in.
 
 ### Distribution
 - Publish to NuGet.org: reserve the package ID and use the opt-in release path.
