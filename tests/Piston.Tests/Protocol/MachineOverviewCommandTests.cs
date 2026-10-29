@@ -120,9 +120,10 @@ public sealed class MachineOverviewCommandTests : IDisposable
         Assert.True(dto.CoordinationAvailable);
         Assert.Null(dto.Error);
         Assert.Equal(2, dto.Worktrees.Count);
+        var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         Assert.Equal("http://localhost:5199",
-            Assert.Single(dto.Worktrees, w => w.WorktreePath == healthyRoot).DashboardUrl);
-        var invalidDto = Assert.Single(dto.Worktrees, w => w.WorktreePath == invalidRoot);
+            Assert.Single(dto.Worktrees, w => pathComparer.Equals(w.WorktreePath, healthyRoot)).DashboardUrl);
+        var invalidDto = Assert.Single(dto.Worktrees, w => pathComparer.Equals(w.WorktreePath, invalidRoot));
         Assert.Null(invalidDto.DashboardUrl);
         Assert.Equal(stale ? "Stale" : "Live", invalidDto.Liveness);
         Assert.NotNull(dto.Budget);
