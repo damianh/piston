@@ -145,12 +145,13 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                     _ = memberKeys.Add("*");
                 }
                 IEnumerable<LineSpan> spans = file.Spans;
-                IReadOnlyList<BranchLine>? branches = file.Branches;
+                var branches = file.Branches;
 
                 if (recording.Merge && ReadUnitFile(unitId, file.FilePath, transaction) is { } existing)
                 {
                     var earlierKeys = ReadMemberKeys(unitId, file.FilePath, transaction);
                     var earlierSpans = LineSpan.Parse(existing.Spans);
+                    var hadExecution = earlierSpans.Count > 0 || earlierKeys.Count > 0;
                     if (ReadSnapshot(existing.Hash, transaction) is { } oldContent)
                     {
                         var oldMembers = SourceMembers.Parse(oldContent);
@@ -167,8 +168,8 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                                 .Where(pair => pair.old.BodyHash == pair.current.BodyHash)
                                 .Select(pair => pair.old.Key)
                                 .ToHashSet(StringComparer.Ordinal);
-                            if (oldMembers.ResidualHash != sourceMembers.ResidualHash
-                                || earlierKeys.Any(key => key != "*" && !unchanged.Contains(key)))
+                            if (hadExecution && (oldMembers.ResidualHash != sourceMembers.ResidualHash
+                                || earlierKeys.Any(key => key != "*" && !unchanged.Contains(key))))
                             {
                                 _ = memberKeys.Add("*");
                             }
@@ -177,12 +178,12 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                             spans = spans.Concat(oldMembers.RemapUnchangedSpans(sourceMembers, earlierSpans));
                         }
                     }
-                    else
+                    else if (hadExecution)
                     {
                         _ = memberKeys.Add("*");
                     }
 
-                    IReadOnlyList<BranchLine>? earlierBranches = existing.Branches is null
+                    var earlierBranches = existing.Branches is null
                         ? null
                         : BranchLine.Parse(existing.Branches);
                     if (!string.Equals(existing.Hash, hash, StringComparison.Ordinal) && earlierBranches is not null)
@@ -477,7 +478,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                     FROM impact_unit_files f
                     JOIN impact_units u ON u.unit_id = f.unit_id
                     LEFT JOIN impact_snapshots s ON s.snapshot_hash = f.snapshot_hash
-                    WHERE f.file_path = $path AND f.spans <> '' AND u.granularity > 0 AND u.is_dirty = 0;
+                    WHERE f.file_path = $path AND (f.spans <> '' OR f.member_keys <> '[]') AND u.granularity > 0 AND u.is_dirty = 0;
                     """;
                 _ = readCmd.Parameters.AddWithValue("$path", change.FilePath);
                 using var reader = readCmd.ExecuteReader();
@@ -686,7 +687,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             JOIN impact_units u ON u.unit_id = f.unit_id
             JOIN impact_unit_tests t ON t.unit_id = u.unit_id
             LEFT JOIN impact_snapshots s ON s.snapshot_hash = f.snapshot_hash
-            WHERE f.file_path = $path AND f.spans <> '';
+            WHERE f.file_path = $path AND (f.spans <> '' OR f.member_keys <> '[]');
             """;
         _ = cmd.Parameters.AddWithValue("$path", filePath);
 
@@ -707,7 +708,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             var snapshotContent = reader.IsDBNull(6) ? null : reader.GetString(6);
             var contentIsCurrent = string.Equals(snapshotHash, currentHash, StringComparison.Ordinal);
             var spans = LineSpan.Parse(reader.GetString(5));
-            IReadOnlyList<BranchLine>? branches = reader.IsDBNull(8) ? null : BranchLine.Parse(reader.GetString(8));
+            var branches = reader.IsDBNull(8) ? null : BranchLine.Parse(reader.GetString(8));
             if (!contentIsCurrent && currentMembers is { Members.Count: > 0 } && snapshotContent is not null)
             {
                 var oldMembers = SourceMembers.Parse(snapshotContent);
@@ -805,7 +806,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             SELECT u.unit_id, u.project_path, u.granularity, f.snapshot_hash, f.spans, f.member_keys, f.branches
             FROM impact_unit_files f
             JOIN impact_units u ON u.unit_id = f.unit_id
-            WHERE f.file_path = $path AND f.spans <> '';
+            WHERE f.file_path = $path AND (f.spans <> '' OR f.member_keys <> '[]');
             """;
         _ = cmd.Parameters.AddWithValue("$path", filePath);
 

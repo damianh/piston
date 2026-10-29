@@ -193,6 +193,11 @@ public sealed class CoverageToolsTests : IDisposable
         [
             Covering("Lib.Tests.Pass", 2, 2),
             Covering("Lib.Tests.Fail", 5, 5) with { Branches = [new(5, 1, 2)] },
+            Covering("Lib.Tests.Fail", 5, 5) with
+            {
+                ProjectPath = Path.Combine(_root, "Other.Tests", "Other.Tests.csproj"),
+                Branches = [new(5, 2, 2)],
+            },
             Covering("Lib.Tests.Old", 5, 5, current: false) with { Branches = [new(5, 2, 2)] },
             Covering("Lib.Tests.Pass", 4, 4),
             Covering("Lib.Tests.Fail", 4, 4),
@@ -201,6 +206,8 @@ public sealed class CoverageToolsTests : IDisposable
         [
             new TestSuite("Lib.Tests",
                 [Result("Lib.Tests.Pass", TestStatus.Passed), Result("Lib.Tests.Fail", TestStatus.Failed)],
+                DateTimeOffset.UnixEpoch, TimeSpan.Zero),
+            new TestSuite("Other.Tests", [Result("Lib.Tests.Fail", TestStatus.Failed)],
                 DateTimeOffset.UnixEpoch, TimeSpan.Zero),
         ];
         var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
@@ -228,7 +235,12 @@ public sealed class CoverageToolsTests : IDisposable
             branch["line"]!.GetValue<int>(),
             branch["covered"]!.GetValue<int>(),
             branch["total"]!.GetValue<int>()));
-        var attributed = Assert.Single(branch["tests"]!.AsArray())!;
+        var attributions = branch["tests"]!.AsArray();
+        Assert.Equal(2, attributions.Count);
+        var attributed = attributions.Single(test => test!["taken"]!.GetValue<int>() == 1)!;
+        var other = attributions.Single(test => test!["taken"]!.GetValue<int>() == 2)!;
+        Assert.Equal("Other.Tests/Other.Tests.csproj", other["project"]!.GetValue<string>());
+        Assert.NotEqual(attributed["project"]!.GetValue<string>(), other["project"]!.GetValue<string>());
         Assert.Equal(("Lib.Tests.Fail", 1, 2, "test"), (
             attributed["name"]!.GetValue<string>(),
             attributed["taken"]!.GetValue<int>(),

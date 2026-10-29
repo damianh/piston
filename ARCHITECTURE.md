@@ -256,7 +256,8 @@ This is a heuristic: code reached by reflection, static state or data files can
 affect a test without appearing in its spans, and a full or forced run remains
 authoritative. The changed-line coverage report includes aggregate branch totals
 and, when current impact-map evidence exists, per-unit taken/total counts for each
-changed branch line. It does not claim an outcome identity, and users should not
+changed branch line, identified by test name and solution-relative project path.
+It does not claim an outcome identity, and users should not
 sum the per-unit counts as an aggregate. Selective runs filter by method, so a
 merge that completed without a crash or runner error also removes recorded cases
 of the methods it ran that no longer exist (theory display names that change

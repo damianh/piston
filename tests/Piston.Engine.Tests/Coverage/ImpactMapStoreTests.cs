@@ -1,9 +1,9 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Microsoft.Data.Sqlite;
 using Piston.Engine.Coverage;
 using Piston.Engine.Impact;
-using Microsoft.Data.Sqlite;
 using Xunit;
 
 namespace Piston.Engine.Tests.Coverage;
@@ -388,6 +388,40 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         Assert.True(unit.IsCurrent);
         Assert.True(unit.HasBranches);
         Assert.True(_sut.GetStats().BranchBytes > 0);
+    }
+
+    [Fact]
+    public async Task ZeroHitMerge_PreservesHistoricalExecutorAfterMemberEdit()
+    {
+        const string original = "class C\n{\n int A() => 1;\n int B() => 2;\n}";
+        var edited = original.Replace("=> 1", "=> 3", StringComparison.Ordinal);
+        var later = edited.Replace("=> 3", "=> 4", StringComparison.Ordinal);
+        await Record(ImpactGranularity.Test, "T.A", ["T.A"], [new(3, 3)], original);
+        await Record(ImpactGranularity.Test, "T.A", ["T.A"], [], edited, merge: true, branches: [new(3, 0, 2)]);
+        await Record(ImpactGranularity.Test, "T.B", ["T.B"], [new(4, 4)], edited);
+
+        Assert.Contains(_sut.GetTestsExecuting(File), executor => executor.TestFqn == "T.A");
+        var changes = new[] { new ChangedFile(File, later) };
+        var selection = _sut.SelectTests(changes);
+        Assert.Contains("T.A", selection.Tests.Keys);
+        Assert.Empty(selection.UnmappedFiles);
+        await _sut.MarkChangedAsync(changes);
+        Assert.False(_sut.GetUnits(Project, ImpactGranularity.Test).Single(unit => unit.UnitKey == "T.A").IsCurrent);
+    }
+
+    [Fact]
+    public async Task BranchOnlyMerge_DoesNotCreateHistoricalExecutionEvidence()
+    {
+        const string original = "class C { int A() => 1; }";
+        const string edited = "class D { int A() => 2; }";
+        await Record(ImpactGranularity.Test, "T.A", ["T.A"], [], original, branches: [new(1, 0, 2)]);
+        await Record(ImpactGranularity.Test, "T.A", ["T.A"], [], edited, merge: true, branches: [new(1, 0, 2)]);
+
+        var changes = new[] { new ChangedFile(File, edited.Replace("=> 2", "=> 3", StringComparison.Ordinal)) };
+        Assert.Empty(_sut.GetTestsExecuting(File));
+        Assert.Equal([File], _sut.SelectTests(changes).UnmappedFiles);
+        await _sut.MarkChangedAsync(changes);
+        Assert.True(Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Test)).IsCurrent);
     }
 
     [Fact]

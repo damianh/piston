@@ -185,12 +185,14 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                         ["covered"] = line.Coverage!.BranchesCovered,
                         ["total"] = line.Coverage.BranchesTotal,
                         ["tests"] = new JsonArray([.. file.BranchTests
-                            .OrderBy(test => test.TestFqn, StringComparer.Ordinal)
+                            .OrderBy(test => test.ProjectPath, StringComparer.Ordinal)
+                            .ThenBy(test => test.TestFqn, StringComparer.Ordinal)
                             .SelectMany(test => test.Branches!
                                 .Where(branch => branch.Line == line.Line)
                                 .Select(branch => (JsonNode)new JsonObject
                                 {
                                     ["name"] = test.TestFqn,
+                                    ["project"] = Relative(test.ProjectPath, solutionDirectory),
                                     ["taken"] = branch.Covered,
                                     ["total"] = branch.Total,
                                     ["granularity"] = test.Granularity,
