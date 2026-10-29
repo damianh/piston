@@ -76,4 +76,8 @@ public sealed record TestSelectionReason(
     string ChangedLines,
     string? ExecutedLines,
     string Granularity,
-    string ProjectPath);
+    string ProjectPath,
+    IReadOnlyList<BranchEvidence>? Branches = null);
+
+/// <summary>Branch outcomes attributed to one measured unit on one source line.</summary>
+public sealed record BranchEvidence(int Line, int Covered, int Total);

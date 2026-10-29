@@ -14,7 +14,7 @@ namespace Piston.Engine.Coverage;
 /// impact_units      (unit_id, project_path, granularity, unit_key, run_id, is_dirty, recorded_at)
 ///                   -- a measured unit: a project's run (granularity 0), a class (1) or a test (2)
 /// impact_unit_tests (unit_id, test_fqn)                      -- the tests credited with the unit's files
-/// impact_unit_files (unit_id, file_path, snapshot_hash, spans) -- executed method ranges, e.g. "3-9,12-20"
+/// impact_unit_files (unit_id, file_path, snapshot_hash, spans, branches) -- executed ranges and per-line branch counts
 /// impact_snapshots  (snapshot_hash, content)                  -- file content when measured, shared by hash
 /// </code>
 /// </remarks>
@@ -43,6 +43,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             file_path     TEXT    NOT NULL,
             snapshot_hash TEXT    NOT NULL,
             spans         TEXT    NOT NULL,
+            branches      TEXT,
             PRIMARY KEY (unit_id, file_path)
         ) WITHOUT ROWID;
 
@@ -120,18 +121,20 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             var pSnapshotContent = snapshotCmd.Parameters.Add("$content", SqliteType.Text);
 
             using var fileCmd = Command(transaction, """
-                INSERT OR REPLACE INTO impact_unit_files (unit_id, file_path, snapshot_hash, spans)
-                VALUES ($unit_id, $path, $hash, $spans);
+                INSERT OR REPLACE INTO impact_unit_files (unit_id, file_path, snapshot_hash, spans, branches)
+                VALUES ($unit_id, $path, $hash, $spans, $branches);
                 """);
             _ = fileCmd.Parameters.AddWithValue("$unit_id", unitId);
             var pPath = fileCmd.Parameters.Add("$path", SqliteType.Text);
             var pHash = fileCmd.Parameters.Add("$hash", SqliteType.Text);
             var pSpans = fileCmd.Parameters.Add("$spans", SqliteType.Text);
+            var pBranches = fileCmd.Parameters.Add("$branches", SqliteType.Text);
 
             foreach (var file in recording.Files)
             {
                 var hash = ImpactContent.Hash(file.Content);
                 IEnumerable<LineSpan> spans = file.Spans;
+                IReadOnlyList<BranchLine>? branches = file.Branches;
 
                 if (recording.Merge && ReadUnitFile(unitId, file.FilePath, transaction) is { } existing)
                 {
@@ -145,6 +148,23 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                     }
 
                     spans = spans.Concat(earlier);
+
+                    IReadOnlyList<BranchLine>? earlierBranches = existing.Branches is null
+                        ? null
+                        : BranchLine.Parse(existing.Branches);
+                    if (!string.Equals(existing.Hash, hash, StringComparison.Ordinal)
+                        && ReadSnapshot(existing.Hash, transaction) is { } branchOldContent
+                        && SnapshotDiff.Compute(SnapshotDiff.SplitLines(branchOldContent), SnapshotDiff.SplitLines(file.Content)) is { } branchDiff
+                        && earlierBranches is not null)
+                    {
+                        earlierBranches = BranchLine.Remap(earlierBranches, branchDiff);
+                    }
+
+                    branches = branches is null
+                        ? earlierBranches
+                        : earlierBranches is null
+                            ? BranchLine.Merge(branches)
+                            : BranchLine.Merge(branches.Concat(earlierBranches));
                 }
 
                 pSnapshotHash.Value = hash;
@@ -154,6 +174,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                 pPath.Value = file.FilePath;
                 pHash.Value = hash;
                 pSpans.Value = LineSpan.Format(LineSpan.Normalize(spans));
+                pBranches.Value = branches is null ? DBNull.Value : BranchLine.Format(branches);
                 _ = await fileCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
             }
 
@@ -236,7 +257,8 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                         changed = changedRange;
                         if (spans.FirstOrDefault(s => s.Overlaps(changed)) is { Start: > 0 } span)
                         {
-                            hits.Add((row, new ImpactReason(change.FilePath, changed, span, row.Granularity, row.ProjectPath)));
+                            hits.Add((row, new ImpactReason(
+                                change.FilePath, changed, span, row.Granularity, row.ProjectPath, BranchesFor(row, changed))));
                             continue;
                         }
                     }
@@ -246,7 +268,8 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                     }
                 }
 
-                touched.Add((row, new ImpactReason(change.FilePath, changed, null, row.Granularity, row.ProjectPath)));
+                touched.Add((row, new ImpactReason(
+                    change.FilePath, changed, null, row.Granularity, row.ProjectPath, BranchesFor(row, changed))));
             }
 
             if (!hasCodeChange)
@@ -279,6 +302,11 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
 
                 reasons.Add(reason);
             }
+
+            static IReadOnlyList<BranchLine>? BranchesFor(FileUnit unit, LineSpan changed) =>
+                unit.Branches is null
+                    ? null
+                    : [.. BranchLine.Parse(unit.Branches).Where(b => changed.Start <= b.Line && b.Line <= changed.End)];
 
             void AddTests(FileUnit unit, ImpactReason reason)
             {
@@ -338,14 +366,18 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
 
         using var cmd = _connection!.CreateCommand();
         cmd.CommandText = """
-            SELECT unit_key, run_id, is_dirty, recorded_at FROM impact_units
-            WHERE project_path = $project AND granularity = $granularity
-            ORDER BY unit_key;
+            SELECT u.unit_key, u.run_id, u.is_dirty, u.recorded_at,
+                NOT EXISTS (
+                    SELECT 1 FROM impact_unit_files f
+                    WHERE f.unit_id = u.unit_id AND f.branches IS NULL)
+            FROM impact_units u
+                    WHERE u.project_path = $project AND u.granularity = $granularity
+            ORDER BY u.unit_key;
             """;
         _ = cmd.Parameters.AddWithValue("$project", projectPath);
         _ = cmd.Parameters.AddWithValue("$granularity", (int)granularity);
 
-        var rows = new List<(string Key, long RunId, bool IsCurrent, DateTimeOffset RecordedAt)>();
+        var rows = new List<(string Key, long RunId, bool IsCurrent, DateTimeOffset RecordedAt, bool HasBranches)>();
         using (var reader = cmd.ExecuteReader())
         {
             while (reader.Read())
@@ -354,7 +386,8 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                     reader.GetString(0),
                     reader.GetInt64(1),
                     reader.GetInt64(2) == 0,
-                    DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture)));
+                    DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture),
+                    reader.GetInt64(4) != 0));
             }
         }
 
@@ -383,7 +416,30 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
 
         return [.. rows.Select(r => new ImpactUnitInfo(
             r.Key, r.RunId, r.IsCurrent, r.RecordedAt,
-            tests.TryGetValue(r.Key, out var list) ? [.. list.Order(StringComparer.Ordinal)] : []))];
+            tests.TryGetValue(r.Key, out var list) ? [.. list.Order(StringComparer.Ordinal)] : [],
+            r.HasBranches))];
+    }
+
+    public ImpactStoreStats GetStats()
+    {
+        using var gate = Enter();
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = """
+            SELECT
+                (SELECT COUNT(*) FROM impact_units),
+                (SELECT COUNT(*) FROM impact_unit_files),
+                (SELECT COALESCE(SUM(length(CAST(spans AS BLOB))), 0) FROM impact_unit_files),
+                (SELECT COALESCE(SUM(length(CAST(branches AS BLOB))), 0) FROM impact_unit_files),
+                (SELECT COALESCE(SUM(length(CAST(content AS BLOB))), 0) FROM impact_snapshots);
+            """;
+        using var reader = cmd.ExecuteReader();
+        _ = reader.Read();
+        return new ImpactStoreStats(
+            reader.GetInt32(0),
+            reader.GetInt32(1),
+            reader.GetInt64(2),
+            reader.GetInt64(3),
+            reader.GetInt64(4));
     }
 
     public async Task RemoveUnitsAsync(string projectPath, ImpactGranularity granularity, IReadOnlyCollection<string> unitKeys)
@@ -444,7 +500,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
         var snapshotItems = new Dictionary<string, IReadOnlyList<SnapshotDiff.CodeItem>>(StringComparer.Ordinal);
         using var cmd = _connection!.CreateCommand();
         cmd.CommandText = """
-            SELECT u.project_path, t.test_fqn, u.granularity, u.is_dirty, f.snapshot_hash, f.spans, s.content
+            SELECT u.project_path, t.test_fqn, u.granularity, u.is_dirty, f.snapshot_hash, f.spans, s.content, f.branches
             FROM impact_unit_files f
             JOIN impact_units u ON u.unit_id = f.unit_id
             JOIN impact_unit_tests t ON t.unit_id = u.unit_id
@@ -480,6 +536,9 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             }
 
             var spans = LineSpan.Parse(reader.GetString(5));
+            IReadOnlyList<BranchLine>? branches = contentIsCurrent && !reader.IsDBNull(7)
+                ? BranchLine.Parse(reader.GetString(7))
+                : null;
             if (contentIsCurrent
                 && !string.Equals(snapshotHash, currentHash, StringComparison.Ordinal)
                 && snapshotContent is not null
@@ -487,11 +546,15 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                 && SnapshotDiff.Compute(SnapshotDiff.SplitLines(snapshotContent), SnapshotDiff.SplitLines(currentContent)) is { } lineDiff)
             {
                 spans = lineDiff.Remap(spans);
+                if (branches is not null)
+                {
+                    branches = BranchLine.RemapEquivalent(branches, snapshotContent, currentContent);
+                }
             }
 
             var row = new ImpactExecutor(
                 key.Item1, key.Item2, granularity, spans, snapshotHash,
-                reader.GetInt64(3) == 0, contentIsCurrent);
+                reader.GetInt64(3) == 0, contentIsCurrent, branches);
             if (!best.TryGetValue(key, out var existing)
                 || (row.IsUnitCurrent, row.Granularity).CompareTo((existing.IsUnitCurrent, existing.Granularity)) > 0)
             {
@@ -504,13 +567,19 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             .ThenBy(e => e.TestFqn, StringComparer.Ordinal)];
     }
 
-    private sealed record FileUnit(long UnitId, string ProjectPath, ImpactGranularity Granularity, string Hash, string Spans);
+    private sealed record FileUnit(
+        long UnitId,
+        string ProjectPath,
+        ImpactGranularity Granularity,
+        string Hash,
+        string Spans,
+        string? Branches);
 
     private List<FileUnit> ReadFileUnits(string filePath)
     {
         using var cmd = _connection!.CreateCommand();
         cmd.CommandText = """
-            SELECT u.unit_id, u.project_path, u.granularity, f.snapshot_hash, f.spans
+            SELECT u.unit_id, u.project_path, u.granularity, f.snapshot_hash, f.spans, f.branches
             FROM impact_unit_files f
             JOIN impact_units u ON u.unit_id = f.unit_id
             WHERE f.file_path = $path;
@@ -526,7 +595,8 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                 reader.GetString(1),
                 (ImpactGranularity)reader.GetInt32(2),
                 reader.GetString(3),
-                reader.GetString(4)));
+                reader.GetString(4),
+                reader.IsDBNull(5) ? null : reader.GetString(5)));
         }
 
         return rows;
@@ -600,13 +670,18 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
         }
     }
 
-    private (string Hash, string Spans)? ReadUnitFile(long unitId, string filePath, SqliteTransaction transaction)
+    private (string Hash, string Spans, string? Branches)? ReadUnitFile(long unitId, string filePath, SqliteTransaction transaction)
     {
-        using var cmd = Command(transaction, "SELECT snapshot_hash, spans FROM impact_unit_files WHERE unit_id = $unit_id AND file_path = $path;");
+        using var cmd = Command(transaction, "SELECT snapshot_hash, spans, branches FROM impact_unit_files WHERE unit_id = $unit_id AND file_path = $path;");
         _ = cmd.Parameters.AddWithValue("$unit_id", unitId);
         _ = cmd.Parameters.AddWithValue("$path", filePath);
         using var reader = cmd.ExecuteReader();
-        return reader.Read() ? (reader.GetString(0), reader.GetString(1)) : null;
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        return (reader.GetString(0), reader.GetString(1), reader.IsDBNull(2) ? null : reader.GetString(2));
     }
 
     private string? ReadSnapshot(string hash, SqliteTransaction? transaction)

@@ -163,6 +163,14 @@ public static class TestRunJson
                         ["executedLines"] = reason.ExecutedLines,
                         ["granularity"] = reason.Granularity,
                         ["projectPath"] = reason.ProjectPath,
+                        ["branches"] = reason.Branches is null
+                            ? null
+                            : new JsonArray(reason.Branches.Select(b => (JsonNode)new JsonObject
+                            {
+                                ["line"] = b.Line,
+                                ["taken"] = b.Covered,
+                                ["total"] = b.Total,
+                            }).ToArray()),
                     }).ToArray())))),
         };
 

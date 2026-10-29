@@ -136,6 +136,7 @@ internal sealed class CoverageProcessor : ICoverageProcessor
             }
 
             var spansByFile = new Dictionary<string, List<LineSpan>>(StringComparer.OrdinalIgnoreCase);
+            var branchesByFile = new Dictionary<string, List<BranchLine>>(StringComparer.OrdinalIgnoreCase);
             var measured = false;
             foreach (var reportPath in unit.ReportPaths)
             {
@@ -147,18 +148,22 @@ internal sealed class CoverageProcessor : ICoverageProcessor
                 measured = true;
                 foreach (var file in reportFiles)
                 {
+                    if (!spansByFile.TryGetValue(file.FilePath, out var allSpans))
+                    {
+                        spansByFile[file.FilePath] = allSpans = [];
+                    }
+
                     var spans = file.GetExecutedSpans();
-                    if (spans.Count == 0)
+                    allSpans.AddRange(spans);
+
+                    if (!branchesByFile.TryGetValue(file.FilePath, out var branchLines))
                     {
-                        continue;
+                        branchesByFile[file.FilePath] = branchLines = [];
                     }
 
-                    if (!spansByFile.TryGetValue(file.FilePath, out var all))
-                    {
-                        spansByFile[file.FilePath] = all = [];
-                    }
-
-                    all.AddRange(spans);
+                    branchLines.AddRange(file.Lines
+                        .Where(line => line.BranchesTotal > 0)
+                        .Select(line => new BranchLine(line.LineNumber, line.BranchesCovered, line.BranchesTotal)));
                 }
             }
 
@@ -168,7 +173,7 @@ internal sealed class CoverageProcessor : ICoverageProcessor
             }
 
             var files = new List<ImpactFile>();
-            foreach (var (path, spans) in spansByFile)
+            foreach (var path in spansByFile.Keys.Concat(branchesByFile.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 if (!contents.TryGetValue(path, out var content))
                 {
@@ -179,7 +184,11 @@ internal sealed class CoverageProcessor : ICoverageProcessor
 
                 if (content is not null)
                 {
-                    files.Add(new ImpactFile(path, LineSpan.Normalize(spans), content));
+                    files.Add(new ImpactFile(
+                        path,
+                        LineSpan.Normalize(spansByFile.GetValueOrDefault(path) ?? []),
+                        content,
+                        branchesByFile.TryGetValue(path, out var branches) ? BranchLine.Merge(branches) : []));
                 }
             }
 

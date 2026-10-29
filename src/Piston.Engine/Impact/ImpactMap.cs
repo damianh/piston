@@ -25,7 +25,12 @@ internal enum ImpactGranularity
 /// <param name="FilePath">Absolute path of the source file.</param>
 /// <param name="Spans">Executed method line ranges.</param>
 /// <param name="Content">The file's content when it was measured; changes are found by diffing against it.</param>
-internal sealed record ImpactFile(string FilePath, IReadOnlyList<LineSpan> Spans, string Content);
+/// <param name="Branches">Per-line branch outcomes, or null when branch evidence was not recorded.</param>
+internal sealed record ImpactFile(
+    string FilePath,
+    IReadOnlyList<LineSpan> Spans,
+    string Content,
+    IReadOnlyList<BranchLine>? Branches = null);
 
 /// <summary>What one measured unit (a project's run, a test class or a test) executed.</summary>
 /// <param name="ProjectPath">The test project the unit belongs to.</param>
@@ -67,12 +72,14 @@ internal sealed record ChangedFile(string FilePath, string? Content);
 /// </param>
 /// <param name="Granularity">How precisely the evidence attributes the file to the test.</param>
 /// <param name="ProjectPath">The test project.</param>
+/// <param name="Branches">Known branch counts on changed lines, or null when unavailable.</param>
 internal sealed record ImpactReason(
     string FilePath,
     LineSpan ChangedLines,
     LineSpan? ExecutedSpan,
     ImpactGranularity Granularity,
-    string ProjectPath);
+    string ProjectPath,
+    IReadOnlyList<BranchLine>? Branches = null);
 
 /// <summary>The tests a set of changes affects, according to the impact map.</summary>
 /// <param name="Tests">Each selected test FQN with the reasons it was selected.</param>
@@ -111,6 +118,9 @@ internal interface IImpactMapStore
     /// <summary>Returns the units recorded for <paramref name="projectPath"/> at <paramref name="granularity"/>, with whether each is current.</summary>
     IReadOnlyList<ImpactUnitInfo> GetUnits(string projectPath, ImpactGranularity granularity);
 
+    /// <summary>Returns approximate row and text-storage statistics for the impact map.</summary>
+    ImpactStoreStats GetStats();
+
     /// <summary>Forgets the named units of a project, e.g. test classes that no longer exist.</summary>
     Task RemoveUnitsAsync(string projectPath, ImpactGranularity granularity, IReadOnlyCollection<string> unitKeys);
 
@@ -126,6 +136,7 @@ internal interface IImpactMapStore
 /// <param name="SnapshotHash">Hash of the file's content when measured.</param>
 /// <param name="IsUnitCurrent">False when the unit's code changed and it awaits re-measurement.</param>
 /// <param name="IsContentCurrent">False when the file's current code differs from the measured snapshot.</param>
+/// <param name="Branches">Per-line branch counts, remapped to current content when it is code-current.</param>
 internal sealed record ImpactExecutor(
     string ProjectPath,
     string TestFqn,
@@ -133,12 +144,25 @@ internal sealed record ImpactExecutor(
     IReadOnlyList<LineSpan> Spans,
     string SnapshotHash,
     bool IsUnitCurrent,
-    bool IsContentCurrent);
+    bool IsContentCurrent,
+    IReadOnlyList<BranchLine>? Branches = null);
 
 /// <summary>A recorded unit's identity and state.</summary>
 /// <param name="Tests">The tests credited with the unit's files.</param>
+/// <param name="HasBranches">True when branch evidence was recorded for all its file rows.</param>
 internal sealed record ImpactUnitInfo(
-    string UnitKey, long RunId, bool IsCurrent, DateTimeOffset RecordedAt, IReadOnlyList<string> Tests);
+    string UnitKey,
+    long RunId,
+    bool IsCurrent,
+    DateTimeOffset RecordedAt,
+    IReadOnlyList<string> Tests,
+    bool HasBranches = false);
+
+/// <summary>Approximate persisted impact-map size, in UTF-8 bytes.</summary>
+internal sealed record ImpactStoreStats(int Units, int FileRows, long SpanBytes, long BranchBytes, long SnapshotBytes)
+{
+    public long TotalBytes => SpanBytes + BranchBytes + SnapshotBytes;
+}
 
 internal static class ImpactContent
 {

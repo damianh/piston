@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Security.Cryptography;
+using Piston.Engine.Models;
 
 namespace Piston.Engine.Coverage;
 
@@ -96,9 +97,11 @@ public sealed record CoveredLineRange(int Start, int End);
 /// The file is unchanged since it was measured and the measured code has not changed since, so the ranges line up
 /// with the file as it is now.
 /// </param>
+/// <param name="Branches">Per-line branch outcomes, null if branch data was not recorded or the source is stale.</param>
 public sealed record CoveringTest(
     string TestFqn,
     string ProjectPath,
     string Granularity,
     IReadOnlyList<CoveredLineRange> ExecutedLines,
-    bool IsCurrent);
+    bool IsCurrent,
+    IReadOnlyList<BranchEvidence>? Branches = null);

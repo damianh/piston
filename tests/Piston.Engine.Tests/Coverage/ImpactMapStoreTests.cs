@@ -3,6 +3,7 @@
 
 using Piston.Engine.Coverage;
 using Piston.Engine.Impact;
+using Microsoft.Data.Sqlite;
 using Xunit;
 
 namespace Piston.Engine.Tests.Coverage;
@@ -13,6 +14,7 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
     private const string File = "/repo/src/Lib/Code.cs";
 
     private static readonly string Original = Source(30);
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
 
     private string _tempDir = string.Empty;
     private SqliteCoverageStore _sut = null!;
@@ -48,9 +50,11 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         LineSpan[] spans,
         string? content = null,
         bool merge = false,
-        bool methodsComplete = false) =>
+        bool methodsComplete = false,
+        BranchLine[]? branches = null) =>
         _sut.RecordImpactAsync(new ImpactRecording(
-            Project, granularity, unitKey, _sut.CreateRunId(), tests, [new ImpactFile(File, spans, content ?? Original)], merge, methodsComplete));
+            Project, granularity, unitKey, _sut.CreateRunId(), tests,
+            [new ImpactFile(File, spans, content ?? Original, branches)], merge, methodsComplete));
 
     [Fact]
     public async Task SelectTests_ChangeInsideAnExecutedSpan_SelectsTheUnitsTestsWithTheSpan()
@@ -104,7 +108,7 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
             "T.A.One",
             _sut.CreateRunId(),
             ["T.A.One"],
-            [new ImpactFile(path, [new(3, 3)], original)],
+            [new ImpactFile(path, [new(3, 3)], original, [new BranchLine(3, 1, 2)])],
             Merge: false));
 
         var selection = _sut.SelectTests([new ChangedFile(path, edited)]);
@@ -116,6 +120,7 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         Assert.True(executor.IsUnitCurrent);
         Assert.True(executor.IsContentCurrent);
         Assert.Equal([new LineSpan(3, 5)], executor.Spans);
+        Assert.Equal([new BranchLine(5, 1, 2)], executor.Branches);
     }
 
     [Fact]
@@ -231,6 +236,74 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         Assert.Equal(["T.A", "T.B"], units.Select(u => u.UnitKey));
         Assert.Equal(["T.A.One"], units[0].Tests);
         Assert.Equal(["T.B.One", "T.B.Two"], units[1].Tests);
+    }
+
+    [Fact]
+    public async Task GetUnits_IdentifiesUnitsWithoutBranchEvidence()
+    {
+        await Record(ImpactGranularity.Test, "T.A.One", ["T.A.One"], [new(3, 5)]);
+        await Record(ImpactGranularity.Test, "T.B.One", ["T.B.One"], [new(3, 5)], branches: [new(4, 1, 2)]);
+
+        var units = _sut.GetUnits(Project, ImpactGranularity.Test).ToDictionary(u => u.UnitKey);
+
+        Assert.False(units["T.A.One"].HasBranches);
+        Assert.True(units["T.B.One"].HasBranches);
+    }
+
+    [Fact]
+    public async Task SelectTests_AttachesBranchCountsOnChangedLines()
+    {
+        await Record(
+            ImpactGranularity.Test,
+            "T.A.One",
+            ["T.A.One"],
+            [new(3, 5)],
+            branches: [new(4, 1, 2), new(5, 0, 2)]);
+
+        var selection = _sut.SelectTests([new ChangedFile(File, Edit(Original, 4, "changed"))]);
+
+        Assert.Equal([new BranchLine(4, 1, 2)], Assert.Single(selection.Tests["T.A.One"]).Branches);
+    }
+
+    [Fact]
+    public async Task RecordImpactAsync_MergeAfterAnEdit_RemapsEarlierBranchLines()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A"], [new(3, 8)], branches: [new(4, 1, 2)]);
+        var shifted = "new 1\nnew 2\n" + Original;
+
+        await Record(ImpactGranularity.Run, "run", ["T.B"], [new(25, 26)], shifted, merge: true);
+
+        var selection = _sut.SelectTests([new ChangedFile(File, Edit(shifted, 6, "changed"))]);
+        Assert.Equal([new BranchLine(6, 1, 2)], Assert.Single(selection.Tests["T.A"]).Branches);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_AddsBranchesColumnToAnExistingImpactMap()
+    {
+        await Record(ImpactGranularity.Test, "T.A.One", ["T.A.One"], [new(3, 5)], branches: [new(4, 1, 2)]);
+        _sut.Dispose();
+        var database = Path.Combine(_tempDir, ".piston", "piston.db");
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = database,
+            Pooling = false,
+        }.ToString()))
+        {
+            await connection.OpenAsync(_ct);
+            using var command = connection.CreateCommand();
+            command.CommandText = "ALTER TABLE impact_unit_files DROP COLUMN branches;";
+            _ = await command.ExecuteNonQueryAsync(_ct);
+        }
+
+        _sut = new SqliteCoverageStore();
+        await _sut.InitializeAsync(_tempDir);
+
+        var stats = _sut.GetStats();
+        Assert.Equal(0, stats.BranchBytes);
+        Assert.False(Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Test)).HasBranches);
+        Assert.Equal(
+            ["T.A.One"],
+            _sut.SelectTests([new ChangedFile(File, Edit(Original, 4, "changed"))]).Tests.Keys);
     }
 
     [Fact]

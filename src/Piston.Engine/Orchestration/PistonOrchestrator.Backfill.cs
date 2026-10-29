@@ -102,6 +102,7 @@ public sealed partial class PistonOrchestrator
         var solutionDir = Path.GetDirectoryName(Path.GetFullPath(solutionPath));
         var granularityName = granularity == ImpactGranularity.Test ? "test" : "class";
         var log = DiagnosticLog.Instance;
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
         var completed = 0;
         try
         {
@@ -163,7 +164,13 @@ public sealed partial class PistonOrchestrator
                 completed++;
             }
 
-            log?.Write("Backfill", $"Measured {completed} {granularityName} unit(s)");
+            var stats = store.GetStats();
+            stopwatch.Stop();
+            log?.Write(
+                "Backfill",
+                $"Measured {completed} {granularityName} unit(s) in {stopwatch.Elapsed.TotalSeconds:F1}s; impact map: " +
+                $"{stats.Units} units, {stats.FileRows} file rows, {stats.SpanBytes} span bytes, " +
+                $"{stats.BranchBytes} branch bytes, {stats.SnapshotBytes} snapshot bytes ({stats.TotalBytes} total)");
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

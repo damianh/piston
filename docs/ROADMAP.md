@@ -67,6 +67,9 @@ ARCHITECTURE describe the implementation in detail.
   Cobertura export over MCP, HTTP, the protocol and the CLI.
 - An impact map with idle per-test (default) or per-class backfill, and
   changed-line test selection with per-test reasons and conservative fallback.
+- Branch-level attribution in impact-map reasons and changed-line coverage:
+  per-unit, per-line outcome counts (Cobertura does not identify individual
+  outcomes). Backfill re-measures existing units missing branch evidence.
 - Git bases (`working`, `branch`, `range`) for affected-test planning and
   changed-line coverage.
 
@@ -118,7 +121,6 @@ opens by hand (today's `piston-dashboard` skill).
   failing tests, uncovered, non-executable, or unknown/stale.
 - A coverage-aware diff view in the dashboard and canvas, with drill-down to the
   covering tests.
-- Branch-level attribution in the impact map.
 - Method-level identity, so line shifts do not invalidate evidence. Never reuse old
   line evidence without validated remapping.
 

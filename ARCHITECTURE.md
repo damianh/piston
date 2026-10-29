@@ -148,25 +148,35 @@ With coverage enabled, Tier 3 selects tests from the **impact map**
 (`IImpactMapStore`, implemented by `SqliteCoverageStore`). Each recorded *unit*
 belongs to a test project, has a granularity (`run`, `class` or `test`) and lists
 the tests it measured and, per source file, the line spans those tests executed
-plus a content-addressed snapshot of the file as measured.
+plus a content-addressed snapshot of the file as measured. It also stores
+per-line branch counts for each unit. Cobertura provides counts such as
+`1/2` outcomes on a line, but does not identify which outcome was taken; these
+counts are not additive across tests.
 
 - **Recording.** After a coverage run, the orchestrator records one `run` unit per
   test project from that project's reports. A full run in which all the project's
   tests ran cleanly replaces the unit; other runs merge into it, first remapping
-  earlier spans onto the new content with a line diff.
+  earlier spans and branch lines onto the new content with a line diff. Branch
+  evidence replaced by a code edit is discarded; comment and whitespace edits
+  remap lines through unchanged C# tokens. The SQLite `branches` column is
+  nullable so existing databases can be migrated without invalidating selection:
+  null means unknown, and an empty value means measured with no branch lines.
 - **Backfill.** `run` evidence credits every executed line to every test of the
   project. When the daemon is idle, `ImpactBackfill` plans class (or test) units
   that are missing or outdated, and the orchestrator runs each with a name filter
-  and coverage, recording a `class`/`test` unit. A unit is skipped when not every
-  planned test ran. Any new run cancels the backfill; progress is published as
-  `ImpactBackfill` in the state snapshot.
+  and coverage, recording a `class`/`test` unit. Legacy units without branch
+  data are re-measured after missing and outdated units. A unit is skipped when
+  not every planned test ran. Any new run cancels the backfill; progress is
+  published as `ImpactBackfill` in the state snapshot. A completed pass logs
+  elapsed time and approximate bytes for spans, branches and snapshots.
 - **Selection.** `SelectTests` diffs each changed file against each unit's
   snapshot. A unit whose executed spans overlap the changed lines selects its tests,
-  with a `TestSelectionReason` (changed lines, executed span, granularity); a change
-  outside every span selects every test that executed the file. Current finer
-  evidence about a test overrides coarser evidence. Analyzing a change marks the
-  file's class and test units dirty, so the `run` unit decides until they are
-  remeasured.
+  with a `TestSelectionReason` (changed lines, executed span, granularity and any
+  branch counts on the changed lines); a change outside every span selects every
+  test that executed the file. Branch counts enrich reasons only and do not alter
+  selection. Current finer evidence about a test overrides coarser evidence.
+  Analyzing a change marks the file's class and test units dirty, so the `run`
+  unit decides until they are remeasured.
 - **Abstaining.** A changed test file, a changed file with no recording, or more
   than `ImpactAnalysisResult.MaxFilteredTests` (100) selected tests falls back to
   project selection, and the run records why (`SelectionExplanation`). Without an
@@ -175,9 +185,29 @@ plus a content-addressed snapshot of the file as measured.
 
 This is a heuristic: code reached by reflection, static state or data files can
 affect a test without appearing in its spans, and a full or forced run remains
-authoritative. Selective runs filter by method, so a merge that completed without
-a crash or runner error also removes recorded cases of the methods it ran that no
-longer exist (theory display names that change between runs).
+authoritative. The changed-line coverage report includes aggregate branch totals
+and, when current impact-map evidence exists, per-unit taken/total counts for each
+changed branch line. It does not claim an outcome identity, and users should not
+sum the per-unit counts as an aggregate. Selective runs filter by method, so a
+merge that completed without a crash or runner error also removes recorded cases
+of the methods it ran that no longer exist (theory display names that change
+between runs).
+
+### Test-level backfill measurement
+
+On 2026-10-25, a Release daemon on Linux/Nix ran `Piston.slnx` with test-level
+backfill and `parallelism=1`. The initial run reported 1,335 tests: 837 in
+`Piston.Engine.Tests` (35 failed) and 498 in `Piston.Tests` (all passed). The
+backfill planned 993 test units and took 3,478.3 seconds (about 58 minutes).
+991 test units were stored; two were skipped because not every planned test ran
+in the filtered execution. The initial failures were in verification-input
+assertions and orchestrator graph-refresh timeouts.
+
+The resulting impact-map payload was approximately 13,898,341 bytes: 138,020
+span bytes, 12,743,700 branch bytes and 1,016,621 snapshot bytes. The physical
+`.piston/piston.db` file was 123,924,480 bytes (about 118.1 MiB), including
+ordinary line-coverage data. These timings and sizes are a single-worktree
+measurement, not a general performance guarantee.
 
 ## Builds and execution
 

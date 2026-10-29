@@ -174,6 +174,11 @@ public sealed class CoverageToolsTests : IDisposable
         engine.FileCoverage[measured] = new FileCoverageSnapshot(
             Summary(measured, 4, 2),
             [new(2, 1), new(3, 0), new(4, 1), new(5, 1, 1, 2)]);
+        engine.CoveringTests[measured] =
+        [
+            new("Lib.Tests.A.One", Path.Combine(_root, "tests", "Lib.Tests.csproj"), "test", [], true, [new(5, 1, 2)]),
+            new("Lib.Tests.Old", Path.Combine(_root, "tests", "Lib.Tests.csproj"), "test", [], false, [new(5, 2, 2)]),
+        ];
         engine.FileCoverage[stale] = new FileCoverageSnapshot(Summary(stale, 1, 1, stale: true), [new(1, 1)]);
         var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
 
@@ -187,6 +192,17 @@ public sealed class CoverageToolsTests : IDisposable
         var file = Assert.Single(json["files"]!.AsArray())!;
         Assert.Equal("Measured.cs", file["path"]!.GetValue<string>());
         Assert.Equal("3", file["uncoveredLines"]!.GetValue<string>());
+        var branch = Assert.Single(file["branchLines"]!.AsArray())!;
+        Assert.Equal((5, 1, 2), (
+            branch["line"]!.GetValue<int>(),
+            branch["covered"]!.GetValue<int>(),
+            branch["total"]!.GetValue<int>()));
+        var attributed = Assert.Single(branch["tests"]!.AsArray())!;
+        Assert.Equal(("Lib.Tests.A.One", 1, 2, "test"), (
+            attributed["name"]!.GetValue<string>(),
+            attributed["taken"]!.GetValue<int>(),
+            attributed["total"]!.GetValue<int>(),
+            attributed["granularity"]!.GetValue<string>()));
         Assert.Equal(["Stale.cs"], json["staleFiles"]!.AsArray().Select(f => f!.GetValue<string>()));
         Assert.Equal(["New.cs"], json["notMeasuredFiles"]!.AsArray().Select(f => f!.GetValue<string>()));
     }
@@ -255,7 +271,7 @@ public sealed class CoverageToolsTests : IDisposable
             AffectedTestFqns = ["Lib.Tests.B.Two", "Lib.Tests.A.One"],
             SelectionReasons = new Dictionary<string, IReadOnlyList<TestSelectionReason>>
             {
-                ["Lib.Tests.A.One"] = [new(lib, "12", "10-14", "class", project)],
+                ["Lib.Tests.A.One"] = [new(lib, "12", "10-14", "class", project, [new(12, 1, 2)])],
             },
             Explanation = "Tests whose recorded execution touches the changed lines.",
         };
@@ -274,6 +290,10 @@ public sealed class CoverageToolsTests : IDisposable
         var reason = Assert.Single(tests[0]!["reasons"]!.AsArray())!;
         Assert.Equal("src/Lib/Code.cs", (string?)reason["file"]);
         Assert.Equal(("12", "10-14", "class"), ((string?)reason["changedLines"], (string?)reason["executedLines"], (string?)reason["granularity"]));
+        Assert.Equal((12, 1, 2), (
+            reason["branches"]![0]!["line"]!.GetValue<int>(),
+            reason["branches"]![0]!["taken"]!.GetValue<int>(),
+            reason["branches"]![0]!["total"]!.GetValue<int>()));
         Assert.Null(tests[1]!["reasons"]);
     }
 

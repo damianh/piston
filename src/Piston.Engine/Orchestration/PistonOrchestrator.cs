@@ -669,7 +669,10 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             e.ProjectPath,
             e.Granularity.ToString().ToLowerInvariant(),
             [.. e.Spans.Select(s => new CoveredLineRange(s.Start, s.End))],
-            e.IsUnitCurrent && e.IsContentCurrent))];
+            e.IsUnitCurrent && e.IsContentCurrent,
+            e.Branches is null
+                ? null
+                : [.. e.Branches.Select(b => new BranchEvidence(b.Line, b.Covered, b.Total))]))];
     }
 
     /// <summary>

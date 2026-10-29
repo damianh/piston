@@ -210,7 +210,7 @@ public sealed class TestRunToolTests
     [Fact]
     public void SelectionExplanationAndReasonsRoundTripThroughTheProtocolAndMcp()
     {
-        var reason = new TestSelectionReason("/w/src/A.cs", "4", "3-5", "class", "/w/T/T.csproj");
+        var reason = new TestSelectionReason("/w/src/A.cs", "4", "3-5", "class", "/w/T/T.csproj", [new(4, 1, 2)]);
         var baseRun = Run("selective", 4, scope: TestRunScope.Selective);
         var run = baseRun with
         {
@@ -227,6 +227,7 @@ public sealed class TestRunToolTests
         Assert.Equal("Selected by changed lines.", dto.SelectionExplanation);
         var mapped = Assert.Single(Assert.Single(dto.SelectionReasons!).Value);
         Assert.Equal(("/w/src/A.cs", "4", "3-5", "class"), (mapped.FilePath, mapped.ChangedLines, mapped.ExecutedLines, mapped.Granularity));
+        Assert.Equal([new BranchLineDto(4, 1, 2)], mapped.Branches);
         Assert.Null(Run("full", 5).ToDto().SelectionReasons);
 
         var engine = new StubEngine();
@@ -242,6 +243,10 @@ public sealed class TestRunToolTests
         Assert.Equal(reason.ExecutedLines, reasons[0].GetProperty("executedLines").GetString());
         Assert.Equal(reason.Granularity, reasons[0].GetProperty("granularity").GetString());
         Assert.Equal(reason.ProjectPath, reasons[0].GetProperty("projectPath").GetString());
+        Assert.Equal((4, 1, 2), (
+            reasons[0].GetProperty("branches")[0].GetProperty("line").GetInt32(),
+            reasons[0].GetProperty("branches")[0].GetProperty("taken").GetInt32(),
+            reasons[0].GetProperty("branches")[0].GetProperty("total").GetInt32()));
 
         using var fullDocument = JsonDocument.Parse(tools.GetTestRun("full"));
         var fullContext = fullDocument.RootElement.GetProperty("context");

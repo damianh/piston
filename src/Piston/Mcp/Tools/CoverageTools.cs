@@ -38,7 +38,8 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
     private static readonly JsonSerializerOptions WriteOptions = new() { WriteIndented = true };
 
     private const string Granularity =
-        "Coverage is aggregated over the tests that ran; it does not say which test covered a line.";
+        "Aggregate coverage counts all tests that ran. Branch attribution is per measured impact-map unit and " +
+        "reports counts on a line, not which specific branch outcome was taken.";
 
     [McpServerTool(Name = GetCoverageTool), Description(
         "Get line and branch coverage as JSON (schema piston.coverage/v1). Without a file: solution totals, per-module " +
@@ -100,8 +101,9 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         "tree (staged, unstaged and untracked files) with HEAD, or with the merge base of baseRef and HEAD, or a commit " +
         "range (whose line numbers match the coverage only when it ends at the checked-out state). For each " +
         "changed source file: covered, partially covered and uncovered changed lines (non-executable lines are ignored). " +
-        "Files changed since the last run that measured them are reported as stale with no line verdicts: run the tests " +
-        "first. Requires the daemon to run with coverage enabled.")]
+        "Branch lines also list per-test/unit outcome counts when impact-map evidence is current. Cobertura does not " +
+        "identify which outcome was taken. Files changed since the last run that measured them are reported as stale " +
+        "with no line verdicts: run the tests first. Requires coverage enabled.")]
     public async Task<string> GetChangedLineCoverageAsync(
         [Description(BaseRefDescription)] string? baseRef = null,
         [Description(BaseDescription)] string? @base = null,
@@ -122,7 +124,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                 ?? throw new McpException("No solution is loaded.");
             var changes = await GitChangesAsync(solutionDirectory, @base, baseRef, ct).ConfigureAwait(false);
 
-            var json = ChangedLineCoverage(changes, solutionDirectory, engine.GetFileCoverage);
+            var json = ChangedLineCoverage(changes, solutionDirectory, engine.GetFileCoverage, engine.GetCoveringTests);
             summary = $"{json["totals"]!["uncovered"]} uncovered of {json["totals"]!["executable"]} changed executable line(s)";
             succeeded = true;
             return json.ToJsonString(WriteOptions);
@@ -135,7 +137,10 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
     }
 
     internal static JsonObject ChangedLineCoverage(
-        ChangedLinesResult changes, string solutionDirectory, Func<string, FileCoverageSnapshot?> getCoverage)
+        ChangedLinesResult changes,
+        string solutionDirectory,
+        Func<string, FileCoverageSnapshot?> getCoverage,
+        Func<string, IReadOnlyList<CoveringTest>?>? getCoveringTests = null)
     {
         int executable = 0, covered = 0, partial = 0, uncovered = 0;
         var files = new JsonArray();
@@ -170,6 +175,32 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
 
             var fileUncovered = changed.Where(l => l.HitCount == 0).Select(l => l.LineNumber).ToList();
             var filePartial = changed.Where(IsPartial).ToList();
+            var branchLines = new JsonArray();
+            var attributedTests = getCoveringTests?.Invoke(path)?.Where(t => t.IsCurrent).ToList() ?? [];
+            foreach (var line in changed.Where(l => l.BranchesTotal > 0))
+            {
+                var tests = attributedTests
+                    .Where(t => t.Branches?.Any(b => b.Line == line.LineNumber) == true)
+                    .OrderBy(t => t.TestFqn, StringComparer.Ordinal)
+                    .SelectMany(t => t.Branches!
+                        .Where(b => b.Line == line.LineNumber)
+                        .Select(b => (Test: t, Branch: b)))
+                    .Select(item => (JsonNode)new JsonObject
+                    {
+                        ["name"] = item.Test.TestFqn,
+                        ["taken"] = item.Branch.Covered,
+                        ["total"] = item.Branch.Total,
+                        ["granularity"] = item.Test.Granularity,
+                    });
+                branchLines.Add(new JsonObject
+                {
+                    ["line"] = line.LineNumber,
+                    ["covered"] = line.BranchesCovered,
+                    ["total"] = line.BranchesTotal,
+                    ["tests"] = new JsonArray([.. tests]),
+                });
+            }
+
             var fileCovered = changed.Count - fileUncovered.Count - filePartial.Count;
             executable += changed.Count;
             covered += fileCovered;
@@ -182,6 +213,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                 ["covered"] = fileCovered,
                 ["uncoveredLines"] = ChangedLines.FormatRanges(fileUncovered),
                 ["partialLines"] = PartialLines(filePartial),
+                ["branchLines"] = branchLines,
                 ["isPartial"] = coverage.File.IsPartial,
             });
         }
@@ -267,9 +299,9 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         "piston.affected-plan/v1). Runs nothing and changes no state. Without files, uses git changes: the working " +
         "tree against HEAD by default, a branch since it left its base, or a commit range (see base). scope is full " +
         "(every test), projects (every test in the listed test projects), tests (only the listed tests) or none; " +
-        "explanation says why. With coverage, each selected test lists the changed lines that selected it and the " +
-        "granularity of the evidence: run- or class-level evidence over-selects and does not mean that test executed " +
-        "those lines. Use run_affected_tests to run the plan.")]
+        "explanation says why. With coverage, each selected test lists changed lines and, when measured, per-line " +
+        "branch outcome counts. Coverage reports do not identify which outcome was taken. Run- or class-level " +
+        "evidence over-selects and does not mean that test executed those lines. Use run_affected_tests to run the plan.")]
     public async Task<string> PlanAffectedTestsAsync(
         [Description("Changed files, absolute or relative to the solution directory. Omit to use git changes.")] string[]? files = null,
         [Description("When files is omitted: " + BaseRefDescription)] string? baseRef = null,
@@ -412,6 +444,14 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                         ["executedLines"] = r.ExecutedLines,
                         ["granularity"] = r.Granularity,
                         ["project"] = Relative(r.ProjectPath, solutionDirectory),
+                        ["branches"] = r.Branches is null
+                            ? null
+                            : new JsonArray([.. r.Branches.Select(b => (JsonNode)new JsonObject
+                            {
+                                ["line"] = b.Line,
+                                ["taken"] = b.Covered,
+                                ["total"] = b.Total,
+                            })]),
                     })]);
                 }
 

@@ -107,6 +107,7 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(List<CoverageLineDto>))]
 [JsonSerializable(typeof(List<CoveringTestDto>))]
 [JsonSerializable(typeof(List<LineRangeDto>))]
+[JsonSerializable(typeof(List<BranchLineDto>))]
 [JsonSerializable(typeof(Dictionary<string, IReadOnlyList<TestSelectionReasonDto>>))]
 [JsonSerializable(typeof(Dictionary<string, ProjectRunStatusDto>))]
 [JsonSerializable(typeof(List<TestFailureData>))]

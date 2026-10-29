@@ -410,7 +410,8 @@ public sealed class ImpactAnalyzerTests : IDisposable
         await store.RecordImpactAsync(new ImpactRecording(
             _testsCsproj, ImpactGranularity.Class, "T.A", store.CreateRunId(), ["T.A.One"], [new ImpactFile(lib, [new(2, 4)], LibSource)], Merge: false));
         await store.RecordImpactAsync(new ImpactRecording(
-            _testsCsproj, ImpactGranularity.Class, "T.B", store.CreateRunId(), ["T.B.One"], [new ImpactFile(lib, [new(10, 12)], LibSource)], Merge: false));
+            _testsCsproj, ImpactGranularity.Class, "T.B", store.CreateRunId(), ["T.B.One"],
+            [new ImpactFile(lib, [new(10, 12)], LibSource, [new(11, 1, 2)])], Merge: false));
         return store;
     }
 
@@ -435,6 +436,7 @@ public sealed class ImpactAnalyzerTests : IDisposable
         var reason = Assert.Single(result.SelectionReasons!["T.B.One"]);
         Assert.Equal(("11", "10-12", "class"), (reason.ChangedLines, reason.ExecutedLines, reason.Granularity));
         Assert.Equal(_testsCsproj, reason.ProjectPath);
+        Assert.Equal([new BranchEvidence(11, 1, 2)], reason.Branches);
     }
 
     [Fact]

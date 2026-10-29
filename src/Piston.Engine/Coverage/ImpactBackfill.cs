@@ -48,6 +48,7 @@ internal static class ImpactBackfill
 
         var missing = new List<Unit>();
         var outdated = new List<Unit>();
+        var legacy = new List<Unit>();
         var obsolete = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
 
         foreach (var project in testProjects.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal))
@@ -90,6 +91,10 @@ internal static class ImpactBackfill
                 {
                     outdated.Add(unit);
                 }
+                else if (!info.HasBranches)
+                {
+                    legacy.Add(unit);
+                }
             }
 
             var gone = existing.Keys.Where(k => !units.ContainsKey(k)).Order(StringComparer.Ordinal).ToList();
@@ -99,7 +104,7 @@ internal static class ImpactBackfill
             }
         }
 
-        return new Plan([.. missing, .. outdated], obsolete);
+        return new Plan([.. missing, .. outdated, .. legacy], obsolete);
     }
 
     /// <summary>The class (<c>Ns.Class</c>, <c>Ns.Outer+Inner</c>) or method (<c>Ns.Class.Method</c>) a test belongs to.</summary>

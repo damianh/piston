@@ -292,7 +292,15 @@ public static class DtoMapper
     }
 
     public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
-        new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath);
+        new(
+            reason.FilePath,
+            reason.ChangedLines,
+            reason.ExecutedLines,
+            reason.Granularity,
+            reason.ProjectPath,
+            reason.Branches is null
+                ? null
+                : [.. reason.Branches.Select(b => new BranchLineDto(b.Line, b.Covered, b.Total))]);
 
     public static CoveringTestsDto ToCoveringTestsDto(string filePath, IReadOnlyList<CoveringTest>? tests) =>
         new(filePath, [.. (tests ?? []).Select(t => new CoveringTestDto(
