@@ -520,13 +520,15 @@ public static class DtoMapper
         return Path.GetRelativePath(solutionDirectory, Path.GetFullPath(projectPath, solutionDirectory)).Replace('\\', '/');
     }
 
-    public static CoveringTestsDto ToCoveringTestsDto(string filePath, IReadOnlyList<CoveringTest>? tests) =>
+    internal static CoveringTestsDto ToCoveringTestsDto(
+        string filePath, IReadOnlyList<CoveringTest>? tests, Func<CoveringTest, CoveringTestOutcome>? outcome = null) =>
         new(filePath, [.. (tests ?? []).Select(t => new CoveringTestDto(
             t.TestFqn,
             t.ProjectPath,
             t.Granularity,
             [.. t.ExecutedLines.Select(r => new LineRangeDto(r.Start, r.End))],
-            t.IsCurrent))]);
+            t.IsCurrent,
+            outcome is null ? null : ChangedLineVerdicts.Name(outcome(t))))]);
 
     /// <summary>The changed-line coverage reply when coverage is disabled.</summary>
     public static ChangedLineCoverageDto DisabledChangedLineCoverage { get; } =
@@ -589,6 +591,126 @@ public static class DtoMapper
             Warnings: warnings);
 
         static long SerializedSize(ChangedLineFileDto dto) =>
+            System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(dto, JsonRpcSerializer.Options).Length + 1;
+    }
+
+    /// <summary>The change diff reply when coverage is disabled.</summary>
+    public static ChangeDiffDto DisabledChangeDiff { get; } =
+        new(false, null, new ChangedLineTotalsDto(0, 0, 0, 0, 0, 0), new Dictionary<string, int>(), [], 0, []);
+
+    /// <summary>
+    /// Maps the diff, with each added source line's verdict, to a reply. Files are added in path order while they
+    /// fit in <paramref name="budget"/> serialized bytes: a file whose hunks do not fit keeps only its totals, and
+    /// once even that does not fit the remaining files are omitted. The reply's totals always count every line.
+    /// </summary>
+    internal static ChangeDiffDto ToChangeDiffDto(
+        this ChangedLineCoverageResult result, string solutionDirectory, long budget = ChangedLineFilesBudget)
+    {
+        var verdicts = result.Files.ToDictionary(f => f.FilePath, StringComparer.Ordinal);
+        var paths = result.Diff.Keys
+            .Union(verdicts.Keys, StringComparer.Ordinal)
+            .Select(p => (Path: p, Relative: Path.GetRelativePath(solutionDirectory, p).Replace('\\', '/')))
+            .OrderBy(p => p.Relative, StringComparer.Ordinal)
+            .ToList();
+
+        var files = new List<ChangeDiffFileDto>();
+        var hunksOmitted = 0;
+        long used = 0;
+        foreach (var (path, relative) in paths)
+        {
+            var diff = result.Diff.GetValueOrDefault(path);
+            var file = verdicts.GetValueOrDefault(path);
+            var dto = ToFileDto(withHunks: true);
+            var size = SerializedSize(dto);
+            if (used + size > budget)
+            {
+                dto = ToFileDto(withHunks: false);
+                size = SerializedSize(dto);
+                if (used + size > budget)
+                {
+                    break;
+                }
+
+                hunksOmitted++;
+            }
+
+            files.Add(dto);
+            used += size;
+
+            ChangeDiffFileDto ToFileDto(bool withHunks)
+            {
+                var hunks = diff?.Hunks ?? [];
+                var lines = file?.Lines.ToDictionary(l => l.Line);
+                return new(
+                    path,
+                    relative,
+                    StatusName(diff?.Status ?? DiffFileStatus.Modified),
+                    ChangedLineVerdicts.IsCodeFile(path),
+                    file?.IsMeasured ?? false,
+                    file?.IsStale ?? false,
+                    file?.IsPartial ?? false,
+                    (file?.Totals ?? ChangedLineTotals.Of([])).ToDto(),
+                    withHunks ? [.. hunks.Select(h => ToHunkDto(h, lines))] : [],
+                    HunksOmitted: !withHunks && hunks.Count > 0);
+            }
+        }
+
+        var filesOmitted = paths.Count - files.Count;
+        var warnings = result.Warnings.ToList();
+        if (filesOmitted > 0 || hunksOmitted > 0)
+        {
+            warnings.Add(
+                $"The diff is too large to show in full: {hunksOmitted} file(s) give only totals and " +
+                $"{filesOmitted} file(s) are omitted. The totals count every changed line.");
+        }
+
+        return new(
+            Enabled: true,
+            Base: result.Basis,
+            Totals: result.Totals.ToDto(),
+            UnknownReasons: result.UnknownReasons.ToDictionary(
+                kv => ChangedLineVerdicts.Name(kv.Key)!, kv => kv.Value, StringComparer.Ordinal),
+            Files: files,
+            FilesOmitted: filesOmitted,
+            Warnings: warnings);
+
+        static DiffHunkDto ToHunkDto(DiffHunk hunk, Dictionary<int, ChangedLineResult>? verdicts) =>
+            new(hunk.OldStart, hunk.OldCount, hunk.NewStart, hunk.NewCount, [.. hunk.Lines.Select(line =>
+            {
+                var kind = line.Kind switch
+                {
+                    DiffLineKind.Added => "added",
+                    DiffLineKind.Removed => "removed",
+                    _ => "context",
+                };
+                if (line.Kind != DiffLineKind.Added || line.NewLine is not { } number
+                    || verdicts?.GetValueOrDefault(number) is not { } verdict)
+                {
+                    return new DiffLineDto(kind, line.OldLine, line.NewLine, line.Text);
+                }
+
+                var coverage = verdict.Coverage;
+                return new DiffLineDto(
+                    kind,
+                    line.OldLine,
+                    line.NewLine,
+                    line.Text,
+                    ChangedLineVerdicts.Name(verdict.Verdict),
+                    ChangedLineVerdicts.Name(verdict.Reason),
+                    coverage?.HitCount,
+                    coverage is { BranchesTotal: > 0 } ? coverage.BranchesCovered : null,
+                    coverage is { BranchesTotal: > 0 } ? coverage.BranchesTotal : null);
+            })]);
+
+        static string StatusName(DiffFileStatus status) => status switch
+        {
+            DiffFileStatus.Added => "added",
+            DiffFileStatus.Deleted => "deleted",
+            DiffFileStatus.Binary => "binary",
+            _ => "modified",
+        };
+
+        static long SerializedSize(ChangeDiffFileDto dto) =>
             System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(dto, JsonRpcSerializer.Options).Length + 1;
     }
 

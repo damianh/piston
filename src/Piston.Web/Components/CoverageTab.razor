@@ -13,9 +13,14 @@
             to collect line and branch coverage on every run.
         </div>
     }
+    else if (View.CoverageMode == CoverageMode.Changes)
+    {
+        <ChangeDiffView ToolbarStart="@ModeSwitch" OnOpenTest="OnOpenTest" KeyboardEvent="@KeyboardEvent" />
+    }
     else
     {
         <div class="flex items-center gap-2 px-4 py-1.5 shrink-0 bg-gray-900 border-b border-gray-800 select-none">
+            @ModeSwitch
             @if (View.CoverageGrouping != CoverageGrouping.Flat)
             {
                 <div class="flex items-center gap-1">
@@ -214,6 +219,49 @@
     /// <summary>Opens a test, by fully-qualified name, in the Tests tab.</summary>
     [Parameter] public EventCallback<TestReference> OnOpenTest { get; set; }
 
+    /// <summary>The latest key pressed outside a text field, for the Changes view's shortcuts.</summary>
+    [Parameter] public KeyboardEventArgs? KeyboardEvent { get; set; }
+
+    private bool FilesMode => View.CoverageMode == CoverageMode.Files;
+
+    private RenderFragment ModeSwitch =>
+        @<div class="flex items-center rounded border border-gray-700 overflow-hidden shrink-0" role="group" aria-label="Coverage view">
+            @foreach (var (mode, label, hint) in Modes)
+            {
+                var active = View.CoverageMode == mode;
+                <button type="button" aria-pressed="@(active ? "true" : "false")" title="@hint"
+                        class="h-6 px-2 text-xs transition-colors @(active ? "bg-gray-700 text-gray-100" : "bg-gray-800 text-gray-400 hover:text-gray-200")"
+                        @onclick="() => SetModeAsync(mode)">@label</button>
+            }
+        </div>;
+
+    private static readonly (CoverageMode Mode, string Label, string Hint)[] Modes =
+    [
+        (CoverageMode.Files, "Files", "Every measured file with its line coverage"),
+        (CoverageMode.Changes, "Changes", "The diff of the changes, each changed line coloured by what the tests prove about it"),
+    ];
+
+    private async Task SetModeAsync(CoverageMode mode)
+    {
+        if (mode == View.CoverageMode)
+        {
+            return;
+        }
+
+        // The splitter's container leaves the page with the Files view; it is attached again when the view returns.
+        if (_splitterAttached)
+        {
+            _splitterAttached = false;
+            await JS.InvokeVoidAsync("pistonSplitter.detach", _splitContainer);
+        }
+
+        View.CoverageMode = mode;
+        if (mode == CoverageMode.Files)
+        {
+            await RefreshAsync();
+        }
+    }
+
     protected override async Task OnInitializedAsync()
     {
         Client.StateChanged += OnStateChanged;
@@ -255,13 +303,13 @@
             _selfRef = DotNetObjectReference.Create(this);
         }
 
-        if (_coverageEnabled && !_splitterAttached)
+        if (_coverageEnabled && FilesMode && !_splitterAttached)
         {
             await JS.InvokeVoidAsync("pistonSplitter.attach", _splitContainer, _selfRef,
                 ViewState.MinSplitPercent, ViewState.MaxSplitPercent);
             _splitterAttached = true;
         }
-        else if (!_coverageEnabled && _splitterAttached)
+        else if ((!_coverageEnabled || !FilesMode) && _splitterAttached)
         {
             await JS.InvokeVoidAsync("pistonSplitter.detach", _splitContainer);
             _splitterAttached = false;
@@ -270,7 +318,8 @@
 
     private async Task RefreshAsync()
     {
-        if (!_coverageEnabled)
+        // The Changes view reloads itself.
+        if (!_coverageEnabled || !FilesMode)
         {
             StateHasChanged();
             return;

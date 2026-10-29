@@ -107,6 +107,39 @@ public sealed class ViewState
             ? DefaultCoverageSplitRightPercent
             : DefaultSplitBottomPercent;
 
+    // ── Coverage tab: changes ──
+
+    public CoverageMode CoverageMode { get; set; } = CoverageMode.Files;
+
+    /// <summary><c>working</c>, <c>branch</c> or <c>range</c> (see <see cref="ChangeDiffModel.Bases"/>).</summary>
+    public string ChangeBase { get; set; } = ChangeDiffModel.Working;
+
+    /// <summary>The branch or commit for <c>branch</c>, or the range for <c>range</c>; null for the default branch.</summary>
+    public string? ChangeBaseRef { get; set; }
+
+    /// <summary>Show only files and hunks with lines no passing test proves.</summary>
+    public bool ChangesOnlyUnproven { get; set; }
+
+    /// <summary>Applies a dashboard link's Coverage mode and change base.</summary>
+    public void ApplyLink(DashboardLink link)
+    {
+        if (link.Mode is { } mode)
+        {
+            CoverageMode = mode;
+        }
+
+        if (link.Base is { } @base)
+        {
+            ChangeBase = @base;
+            ChangeBaseRef = @base == ChangeDiffModel.Working ? null : link.BaseRef;
+        }
+        else if (link.BaseRef is { } baseRef)
+        {
+            ChangeBase = ChangeDiffModel.Branch;
+            ChangeBaseRef = baseRef;
+        }
+    }
+
     // ── Pinned tests ──
     public HashSet<string> PinnedTestFqns { get; } = new(StringComparer.Ordinal);
 

@@ -147,6 +147,9 @@ internal sealed record ChangedLineCoverageResult(
 {
     public ChangedLineTotals Totals => ChangedLineTotals.Of(Files.SelectMany(f => f.Lines));
 
+    /// <summary>Each changed file's hunks, by absolute path, when context lines were asked for; otherwise empty.</summary>
+    public IReadOnlyDictionary<string, DiffFile> Diff { get; init; } = new Dictionary<string, DiffFile>();
+
     /// <summary>Unknown lines per reason, every reason included.</summary>
     public IReadOnlyDictionary<UnknownReason, int> UnknownReasons
     {
@@ -181,16 +184,20 @@ internal static class ChangedLineVerdicts
     /// time, every changed line is reported as unknown: <see cref="UnknownReason.ResultsUpdating"/> while a run is
     /// publishing results, or <see cref="UnknownReason.Stale"/> while the files keep changing.
     /// </param>
+    /// <param name="contextLines">
+    /// Above zero, the result's <see cref="ChangedLineCoverageResult.Diff"/> has each changed file's hunks with this
+    /// many lines of context, read with the same changes the verdicts were given for.
+    /// </param>
     /// <exception cref="ArgumentException">The base or ref is invalid.</exception>
     /// <exception cref="InvalidOperationException">Git failed or no base was found.</exception>
     public static async Task<ChangedLineCoverageResult> GetAsync(
         IEngine engine, string solutionDirectory, string? @base, string? baseRef, CancellationToken ct,
-        TimeSpan? settleTimeout = null)
+        TimeSpan? settleTimeout = null, int contextLines = 0)
     {
         var state = engine.State;
         var runBefore = state.CurrentRun;
         var deadline = DateTimeOffset.UtcNow + (settleTimeout ?? DefaultSettleTimeout);
-        var changes = await ChangedLines.GetCheckedAsync(solutionDirectory, @base, baseRef, ct).ConfigureAwait(false);
+        var changes = await ChangedLines.GetCheckedAsync(solutionDirectory, @base, baseRef, contextLines, ct).ConfigureAwait(false);
         ChangedLineCoverageResult? result = null;
         var unsettled = UnknownReason.ResultsUpdating;
         while (true)
@@ -210,7 +217,7 @@ internal static class ChangedLineVerdicts
 
                 if (!state.IsPublishingResults && state.ResultsVersion == version)
                 {
-                    var again = await ChangedLines.GetCheckedAsync(solutionDirectory, @base, baseRef, ct)
+                    var again = await ChangedLines.GetCheckedAsync(solutionDirectory, @base, baseRef, contextLines, ct)
                         .ConfigureAwait(false);
                     if (SameChanges(changes, again) && SameContents(contents, ContentHashes(changes)))
                     {
@@ -256,6 +263,7 @@ internal static class ChangedLineVerdicts
                 "and may change when it finishes.");
         }
 
+        result = result with { Diff = changes.Diff };
         return warnings.Count == 0 ? result : result with { Warnings = [.. result.Warnings, .. warnings] };
     }
 
@@ -595,6 +603,15 @@ internal static class ChangedLineVerdicts
         ChangedLineVerdict.Uncovered => "uncovered",
         ChangedLineVerdict.NonExecutable => "nonExecutable",
         _ => "unknown",
+    };
+
+    /// <summary>The camelCase wire name of a test outcome.</summary>
+    public static string Name(CoveringTestOutcome outcome) => outcome switch
+    {
+        CoveringTestOutcome.Passed => "passed",
+        CoveringTestOutcome.Failed => "failed",
+        CoveringTestOutcome.Skipped => "skipped",
+        _ => "noResult",
     };
 
     /// <summary>The camelCase wire name of an unknown reason, or null for none.</summary>

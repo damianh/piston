@@ -1,0 +1,648 @@
+@* The Coverage tab's Changes mode: the unified diff of the changes, each added source line coloured by its verdict. *@
+@inject EngineClientService Client
+@inject IJSRuntime JS
+@inject ViewState View
+@implements IDisposable
+
+<div class="flex flex-col h-full min-h-0 overflow-hidden" data-testid="change-diff">
+    <div class="flex flex-wrap items-center gap-2 px-4 py-1.5 shrink-0 bg-gray-900 border-b border-gray-800 select-none">
+        @ToolbarStart
+        <div class="relative">
+            <select class="appearance-none bg-gray-800 border border-gray-700 rounded h-6 pl-2 pr-6 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
+                    title="Compare against" aria-label="Compare against"
+                    value="@View.ChangeBase" @onchange="ChangeBaseAsync" @onkeydown:stopPropagation="true">
+                <option value="@ChangeDiffModel.Working">Uncommitted changes</option>
+                <option value="@ChangeDiffModel.Branch">Branch changes</option>
+                <option value="@ChangeDiffModel.Range">Commit range</option>
+            </select>
+            <svg class="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 w-2.5 h-2.5 text-gray-400"
+                 viewBox="0 0 10 10" fill="none" aria-hidden="true">
+                <path d="M2 3.5 5 6.5 8 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+        </div>
+        @if (View.ChangeBase != ChangeDiffModel.Working)
+        {
+            var isRange = View.ChangeBase == ChangeDiffModel.Range;
+            <input type="text" spellcheck="false" maxlength="@ChangeDiffModel.MaxBaseRefLength"
+                   placeholder="@(isRange ? "e.g. HEAD~3..HEAD" : "default branch")"
+                   aria-label="@(isRange ? "Commit range" : "Branch or commit to compare against")"
+                   title="@(isRange ? "A range (A..B) or a single commit" : "The branch or commit the changes are compared against; blank for the default branch")"
+                   class="bg-gray-800 border border-gray-700 rounded h-6 px-2 text-gray-200 text-xs font-mono w-40 min-w-0 focus:outline-none focus:border-blue-500"
+                   value="@View.ChangeBaseRef" @onchange="ChangeBaseRefAsync" @onkeydown:stopPropagation="true" />
+        }
+        <label class="flex items-center gap-1.5 text-gray-300 cursor-pointer" title="Show only files and hunks with lines no passing test proves">
+            <input type="checkbox" class="accent-blue-500" checked="@View.ChangesOnlyUnproven"
+                   @onchange="e => View.ChangesOnlyUnproven = e.Value is true" @onkeydown:stopPropagation="true" />
+            Only unproven
+        </label>
+        <div class="ml-auto flex items-center gap-1">
+            @{
+                var unprovenCount = _unproven.Count;
+                var position = _picked is { } p ? IndexOf(p) : -1;
+            }
+            <span class="text-gray-500 tabular-nums mr-1" aria-live="polite">
+                @(unprovenCount == 0 ? "No unproven lines" : position >= 0 ? $"Unproven {position + 1} of {unprovenCount}" : $"{unprovenCount} unproven")
+            </span>
+            <button type="button" class="w-6 h-6 shrink-0 flex items-center justify-center bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors disabled:opacity-40"
+                    title="Previous unproven line (P)" aria-label="Previous unproven line" disabled="@(unprovenCount == 0)"
+                    @onclick="() => StepAsync(forward: false)">‹</button>
+            <button type="button" class="w-6 h-6 shrink-0 flex items-center justify-center bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors disabled:opacity-40"
+                    title="Next unproven line (N)" aria-label="Next unproven line" disabled="@(unprovenCount == 0)"
+                    @onclick="() => StepAsync(forward: true)">›</button>
+            <button type="button" class="w-6 h-6 shrink-0 flex items-center justify-center bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
+                    title="Reload the changes" aria-label="Reload the changes" @onclick="LoadAsync">↻</button>
+        </div>
+    </div>
+
+    <!-- Change totals -->
+    <div class="flex flex-wrap items-center gap-x-4 gap-y-0.5 px-4 py-1 shrink-0 border-b border-gray-800 text-gray-400 select-none"
+         data-testid="change-summary">
+        @if (_error is { } error)
+        {
+            <span class="text-red-400 break-words">@error</span>
+        }
+        else if (_diff is null)
+        {
+            <span class="text-gray-600 italic">
+                @(_loading ? "Reading the changes…"
+                    : View.ChangeBase == ChangeDiffModel.Range && View.ChangeBaseRef is null ? "Enter a commit range, e.g. HEAD~3..HEAD, or a commit." : "")
+            </span>
+        }
+        else
+        {
+            var t = _diff.Totals;
+            <span>vs <span class="font-mono text-gray-200" title="What the changes are compared against">@ShortBase(_diff.Base)</span></span>
+            <span><span class="text-gray-100 font-semibold tabular-nums">@t.ChangedLines.ToString("N0")</span> changed source lines</span>
+            @Count("coveredByPassing", t.CoveredByPassing)
+            @Count("coveredOnlyByFailing", t.CoveredOnlyByFailing)
+            @Count("uncovered", t.Uncovered)
+            @Count("unknown", t.Unknown)
+            @Count("nonExecutable", t.NonExecutable)
+            @if (_loading)
+            {
+                <span class="text-gray-600 italic">refreshing…</span>
+            }
+            @foreach (var warning in _diff.Warnings)
+            {
+                <span class="basis-full text-yellow-400 break-words">@warning</span>
+            }
+        }
+    </div>
+
+    <div class="flex flex-col md:flex-row flex-1 min-h-0 overflow-hidden">
+        <!-- Changed files -->
+        <nav class="shrink-0 md:w-72 max-h-40 md:max-h-none overflow-y-auto py-1 border-b md:border-b-0 md:border-r border-gray-800"
+             aria-label="Changed files">
+            @if (_diff is { } d)
+            {
+                var files = VisibleFiles(d);
+                if (d.Files.Count == 0)
+                {
+                    <div class="text-gray-600 italic px-4 py-2">No changes.</div>
+                }
+                else if (files.Count == 0)
+                {
+                    <div class="text-gray-600 italic px-4 py-2">Every changed line is proven.</div>
+                }
+
+                foreach (var changed in files)
+                {
+                    var selected = changed.FilePath == _selectedPath;
+                    var (dir, name) = SplitPath(changed.RelativePath);
+                    <button type="button" aria-current="@(selected ? "true" : null)"
+                            class="flex items-center gap-2 w-full px-3 py-0.5 text-left @(selected ? "bg-gray-800 text-gray-100" : "text-gray-300 hover:bg-gray-800/50")"
+                            title="@changed.RelativePath" @onclick="() => SelectFile(changed.FilePath)">
+                        <span class="w-3 shrink-0 text-center font-mono text-[10px] @StatusClass(changed.Status)" title="@changed.Status">@StatusLetter(changed.Status)</span>
+                        <span class="flex-1 min-w-0 truncate">
+                            <span>@name</span>
+                            <span class="ml-1 text-gray-500">@dir</span>
+                        </span>
+                        @if (changed.IsCode)
+                        {
+                            @FileCounts(changed)
+                        }
+                    </button>
+                }
+
+                if (d.FilesOmitted > 0)
+                {
+                    <div class="text-gray-500 italic px-4 py-1">@d.FilesOmitted more file(s) not shown</div>
+                }
+            }
+        </nav>
+
+        <!-- Diff of the selected file -->
+        <div class="flex-1 flex flex-col min-w-0 min-h-0 overflow-hidden">
+            @if (SelectedFile is not { } file)
+            {
+                <div class="text-gray-600 italic px-4 py-4">@(_diff is { Files.Count: > 0 } ? "Select a file to see its diff." : "")</div>
+            }
+            else
+            {
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5 shrink-0 border-b border-gray-800">
+                    <span class="text-gray-200 font-semibold break-all">@file.RelativePath</span>
+                    @if (file.IsCode)
+                    {
+                        @FileCounts(file)
+                        @if (file.IsStale)
+                        {
+                            <span class="text-yellow-400" title="Changed since it was measured, or a range's version differs from the working tree">stale</span>
+                        }
+                        else if (file.IsPartial)
+                        {
+                            <span class="text-gray-500" title="Measured by a selective run, not a full run of every test">partial</span>
+                        }
+                        else if (!file.IsMeasured)
+                        {
+                            <span class="text-gray-500" title="No coverage run measured this file">not measured</span>
+                        }
+                    }
+                </div>
+                <div class="flex-1 min-h-0 overflow-auto font-mono text-[12px] leading-5 pb-1" @ref="_diffScroller">
+                    @if (file.Status == "binary")
+                    {
+                        <div class="text-gray-600 italic px-4 py-2 font-sans">Binary file.</div>
+                    }
+                    else if (file.HunksOmitted)
+                    {
+                        <div class="text-gray-600 italic px-4 py-2 font-sans">The diff is too large to show this file; its totals count every line.</div>
+                    }
+                    else
+                    {
+                        var hunks = ChangeDiffModel.VisibleHunks(file, View.ChangesOnlyUnproven);
+                        var highlight = file.RelativePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase);
+                        if (hunks.Count == 0)
+                        {
+                            <div class="text-gray-600 italic px-4 py-2 font-sans">@(file.Hunks.Count == 0 ? "No line changes (e.g. an empty or renamed file)." : "Every changed line is proven.")</div>
+                        }
+
+                        foreach (var hunk in hunks)
+                        {
+                            var tokens = highlight ? ChangeDiffModel.Highlight(hunk) : null;
+                            <div class="px-4 py-0.5 mt-1 first:mt-0 bg-gray-900 text-gray-500 select-none">@HunkHeader(hunk)</div>
+                            for (var i = 0; i < hunk.Lines.Count; i++)
+                            {
+                                var line = hunk.Lines[i];
+                                var lineTokens = tokens?[i];
+                                @RenderLine(file, line, lineTokens)
+                            }
+                        }
+                    }
+                </div>
+                @if (_picked is { } picked && picked.FilePath == file.FilePath)
+                {
+                    @RenderLineTests(file, picked.Line)
+                }
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    /// <summary>Rendered first in the toolbar, e.g. the Files/Changes switch.</summary>
+    [Parameter] public RenderFragment? ToolbarStart { get; set; }
+
+    /// <summary>Opens a test in the Tests tab.</summary>
+    [Parameter] public EventCallback<TestReference> OnOpenTest { get; set; }
+
+    /// <summary>The latest key pressed outside a text field: N and P step through unproven lines.</summary>
+    [Parameter] public KeyboardEventArgs? KeyboardEvent { get; set; }
+
+    private ChangeDiffDto? _diff;
+    private string? _error;
+    private bool _loading;
+    private int _requestVersion;
+    private IReadOnlyList<ChangeLineRef> _unproven = [];
+    private string? _selectedPath;
+    private ChangeLineRef? _picked;
+    private bool _scrollPending;
+    private ElementReference _diffScroller;
+    private readonly Dictionary<string, CoveringTestsDto?> _coveringTests = new(StringComparer.Ordinal);
+    private KeyboardEventArgs? _lastHandledKeyboardEvent;
+    private DateTimeOffset? _lastRunTime;
+    private DateTimeOffset? _lastChangeTime;
+    private bool _backfilling;
+
+    private ChangeDiffFileDto? SelectedFile =>
+        _diff?.Files.FirstOrDefault(f => f.FilePath == _selectedPath);
+
+    protected override async Task OnInitializedAsync()
+    {
+        _lastHandledKeyboardEvent = KeyboardEvent;
+        if (Client.CurrentSnapshot is { } snapshot)
+        {
+            Capture(snapshot);
+        }
+
+        Client.StateChanged += OnStateChanged;
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (KeyboardEvent is null || ReferenceEquals(KeyboardEvent, _lastHandledKeyboardEvent))
+        {
+            return;
+        }
+
+        _lastHandledKeyboardEvent = KeyboardEvent;
+        if (KeyboardEvent.CtrlKey || KeyboardEvent.AltKey || KeyboardEvent.MetaKey)
+        {
+            return;
+        }
+
+        switch (KeyboardEvent.Key)
+        {
+            case "n" or "N":
+                await StepAsync(forward: true);
+                break;
+            case "p" or "P":
+                await StepAsync(forward: false);
+                break;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_scrollPending && _picked is { } picked)
+        {
+            _scrollPending = false;
+            await JS.InvokeVoidAsync("pistonScroll.revealElement", LineId(picked.Line));
+        }
+    }
+
+    private void Capture(StateSnapshotNotification snapshot)
+    {
+        _lastRunTime = snapshot.LastRunTime;
+        _lastChangeTime = snapshot.LastFileChangeTime;
+        _backfilling = snapshot.ImpactBackfill is not null;
+    }
+
+    private void OnStateChanged(StateSnapshotNotification snapshot)
+    {
+        // New results or edited files change the verdicts; a finished backfill pass refines which tests ran a line.
+        var changed = snapshot.LastRunTime != _lastRunTime
+            || snapshot.LastFileChangeTime != _lastChangeTime
+            || (_backfilling && snapshot.ImpactBackfill is null);
+        Capture(snapshot);
+        if (changed)
+        {
+            _ = InvokeAsync(LoadAsync);
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        var version = ++_requestVersion;
+        _loading = true;
+        StateHasChanged();
+        var (@base, baseRef) = ChangeDiffModel.Request(View.ChangeBase, View.ChangeBaseRef);
+        var (diff, error) = await Client.GetChangeDiffAsync(@base, baseRef);
+        if (version != _requestVersion)
+        {
+            return;
+        }
+
+        _loading = false;
+        _error = error;
+        _coveringTests.Clear();
+        if (diff is null)
+        {
+            _diff = null;
+            _unproven = [];
+            StateHasChanged();
+            return;
+        }
+
+        _diff = diff;
+        _unproven = ChangeDiffModel.UnprovenLines(diff.Files);
+        if (_selectedPath is null || !diff.Files.Any(f => f.FilePath == _selectedPath))
+        {
+            _selectedPath = (_unproven.Count > 0 ? _unproven[0].FilePath : null)
+                ?? diff.Files.FirstOrDefault(f => !f.HunksOmitted && f.Hunks.Count > 0)?.FilePath
+                ?? diff.Files.FirstOrDefault()?.FilePath;
+        }
+
+        if (_picked is { } picked && !HasLine(picked))
+        {
+            _picked = null;
+        }
+
+        if (_picked is { } current)
+        {
+            await LoadCoveringTestsAsync(current.FilePath);
+        }
+
+        StateHasChanged();
+    }
+
+    private bool HasLine(ChangeLineRef line) =>
+        _diff?.Files.FirstOrDefault(f => f.FilePath == line.FilePath) is { } file
+        && file.Hunks.Any(h => h.Lines.Any(l => l.NewLine == line.Line && l.Kind != "removed"));
+
+    private async Task ChangeBaseAsync(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString();
+        if (!ChangeDiffModel.Bases.Contains(value) || value == View.ChangeBase)
+        {
+            return;
+        }
+
+        View.ChangeBase = value!;
+        View.ChangeBaseRef = null;
+        _picked = null;
+        if (value != ChangeDiffModel.Range)
+        {
+            await LoadAsync();
+        }
+        else
+        {
+            _diff = null;
+            _unproven = [];
+            _error = null;
+            _requestVersion++;
+            _loading = false;
+        }
+    }
+
+    private async Task ChangeBaseRefAsync(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString()?.Trim();
+        View.ChangeBaseRef = string.IsNullOrEmpty(value) ? null : value;
+        _picked = null;
+        await LoadAsync();
+    }
+
+    private void SelectFile(string path)
+    {
+        if (_selectedPath == path)
+        {
+            return;
+        }
+
+        _selectedPath = path;
+        _picked = null;
+    }
+
+    private async Task PickLineAsync(ChangeDiffFileDto file, int line)
+    {
+        var target = new ChangeLineRef(file.FilePath, line);
+        _picked = _picked == target ? null : target;
+        if (_picked is not null)
+        {
+            await LoadCoveringTestsAsync(file.FilePath);
+        }
+    }
+
+    private async Task StepAsync(bool forward)
+    {
+        if (_diff is null)
+        {
+            return;
+        }
+
+        var order = _diff.Files.Select(f => f.FilePath).ToList();
+        if (ChangeDiffModel.Step(_unproven, _picked, forward, order) is not { } next)
+        {
+            return;
+        }
+
+        _selectedPath = next.FilePath;
+        _picked = next;
+        _scrollPending = true;
+        StateHasChanged();
+        await LoadCoveringTestsAsync(next.FilePath);
+    }
+
+    private async Task LoadCoveringTestsAsync(string path)
+    {
+        if (_coveringTests.ContainsKey(path))
+        {
+            return;
+        }
+
+        var version = _requestVersion;
+        var tests = await Client.GetCoveringTestsAsync(path);
+        if (version == _requestVersion)
+        {
+            _coveringTests[path] = tests;
+            StateHasChanged();
+        }
+    }
+
+    private int IndexOf(ChangeLineRef line)
+    {
+        for (var i = 0; i < _unproven.Count; i++)
+        {
+            if (_unproven[i] == line)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    private List<ChangeDiffFileDto> VisibleFiles(ChangeDiffDto diff) =>
+        View.ChangesOnlyUnproven ? [.. diff.Files.Where(ChangeDiffModel.HasUnproven)] : [.. diff.Files];
+
+    private static string LineId(int line) => $"change-line-{line}";
+
+    private static string HunkHeader(DiffHunkDto hunk) =>
+        $"@@ -{hunk.OldStart},{hunk.OldCount} +{hunk.NewStart},{hunk.NewCount} @@";
+
+    private static string ShortBase(string? basis) =>
+        basis is { Length: 40 } && basis.All(char.IsAsciiHexDigit) ? basis[..10] : basis ?? "";
+
+    private static string StatusLetter(string status) => status switch
+    {
+        "added" => "A",
+        "deleted" => "D",
+        "binary" => "B",
+        _ => "M",
+    };
+
+    private static string StatusClass(string status) => status switch
+    {
+        "added" => "text-green-400",
+        "deleted" => "text-red-400",
+        _ => "text-gray-500",
+    };
+
+    private RenderFragment Count(string verdict, int count) =>
+        @<text>
+            @{
+                var style = ChangeDiffModel.Style(verdict);
+            }
+            <span title="@style.Description">
+                <span class="@style.TextClass" aria-hidden="true">@style.Glyph</span>
+                <span class="tabular-nums text-gray-200">@count.ToString("N0")</span> @style.Label
+            </span>
+        </text>;
+
+    private static RenderFragment FileCounts(ChangeDiffFileDto file) =>
+        @<text>
+            @{
+                var t = file.Totals;
+                var unproven = t.Uncovered + t.CoveredOnlyByFailing + t.Unknown;
+            }
+            <span class="shrink-0 flex items-center gap-1.5 tabular-nums"
+                  title="@($"{t.CoveredByPassing} covered, {t.CoveredOnlyByFailing} failing only, {t.Uncovered} uncovered, {t.Unknown} unknown, {t.NonExecutable} not code")">
+                @if (t.Uncovered > 0)
+                {
+                    <span class="text-red-400">○@t.Uncovered</span>
+                }
+                @if (t.CoveredOnlyByFailing > 0)
+                {
+                    <span class="text-coral">✗@t.CoveredOnlyByFailing</span>
+                }
+                @if (t.Unknown > 0)
+                {
+                    <span class="text-yellow-400">?@t.Unknown</span>
+                }
+                @if (unproven == 0 && t.CoveredByPassing > 0)
+                {
+                    <span class="text-green-400">✓</span>
+                }
+            </span>
+        </text>;
+
+    private RenderFragment RenderLine(ChangeDiffFileDto file, DiffLineDto line, List<SourceToken>? tokens) =>
+        @<text>
+            @{
+                var style = ChangeDiffModel.Style(line.Verdict);
+                var removed = line.Kind == "removed";
+                var sign = line.Kind switch { "added" => "+", "removed" => "−", _ => " " };
+                var number = removed ? null : line.NewLine;
+                var picked = number is { } n && _picked == new ChangeLineRef(file.FilePath, n);
+                var pickable = file.IsCode && number is not null;
+            }
+            <div id="@(number is { } id ? LineId(id) : null)"
+                 class="flex @(removed ? "text-gray-500" : "") @style.RowClass @(picked ? "ring-1 ring-inset ring-blue-500/70" : "")"
+                 title="@ChangeDiffModel.LineTitle(line)">
+                <span class="w-1 shrink-0 @style.GutterClass" aria-hidden="true"></span>
+                <span class="w-10 pr-2 text-right text-gray-600 select-none shrink-0 tabular-nums">@line.OldLine</span>
+                @if (pickable)
+                {
+                    <button type="button" class="w-10 pr-2 text-right select-none shrink-0 tabular-nums @(picked ? "text-blue-300" : "text-gray-500 hover:text-gray-200")"
+                            title="Show the tests that executed line @number" aria-pressed="@(picked ? "true" : "false")"
+                            @onclick="() => PickLineAsync(file, number!.Value)">@number</button>
+                }
+                else
+                {
+                    <span class="w-10 pr-2 text-right text-gray-500 select-none shrink-0 tabular-nums">@number</span>
+                }
+                <span class="w-4 shrink-0 text-center select-none @style.TextClass" aria-label="@style.Label">@style.Glyph</span>
+                <span class="w-3 shrink-0 select-none text-gray-500" aria-hidden="true">@sign</span>
+                <span class="whitespace-pre pr-4 @(removed ? "" : "text-gray-200")">@if (tokens is not null && !removed)
+                {
+                    @foreach (var token in tokens)
+                    {
+                        <span class="@CSharpHighlighter.TokenClass(token.Kind)">@token.Text</span>
+                    }
+                }
+                else
+                {
+                    @line.Text
+                }</span>
+            </div>
+        </text>;
+
+    private RenderFragment RenderLineTests(ChangeDiffFileDto file, int lineNumber) =>
+        @<text>
+            @{
+                var line = file.Hunks.SelectMany(h => h.Lines).FirstOrDefault(l => l.NewLine == lineNumber && l.Kind != "removed");
+                var style = ChangeDiffModel.Style(line?.Verdict);
+                var loaded = _coveringTests.TryGetValue(file.FilePath, out var covering);
+                var tests = ChangeDiffModel.TestsForLine(covering?.Tests ?? [], lineNumber);
+                var projectPaths = (covering?.Tests ?? []).Select(t => t.ProjectPath).ToList();
+            }
+            <section class="flex flex-col shrink-0 max-h-[40%] min-h-0 border-t border-gray-800" aria-label="Tests that executed line @lineNumber">
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1.5 shrink-0">
+                    <span class="text-gray-200 font-semibold">Line @lineNumber</span>
+                    @if (line?.Verdict is not null)
+                    {
+                        <span class="@style.TextClass">@style.Glyph @style.Label</span>
+                        <span class="text-gray-400">@style.Description</span>
+                    }
+                    else if (line?.Kind == "context")
+                    {
+                        <span class="text-gray-500">unchanged</span>
+                    }
+                    @if (ChangeDiffModel.ReasonText(line?.Reason) is { } reason)
+                    {
+                        <span class="text-yellow-400">@reason</span>
+                    }
+                    @if (line?.HitCount is { } hits)
+                    {
+                        <span class="text-gray-500 tabular-nums">
+                            @hits hit(s)@(line.BranchesTotal is { } total ? $" · {line.BranchesCovered}/{total} branches" : "")
+                        </span>
+                    }
+                    <button type="button" class="ml-auto text-gray-400 underline decoration-gray-600 underline-offset-2 hover:text-gray-100"
+                            @onclick="() => _picked = null">close</button>
+                </div>
+                <div class="flex-1 min-h-0 overflow-y-auto pb-1">
+                    @if (!loaded)
+                    {
+                        <div class="text-gray-600 italic px-4 py-1">Loading…</div>
+                    }
+                    else if (tests.Credited.Count == 0 && tests.Outdated.Count == 0)
+                    {
+                        <div class="text-gray-600 italic px-4 py-1">No recorded test executed this line.</div>
+                    }
+                    else
+                    {
+                        foreach (var test in tests.Credited)
+                        {
+                            @RenderTest(test, projectPaths, outdated: false)
+                        }
+
+                        @if (tests.Outdated.Count > 0)
+                        {
+                            <div class="px-4 pt-1.5 pb-0.5 text-gray-500 select-none"
+                                 title="Measured on an older version of the file: their ranges include this line number, but it may have been other code">
+                                Measured on an older version
+                            </div>
+                            foreach (var test in tests.Outdated)
+                            {
+                                @RenderTest(test, projectPaths, outdated: true)
+                            }
+                        }
+                    }
+                </div>
+            </section>
+        </text>;
+
+    private RenderFragment RenderTest(CoveringTestDto test, IReadOnlyList<string> projectPaths, bool outdated) =>
+        @<text>
+            <button type="button" class="flex items-center gap-2 w-full px-4 py-0.5 text-left text-gray-300 hover:bg-gray-800/50 @(outdated ? "opacity-70" : "")"
+                    title="@test.TestFqn"
+                    @onclick="() => OnOpenTest.InvokeAsync(TestReference.FromProjectPath(test.ProjectPath, test.TestFqn, Client.CurrentSnapshot?.SolutionPath))">
+                <span class="w-16 shrink-0 @ChangeDiffModel.OutcomeClass(test.Outcome)">@ChangeDiffModel.OutcomeLabel(test.Outcome)</span>
+                <GranularityBadge Granularity="@test.Granularity" />
+                <span class="min-w-0 truncate">@ShortTestName(test.TestFqn)</span>
+                <span class="shrink-0 text-gray-500">@ProjectLabels.For(test.ProjectPath, projectPaths, Client.CurrentSnapshot?.SolutionPath)</span>
+                @if (outdated)
+                {
+                    <span class="shrink-0 text-yellow-400">outdated</span>
+                }
+            </button>
+        </text>;
+
+    private static string ShortTestName(string fqn)
+    {
+        var paren = fqn.IndexOf('(', StringComparison.Ordinal);
+        var head = paren < 0 ? fqn : fqn[..paren];
+        var parts = head.Split('.');
+        return string.Join('.', parts.TakeLast(2)) + (paren < 0 ? "" : fqn[paren..]);
+    }
+
+    private static (string Directory, string Name) SplitPath(string path)
+    {
+        var slash = path.LastIndexOf('/');
+        return slash < 0 ? ("", path) : (path[..slash], path[(slash + 1)..]);
+    }
+
+    public void Dispose() => Client.StateChanged -= OnStateChanged;
+}

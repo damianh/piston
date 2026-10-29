@@ -49,7 +49,17 @@ internal static partial class ChangedLines
     /// <exception cref="ArgumentException"><paramref name="base"/> or <paramref name="reference"/> is invalid.</exception>
     /// <exception cref="InvalidOperationException">Git failed, a ref is unknown or no base was found.</exception>
     public static Task<ChangedLinesResult> GetCheckedAsync(
-        string directory, string? @base, string? reference, CancellationToken ct)
+        string directory, string? @base, string? reference, CancellationToken ct) =>
+        GetCheckedAsync(directory, @base, reference, contextLines: 0, ct);
+
+    /// <summary>
+    /// Validates a base and ref given by a client, then reads the changes they select. With
+    /// <paramref name="contextLines"/> above zero, the result also has each file's hunks with that much context.
+    /// </summary>
+    /// <exception cref="ArgumentException"><paramref name="base"/> or <paramref name="reference"/> is invalid.</exception>
+    /// <exception cref="InvalidOperationException">Git failed, a ref is unknown or no base was found.</exception>
+    public static Task<ChangedLinesResult> GetCheckedAsync(
+        string directory, string? @base, string? reference, int contextLines, CancellationToken ct)
     {
         if (!TryParseBase(@base, reference, out var kind))
         {
@@ -61,7 +71,7 @@ internal static partial class ChangedLines
             throw new ArgumentException($"'{reference}' is not a valid git revision.", nameof(reference));
         }
 
-        return GetAsync(directory, kind, reference, ct);
+        return GetAsync(directory, kind, reference, contextLines, ct);
     }
 
     /// <summary>
@@ -83,8 +93,18 @@ internal static partial class ChangedLines
     /// </list>
     /// </summary>
     /// <exception cref="InvalidOperationException">Git failed, a ref is unknown or invalid, or no base was found.</exception>
+    public static Task<ChangedLinesResult> GetAsync(
+        string directory, ChangeBase kind, string? reference, CancellationToken ct) =>
+        GetAsync(directory, kind, reference, contextLines: 0, ct);
+
+    /// <summary>
+    /// As <see cref="GetAsync(string, ChangeBase, string?, CancellationToken)"/>; with <paramref name="contextLines"/>
+    /// above zero, also returns each changed file's hunks (<see cref="ChangedLinesResult.Diff"/>) with that many
+    /// lines of context, read from the same diff as the changed lines.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Git failed, a ref is unknown or invalid, or no base was found.</exception>
     public static async Task<ChangedLinesResult> GetAsync(
-        string directory, ChangeBase kind, string? reference, CancellationToken ct)
+        string directory, ChangeBase kind, string? reference, int contextLines, CancellationToken ct)
     {
         var top = (await RunGitAsync(directory, ["rev-parse", "--show-toplevel"], ct).ConfigureAwait(false)).Trim();
         var warnings = new List<string>();
@@ -166,14 +186,33 @@ internal static partial class ChangedLines
                 break;
         }
 
+        var withHunks = contextLines > 0;
         var diff = await RunGitAsync(
             top,
-            ["-c", "core.quotepath=off", "diff", "--unified=0", "--no-color", "--no-ext-diff", "--no-renames", .. revisions, "--"],
+            ["-c", "core.quotepath=off", "diff", $"--unified={Math.Max(contextLines, 0)}", "--no-color", "--no-ext-diff",
+                "--no-renames", .. revisions, "--"],
             ct).ConfigureAwait(false);
         var files = new Dictionary<string, SortedSet<int>>(StringComparer.Ordinal);
-        foreach (var (path, lines) in ParseAddedLines(diff))
+        var hunks = new Dictionary<string, DiffFile>(StringComparer.Ordinal);
+        if (withHunks)
         {
-            files[Path.GetFullPath(Path.Combine(top, path))] = lines;
+            foreach (var (path, file) in UnifiedDiff.Parse(diff))
+            {
+                var full = Path.GetFullPath(Path.Combine(top, path));
+                hunks[full] = file;
+                var added = new SortedSet<int>(file.AddedLines);
+                if (added.Count > 0)
+                {
+                    files[full] = added;
+                }
+            }
+        }
+        else
+        {
+            foreach (var (path, lines) in ParseAddedLines(diff))
+            {
+                files[Path.GetFullPath(Path.Combine(top, path))] = lines;
+            }
         }
 
         if (includeUntracked)
@@ -182,7 +221,16 @@ internal static partial class ChangedLines
             foreach (var path in untracked.Split('\0', StringSplitOptions.RemoveEmptyEntries))
             {
                 var full = Path.GetFullPath(Path.Combine(top, path));
-                files[full] = new SortedSet<int>(Enumerable.Range(1, CountLines(full)));
+                if (withHunks)
+                {
+                    var file = ReadUntracked(full);
+                    hunks[full] = file;
+                    files[full] = new SortedSet<int>(file.AddedLines);
+                }
+                else
+                {
+                    files[full] = new SortedSet<int>(Enumerable.Range(1, CountLines(full)));
+                }
             }
         }
 
@@ -210,7 +258,7 @@ internal static partial class ChangedLines
             }
         }
 
-        return new ChangedLinesResult(basis, files) { Warnings = warnings, DivergedFiles = diverged };
+        return new ChangedLinesResult(basis, files) { Warnings = warnings, DivergedFiles = diverged, Diff = hunks };
 
         static string Side(string side) => side.Length == 0 ? "HEAD" : RequireRevision(side);
     }
@@ -350,6 +398,39 @@ internal static partial class ChangedLines
         }
     }
 
+    /// <summary>An untracked file as wholly added; binary or unreadable files, and those over 4 MB, have no lines.</summary>
+    private static DiffFile ReadUntracked(string path)
+    {
+        try
+        {
+            var info = new FileInfo(path);
+            if (!info.Exists || info.Length > 4 * 1024 * 1024)
+            {
+                return new DiffFile(DiffFileStatus.Added, []);
+            }
+
+            var bytes = File.ReadAllBytes(path);
+            if (bytes.AsSpan(0, Math.Min(bytes.Length, 8000)).Contains((byte)0))
+            {
+                // Git's own test for binary content.
+                return new DiffFile(DiffFileStatus.Binary, []);
+            }
+
+            using var reader = new StreamReader(new MemoryStream(bytes), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+            var lines = new List<string>();
+            while (reader.ReadLine() is { } line)
+            {
+                lines.Add(line);
+            }
+
+            return UnifiedDiff.Added(lines);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return new DiffFile(DiffFileStatus.Added, []);
+        }
+    }
+
     private static int CountLines(string path)
     {
         try
@@ -419,6 +500,12 @@ internal sealed record ChangedLinesResult(string Basis, IReadOnlyDictionary<stri
     /// line numbers do not describe the files on disk.
     /// </summary>
     public IReadOnlySet<string> DivergedFiles { get; init; } = new HashSet<string>();
+
+    /// <summary>
+    /// Each changed file's hunks, by absolute path, when context lines were asked for: every file git lists, so
+    /// including deleted, binary and non-source files, and those whose only changes are removals.
+    /// </summary>
+    public IReadOnlyDictionary<string, DiffFile> Diff { get; init; } = new Dictionary<string, DiffFile>();
 }
 
 /// <summary>What changes are compared against: see <see cref="ChangedLines.GetAsync(string, ChangeBase, string?, CancellationToken)"/>.</summary>

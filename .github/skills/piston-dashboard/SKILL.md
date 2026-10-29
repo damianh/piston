@@ -45,6 +45,10 @@ flow if the installed tool is older).
 2. Open it with a stable instance ID, such as `piston-panel`, and empty input `{}`.
 3. Use its `refresh` action to rediscover the current worktree without running
    tests. Reopening or resuming also only inspects state.
+4. To review a change, open with `{"view":"changes"}` (optionally `"base":"branch"`
+   or `"range"` and a `"baseRef"`), or invoke `show_changes` with the same `base`
+   and `baseRef`. This shows Coverage › Changes: the diff with each added line
+   coloured by its verdict. It only navigates; it never runs tests.
 
 The connection shell survives engine loss, displays instructions when hosting is
 disabled, and reconnects to a replacement owner of the same worktree. It follows
@@ -56,7 +60,8 @@ If extension registration/reload tools are unavailable or the runtime has no
 native canvas support, say so and open the URL returned by discovery in the
 `browser` canvas instead. Reuse a stable instance ID. After redeploying the
 dashboard, reopen the panel; for browser fallback, add/increment `?v=<N>` to
-avoid stale assets.
+avoid stale assets. The browser fallback opens the changes view with
+`?tab=coverage&mode=changes&base=branch&ref=main`.
 
 ## Redeploy after a change
 

@@ -19,6 +19,42 @@ export function loopbackEndpoint(value) {
     return url;
 }
 
+const changeBases = ["working", "branch", "range"];
+const baseRefPattern = /^[A-Za-z0-9._/@{}~^][A-Za-z0-9._/@{}~^-]*$/;
+
+/**
+ * The dashboard query that opens the Coverage tab's Changes view, e.g.
+ * `tab=coverage&mode=changes&base=branch&ref=main`. A ref is a branch, commit or range; it may not start with
+ * `-`, so it can never become a git option.
+ */
+export function changesQuery({ base, baseRef } = {}) {
+    if (base !== undefined && !changeBases.includes(base)) {
+        throw new Error(`base must be one of ${changeBases.join(", ")}.`);
+    }
+    if (baseRef !== undefined && (typeof baseRef !== "string" || baseRef.length > 200 || !baseRefPattern.test(baseRef))) {
+        throw new Error("baseRef must be a branch, commit or range of at most 200 characters, not starting with '-'.");
+    }
+    const chosen = base ?? (baseRef ? "branch" : "working");
+    if (chosen === "range" && !baseRef) throw new Error("A range needs baseRef, e.g. HEAD~3..HEAD.");
+    const query = new URLSearchParams({ tab: "coverage", mode: "changes", base: chosen });
+    if (chosen !== "working" && baseRef) query.set("ref", baseRef);
+    return query.toString();
+}
+
+/** The dashboard query an open request asks for, or undefined to leave the panel where it is. */
+export function openQuery(input) {
+    if (input === undefined || input === null) return undefined;
+    if (typeof input !== "object" || Array.isArray(input)) throw new Error("The canvas input must be an object.");
+    const { view, base, baseRef } = input;
+    if (view !== undefined && !["dashboard", "changes"].includes(view)) throw new Error("view must be dashboard or changes.");
+    if (view === "dashboard") {
+        if (base !== undefined || baseRef !== undefined) throw new Error("base and baseRef apply only to the changes view.");
+        return "";
+    }
+    if (view === undefined && base === undefined && baseRef === undefined) return undefined;
+    return changesQuery({ base, baseRef });
+}
+
 export async function discover(cwd, executeCommand = execute) {
     try {
         let stdout;
@@ -98,6 +134,7 @@ export function createDashboardCanvas({ inspect = discover, check = probe, invok
         let refreshing;
         let checkedAt = 0;
         let closed = false;
+        let navigation = { seq: 0, query: "" };
         const actionLifetime = new AbortController();
         const sockets = new Set();
         async function refresh(force = false) {
@@ -160,7 +197,7 @@ export function createDashboardCanvas({ inspect = discover, check = probe, invok
             const path = req.url.split("?")[0];
             if (path === "/__piston/state") {
                 res.setHeader("Content-Type", "application/json");
-                res.end(JSON.stringify(await refresh())); return;
+                res.end(JSON.stringify({ ...await refresh(), navigation })); return;
             }
             const asset = path === "/__piston/" ? "shell.html" : path.slice("/__piston/".length);
             if (path.startsWith("/__piston/") && assets.has(asset)) {
@@ -226,7 +263,17 @@ export function createDashboardCanvas({ inspect = discover, check = probe, invok
         return {
             cwd, url: `${origin}/__piston/`,
             refresh,
-            async action(name) {
+            navigate(query) {
+                if (query !== undefined) navigation = { seq: navigation.seq + 1, query };
+                return navigation;
+            },
+            async action(name, input) {
+                if (name === "show_changes") {
+                    const query = changesQuery(input ?? {});
+                    const current = await refresh(true);
+                    this.navigate(query);
+                    return { state: current.state, message: current.message, shown: `?${query}` };
+                }
                 const current = await refresh(true);
                 if (name === "refresh") return current;
                 if (!target) throw new Error(current.message);
@@ -244,7 +291,8 @@ export function createDashboardCanvas({ inspect = discover, check = probe, invok
     }
 
     return {
-        async open(instanceId, cwd) {
+        async open(instanceId, cwd, input) {
+            const query = openQuery(input);
             let entry = panels.get(instanceId);
             if (entry && entry.cwd !== cwd) { await this.close(instanceId); entry = undefined; }
             if (!entry) {
@@ -260,13 +308,14 @@ export function createDashboardCanvas({ inspect = discover, check = probe, invok
                 }
                 finally { pending.delete(instanceId); }
             }
+            entry.navigate(query);
             await entry.refresh(true);
             return { url: entry.url, title: "Piston", status: (await entry.refresh()).message };
         },
-        async action(instanceId, name, cwd) {
+        async action(instanceId, name, cwd, input) {
             const entry = panels.get(instanceId);
             if (!entry || entry.cwd !== cwd) throw new Error("Reopen the canvas for the active worktree before invoking actions.");
-            return entry.action(name);
+            return entry.action(name, input);
         },
         async close(instanceId) {
             const entry = panels.get(instanceId) ?? await pending.get(instanceId);

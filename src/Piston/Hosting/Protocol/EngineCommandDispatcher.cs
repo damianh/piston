@@ -110,7 +110,10 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                     var cmd = JsonRpcSerializer.DeserializeParams<GetCoveringTestsCommand>(@params);
                     var filePath = cmd?.FilePath ?? string.Empty;
                     var tests = string.IsNullOrWhiteSpace(filePath) ? null : _engine.GetCoveringTests(filePath);
-                    var result = DtoMapper.ToCoveringTestsDto(filePath, tests);
+                    var outcome = tests is { Count: > 0 }
+                        ? ChangedLineVerdicts.OutcomeLookup(_engine.State, _engine.GetTestProjectPaths())
+                        : null;
+                    var result = DtoMapper.ToCoveringTestsDto(filePath, tests, outcome);
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
                 }
@@ -142,6 +145,44 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                             result = (await ChangedLineVerdicts
                                 .GetAsync(_engine, solutionDirectory, cmd?.Base, cmd?.BaseRef, ct)
                                 .ConfigureAwait(false)).ToDto(solutionDirectory);
+                        }
+                        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+                        {
+                            throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, ex.Message);
+                        }
+                    }
+
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
+            case ProtocolMethods.CoverageGetChangeDiff:
+                {
+                    GetChangeDiffCommand? cmd;
+                    try
+                    {
+                        cmd = JsonRpcSerializer.DeserializeParams<GetChangeDiffCommand>(@params);
+                    }
+                    catch (JsonException ex)
+                    {
+                        throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, $"Invalid parameters: {ex.Message}");
+                    }
+
+                    ChangeDiffDto result;
+                    if (!_engine.State.CoverageEnabled)
+                    {
+                        result = DtoMapper.DisabledChangeDiff;
+                    }
+                    else
+                    {
+                        var solutionDirectory = SolutionDirectory
+                            ?? throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, "No solution is loaded.");
+                        var context = Math.Clamp(cmd?.Context ?? 3, 1, 20);
+                        try
+                        {
+                            result = (await ChangedLineVerdicts
+                                .GetAsync(_engine, solutionDirectory, cmd?.Base, cmd?.BaseRef, ct, contextLines: context)
+                                .ConfigureAwait(false)).ToChangeDiffDto(solutionDirectory);
                         }
                         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
                         {

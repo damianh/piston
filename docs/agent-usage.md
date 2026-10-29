@@ -241,7 +241,10 @@ how tests are selected and for the other tools.
 
 `get_changed_line_coverage` (schema `piston.changed-line-coverage/v2`) classifies
 every changed line of every changed `.cs`, `.fs` or `.vb` file. The same verdicts
-are available to protocol clients as `coverage/getChangedLines`.
+are available to protocol clients as `coverage/getChangedLines`, and as a diff
+(`coverage/getChangeDiff`) in the dashboard's Coverage › Changes view, which the
+`piston-dashboard` canvas opens with `{"view":"changes"}` or its `show_changes`
+action.
 
 | Verdict | Meaning |
 |---|---|
