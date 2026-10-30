@@ -90,7 +90,8 @@ internal static partial class MtpTestProcessRunner
         CancellationToken ct,
         ExecutionLog? runLog = null,
         MtpWarmHostPool? warmHosts = null,
-        string? hostArguments = null)
+        string? hostArguments = null,
+        MtpDiscoveryCache? discoveryCache = null)
     {
         var log = runLog ?? new ExecutionLog(projectPath);
         log.Runner = "MTP server";
@@ -103,11 +104,29 @@ internal static partial class MtpTestProcessRunner
                 return null;
             }
 
-            var discovered = new List<JsonElement>();
-            var discoveredKeys = new HashSet<string>(StringComparer.Ordinal);
-            var discovery = await MtpServerSession.RunAsync(appPath, solutionDirectory, MtpServerSession.DiscoverMethod, tests: null,
-                nodes => discovered.AddRange(nodes.Where(n => IsAction(n) && NodeKey(n) is { } key && discoveredKeys.Add(key))),
-                ct, log, warmHosts).ConfigureAwait(false);
+            async Task<MtpDiscoveryCache.Discovery> DiscoverAsync(CancellationToken token)
+            {
+                var nodes = new List<JsonElement>();
+                var keys = new HashSet<string>(StringComparer.Ordinal);
+                var result = await MtpServerSession.RunAsync(appPath, solutionDirectory, MtpServerSession.DiscoverMethod, tests: null,
+                    updates => nodes.AddRange(updates.Where(n => IsAction(n) && NodeKey(n) is { } key && keys.Add(key))),
+                    token, log, warmHosts).ConfigureAwait(false);
+                return new MtpDiscoveryCache.Discovery(result, nodes);
+            }
+
+            MtpDiscoveryCache.Lookup lookup;
+            try
+            {
+                lookup = discoveryCache is null
+                    ? new MtpDiscoveryCache.Lookup(await DiscoverAsync(ct).ConfigureAwait(false), Cached: false)
+                    : await discoveryCache.GetAsync(appPath, solutionDirectory, DiscoverAsync, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return new ProjectTestResult(projectPath, [], null, [], Crashed: false);
+            }
+
+            var discovery = lookup.Discovery.Result;
             if (discovery.Outcome == MtpServerSession.Outcome.Cancelled)
             {
                 return new ProjectTestResult(projectPath, [], null, [], Crashed: false);
@@ -119,8 +138,10 @@ internal static partial class MtpTestProcessRunner
                 return null;
             }
 
+            var discovered = lookup.Discovery.Nodes;
             var matched = discovered.Where(n => Matches(expression, n)).ToList();
-            log.Write("MtpRunner", $"Filter matched {matched.Count} of {discovered.Count} test(s): {filter}");
+            log.Write("MtpRunner",
+                $"Filter matched {matched.Count} of {discovered.Count} test(s){(lookup.Cached ? " (cached discovery)" : "")}: {filter}");
             if (matched.Count == 0)
             {
                 return new ProjectTestResult(projectPath, [], null, [], Crashed: false);

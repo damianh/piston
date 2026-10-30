@@ -112,4 +112,37 @@ public sealed class ImpactBackfillTests
 
         Assert.Equal(["A.Tests.New", "A.Tests.Foo", "A.Tests.Outer"], plan.Units.Select(u => u.Key));
     }
+
+    [Fact]
+    public void Create_InterleavesProjectsWithinEachPriority()
+    {
+        const string otherProject = "/src/B.Tests/B.Tests.csproj";
+        var a = new TestSuite("A.Tests",
+        [
+            Test("A.Tests.New1.Test"),
+            Test("A.Tests.New2.Test"),
+            Test("A.Tests.Old.Test"),
+            Test("A.Tests.Legacy.Test"),
+        ], DateTimeOffset.UtcNow, TimeSpan.Zero);
+        var b = new TestSuite("B.Tests",
+        [
+            Test("B.Tests.New1.Test"),
+            Test("B.Tests.Old.Test"),
+            Test("B.Tests.Legacy.Test"),
+        ], DateTimeOffset.UtcNow, TimeSpan.Zero);
+
+        var plan = ImpactBackfill.Create([Project, otherProject], [a, b], project => project == Project
+            ? [
+                Recorded("A.Tests.Old", current: false, true, "A.Tests.Old.Test"),
+                Recorded("A.Tests.Legacy", current: true, false, "A.Tests.Legacy.Test"),
+            ]
+            : [
+                Recorded("B.Tests.Old", current: false, true, "B.Tests.Old.Test"),
+                Recorded("B.Tests.Legacy", current: true, false, "B.Tests.Legacy.Test"),
+            ], ImpactGranularity.Class);
+
+        Assert.Equal(
+            ["A.Tests.New1", "B.Tests.New1", "A.Tests.New2", "A.Tests.Old", "B.Tests.Old", "A.Tests.Legacy", "B.Tests.Legacy"],
+            plan.Units.Select(unit => unit.Key));
+    }
 }

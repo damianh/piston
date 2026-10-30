@@ -1,7 +1,9 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Collections.Concurrent;
 using Piston.Engine.Coverage;
+using Piston.Engine.Execution;
 using Piston.Engine.History;
 using Piston.Engine.Impact;
 using Piston.Engine.Models;
@@ -17,11 +19,20 @@ public sealed partial class PistonOrchestrator
     private CancellationTokenSource? _backfillCts;
     private Task _backfillTask = Task.CompletedTask;
 
-    // Units whose measurement failed this session, so they are not retried after every run; guarded by _runLock.
-    private readonly HashSet<(string Project, string Key)> _backfillFailed = [];
+    // Units whose measurement failed this session, so they are not retried after every run.
+    private readonly ConcurrentDictionary<(string Project, string Key), byte> _backfillFailed = new();
 
     /// <summary>The granularity measured when idle; null disables the backfill.</summary>
     internal ImpactGranularity? BackfillGranularity { get; set; }
+
+    /// <summary>The maximum number of backfill measurements running at once.</summary>
+    internal int BackfillConcurrency { get; set; } = 1;
+
+    /// <summary>The output directory instrumented by a project's collector, or null when it is unknown.</summary>
+    internal Func<string, string?> BackfillOutputDirectory { get; set; } = _ => null;
+
+    /// <summary>Clears discoveries from earlier passes before measuring the current test results.</summary>
+    internal Action StartBackfillDiscovery { get; set; } = () => { };
 
     /// <summary>How long a test runs before it is reported as possibly hanging; null turns the warning off.</summary>
     internal TimeSpan? HangThreshold { get; set; }
@@ -123,7 +134,7 @@ public sealed partial class PistonOrchestrator
                     _state.TestSuites,
                     project => store.GetUnits(project, granularity),
                     granularity,
-                    _backfillFailed,
+                    _backfillFailed.Keys.ToHashSet(),
                     solutionDir);
             }
             finally
@@ -141,10 +152,80 @@ public sealed partial class PistonOrchestrator
                 return;
             }
 
+            StartBackfillDiscovery();
             log?.Write("Backfill", $"Measuring {plan.Units.Count} {granularityName} unit(s)");
-            foreach (var unit in plan.Units)
+            var outputs = plan.Units.Select(unit => unit.ProjectPath)
+                .Distinct(StringComparer.Ordinal)
+                .ToDictionary(project => project, BackfillOutputIdentity, StringComparer.Ordinal);
+            var allOutputsKnown = outputs.Values.All(output => output is not null);
+            var roots = new List<string>();
+            var rootByOutput = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (allOutputsKnown)
             {
-                PublishBackfill(new ImpactBackfillProgress(granularityName, completed, plan.Units.Count, unit.Key, unit.ProjectPath));
+                foreach (var output in outputs.Values.OfType<string>().Distinct(StringComparer.Ordinal).OrderBy(path => path.Length))
+                {
+                    var root = roots.FirstOrDefault(candidate => IsSameOrParentDirectory(candidate, output));
+                    if (root is null)
+                    {
+                        roots.Add(output);
+                        root = output;
+                    }
+
+                    rootByOutput[output] = root;
+                }
+
+                if (BackfillConcurrency > 1 && roots.Count > 1
+                    && !CoverageOutputIsolation.CanRunConcurrently(roots, out var reason, ct))
+                {
+                    allOutputsKnown = false;
+                    log?.Write("Backfill", $"Cannot isolate output directories ({reason}); measuring serially");
+                }
+            }
+            else
+            {
+                log?.Write("Backfill", "A test output directory is unknown; measuring serially");
+            }
+
+            var outputGroups = outputs.ToDictionary(
+                output => output.Key,
+                output => allOutputsKnown ? rootByOutput[output.Value!] : string.Empty,
+                StringComparer.Ordinal);
+            var groupCount = outputGroups.Values.Distinct(StringComparer.Ordinal).Count();
+            var concurrency = Math.Min(Math.Max(1, BackfillConcurrency), groupCount);
+            var chunkSize = concurrency == 1
+                ? 1
+                : (int)Math.Min(plan.Units.Count, (long)concurrency * 2);
+            var progressGate = new Lock();
+            var activeUnits = new List<ImpactBackfill.Unit>();
+
+            void PublishProgress(
+                ImpactBackfill.Unit? started = null, ImpactBackfill.Unit? finished = null, ImpactBackfill.Unit? waiting = null)
+            {
+                lock (progressGate)
+                {
+                    if (started is not null)
+                    {
+                        activeUnits.Add(started);
+                    }
+
+                    if (finished is not null)
+                    {
+                        _ = activeUnits.Remove(finished);
+                        completed++;
+                    }
+
+                    var currentUnit = activeUnits.Count > 0 ? activeUnits[^1] : waiting ?? finished;
+                    if (currentUnit is not null)
+                    {
+                        PublishBackfill(new ImpactBackfillProgress(
+                            granularityName, completed, plan.Units.Count, currentUnit.Key, currentUnit.ProjectPath));
+                    }
+                }
+            }
+
+            foreach (var chunk in plan.Units.Chunk(chunkSize))
+            {
+                PublishProgress(waiting: chunk[0]);
                 await _runLock.WaitAsync(ct).ConfigureAwait(false);
                 try
                 {
@@ -154,15 +235,88 @@ public sealed partial class PistonOrchestrator
                         return;
                     }
 
-                    await MeasureUnitAsync(unit, granularity, builtAt.UtcDateTime, store, processor, solutionPath, solutionDir, ct)
+                    using var lease = await _admission.AdmitAsync($"backfill-{Guid.NewGuid():N}", _ => { }, null, ct)
                         .ConfigureAwait(false);
+                    using var stopChunk = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    using var slots = new SemaphoreSlim(concurrency, concurrency);
+                    using var resourceState = new SecondaryResourceState(_state);
+                    // Collectors may instrument binaries in place, so measurements sharing an output
+                    // directory must never overlap. Unknown output locations force a serial pass.
+                    var outputGates = chunk.Select(unit => outputGroups[unit.ProjectPath])
+                        .Distinct(StringComparer.Ordinal)
+                        .ToDictionary(output => output, _ => new SemaphoreSlim(1, 1), StringComparer.Ordinal);
+
+                    async Task MeasureWhenReadyAsync(ImpactBackfill.Unit unit)
+                    {
+                        var outputGate = outputGates[outputGroups[unit.ProjectPath]];
+                        var outputHeld = false;
+                        var slotHeld = false;
+                        try
+                        {
+                            await outputGate.WaitAsync(stopChunk.Token).ConfigureAwait(false);
+                            outputHeld = true;
+
+                            await slots.WaitAsync(stopChunk.Token).ConfigureAwait(false);
+                            slotHeld = true;
+                            stopChunk.Token.ThrowIfCancellationRequested();
+                            if (Interlocked.Read(ref _fileChangeGeneration) != baseline.ChangeGeneration)
+                            {
+                                stopChunk.Cancel();
+                                return;
+                            }
+
+                            PublishProgress(started: unit);
+                            await MeasureUnitAsync(
+                                unit, granularity, builtAt.UtcDateTime, baseline.ChangeGeneration, store, processor,
+                                solutionPath, solutionDir, resourceState, stopChunk.Token).ConfigureAwait(false);
+                            if (Interlocked.Read(ref _fileChangeGeneration) != baseline.ChangeGeneration)
+                            {
+                                stopChunk.Cancel();
+                                return;
+                            }
+
+                            PublishProgress(finished: unit);
+                        }
+                        catch
+                        {
+                            stopChunk.Cancel();
+                            throw;
+                        }
+                        finally
+                        {
+                            if (slotHeld)
+                            {
+                                _ = slots.Release();
+                            }
+
+                            if (outputHeld)
+                            {
+                                _ = outputGate.Release();
+                            }
+                        }
+                    }
+
+                    try
+                    {
+                        await Task.WhenAll(chunk.Select(MeasureWhenReadyAsync)).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (
+                        !ct.IsCancellationRequested && Interlocked.Read(ref _fileChangeGeneration) != baseline.ChangeGeneration)
+                    {
+                        return;
+                    }
+                    finally
+                    {
+                        foreach (var gate in outputGates.Values)
+                        {
+                            gate.Dispose();
+                        }
+                    }
                 }
                 finally
                 {
                     _ = _runLock.Release();
                 }
-
-                completed++;
             }
 
             var stats = store.GetStats();
@@ -191,27 +345,58 @@ public sealed partial class PistonOrchestrator
         }
     }
 
+    private string? BackfillOutputIdentity(string project)
+    {
+        var directory = BackfillOutputDirectory(project);
+        if (string.IsNullOrEmpty(directory))
+        {
+            return null;
+        }
+
+        try
+        {
+            return WorktreeIdentity.CanonicalizePath(directory);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ExecutionCoordinationException)
+        {
+            DiagnosticLog.Instance?.Write("Backfill",
+                $"Cannot identify output for {project}; measuring serially: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static bool IsSameOrParentDirectory(string parent, string path) =>
+        string.Equals(parent, path, StringComparison.Ordinal)
+        || (path.StartsWith(parent, StringComparison.Ordinal)
+            && (Path.EndsInDirectorySeparator(parent)
+                || path[parent.Length] == Path.DirectorySeparatorChar
+                || path[parent.Length] == Path.AltDirectorySeparatorChar));
+
     // Caller holds _runLock.
     private async Task MeasureUnitAsync(
         ImpactBackfill.Unit unit,
         ImpactGranularity granularity,
         DateTime builtAtUtc,
+        long buildGeneration,
         IImpactMapStore store,
         ICoverageProcessor processor,
         string solutionPath,
         string? solutionDir,
+        SecondaryResourceState resourceState,
         CancellationToken ct)
     {
-        TestRunResult result;
-        using (var lease = await _admission.AdmitAsync($"backfill-{Guid.NewGuid():N}", _ => { }, null, ct).ConfigureAwait(false))
-        {
-            result = await RunSecondaryTestsAsync(
-                solutionPath, [unit.ProjectPath], unit.Filter, collectCoverage: true, onProjectCompleted: null, ct).ConfigureAwait(false);
-        }
+        var result = await RunSecondaryTestsAsync(
+            solutionPath, [unit.ProjectPath], unit.Filter, collectCoverage: true, onProjectCompleted: null, ct, resourceState,
+            reuseDiscovery: true)
+            .ConfigureAwait(false);
 
         try
         {
             ct.ThrowIfCancellationRequested();
+            if (Interlocked.Read(ref _fileChangeGeneration) != buildGeneration)
+            {
+                return;
+            }
 
             var ran = result.Suites.SelectMany(s => s.Tests).Select(t => t.FullyQualifiedName).ToHashSet(StringComparer.Ordinal);
             var tests = unit.Tests.Where(ran.Contains).ToList();
@@ -220,7 +405,7 @@ public sealed partial class PistonOrchestrator
             // A test that did not run would keep the unit outdated, so it is not measured again until restart.
             if (crashed || result.CoverageReportPaths.Count == 0 || tests.Count != unit.Tests.Count)
             {
-                _ = _backfillFailed.Add((unit.ProjectPath, unit.Key));
+                _ = _backfillFailed.TryAdd((unit.ProjectPath, unit.Key), 0);
                 DiagnosticLog.Instance?.Write("Backfill",
                     $"Skipped {unit.Key}: {(crashed ? "the run failed" : result.CoverageReportPaths.Count == 0 ? "no coverage report" : "not every test ran")}");
                 if (crashed || result.CoverageReportPaths.Count == 0 || tests.Count == 0)
@@ -232,6 +417,12 @@ public sealed partial class PistonOrchestrator
             await _coverageLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
+                ct.ThrowIfCancellationRequested();
+                if (Interlocked.Read(ref _fileChangeGeneration) != buildGeneration)
+                {
+                    return;
+                }
+
                 var impact = new CoverageImpactOptions(
                     [new CoverageRunUnit(unit.ProjectPath, unit.Key, result.CoverageReportPaths, tests, Merge: false)],
                     granularity,

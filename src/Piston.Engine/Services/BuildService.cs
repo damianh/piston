@@ -9,12 +9,17 @@ namespace Piston.Engine.Services;
 public sealed class BuildService : IBuildService
 {
     private readonly MtpWarmHostPool? _warmHosts;
+    private readonly MtpDiscoveryCache? _discoveryCache;
 
     public BuildService()
     {
     }
 
-    internal BuildService(MtpWarmHostPool? warmHosts) => _warmHosts = warmHosts;
+    internal BuildService(MtpWarmHostPool? warmHosts, MtpDiscoveryCache? discoveryCache = null)
+    {
+        _warmHosts = warmHosts;
+        _discoveryCache = discoveryCache;
+    }
 
     public Task<BuildResult> BuildAsync(string solutionPath, CancellationToken ct) =>
         BuildAsync(solutionPath, null, null, ct);
@@ -31,6 +36,7 @@ public sealed class BuildService : IBuildService
         Action<string>? onProjectBuilt,
         CancellationToken ct)
     {
+        _discoveryCache?.Invalidate();
         if (_warmHosts is not null)
         {
             await _warmHosts.RetireBeforeBuildAsync().ConfigureAwait(false);

@@ -104,13 +104,16 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             message => _diagnosticLog.Write("Resources", message));
         var vsTestStrategy = new ProcessTestExecutionStrategy(trxParser);
         _warmHosts = options.WarmTestHosts ? new MtpWarmHostPool() : null;
-        var buildService = serviceOverrides?.BuildService ?? new BuildService(_warmHosts);
+        var discoveryCache = new MtpDiscoveryCache();
+        var buildService = serviceOverrides?.BuildService ?? new BuildService(_warmHosts, discoveryCache);
+        bool RequiresResources(string projectPath) => !resourceResolver.Resolve(projectPath).IsEmpty;
         var mtpStrategy = new MtpTestExecutionStrategy(
             projectPath => impactAnalyzer.GetMtpOutputPath(projectPath),
             solutionDir,
             impactAnalyzer.IsMultiTargeted,
             _warmHosts,
-            projectPath => !resourceResolver.Resolve(projectPath).IsEmpty);
+            RequiresResources,
+            discoveryCache);
 
         ITestExecutionStrategy strategy = options.TestExecutionMode switch
         {
@@ -165,6 +168,10 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             ImpactBackfillMode.Test => Impact.ImpactGranularity.Test,
             _ => null,
         };
+        _orchestrator.BackfillConcurrency = effectivePoolSize;
+        _orchestrator.BackfillOutputDirectory = projectPath =>
+            mtpStrategy.ServerAppPath(projectPath) is { } appPath ? Path.GetDirectoryName(appPath) : null;
+        _orchestrator.StartBackfillDiscovery = discoveryCache.Invalidate;
         _orchestrator.HangThreshold = options.HangThreshold;
         _orchestrator.RetryFailedTests = Math.Clamp(options.RetryFailedTests, 0, PistonOptions.MaxRetryFailedTests);
         _orchestrator.SdkVersionProvider = serviceOverrides?.SdkVersionProvider

@@ -106,7 +106,28 @@ internal static class ImpactBackfill
             }
         }
 
-        return new Plan([.. missing, .. outdated, .. legacy], obsolete);
+        return new Plan(
+            [.. InterleaveProjects(missing), .. InterleaveProjects(outdated), .. InterleaveProjects(legacy)],
+            obsolete);
+    }
+
+    private static IEnumerable<Unit> InterleaveProjects(IEnumerable<Unit> units)
+    {
+        var projects = units.GroupBy(unit => unit.ProjectPath, StringComparer.Ordinal)
+            .Select(group => new Queue<Unit>(group))
+            .ToList();
+        while (projects.Count > 0)
+        {
+            foreach (var project in projects)
+            {
+                if (project.TryDequeue(out var unit))
+                {
+                    yield return unit;
+                }
+            }
+
+            _ = projects.RemoveAll(project => project.Count == 0);
+        }
     }
 
     /// <summary>The class (<c>Ns.Class</c>, <c>Ns.Outer+Inner</c>) or method (<c>Ns.Class.Method</c>) a test belongs to.</summary>

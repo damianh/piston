@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Collections.Concurrent;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
 using Xunit;
@@ -49,6 +50,25 @@ public sealed class TestRunnerServiceCapacityTests
         await AssertExecutionWaitsForDiscoveryAsync(sut, strategy);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task RunTestsAsync_ForwardsDiscoveryReuseToEveryRequest(int projects)
+    {
+        var strategy = new GatedStrategy();
+        using var pool = new TestProcessPool(poolSize: 2, recycleAfter: 50, strategy);
+        var sut = new TestRunnerService(strategy, pool);
+        var targets = projects == 0 ? null : Enumerable.Range(0, projects).Select(index => $"/w/{index}.csproj").ToArray();
+
+        _ = await sut.RunTestsAsync(
+            "/w/App.slnx", targets, filter: "Name=Test", collectCoverage: true,
+            new TestRunCallbacks { ReuseDiscovery = true }, TestContext.Current.CancellationToken);
+
+        Assert.Equal(Math.Max(1, projects), strategy.Requests.Count);
+        Assert.All(strategy.Requests, request => Assert.True(request.ReuseDiscovery));
+    }
+
     private static async Task AssertExecutionWaitsForDiscoveryAsync(TestRunnerService sut, GatedStrategy strategy)
     {
         var discovery = sut.DiscoverTestsAsync(["/w/A.csproj"], null, (_, _) => { }, CancellationToken.None);
@@ -86,6 +106,8 @@ public sealed class TestRunnerServiceCapacityTests
 
         public int MaxConcurrency => Volatile.Read(ref _maxConcurrency);
 
+        public ConcurrentQueue<ProjectTestRequest> Requests { get; } = new();
+
         public void ReleaseDiscovery() => _discoveryGate.TrySetResult();
 
         public bool CanExecute(string projectPath) => true;
@@ -98,6 +120,7 @@ public sealed class TestRunnerServiceCapacityTests
             Enter();
             try
             {
+                Requests.Enqueue(request);
                 _ = _executionStarted.TrySetResult();
                 await Task.Yield();
                 var suite = new TestSuite(request.ProjectPath, [], DateTimeOffset.UtcNow, TimeSpan.Zero);

@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Piston.Engine.Coverage;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
 using Piston.Engine.Services;
@@ -19,12 +20,13 @@ namespace Piston.Engine.Tests.Integration;
 /// The test project uses explicit package versions and lives outside the repo root so
 /// it does not inherit the solution's <c>Directory.Packages.props</c> (which does not
 /// include xUnit v3 or MTP packages). If packages cannot be restored (e.g. offline
-/// CI environment), the tests return early without asserting (pass vacuously).
+/// CI environment), existing tests return early; the coverage-attribution tests report a skip.
 /// </remarks>
 public sealed class MtpExecutionTests : IAsyncLifetime
 {
     private string _root = string.Empty;
     private string _testCsproj = string.Empty;
+    private bool _restored;
     private bool _available;
     private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
 
@@ -55,7 +57,34 @@ public sealed class MtpExecutionTests : IAsyncLifetime
                 <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
                 <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" />
               </ItemGroup>
+              <ItemGroup>
+                <ProjectReference Include="Lib/Lib.csproj" />
+                <Compile Remove="Lib/**/*.cs" />
+              </ItemGroup>
             </Project>
+            """);
+
+        var library = Directory.CreateDirectory(Path.Combine(_root, "Lib")).FullName;
+        await File.WriteAllTextAsync(Path.Combine(library, "Lib.csproj"), """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup><TargetFramework>net10.0</TargetFramework></PropertyGroup>
+            </Project>
+            """);
+        await File.WriteAllTextAsync(Path.Combine(library, "CoveredCode.cs"), """
+            namespace MtpE2E.Library;
+
+            public static class CoveredCode
+            {
+                public static int Passing()
+                {
+                    return 11;
+                }
+
+                public static int Failing()
+                {
+                    return 22;
+                }
+            }
             """);
 
         await File.WriteAllTextAsync(Path.Combine(_root, "Tests.cs"), """
@@ -76,6 +105,7 @@ public sealed class MtpExecutionTests : IAsyncLifetime
                 public async System.Threading.Tasks.Task PassingTest()
                 {
                     Xunit.TestContext.Current.TestOutputHelper?.WriteLine("hello from PassingTest");
+                    Xunit.Assert.Equal(11, MtpE2E.Library.CoveredCode.Passing());
 
                     var gate = System.IO.Path.GetFullPath(System.IO.Path.Combine(System.AppContext.BaseDirectory, "../../../progress-gate"));
                     while (System.IO.File.Exists(gate))
@@ -97,6 +127,7 @@ public sealed class MtpExecutionTests : IAsyncLifetime
                 [Xunit.Fact]
                 public void FailingTest()
                 {
+                    Xunit.Assert.Equal(22, MtpE2E.Library.CoveredCode.Failing());
                     throw new System.InvalidOperationException("expected failure");
                 }
             }
@@ -109,6 +140,7 @@ public sealed class MtpExecutionTests : IAsyncLifetime
             return;
         }
 
+        _restored = true;
         if (!await TryRunDotnetAsync("build --configuration Debug --no-restore", _root))
         {
             _available = false;
@@ -385,6 +417,182 @@ public sealed class MtpExecutionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task SequentialFilteredCoverage_ReusesDiscoveryAndKeepsReportsSeparate()
+    {
+        Assert.SkipUnless(_restored, "MTP fixture packages could not be restored.");
+        Assert.True(_available, "The MTP fixture must restore and build.");
+        var cache = new MtpDiscoveryCache();
+        var strategy = new MtpTestExecutionStrategy(_ => AppPath, _root, discoveryCache: cache);
+        const string passing = "FullyQualifiedName=MtpE2E.SampleTests.PassingTest";
+        const string failing = "FullyQualifiedName=MtpE2E.FailingTests.FailingTest";
+        var results = new List<ProjectTestResult>();
+        try
+        {
+            var passResult = await strategy.ExecuteAsync(
+                new ProjectTestRequest(_testCsproj, passing, true) { ReuseDiscovery = true }, null, _ct);
+            results.Add(passResult);
+            var failResult = await strategy.ExecuteAsync(
+                new ProjectTestRequest(_testCsproj, failing, true) { ReuseDiscovery = true }, null, _ct);
+            results.Add(failResult);
+
+            var passed = Assert.Single(passResult.Suites.SelectMany(suite => suite.Tests));
+            Assert.True(passed.Status == TestStatus.Passed, $"{passed.Status}: {passed.ErrorMessage}");
+            Assert.Equal(TestStatus.Failed, Assert.Single(failResult.Suites.SelectMany(suite => suite.Tests)).Status);
+            Assert.All(new[] { passResult, failResult }, result =>
+            {
+                Assert.Null(result.RunnerError);
+                Assert.False(result.Crashed);
+                Assert.Equal("MTP server", result.Log!.Runner);
+                _ = Assert.Single(result.CoverageReportPaths);
+            });
+            Assert.Contains(failResult.Log!.Entries, entry => entry.Message.Contains("(cached discovery)", StringComparison.Ordinal));
+
+            var source = Path.Combine(_root, "Lib", "CoveredCode.cs");
+            var lines = await File.ReadAllLinesAsync(source, _ct);
+            var passLine = Array.FindIndex(lines, line => line.Contains("return 11;", StringComparison.Ordinal)) + 1;
+            var failLine = Array.FindIndex(lines, line => line.Contains("return 22;", StringComparison.Ordinal)) + 1;
+            Assert.True(passLine > 0 && failLine > 0);
+
+            var passHits = CoverageHits(passResult, source);
+            var failHits = CoverageHits(failResult, source);
+            Assert.Contains(passLine, passHits);
+            Assert.DoesNotContain(failLine, passHits);
+            Assert.Contains(failLine, failHits);
+            Assert.DoesNotContain(passLine, failHits);
+
+            var foreground = await strategy.ExecuteAsync(new ProjectTestRequest(_testCsproj, passing, false), null, _ct);
+            Assert.DoesNotContain(foreground.Log!.Entries, entry => entry.Message.Contains("(cached discovery)", StringComparison.Ordinal));
+            var cachedRun = await strategy.ExecuteAsync(
+                new ProjectTestRequest(_testCsproj, passing, false) { ReuseDiscovery = true }, null, _ct);
+            Assert.Contains(cachedRun.Log!.Entries, entry => entry.Message.Contains("(cached discovery)", StringComparison.Ordinal));
+            var build = await new BuildService(warmHosts: null, discoveryCache: cache).BuildAsync(_testCsproj, _ct);
+            Assert.True(build.Status == BuildStatus.Succeeded, string.Join(Environment.NewLine, build.Errors));
+            var afterBuild = await strategy.ExecuteAsync(
+                new ProjectTestRequest(_testCsproj, passing, false) { ReuseDiscovery = true }, null, _ct);
+            Assert.DoesNotContain(afterBuild.Log!.Entries, entry => entry.Message.Contains("(cached discovery)", StringComparison.Ordinal));
+            Assert.Equal(TestStatus.Passed, Assert.Single(afterBuild.Suites.SelectMany(suite => suite.Tests)).Status);
+        }
+        finally
+        {
+            foreach (var dir in results.SelectMany(result => result.CoverageReportPaths)
+                .Select(PistonOrchestrator.CoverageResultsDirectory).OfType<string>().Distinct())
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { /* ignore */ }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ParallelCoverageFromDifferentOutputs_RecordsOnlyEachProjectsHits()
+    {
+        Assert.SkipUnless(_restored, "MTP fixture packages could not be restored.");
+        Assert.True(_available, "The MTP fixture must restore and build.");
+        var otherRoot = Directory.CreateTempSubdirectory("piston-mtp-other-").FullName;
+        var otherProject = Path.Combine(otherRoot, "OtherTests.csproj");
+        var otherApp = Path.Combine(otherRoot, "bin", "Debug", "net10.0", "OtherTests.dll");
+        var gate = Path.Combine(_root, "progress-gate");
+        var tasks = new List<Task<ProjectTestResult>>();
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+        try
+        {
+            var tests = System.Security.SecurityElement.Escape(Path.Combine(_root, "Tests.cs"));
+            var library = System.Security.SecurityElement.Escape(Path.Combine(_root, "Lib", "Lib.csproj"));
+            await File.WriteAllTextAsync(otherProject, $$"""
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net10.0</TargetFramework>
+                    <Nullable>enable</Nullable>
+                    <OutputType>Exe</OutputType>
+                    <IsTestingPlatformApplication>true</IsTestingPlatformApplication>
+                    <NoWarn>$(NoWarn);NU1507</NoWarn>
+                  </PropertyGroup>
+                  <ItemGroup>
+                    <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
+                    <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" />
+                    <ProjectReference Include="{{library}}" />
+                    <Compile Include="{{tests}}" Link="Tests.cs" />
+                  </ItemGroup>
+                </Project>
+                """, _ct);
+            Assert.True(await TryRunDotnetAsync("restore", otherRoot));
+            Assert.True(await TryRunDotnetAsync("build --configuration Debug --no-restore", otherRoot));
+            await File.WriteAllTextAsync(gate, "", _ct);
+
+            var strategy = new MtpTestExecutionStrategy(
+                project => project == otherProject ? otherApp : AppPath, _root);
+            var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var passTask = strategy.ExecuteAsync(
+                new ProjectTestRequest(_testCsproj, "FullyQualifiedName=MtpE2E.SampleTests.PassingTest", true),
+                suites =>
+                {
+                    if (suites.SelectMany(suite => suite.Tests).Any(test => test.Status == TestStatus.Running))
+                    {
+                        _ = started.TrySetResult();
+                    }
+                },
+                stop.Token);
+            tasks.Add(passTask);
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(60), _ct);
+
+            var failTask = strategy.ExecuteAsync(
+                new ProjectTestRequest(otherProject, "FullyQualifiedName=MtpE2E.FailingTests.FailingTest", true),
+                null,
+                stop.Token);
+            tasks.Add(failTask);
+            var failResult = await failTask.WaitAsync(TimeSpan.FromSeconds(60), _ct);
+            Assert.False(passTask.IsCompleted);
+            File.Delete(gate);
+            var passResult = await passTask.WaitAsync(TimeSpan.FromSeconds(60), _ct);
+
+            var passed = Assert.Single(passResult.Suites.SelectMany(suite => suite.Tests));
+            Assert.True(passed.Status == TestStatus.Passed, $"{passed.Status}: {passed.ErrorMessage}");
+            Assert.Equal(TestStatus.Failed, Assert.Single(failResult.Suites.SelectMany(suite => suite.Tests)).Status);
+            Assert.All(new[] { passResult, failResult }, result =>
+            {
+                Assert.Null(result.RunnerError);
+                Assert.False(result.Crashed);
+                _ = Assert.Single(result.CoverageReportPaths);
+            });
+            Assert.NotEqual(passResult.CoverageReportPaths[0], failResult.CoverageReportPaths[0]);
+
+            var source = Path.Combine(_root, "Lib", "CoveredCode.cs");
+            var lines = await File.ReadAllLinesAsync(source, _ct);
+            var passLine = Array.FindIndex(lines, line => line.Contains("return 11;", StringComparison.Ordinal)) + 1;
+            var failLine = Array.FindIndex(lines, line => line.Contains("return 22;", StringComparison.Ordinal)) + 1;
+            Assert.True(passLine > 0 && failLine > 0);
+            var passHits = CoverageHits(passResult, source);
+            var failHits = CoverageHits(failResult, source);
+            Assert.Contains(passLine, passHits);
+            Assert.DoesNotContain(failLine, passHits);
+            Assert.Contains(failLine, failHits);
+            Assert.DoesNotContain(passLine, failHits);
+        }
+        finally
+        {
+            File.Delete(gate);
+            await stop.CancelAsync();
+            try
+            {
+                _ = await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(60), _ct);
+            }
+            finally
+            {
+                foreach (var task in tasks.Where(task => task.IsCompletedSuccessfully))
+                {
+                    var result = await task;
+                    foreach (var dir in result.CoverageReportPaths
+                        .Select(PistonOrchestrator.CoverageResultsDirectory).OfType<string>().Distinct())
+                    {
+                        try { Directory.Delete(dir, recursive: true); } catch { /* ignore */ }
+                    }
+                }
+
+                try { Directory.Delete(otherRoot, recursive: true); } catch { /* ignore */ }
+            }
+        }
+    }
+
+    [Fact]
     public async Task RunAsync_WithCoverage_ServerModeStreamsProgress()
     {
         if (!_available)
@@ -460,6 +668,14 @@ public sealed class MtpExecutionTests : IAsyncLifetime
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     private string AppPath => Path.Combine(_root, "bin", "Debug", "net10.0", "MtpE2E.dll");
+
+    private static HashSet<int> CoverageHits(ProjectTestResult result, string source) => new CoberturaParser()
+        .Parse(Assert.Single(result.CoverageReportPaths)).Files
+        .Where(file => string.Equals(file.FilePath, source, StringComparison.OrdinalIgnoreCase))
+        .SelectMany(file => file.Lines)
+        .Where(line => line.HitCount > 0)
+        .Select(line => line.LineNumber)
+        .ToHashSet();
 
     // Server mode needs the built test app; without it the runner falls back to dotnet test.
     private Task<ProjectTestResult> RunAsync(bool serverMode, string? filter, MtpCoverage coverage = MtpCoverage.Off)
