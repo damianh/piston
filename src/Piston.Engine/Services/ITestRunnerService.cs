@@ -18,6 +18,8 @@ public sealed record TestRunResult(
 /// <summary>Per-project callbacks raised while a test run is in flight. All members are optional.</summary>
 public sealed record TestRunCallbacks
 {
+    internal bool ReuseDiscovery { get; init; }
+
     /// <summary>
     /// Raised while a project waits for exclusive test resources held or queued for by other runs on the
     /// machine, each time its queue status changes.

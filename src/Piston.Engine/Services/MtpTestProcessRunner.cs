@@ -81,7 +81,8 @@ internal static partial class MtpTestProcessRunner
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct,
         MtpCoverage coverage = MtpCoverage.Off,
-        MtpWarmHostPool? warmHosts = null)
+        MtpWarmHostPool? warmHosts = null,
+        MtpDiscoveryCache? discoveryCache = null)
     {
         var log = new ExecutionLog(projectPath);
         log.Write("MtpRunner", $"Project: {projectPath}");
@@ -108,7 +109,7 @@ internal static partial class MtpTestProcessRunner
                 // With --coverage the extension relaunches the test host under a controller, which connects
                 // as a passive node; the run uses a host started for it alone, not a warm one.
                 result = await RunWithServerAsync(projectPath, appPath, solutionDirectory, filter, onProgress, ct, log, warmHosts,
-                    coverageArgs).ConfigureAwait(false);
+                    coverageArgs, discoveryCache).ConfigureAwait(false);
             }
 
             if (result is null)

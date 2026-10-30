@@ -24,19 +24,22 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
     private readonly string _solutionDirectory;
     private readonly MtpWarmHostPool? _warmHosts;
     private readonly Func<string, bool> _requiresResources;
+    private readonly MtpDiscoveryCache _discoveryCache;
 
     public MtpTestExecutionStrategy(
         Func<string, string?> getMtpOutputPath,
         string solutionDirectory,
         Func<string, bool>? isMultiTargeted = null,
         MtpWarmHostPool? warmHosts = null,
-        Func<string, bool>? requiresResources = null)
+        Func<string, bool>? requiresResources = null,
+        MtpDiscoveryCache? discoveryCache = null)
     {
         _getMtpOutputPath = getMtpOutputPath;
         _solutionDirectory = solutionDirectory;
         _isMultiTargeted = isMultiTargeted ?? (_ => false);
         _warmHosts = warmHosts;
         _requiresResources = requiresResources ?? (_ => false);
+        _discoveryCache = discoveryCache ?? new MtpDiscoveryCache();
     }
 
     /// <summary>
@@ -64,7 +67,8 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
             onProgress,
             ct,
             CoverageFor(request),
-            WarmHostsFor(request.ProjectPath));
+            WarmHostsFor(request.ProjectPath),
+            request.ReuseDiscovery ? _discoveryCache : null);
 
     // A successful warm host outlives the resource lease; coordinated projects must exit with it.
     internal MtpWarmHostPool? WarmHostsFor(string projectPath) =>

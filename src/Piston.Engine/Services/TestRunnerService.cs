@@ -81,7 +81,10 @@ public sealed class TestRunnerService : ITestRunnerService
         if (testProjectPaths is null || testProjectPaths.Count == 0)
         {
             // Single target (whole solution path) — run directly
-            var request = new ProjectTestRequest(solutionPath, filter, collectCoverage);
+            var request = new ProjectTestRequest(solutionPath, filter, collectCoverage)
+            {
+                ReuseDiscovery = callbacks.ReuseDiscovery,
+            };
             ProjectTestResult single;
             var (resources, refused) = await AcquireResourcesAsync(solutionPath, callbacks, ct).ConfigureAwait(false);
             if (refused is not null)
@@ -247,7 +250,7 @@ public sealed class TestRunnerService : ITestRunnerService
         CancellationToken ct)
     {
         var requests = testProjectPaths
-            .Select(p => new ProjectTestRequest(p, filter, collectCoverage))
+            .Select(p => new ProjectTestRequest(p, filter, collectCoverage) { ReuseDiscovery = callbacks.ReuseDiscovery })
             .ToList();
 
         async Task<ProjectTestResult> RunOneAsync(ProjectTestRequest request)
@@ -310,7 +313,10 @@ public sealed class TestRunnerService : ITestRunnerService
 
             try
             {
-                var request = new ProjectTestRequest(projectPath, filter, collectCoverage);
+                var request = new ProjectTestRequest(projectPath, filter, collectCoverage)
+                {
+                    ReuseDiscovery = callbacks.ReuseDiscovery,
+                };
                 ProjectTestResult result;
                 var (resources, refused) = await AcquireResourcesAsync(projectPath, callbacks, ct).ConfigureAwait(false);
                 if (refused is not null)
