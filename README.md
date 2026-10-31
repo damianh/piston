@@ -18,10 +18,21 @@ is the dashboard. See [ARCHITECTURE.md](ARCHITECTURE.md) for details and
 
 ## Delivery
 
+<!-- mcp-name: io.github.damianh/piston -->
+
 Piston ships as a framework-dependent .NET tool that provides the stdio MCP server, the daemon (HTTP MCP and the
 dashboard) and the CLI.
 
-Build and install the local .NET tool:
+Once a release is available on [NuGet.org](https://www.nuget.org/packages/Piston), install it globally:
+
+```sh
+dotnet tool install --global Piston
+piston --help
+```
+
+Use `--version <version>` to pin a published version, or `--prerelease` for preview
+releases. Publication is not implied by the examples: until the first release is
+published, build and install locally:
 
 ```sh
 dotnet pack src/Piston/Piston.csproj -c Release -o packages
@@ -35,13 +46,85 @@ Use an actual solution path in the last command. On Windows, the executable is
 is the local development package version; use the built/released version when
 it differs. The package is framework-dependent and requires the .NET 10 SDK
 and ASP.NET Core 10 runtime, plus the target solution's own SDK requirements.
-It bundles the web dashboard; it is not an MCP-specific package or a `dnx`
-entry point.
+It bundles the web dashboard and remains a normal .NET tool; MCP discovery does
+not replace its CLI or daemon.
 
-The release workflow attaches a `.nupkg` to GitHub Releases rather
-than desktop installers. NuGet publication is a separate, opt-in workflow path
-requiring package ownership and credentials; these local commands do not imply
-that a package is already published on NuGet.org.
+### Run without permanent installation
+
+`dnx` (from the .NET 10 SDK) can acquire and run a specific published version:
+
+```sh
+dnx Piston@<version> -- --help
+dnx Piston@<version> -- mcp /path/to/solution.slnx
+```
+
+Replace `<version>` with an actual release version. For local packages, add
+`--source ./packages` before `--`. Arguments after `--` go to Piston. **Include
+`mcp` for an MCP client**: bare `dnx Piston` uses Piston's normal default command,
+which starts/attaches to a daemon and opens a browser, not a stdio server.
+The client's working directory must be the intended worktree. Pin versions in
+MCP configuration so an agent restart does not unexpectedly acquire a new version.
+
+Packages contain `.mcp/server.json`, validated against the pinned
+[MCP server schema](https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json),
+with the packed version, NuGet source, `dnx` runtime and explicit `mcp` argument.
+They declare both `DotnetTool` and `McpServer` package types for NuGet MCP
+discovery. This does **not** publish or claim a listing in the official MCP
+Registry. The framework-dependent runtime requirements above still apply.
+
+### Upgrading
+
+**Stop every Piston process using the installed package before updating, on all
+operating systems.** Close/disconnect stdio MCP sessions in each client, stop
+daemons with `piston stop` in each worktree, and use `piston status --all` to
+check for remaining owners. Do not use `--force` unless you intend to terminate
+the identified process.
+
+```sh
+dotnet tool update --global Piston
+piston --version
+```
+
+Use `--version <version>` to pin the update. For an isolated installation,
+replace `--global` with `--tool-path ./tools`; for a local feed, also add
+`--source ./packages`. Reconnect MCP clients and restart any daemon with its
+previous options (including `--coverage`) after updating.
+
+| Platform | Live update behavior and required procedure |
+|---|---|
+| Linux | Local two-version validation found that updating can succeed while the old process remains live. Its removed package directory makes the dashboard return 404 and a forced MCP test run return `Incomplete`. Update success does not mean the running process upgraded: stop, update, then restart. |
+| macOS | Stop/update/restart is required. The three-OS distribution CI checks both live updates and restart behavior; macOS live-update observations still require a completed CI run. No uninterrupted-upgrade guarantee is made. |
+| Windows | Stop/update/restart is required. Loaded executable/DLL files can lock the tool store. Distribution CI distinguishes file-lock failures from other update errors; Windows observations still require a completed CI run. If an update reports a lock, close remaining sessions/daemons, then retry. |
+
+`dotnet run build.cs -- smoke-distribution` probes live stdio MCP and daemon
+updates with two versions in disposable tool stores, logs the actual behavior,
+and requires the replacement CLI/MCP/daemon to work. It does not update a user's
+global installation. With `dnx`, disconnect the client, change its pinned package
+version and reconnect; an already-running process never switches versions.
+
+### Tagged publishing (maintainers)
+
+The release workflow validates the package and distribution on Linux, macOS and
+Windows, attaches the `.nupkg` to GitHub Releases, and publishes `v*` tags to
+NuGet.org using [Trusted Publishing](https://learn.microsoft.com/en-us/nuget/nuget-org/trusted-publishing).
+Manual runs still require `publish_to_nuget: true` to publish; otherwise they only
+validate and produce an artifact.
+
+Before publishing, establish ownership of the `Piston` package ID on NuGet.org.
+If an initial upload is needed to claim the ID, do it through the maintainer's
+account; an empty search result is not proof of ownership. Create a NuGet
+Trusted Publisher policy with repository owner `damianh`, repository `piston`,
+workflow filename `release.yml` (not its full path), and environment `nuget`.
+Configure that GitHub environment with appropriate protection rules and set the
+repository/environment variable `NUGET_USER` to the owning NuGet profile name,
+not an email address. No long-lived `NUGET_API_KEY` repository secret is used.
+`NuGet/login` exchanges the job's GitHub OIDC token for a temporary push key.
+
+Publishing errors, including duplicate versions, fail the workflow. After a
+push, `smoke-public` waits for NuGet indexing with bounded retries, checks the
+downloaded metadata, and exercises public-feed `dnx` over real stdio MCP.
+The first public tagged release remains an acceptance gate until it actually
+succeeds; local-feed validation alone is not proof of publication.
 
 ## Usage
 

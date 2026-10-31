@@ -1,0 +1,23 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.damianh/piston",
+  "description": "Continuous .NET testing, verification and coverage for coding agents.",
+  "repository": {
+    "url": "https://github.com/damianh/piston",
+    "source": "github"
+  },
+  "version": "@VERSION@",
+  "packages": [
+    {
+      "registryType": "nuget",
+      "registryBaseUrl": "https://api.nuget.org/v3/index.json",
+      "identifier": "Piston",
+      "version": "@VERSION@",
+      "runtimeHint": "dnx",
+      "transport": { "type": "stdio" },
+      "packageArguments": [
+        { "type": "positional", "value": "mcp" }
+      ]
+    }
+  ]
+}

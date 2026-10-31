@@ -132,9 +132,15 @@ ARCHITECTURE describe the implementation in detail.
 ## Near-term
 
 ### Distribution
-- Publish to NuGet.org: reserve the package ID and use the opt-in release path.
-- Validate `dnx` invocation and MCP registry metadata before documenting them.
-- Validate tool upgrades while sessions are running, including Windows file locks.
+- Complete the first public tagged NuGet release after package ownership and
+  Trusted Publisher setup; tagged publishing uses GitHub OIDC, manual publishing
+  remains opt-in.
+- NuGet MCP discovery metadata and local-feed `dnx` are checked by distribution
+  smoke tests. Official MCP Registry publication remains deferred.
+- Distribution CI probes live updates and requires stop/update/restart on Linux,
+  macOS and Windows. Collect the three-OS observations before making any
+  uninterrupted-upgrade guarantees; Linux validation already shows removed
+  dashboard assets in a live old process.
 
 ## Later
 

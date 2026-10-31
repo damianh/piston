@@ -10,7 +10,7 @@ on:
         description: "NuGet version to package (e.g. 0.1.0)"
         required: true
       publish_to_nuget:
-        description: "Publish to NuGet.org (requires package ownership and NUGET_API_KEY)"
+        description: "Publish to NuGet.org (requires package ownership and Trusted Publishing setup)"
         type: boolean
         default: false
 
@@ -25,21 +25,36 @@ jobs:
   test:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
       - run: dotnet build Piston.slnx -c Release
       - run: dotnet test Piston.slnx -c Release --no-build
 
+  distribution:
+    name: Distribution (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+      - run: dotnet run build.cs -- smoke-distribution
+
   package:
-    needs: test
+    needs: [test, distribution]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: "10.0.x"
       - name: Determine version
@@ -82,14 +97,45 @@ jobs:
             gh release create "$GITHUB_REF_NAME" --verify-tag --generate-notes
           fi
           gh release upload "$GITHUB_REF_NAME" packages/*.nupkg
-      - name: Publish tool to NuGet.org
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_to_nuget
+
+  publish:
+    needs: package
+    if: github.event_name == 'push' || inputs.publish_to_nuget
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: nuget
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          name: piston-nuget-tool
+          path: packages
+      - name: Validate publishing configuration
         env:
-          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+          NUGET_USER: ${{ vars.NUGET_USER }}
         run: |
-          if [ -z "$NUGET_API_KEY" ]; then
-            echo "::error::Publishing requires package ownership and the NUGET_API_KEY secret."
+          if [ -z "$NUGET_USER" ]; then
+            echo "::error::Set the NUGET_USER variable and configure the NuGet Trusted Publisher for release.yml and environment nuget."
             exit 1
           fi
+      - name: Obtain short-lived NuGet credentials
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ${{ vars.NUGET_USER }}
+      - name: Publish tool to NuGet.org
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: |
           dotnet nuget push "packages/*.nupkg" --source https://api.nuget.org/v3/index.json \
             --api-key "$NUGET_API_KEY"
+      - name: Verify public package and dnx MCP after indexing
+        env:
+          PISTON_PACKAGES: packages
+        run: dotnet run build.cs -- smoke-public
