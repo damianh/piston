@@ -503,7 +503,7 @@ static string CreateSmokeFixture(string root, string sourceSolution)
         File.Copy(file, destination);
     }
 
-    File.Copy(".editorconfig", Path.Combine(fixture, ".editorconfig"));
+    File.Copy(Path.Combine(sourceDirectory, ".editorconfig"), Path.Combine(fixture, ".editorconfig"));
     return Path.Combine(fixture, Path.GetFileName(sourceSolution));
 }
 
