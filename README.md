@@ -92,9 +92,14 @@ previous options (including `--coverage`) after updating.
 
 | Platform | Live update behavior and required procedure |
 |---|---|
-| Linux | Local two-version validation found that updating can succeed while the old process remains live. Its removed package directory makes the dashboard return 404 and a forced MCP test run return `Incomplete`. Update success does not mean the running process upgraded: stop, update, then restart. |
-| macOS | Stop/update/restart is required. The three-OS distribution CI checks both live updates and restart behavior; macOS live-update observations still require a completed CI run. No uninterrupted-upgrade guarantee is made. |
-| Windows | Stop/update/restart is required. Loaded executable/DLL files can lock the tool store. Distribution CI distinguishes file-lock failures from other update errors; Windows observations still require a completed CI run. If an update reports a lock, close remaining sessions/daemons, then retry. |
+| Linux | Two-version validation on Ubuntu found that updating succeeds while the old process remains live. Its removed package directory makes the dashboard return 404 and a forced MCP test run return `Incomplete`. Stop/update/restart restores the dashboard and full test execution. |
+| macOS | Validation on macOS found the same behavior as Linux: updating succeeds, but the old daemon loses dashboard assets and the old MCP process cannot complete a forced test run. Stop/update/restart restores both. |
+| Windows | Validation found that both live MCP and daemon updates fail to uninstall the old version with `Access to the path ...\.store\piston\<version> is denied`. The old processes continue working. Closing the clients/stopping the daemon, retrying the update and restarting succeeds. |
+
+These observations come from a [three-OS non-publishing release validation](https://github.com/damianh/piston/actions/runs/41178160412)
+using .NET 10 and isolated `--tool-path` installations (the same `.store` layout).
+They are not an uninterrupted-upgrade guarantee for every SDK/runtime version.
+Update success does not mean an already-running process upgraded.
 
 `dotnet run build.cs -- smoke-distribution` probes live stdio MCP and daemon
 updates with two versions in disposable tool stores, logs the actual behavior,

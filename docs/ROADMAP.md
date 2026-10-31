@@ -137,10 +137,10 @@ ARCHITECTURE describe the implementation in detail.
   remains opt-in.
 - NuGet MCP discovery metadata and local-feed `dnx` are checked by distribution
   smoke tests. Official MCP Registry publication remains deferred.
-- Distribution CI probes live updates and requires stop/update/restart on Linux,
-  macOS and Windows. Collect the three-OS observations before making any
-  uninterrupted-upgrade guarantees; Linux validation already shows removed
-  dashboard assets in a live old process.
+- Three-OS distribution validation confirmed that Linux/macOS live updates remove
+  files needed by old processes, while Windows live updates encounter tool-store
+  locks. Stop/update/restart passes on all three; do not promise uninterrupted
+  upgrades.
 
 ## Later
 
