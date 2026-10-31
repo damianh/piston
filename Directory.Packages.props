@@ -5,6 +5,7 @@
   <ItemGroup>
     <PackageVersion Include="Bullseye" Version="6.3.0" />
     <PackageVersion Include="Jint" Version="4.17.0" />
+    <PackageVersion Include="JsonSchema.Net" Version="7.4.0" />
     <PackageVersion Include="Microsoft.Build" Version="17.14.28" />
     <PackageVersion Include="Microsoft.Build.Framework" Version="17.14.28" />
     <PackageVersion Include="Microsoft.Build.Locator" Version="1.11.2" />

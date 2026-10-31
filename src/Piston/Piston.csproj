@@ -4,6 +4,8 @@
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>piston</ToolCommandName>
     <PackageId>Piston</PackageId>
+    <PackageType>DotnetTool;McpServer</PackageType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
     <Version>0.1.0</Version>
     <Authors>Damian Hickey</Authors>
     <Description>Continuous .NET test backend with stdio and HTTP MCP test tools and a web dashboard.</Description>
@@ -11,6 +13,18 @@
     <RepositoryUrl>https://github.com/damianh/piston</RepositoryUrl>
     <PackageProjectUrl>https://github.com/damianh/piston</PackageProjectUrl>
   </PropertyGroup>
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+  <Target Name="GenerateMcpMetadata" BeforeTargets="_GetPackageFiles">
+    <PropertyGroup>
+      <_McpMetadata>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)/Integration/server.json').Replace('@VERSION@', '$(PackageVersion)'))</_McpMetadata>
+    </PropertyGroup>
+    <WriteLinesToFile File="$(IntermediateOutputPath)server.json" Lines="$(_McpMetadata)" Overwrite="true" Encoding="UTF-8" />
+    <ItemGroup>
+      <None Include="$(IntermediateOutputPath)server.json" Pack="true" PackagePath="/.mcp/" />
+    </ItemGroup>
+  </Target>
   <ItemGroup>
     <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
