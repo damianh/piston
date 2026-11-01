@@ -162,7 +162,7 @@ async Task<(string Line, string Status, Counts Counts, int Suites)> WaitForStart
         }
 
         var (status, _) = await ReadAsync(tool, ["status", samples], handleExitCode: _ => true);
-        var latest = Regex.Match(status, @"^\s*Latest\s*:\s*(.+)$", RegexOptions.Multiline);
+        var latest = MyRegex().Match(status);
         var active = Regex.IsMatch(status, @"^\s*Active\s*:", RegexOptions.Multiline);
         var fields = latest.Success ? latest.Groups[1].Value.Split('|').Select(f => f.Trim()).ToArray() : [];
         if (fields.Length > 2 && fields[1] == "Startup" && !active)
@@ -730,3 +730,9 @@ internal sealed record Counts(int Total, int Passed, int Failed, int Skipped);
 internal sealed class SmokeTestException(string message) : Exception(message);
 
 internal sealed class PackCheckException(string message) : Exception(message);
+
+partial class Program
+{
+    [GeneratedRegex(@"^\s*Latest\s*:\s*(.+)$", RegexOptions.Multiline)]
+    private static partial Regex MyRegex();
+}

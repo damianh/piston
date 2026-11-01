@@ -39,8 +39,8 @@ internal sealed class RunHistoryStore : IDisposable
         Converters = { new JsonStringEnumConverter() },
     };
 
-    private readonly object _gate = new();
-    private readonly object _saveGate = new();
+    private readonly Lock _gate = new();
+    private readonly Lock _saveGate = new();
     private readonly Dictionary<(string Project, string Test), List<TestHistoryEntry>> _tests = [];
     private HashSet<string> _knownProjectIds = new(StringComparer.Ordinal);
     private readonly List<StoredRun> _runs = []; // oldest first

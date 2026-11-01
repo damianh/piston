@@ -3,19 +3,6 @@
 
 namespace Piston.Engine.Execution;
 
-/// <summary>How a test project's runs are isolated from runs of the same project in other worktrees.</summary>
-public enum TestResourceIsolation
-{
-    /// <summary>
-    /// One run of the project at a time per repository, across all its worktrees on the machine. The
-    /// default for projects that use containers, which commonly reuse fixed container names and ports.
-    /// </summary>
-    Repository,
-
-    /// <summary>No project-level isolation: only the declared exclusive resources are coordinated.</summary>
-    None,
-}
-
 /// <summary>
 /// A <c>testResources</c> entry from <c>.piston.json</c>: overrides what Piston infers about the shared
 /// resources of the test projects matching <see cref="Projects"/>. Every matching rule applies in order;

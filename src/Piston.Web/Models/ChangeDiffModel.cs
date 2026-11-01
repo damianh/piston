@@ -5,33 +5,6 @@ using Piston.Protocol.Dtos;
 
 namespace Piston.Web.Models;
 
-/// <summary>What the Coverage tab shows: every measured file, or the diff of the changes.</summary>
-public enum CoverageMode
-{
-    Files,
-    Changes,
-}
-
-/// <summary>An added line of a changed file.</summary>
-/// <param name="FilePath">Absolute path of the file.</param>
-/// <param name="Line">1-based line number in the changed file.</param>
-public sealed record ChangeLineRef(string FilePath, int Line);
-
-/// <summary>How a changed line's verdict is shown.</summary>
-/// <param name="Label">Short name, e.g. "uncovered".</param>
-/// <param name="Glyph">A mark that tells verdicts apart without colour.</param>
-/// <param name="Description">What the verdict means.</param>
-/// <param name="RowClass">Tint for the line.</param>
-/// <param name="GutterClass">Colour of the gutter bar.</param>
-/// <param name="TextClass">Colour for the label.</param>
-public sealed record VerdictStyle(
-    string Label, string Glyph, string Description, string RowClass, string GutterClass, string TextClass);
-
-/// <summary>The tests recorded as executing a changed line.</summary>
-/// <param name="Credited">Tests measured on the file as it is now: they ran the line, and their outcome counts.</param>
-/// <param name="Outdated">Tests measured on an older version of the file, whose ranges include the line number but may not be the line.</param>
-public sealed record LineTests(IReadOnlyList<CoveringTestDto> Credited, IReadOnlyList<CoveringTestDto> Outdated);
-
 /// <summary>Pure helpers behind the Coverage tab's Changes view.</summary>
 public static class ChangeDiffModel
 {

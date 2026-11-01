@@ -6,9 +6,6 @@ using Piston.Engine.Execution;
 
 namespace Piston.Hosting;
 
-internal sealed record DashboardEndpoint(string State, string Message, string? Url = null,
-    string? Worktree = null, int? ProcessId = null, DateTimeOffset? AcquiredAt = null);
-
 internal static class DashboardDiscovery
 {
     public static DashboardEndpoint Inspect(string path, ExecutionCoordinationDirectory? directory = null)

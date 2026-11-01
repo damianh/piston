@@ -12,7 +12,7 @@ namespace Piston.Engine.Services;
 /// bounded tail of raw output so failures without a recognizable error line still carry details.
 /// Thread-safe: stdout and stderr callbacks may arrive concurrently.
 /// </summary>
-internal sealed class BuildOutputCollector
+internal sealed partial class BuildOutputCollector(int maxTailLines = BuildOutputCollector.DefaultMaxTailLines)
 {
     internal const int DefaultMaxTailLines = 30;
     internal const int MaxTailLineLength = 500;
@@ -22,7 +22,7 @@ internal sealed class BuildOutputCollector
     //   MSBUILD : error MSB1009: message
     //   path : error : message            (codeless, e.g. <Error Text="..."/> without Code)
     private static readonly Regex ErrorPattern =
-        new(@":\s*error(?:\s+[\w.-]+)?\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        MyRegex();
 
     private static readonly Regex WarningPattern =
         new(@":\s*warning(?:\s+[\w.-]+)?\s*:", RegexOptions.Compiled | RegexOptions.IgnoreCase);
@@ -33,16 +33,13 @@ internal sealed class BuildOutputCollector
     private static readonly Regex ProjectOutputPattern =
         new(@"^\s*(?<name>[\w.-]+(?: [\w.-]+)*) -> \S", RegexOptions.Compiled);
 
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly List<string> _errors = [];
     private readonly List<string> _warnings = [];
     private readonly Queue<string> _tail = new();
-    private readonly int _maxTailLines;
+    private readonly int _maxTailLines = Math.Max(1, maxTailLines);
     private int _omittedErrors;
     private int _omittedWarnings;
-
-    public BuildOutputCollector(int maxTailLines = DefaultMaxTailLines) =>
-        _maxTailLines = Math.Max(1, maxTailLines);
 
     /// <summary>Returns the project name when <paramref name="line"/> reports a built project's output.</summary>
     public static bool TryParseBuiltProject(string? line, out string projectName)
@@ -166,4 +163,7 @@ internal sealed class BuildOutputCollector
             _ = _tail.Dequeue();
         }
     }
+
+    [GeneratedRegex(@":\s*error(?:\s+[\w.-]+)?\s*:", RegexOptions.IgnoreCase | RegexOptions.Compiled, "en-US")]
+    private static partial Regex MyRegex();
 }

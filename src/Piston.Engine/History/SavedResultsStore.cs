@@ -37,8 +37,8 @@ internal sealed class SavedResultsStore : IDisposable
         },
     };
 
-    private readonly object _gate = new();
-    private readonly object _saveGate = new();
+    private readonly Lock _gate = new();
+    private readonly Lock _saveGate = new();
     private readonly string _solutionPath;
     private readonly string _filePath;
     private readonly string _engineVersion;
@@ -389,12 +389,3 @@ internal sealed class SavedResultsStore : IDisposable
         public TestRunRecord? LastRun { get; set; }
     }
 }
-
-internal sealed record SavedResultsSnapshot(
-    DateTimeOffset SavedAt,
-    DateTimeOffset? LastRunTime,
-    TimeSpan? LastBuildDuration,
-    TimeSpan? LastTestDuration,
-    BuildResult? LastBuild,
-    IReadOnlyList<TestSuite> TestSuites,
-    TestRunRecord? LastRun);

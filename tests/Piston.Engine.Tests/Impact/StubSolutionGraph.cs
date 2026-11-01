@@ -5,36 +5,24 @@ using Piston.Engine.Impact;
 
 namespace Piston.Engine.Tests.Impact;
 
-internal sealed class StubSolutionGraph : ISolutionGraph
+internal sealed class StubSolutionGraph(
+    IEnumerable<string> allProjects,
+    IEnumerable<string> testProjects,
+    Dictionary<string, IReadOnlySet<string>>? transitiveDependents = null,
+    Dictionary<string, string>? fileToProject = null,
+    Dictionary<string, IReadOnlyList<string>>? projectToFiles = null,
+    HashSet<string>? mtpProjects = null,
+    Dictionary<string, string>? mtpOutputPaths = null,
+    Dictionary<string, IReadOnlySet<string>>? transitiveDependencies = null) : ISolutionGraph
 {
-    private readonly List<string> _allProjects;
-    private readonly List<string> _testProjects;
-    private readonly Dictionary<string, IReadOnlySet<string>> _transitiveDependents;
-    private readonly Dictionary<string, string> _fileToProject;
-    private readonly Dictionary<string, IReadOnlyList<string>> _projectToFiles;
-    private readonly HashSet<string> _mtpProjects;
-    private readonly Dictionary<string, string> _mtpOutputPaths;
-    private readonly Dictionary<string, IReadOnlySet<string>> _transitiveDependencies;
-
-    public StubSolutionGraph(
-        IEnumerable<string> allProjects,
-        IEnumerable<string> testProjects,
-        Dictionary<string, IReadOnlySet<string>>? transitiveDependents = null,
-        Dictionary<string, string>? fileToProject = null,
-        Dictionary<string, IReadOnlyList<string>>? projectToFiles = null,
-        HashSet<string>? mtpProjects = null,
-        Dictionary<string, string>? mtpOutputPaths = null,
-        Dictionary<string, IReadOnlySet<string>>? transitiveDependencies = null)
-    {
-        _allProjects = allProjects.ToList();
-        _testProjects = testProjects.ToList();
-        _transitiveDependents = transitiveDependents ?? [];
-        _fileToProject = fileToProject ?? [];
-        _projectToFiles = projectToFiles ?? [];
-        _mtpProjects = mtpProjects ?? [];
-        _mtpOutputPaths = mtpOutputPaths ?? [];
-        _transitiveDependencies = transitiveDependencies ?? [];
-    }
+    private readonly List<string> _allProjects = allProjects.ToList();
+    private readonly List<string> _testProjects = testProjects.ToList();
+    private readonly Dictionary<string, IReadOnlySet<string>> _transitiveDependents = transitiveDependents ?? [];
+    private readonly Dictionary<string, string> _fileToProject = fileToProject ?? [];
+    private readonly Dictionary<string, IReadOnlyList<string>> _projectToFiles = projectToFiles ?? [];
+    private readonly HashSet<string> _mtpProjects = mtpProjects ?? [];
+    private readonly Dictionary<string, string> _mtpOutputPaths = mtpOutputPaths ?? [];
+    private readonly Dictionary<string, IReadOnlySet<string>> _transitiveDependencies = transitiveDependencies ?? [];
 
     public IReadOnlyList<string> AllProjectPaths => _allProjects;
     public IReadOnlyList<string> TestProjectPaths => _testProjects;

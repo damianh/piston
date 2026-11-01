@@ -10,12 +10,8 @@ namespace Piston.Engine.Coverage;
 /// Records the merged report, and uses run-level granularity for attribution: all tests
 /// in the run are attributed to every covered file/line in the Cobertura reports.
 /// </summary>
-internal sealed class CoverageProcessor : ICoverageProcessor
+internal sealed class CoverageProcessor(ICoberturaParser parser) : ICoverageProcessor
 {
-    private readonly ICoberturaParser _parser;
-
-    public CoverageProcessor(ICoberturaParser parser) => _parser = parser;
-
     public async Task ProcessCoverageAsync(
         long runId,
         IReadOnlyList<string> coberturaXmlPaths,
@@ -110,7 +106,7 @@ internal sealed class CoverageProcessor : ICoverageProcessor
             CoberturaReport report;
             try
             {
-                report = _parser.Parse(xmlPath);
+                report = parser.Parse(xmlPath);
             }
             catch
             {

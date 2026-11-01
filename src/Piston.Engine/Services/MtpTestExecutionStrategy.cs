@@ -17,30 +17,17 @@ namespace Piston.Engine.Services;
 /// path (i.e. it is not an MTP project), causing <see cref="CompositeTestExecutionStrategy"/>
 /// to fall back to the VSTest path.
 /// </remarks>
-internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
+internal sealed class MtpTestExecutionStrategy(
+    Func<string, string?> getMtpOutputPath,
+    string solutionDirectory,
+    Func<string, bool>? isMultiTargeted = null,
+    MtpWarmHostPool? warmHosts = null,
+    Func<string, bool>? requiresResources = null,
+    MtpDiscoveryCache? discoveryCache = null) : ITestExecutionStrategy
 {
-    private readonly Func<string, string?> _getMtpOutputPath;
-    private readonly Func<string, bool> _isMultiTargeted;
-    private readonly string _solutionDirectory;
-    private readonly MtpWarmHostPool? _warmHosts;
-    private readonly Func<string, bool> _requiresResources;
-    private readonly MtpDiscoveryCache _discoveryCache;
-
-    public MtpTestExecutionStrategy(
-        Func<string, string?> getMtpOutputPath,
-        string solutionDirectory,
-        Func<string, bool>? isMultiTargeted = null,
-        MtpWarmHostPool? warmHosts = null,
-        Func<string, bool>? requiresResources = null,
-        MtpDiscoveryCache? discoveryCache = null)
-    {
-        _getMtpOutputPath = getMtpOutputPath;
-        _solutionDirectory = solutionDirectory;
-        _isMultiTargeted = isMultiTargeted ?? (_ => false);
-        _warmHosts = warmHosts;
-        _requiresResources = requiresResources ?? (_ => false);
-        _discoveryCache = discoveryCache ?? new MtpDiscoveryCache();
-    }
+    private readonly Func<string, bool> _isMultiTargeted = isMultiTargeted ?? (_ => false);
+    private readonly Func<string, bool> _requiresResources = requiresResources ?? (_ => false);
+    private readonly MtpDiscoveryCache _discoveryCache = discoveryCache ?? new MtpDiscoveryCache();
 
     /// <summary>
     /// The test app to drive in server mode, or <see langword="null"/> to use <c>dotnet test</c>.
@@ -48,12 +35,12 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
     /// uses <c>dotnet test --project</c>, which runs every framework.
     /// </summary>
     internal string? ServerAppPath(string projectPath) =>
-        _isMultiTargeted(projectPath) ? null : _getMtpOutputPath(projectPath);
+        _isMultiTargeted(projectPath) ? null : getMtpOutputPath(projectPath);
 
     /// <inheritdoc/>
     /// <remarks>Returns <see langword="true"/> only when an MTP output path is available for the project.</remarks>
     public bool CanExecute(string projectPath) =>
-        _getMtpOutputPath(projectPath) is not null;
+        getMtpOutputPath(projectPath) is not null;
 
     /// <inheritdoc/>
     public Task<ProjectTestResult> ExecuteAsync(
@@ -62,7 +49,7 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
         CancellationToken ct) => MtpTestProcessRunner.RunAsync(
             request.ProjectPath,
             ServerAppPath(request.ProjectPath),
-            _solutionDirectory,
+            solutionDirectory,
             request.Filter,
             onProgress,
             ct,
@@ -72,7 +59,7 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
 
     // A successful warm host outlives the resource lease; coordinated projects must exit with it.
     internal MtpWarmHostPool? WarmHostsFor(string projectPath) =>
-        _requiresResources(projectPath) ? null : _warmHosts;
+        _requiresResources(projectPath) ? null : warmHosts;
 
     private MtpCoverage CoverageFor(ProjectTestRequest request)
     {
@@ -81,7 +68,7 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
             return MtpCoverage.Off;
         }
 
-        return HasCoverageExtension(_getMtpOutputPath(request.ProjectPath)) ? MtpCoverage.Collect : MtpCoverage.ExtensionMissing;
+        return HasCoverageExtension(getMtpOutputPath(request.ProjectPath)) ? MtpCoverage.Collect : MtpCoverage.ExtensionMissing;
     }
 
     /// <summary>
@@ -100,15 +87,5 @@ internal sealed class MtpTestExecutionStrategy : ITestExecutionStrategy
         string? filter,
         Action<IReadOnlyList<TestResult>>? onPartial,
         CancellationToken ct) =>
-        MtpTestProcessRunner.DiscoverAsync(projectPath, ServerAppPath(projectPath), _solutionDirectory, filter, onPartial, ct, WarmHostsFor(projectPath));
-}
-
-/// <summary>Whether, and why not, an MTP test run collects code coverage.</summary>
-internal enum MtpCoverage
-{
-    Off,
-    Collect,
-
-    /// <summary>Coverage was requested but the test app cannot collect it.</summary>
-    ExtensionMissing,
+        MtpTestProcessRunner.DiscoverAsync(projectPath, ServerAppPath(projectPath), solutionDirectory, filter, onPartial, ct, WarmHostsFor(projectPath));
 }

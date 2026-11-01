@@ -11,12 +11,9 @@ namespace Piston.Protocol.Transports;
 /// Continuously accepts new client connections on a named pipe,
 /// yielding a connected <see cref="Stream"/> for each client.
 /// </summary>
-public sealed class NamedPipeListener : IAsyncDisposable
+public sealed class NamedPipeListener(string pipeName) : IAsyncDisposable
 {
-    private readonly string _pipeName;
     private bool _disposed;
-
-    public NamedPipeListener(string pipeName) => _pipeName = pipeName;
 
     /// <summary>
     /// Yields a connected <see cref="Stream"/> for each new client.
@@ -27,7 +24,7 @@ public sealed class NamedPipeListener : IAsyncDisposable
     {
         while (!ct.IsCancellationRequested && !_disposed)
         {
-            var transport = new NamedPipeServerTransport(_pipeName);
+            var transport = new NamedPipeServerTransport(pipeName);
             Stream stream;
             try
             {

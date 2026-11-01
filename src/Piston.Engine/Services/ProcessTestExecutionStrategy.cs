@@ -10,11 +10,8 @@ namespace Piston.Engine.Services;
 /// <see cref="TestProcessRunner.RunAsync"/> — the universal fallback that spawns a
 /// <c>dotnet test</c> process per project.
 /// </summary>
-internal sealed class ProcessTestExecutionStrategy : ITestExecutionStrategy
+internal sealed class ProcessTestExecutionStrategy(ITestResultParser parser) : ITestExecutionStrategy
 {
-    private readonly ITestResultParser _parser;
-
-    public ProcessTestExecutionStrategy(ITestResultParser parser) => _parser = parser;
 
     /// <inheritdoc/>
     /// <remarks>Always returns <see langword="true"/> — process-based execution works for any project.</remarks>
@@ -30,7 +27,7 @@ internal sealed class ProcessTestExecutionStrategy : ITestExecutionStrategy
             request.Filter,
             request.CollectCoverage,
             onProgress,
-            _parser,
+            parser,
             ct);
 
     /// <inheritdoc/>

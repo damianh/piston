@@ -20,10 +20,9 @@ namespace Piston.Hosting;
 /// protocol router (named pipe + WebSocket), web dashboard server, and optional MCP server.
 /// Used by the CLI (<c>piston daemon</c>).
 /// </summary>
-public sealed class DaemonHost : IAsyncDisposable
+public sealed class DaemonHost(DaemonHostOptions options) : IAsyncDisposable
 {
-    private readonly DaemonHostOptions _options;
-    private readonly Action<string> _log;
+    private readonly Action<string> _log = options.Log;
 
     private PistonEngine? _engine;
     private ProtocolRouter? _router;
@@ -34,20 +33,14 @@ public sealed class DaemonHost : IAsyncDisposable
     private DateTimeOffset _startedAt;
     private bool _disposed;
 
-    public DaemonHost(DaemonHostOptions options)
-    {
-        _options = options;
-        _log = options.Log;
-    }
-
     /// <summary>The running engine. Available after <see cref="StartAsync"/>.</summary>
     public IEngine Engine => _engine ?? throw new InvalidOperationException("DaemonHost not started.");
 
     /// <summary>The web dashboard URL. Available after <see cref="StartAsync"/>.</summary>
-    public string WebUrl => $"http://localhost:{_options.WebPort}";
+    public string WebUrl => $"http://localhost:{options.WebPort}";
 
     /// <summary>The HTTP MCP endpoint URL, or null when MCP is disabled.</summary>
-    public string? McpUrl => _options.McpPort is { } port ? $"http://localhost:{port}" : null;
+    public string? McpUrl => options.McpPort is { } port ? $"http://localhost:{port}" : null;
 
     /// <summary>Asks <see cref="WaitForShutdownAsync"/> to return so the host can stop. Does not block.</summary>
     public void RequestShutdown()
@@ -59,8 +52,8 @@ public sealed class DaemonHost : IAsyncDisposable
     /// <summary>Describes this daemon for <c>daemon/info</c>.</summary>
     public DaemonInfoResponse GetInfo() => new(
         Environment.ProcessId,
-        _options.SolutionPath,
-        _options.PipeName,
+        options.SolutionPath,
+        options.PipeName,
         _startedAt,
         typeof(DaemonHost).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion,
         WebUrl,
@@ -109,23 +102,23 @@ public sealed class DaemonHost : IAsyncDisposable
 
         // Use a proxy sink so the router (created after engine) can receive activity events.
         var activityProxy = new ActivityEventSinkProxy();
-        _engine = new PistonEngine(_options.EngineOptions, activityProxy);
+        _engine = new PistonEngine(options.EngineOptions, activityProxy);
 
-        _log($"[piston] Starting engine for: {_options.SolutionPath}");
+        _log($"[piston] Starting engine for: {options.SolutionPath}");
         var engine = _engine;
 
         // Endpoints start after worktree ownership is held but before watching or the startup run,
         // so an endpoint conflict fails the daemon without starting a run.
-        await engine.StartAsync(_options.SolutionPath, () => StartEndpointsAsync(engine, activityProxy, ct))
+        await engine.StartAsync(options.SolutionPath, () => StartEndpointsAsync(engine, activityProxy, ct))
             .ConfigureAwait(false);
 
         // A daemon must not outlive its worktree: shut down so ports, pipe and ownership are released.
-        var worktreeRoot = WorktreeIdentity.FromSolutionPath(_options.SolutionPath).RootPath;
-        _presenceMonitor = new WorktreePresenceMonitor(_options.SolutionPath, worktreeRoot, root =>
+        var worktreeRoot = WorktreeIdentity.FromSolutionPath(options.SolutionPath).RootPath;
+        _presenceMonitor = new WorktreePresenceMonitor(options.SolutionPath, worktreeRoot, root =>
         {
             _log($"[piston] Worktree '{root}' no longer exists; shutting down.");
             RequestShutdown();
-        }, _options.PresenceCheckInterval);
+        }, options.PresenceCheckInterval);
         _presenceMonitor.Start();
     }
 
@@ -149,9 +142,9 @@ public sealed class DaemonHost : IAsyncDisposable
 
     private async Task StartEndpointsAsync(PistonEngine engine, ActivityEventSinkProxy activityProxy, CancellationToken ct)
     {
-        _log($"[piston] Listening on pipe: {_options.PipeName}");
+        _log($"[piston] Listening on pipe: {options.PipeName}");
 
-        var listener = new NamedPipeListener(_options.PipeName);
+        var listener = new NamedPipeListener(options.PipeName);
         _router = new ProtocolRouter(engine, listener);
         _router.SetMachineOverviewProvider(
             ct => MachineExecutionOverviewReader.ReadAsync(_engine!.ExecutionCoordinationDirectory, ct));
@@ -160,7 +153,7 @@ public sealed class DaemonHost : IAsyncDisposable
         activityProxy.SetSink(_router);
 
         // Wire MCP call tracking into the activity timeline and call log.
-        var mcpCallTracker = new McpCallTracker(_router.Emit, _options.SolutionPath);
+        var mcpCallTracker = new McpCallTracker(_router.Emit, options.SolutionPath);
         _router.SetMcpCallTracker(mcpCallTracker);
         _router.SetDaemonControl(new DaemonControl(GetInfo, RequestShutdown));
         ConfigureUserSettings(_router);
@@ -178,9 +171,9 @@ public sealed class DaemonHost : IAsyncDisposable
                 $"Could not start the web dashboard on {WebUrl}: {ex.Message} Choose a different --web-port.", ex);
         }
         engine.PublishDashboardUrl(_dashboard.Url);
-        _log($"[piston] Web server (WebSocket) listening on port: {_options.WebPort}");
+        _log($"[piston] Web server (WebSocket) listening on port: {options.WebPort}");
 
-        if (_options.McpPort is not null)
+        if (options.McpPort is not null)
         {
             // MCP always runs on its own dedicated app to avoid middleware conflicts
             var mcpBuilder = WebApplication.CreateBuilder();
@@ -189,11 +182,11 @@ public sealed class DaemonHost : IAsyncDisposable
             _mcpApp = mcpBuilder.Build();
             _ = _mcpApp.UseRequestGuard(securityHeaders: false);
             _ = _mcpApp.MapMcp();
-            _mcpApp.Urls.Add($"http://localhost:{_options.McpPort}");
+            _mcpApp.Urls.Add($"http://localhost:{options.McpPort}");
 
             await StartEndpointAsync(_mcpApp, "MCP server", McpUrl!, "--mcp-port (or mcpPort in .piston.json)", ct)
                 .ConfigureAwait(false);
-            _log($"[piston] MCP server listening on port: {_options.McpPort}");
+            _log($"[piston] MCP server listening on port: {options.McpPort}");
         }
     }
 

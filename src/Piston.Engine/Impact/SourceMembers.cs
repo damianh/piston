@@ -10,14 +10,6 @@ using Microsoft.CodeAnalysis.Text;
 
 namespace Piston.Engine.Impact;
 
-/// <summary>A C# member with a stable syntax-derived identity and token hash.</summary>
-internal sealed record SourceMember(
-    string Key,
-    string BodyHash,
-    string TextHash,
-    LineSpan Lines,
-    IReadOnlyList<int> TokenLines);
-
 /// <summary>Member identities and the non-member syntax of one C# source file.</summary>
 internal sealed class SourceMembers
 {
@@ -293,4 +285,12 @@ internal sealed class SourceMembers
     }
 
     private static string Hash(string value) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+
+    /// <summary>A C# member with a stable syntax-derived identity and token hash.</summary>
+    internal sealed record SourceMember(
+        string Key,
+        string BodyHash,
+        string TextHash,
+        LineSpan Lines,
+        IReadOnlyList<int> TokenLines);
 }

@@ -12,11 +12,9 @@ namespace Piston.Engine.Services;
 /// projects can be built with a single <c>dotnet build</c> invocation. Projects referenced
 /// by filtered projects are still built through their <c>ProjectReference</c>s.
 /// </summary>
-internal static class SolutionFilterBuilder
+internal static partial class SolutionFilterBuilder
 {
-    private static readonly Regex SlnProjectLine = new(
-        @"^Project\(""\{[^}]+\}""\)\s*=\s*""[^""]*""\s*,\s*""(?<path>[^""]+)""",
-        RegexOptions.Compiled | RegexOptions.Multiline);
+    private static readonly Regex SlnProjectLine = MyRegex();
 
     /// <summary>
     /// Resolves the underlying <c>.sln</c>/<c>.slnx</c> and its member projects (absolute paths).
@@ -123,4 +121,6 @@ internal static class SolutionFilterBuilder
 
     private static string NormalizeSeparators(string path) =>
         path.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
+    [GeneratedRegex(@"^Project\(""\{[^}]+\}""\)\s*=\s*""[^""]*""\s*,\s*""(?<path>[^""]+)""", RegexOptions.Multiline | RegexOptions.Compiled)]
+    private static partial Regex MyRegex();
 }

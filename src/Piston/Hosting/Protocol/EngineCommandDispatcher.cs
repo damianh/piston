@@ -20,11 +20,9 @@ namespace Piston.Hosting.Protocol;
 /// <summary>
 /// Bridges JSON-RPC command dispatch to <see cref="IEngine"/> method calls.
 /// </summary>
-public sealed class EngineCommandDispatcher : ICommandDispatcher
+public sealed class EngineCommandDispatcher(IEngine engine) : ICommandDispatcher
 {
     private static readonly char[] ForbiddenFilterChars = ['"', '&', '|', ';', '`', '$'];
-
-    private readonly IEngine _engine;
     private McpCallTracker? _mcpCallTracker;
     private DaemonControl? _daemonControl;
     private ActivityHistory? _activityHistory;
@@ -35,10 +33,8 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
     // Even JSON's worst-case six-byte character escaping stays well below the 4 MiB pipe frame limit.
     internal const int CoverageExportChunkChars = 64 * 1024;
 
-    public EngineCommandDispatcher(IEngine engine) => _engine = engine;
-
     private string? SolutionDirectory =>
-        _engine.State.SolutionPath is { } solutionPath ? Path.GetDirectoryName(Path.GetFullPath(solutionPath)) : null;
+        engine.State.SolutionPath is { } solutionPath ? Path.GetDirectoryName(Path.GetFullPath(solutionPath)) : null;
 
     /// <summary>Delay before a requested shutdown starts, so the reply reaches the client first.</summary>
     internal static TimeSpan ShutdownReplyGrace { get; set; } = TimeSpan.FromMilliseconds(100);
@@ -70,11 +66,11 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                     "engine/start not available in headless mode — solution is configured at launch.");
 
             case ProtocolMethods.EngineForceRun:
-                await _engine.ForceRunAsync().ConfigureAwait(false);
+                await engine.ForceRunAsync().ConfigureAwait(false);
                 return null;
 
             case ProtocolMethods.EngineStop:
-                _engine.Stop();
+                engine.Stop();
                 return null;
 
             case ProtocolMethods.EngineSetFilter:
@@ -82,23 +78,23 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                     var cmd = JsonRpcSerializer.DeserializeParams<SetFilterCommand>(@params);
                     var filter = cmd?.Filter;
                     ValidateFilter(filter);
-                    _engine.SetFilter(filter);
+                    engine.SetFilter(filter);
                     return null;
                 }
 
             case ProtocolMethods.EngineClearResults:
-                _engine.ClearResults();
+                engine.ClearResults();
                 return null;
 
             case ProtocolMethods.EngineReset:
-                await _engine.ResetAsync().ConfigureAwait(false);
+                await engine.ResetAsync().ConfigureAwait(false);
                 return null;
 
             case ProtocolMethods.CoverageGetForFile:
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<GetFileCoverageCommand>(@params);
                     var filePath = cmd?.FilePath ?? string.Empty;
-                    var coverage = string.IsNullOrWhiteSpace(filePath) ? null : _engine.GetFileCoverage(filePath);
+                    var coverage = string.IsNullOrWhiteSpace(filePath) ? null : engine.GetFileCoverage(filePath);
                     var result = DtoMapper.ToFileCoverageDto(
                         filePath, coverage, SolutionDirectory, cmd?.IncludeSource ?? false);
                     return JsonNode.Parse(
@@ -109,9 +105,9 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<GetCoveringTestsCommand>(@params);
                     var filePath = cmd?.FilePath ?? string.Empty;
-                    var tests = string.IsNullOrWhiteSpace(filePath) ? null : _engine.GetCoveringTests(filePath);
+                    var tests = string.IsNullOrWhiteSpace(filePath) ? null : engine.GetCoveringTests(filePath);
                     var outcome = tests is { Count: > 0 }
-                        ? ChangedLineVerdicts.OutcomeLookup(_engine.State, _engine.GetTestProjectPaths())
+                        ? ChangedLineVerdicts.OutcomeLookup(engine.State, engine.GetTestProjectPaths())
                         : null;
                     var result = DtoMapper.ToCoveringTestsDto(filePath, tests, outcome);
                     return JsonNode.Parse(
@@ -132,7 +128,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
 
                     ChangedLineCoverageDto result;
                     // The flag, not the report: reading the report waits on the lock a run holds while storing coverage.
-                    if (!_engine.State.CoverageEnabled)
+                    if (!engine.State.CoverageEnabled)
                     {
                         result = DtoMapper.DisabledChangedLineCoverage;
                     }
@@ -143,7 +139,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                         try
                         {
                             result = (await ChangedLineVerdicts
-                                .GetAsync(_engine, solutionDirectory, cmd?.Base, cmd?.BaseRef, ct)
+                                .GetAsync(engine, solutionDirectory, cmd?.Base, cmd?.BaseRef, ct)
                                 .ConfigureAwait(false)).ToDto(solutionDirectory);
                         }
                         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -169,7 +165,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                     }
 
                     ChangeDiffDto result;
-                    if (!_engine.State.CoverageEnabled)
+                    if (!engine.State.CoverageEnabled)
                     {
                         result = DtoMapper.DisabledChangeDiff;
                     }
@@ -181,7 +177,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                         try
                         {
                             result = (await ChangedLineVerdicts
-                                .GetAsync(_engine, solutionDirectory, cmd?.Base, cmd?.BaseRef, ct, contextLines: context)
+                                .GetAsync(engine, solutionDirectory, cmd?.Base, cmd?.BaseRef, ct, contextLines: context)
                                 .ConfigureAwait(false)).ToChangeDiffDto(solutionDirectory);
                         }
                         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -204,7 +200,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
 
             case ProtocolMethods.HistoryGetRuns:
                 {
-                    var runs = _engine.GetStoredRuns();
+                    var runs = engine.GetStoredRuns();
                     var result = new StoredRunsDto(runs is not null, runs?.Select(DtoMapper.ToDto).ToList() ?? []);
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
@@ -213,7 +209,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
             case ProtocolMethods.HistoryGetRun:
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<GetStoredRunCommand>(@params);
-                    var run = string.IsNullOrWhiteSpace(cmd?.RunId) ? null : _engine.GetStoredRun(cmd.RunId);
+                    var run = string.IsNullOrWhiteSpace(cmd?.RunId) ? null : engine.GetStoredRun(cmd.RunId);
                     return run is null
                         ? null
                         : JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(run.ToDto(), JsonRpcSerializer.Options));
@@ -221,8 +217,8 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
 
             case ProtocolMethods.HistoryGetTestMarks:
                 {
-                    var failures = _engine.GetLatestFailures();
-                    var flaky = _engine.GetFlakyTests();
+                    var failures = engine.GetLatestFailures();
+                    var flaky = engine.GetFlakyTests();
                     var result = new TestMarksDto(failures is not null || flaky is not null, DtoMapper.ToMarks(failures ?? [], flaky ?? []));
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
@@ -235,7 +231,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                     IReadOnlyList<TestHistory>? histories;
                     try
                     {
-                        histories = _engine.GetTestHistory(cmd?.Test ?? "", cmd?.ProjectId);
+                        histories = engine.GetTestHistory(cmd?.Test ?? "", cmd?.ProjectId);
                     }
                     catch (ArgumentException ex)
                     {
@@ -249,15 +245,15 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
             case ProtocolMethods.SessionGetTimeline:
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<GetSessionTimelineCommand>(@params);
-                    var stored = _engine.GetStoredRuns()?.Select(r => r.RunId).ToHashSet(StringComparer.Ordinal);
-                    var result = _engine.State.ToSessionTimelineDto(cmd?.AfterSequence, id => stored?.Contains(id) == true);
+                    var stored = engine.GetStoredRuns()?.Select(r => r.RunId).ToHashSet(StringComparer.Ordinal);
+                    var result = engine.State.ToSessionTimelineDto(cmd?.AfterSequence, id => stored?.Contains(id) == true);
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
                 }
 
             case ProtocolMethods.CoverageGetSummary:
                 {
-                    var result = DtoMapper.ToCoverageSummaryDto(_engine.GetCoverageReport(), SolutionDirectory);
+                    var result = DtoMapper.ToCoverageSummaryDto(engine.GetCoverageReport(), SolutionDirectory);
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
                 }
@@ -294,7 +290,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
             case ProtocolMethods.EngineRunFailed:
                 {
                     var cmd = method == ProtocolMethods.EngineRunFailed
-                        ? RunTestsCommand.ForFailed(_engine.State.ToSnapshot().Suites)
+                        ? RunTestsCommand.ForFailed(engine.State.ToSnapshot().Suites)
                             ?? throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, "No failed tests to run.")
                         : JsonRpcSerializer.DeserializeParams<RunTestsCommand>(@params);
                     if (cmd?.ProjectIds is not { Count: > 0 } projectIds || projectIds.Any(string.IsNullOrWhiteSpace))
@@ -306,7 +302,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                     Task run;
                     try
                     {
-                        run = _engine.RunSelectedAsync(new Engine.Models.TestSelection(projectIds, cmd.Tests));
+                        run = engine.RunSelectedAsync(new Engine.Models.TestSelection(projectIds, cmd.Tests));
                         if (run.IsFaulted)
                         {
                             await run.ConfigureAwait(false);
@@ -337,7 +333,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
                         throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, "project is required.");
                     }
 
-                    var response = new RunLogResponse(_engine.State.FindRunLog(cmd.ProjectId));
+                    var response = new RunLogResponse(engine.State.FindRunLog(cmd.ProjectId));
                     return JsonNode.Parse(
                         System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
                 }
@@ -421,7 +417,7 @@ public sealed class EngineCommandDispatcher : ICommandDispatcher
             }
 
             _pendingCoverageExport = null;
-            var export = CoverageExporter.Export(_engine, format)
+            var export = CoverageExporter.Export(engine, format)
                 ?? throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, "Coverage is disabled.");
             snapshot = new CoverageExportDto(
                 format.ToString().ToLowerInvariant(), CoverageExporter.FileName(format),

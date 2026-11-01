@@ -1,0 +1,41 @@
+// Copyright (c) Damian Hickey. All rights reserved.
+// See LICENSE in the project root for license information.
+
+using Piston.Protocol.Dtos;
+
+namespace Piston.Protocol.Messages;
+
+public sealed record StateSnapshotNotification(
+    PistonPhaseDto Phase,
+    IReadOnlyList<TestSuiteDto> Suites,
+    IReadOnlyList<TestSuiteDto> InProgressSuites,
+    BuildResultDto? LastBuild,
+    DateTimeOffset? LastRunTime,
+    double? LastBuildDurationMs,
+    double? LastTestDurationMs,
+    string? LastTestRunnerError,
+    int TotalExpectedTests,
+    int CompletedTests,
+    int VerifiedSinceChangeCount,
+    DateTimeOffset? LastFileChangeTime,
+    string? SolutionPath,
+    IReadOnlyList<string>? AffectedProjects,
+    IReadOnlyList<string>? AffectedTestProjects,
+    IReadOnlyList<string>? LastChangedFiles,
+    bool CoverageEnabled,
+    bool HasCoverageData,
+    string? CoverageImpactDetail,
+    int TotalTestProjects,
+    int CompletedTestProjects,
+    IReadOnlyDictionary<string, ProjectRunStatusDto>? ProjectStatuses,
+    TestRunDto? LastRun = null,
+    TestRunDto? ActiveRun = null,
+    int TotalBuildProjects = 0,
+    int CompletedBuildProjects = 0,
+    string? LastBuiltProject = null,
+    ImpactBackfillDto? ImpactBackfill = null,
+    RunningTestDto? LongestRunningTest = null,
+    IReadOnlyDictionary<string, TestResourceWaitDto>? ProjectResourceWaits = null,
+    string? RetryStatus = null,
+    long TimelineRevision = 0
+);

@@ -194,13 +194,13 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         _orchestrator.ResultsStore = store;
         var capturing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var releaseCapture = new ManualResetEventSlim();
-        var runRecordsLock = typeof(PistonOrchestrator)
+        var runRecordsLock = (Lock)typeof(PistonOrchestrator)
             .GetField("_runRecordsLock", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
             .GetValue(_orchestrator)!;
         _state.TestSuites = new SnapshotCaptureSuites(_state.TestSuites, () =>
         {
             capturing.SetResult();
-            Assert.True(Monitor.IsEntered(runRecordsLock), "Snapshot capture must share ClearResults' run-record lock.");
+            Assert.True(runRecordsLock.IsHeldByCurrentThread, "Snapshot capture must share ClearResults' run-record lock.");
             Assert.True(releaseCapture.Wait(TimeSpan.FromSeconds(10), _ct));
         });
         _build.Fail = true;
@@ -1018,181 +1018,5 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         Assert.Equal(ResultFreshness.Stale, run.Freshness);
         Assert.NotEqual(run.SourceBefore, run.SourceAfter);
         Assert.Equal(["CS0001: boom"], run.Build!.Errors);
-    }
-}
-
-internal sealed class ProvenanceImpactAnalyzer(IReadOnlyList<string> testProjects) : IImpactAnalyzer
-{
-    public IReadOnlyList<string> TestProjects { get; set; } = testProjects;
-
-    /// <summary>The test projects the graph finds once reloaded after restore; null when it was restored already.</summary>
-    public IReadOnlyList<string>? TestProjectsAfterRestore { get; set; }
-    public bool ProjectDiscoveryComplete { get; set; } = true;
-
-    public IReadOnlyList<string>? GetRestoredTestProjectPaths() =>
-        ProjectDiscoveryComplete && TestProjectsAfterRestore is null ? TestProjects : null;
-
-    public bool RefreshGraphIfEvaluatedBeforeRestore()
-    {
-        if (TestProjectsAfterRestore is not { } restored)
-        {
-            return false;
-        }
-
-        TestProjects = restored;
-        TestProjectsAfterRestore = null;
-        return true;
-    }
-
-    public Func<string?> VerificationCoverage { get; set; } = () => null;
-    public string? GetVerificationCoverageIssue(string solutionPath) => VerificationCoverage();
-    public Task Initialization { get; set; } = Task.CompletedTask;
-    public HashSet<string> MtpProjects { get; } = [];
-    public Task InitializeAsync(string solutionPath, CancellationToken ct) => Initialization;
-
-    public ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes) =>
-        new([TestProjects[0]], [TestProjects[0]], RequiresGraphRebuild: false, IsFullRun: false);
-
-    public ImpactAnalysisResult AnalyzeFullRun() =>
-        new(TestProjects, TestProjects, RequiresGraphRebuild: false, IsFullRun: true);
-
-    public void InvalidateGraph() { }
-    public IReadOnlyList<string> GetAllTestProjectPaths() => TestProjects;
-    public bool IsMtpProject(string projectPath) => MtpProjects.Contains(projectPath);
-    public string? GetMtpOutputPath(string projectPath) => IsMtpProject(projectPath) ? projectPath + ".dll" : null;
-}
-
-internal sealed class ProvenanceBuildService : IBuildService
-{
-    public bool Fail { get; set; }
-    public Action? DuringBuild { get; set; }
-    public List<string> Errors { get; } = ["CS0001: boom"];
-
-    public Task<BuildResult> BuildAsync(string solutionPath, CancellationToken ct) => BuildAsync(solutionPath, null, ct);
-
-    public Task<BuildResult> BuildAsync(string solutionPath, IReadOnlyList<string>? projectPaths, CancellationToken ct)
-    {
-        DuringBuild?.Invoke();
-        return Task.FromResult(Fail
-            ? new BuildResult(BuildStatus.Failed, Errors, [], TimeSpan.FromMilliseconds(1))
-            : new BuildResult(BuildStatus.Succeeded, [], [], TimeSpan.FromMilliseconds(1)));
-    }
-}
-
-internal sealed class ProvenanceTestRunner : ITestRunnerService
-{
-    public Action? DuringRun { get; set; }
-    public Func<string, IReadOnlyList<TestAttachment>>? Attachments { get; set; }
-    public string? FailingTest { get; set; }
-    public bool DuplicateFirstTest { get; set; }
-    public HashSet<string> ProjectsWithoutResults { get; } = [];
-    public HashSet<string> CrashedProjects { get; } = [];
-    public Dictionary<string, TestTimeout> TimedOutProjects { get; } = [];
-    public string? RunningTest { get; set; }
-    public TimeSpan HoldRunning { get; set; }
-    public string? LastFilter { get; private set; }
-    public bool AttachExecutionLog { get; set; }
-
-    /// <summary>How many more runs <see cref="FailingTest"/> fails in before it passes; null fails it every time.</summary>
-    public int? FailuresRemaining { get; set; }
-
-    /// <summary>The framework unfiltered runs report for <see cref="FailingTest"/>, as a multi-targeted project's would.</summary>
-    public string? FailingTestFramework { get; set; }
-
-    /// <summary>Extra failing tests each project reports.</summary>
-    public int ExtraFailures { get; set; }
-
-    /// <summary>Every call: its targets, filter and whether it collected coverage.</summary>
-    public List<(IReadOnlyList<string>? Targets, string? Filter, bool Coverage)> Calls { get; } = [];
-
-    public Task<TestRunResult> RunTestsAsync(
-        string solutionPath, string? filter, Action<IReadOnlyList<TestSuite>>? onProgress, CancellationToken ct) =>
-        RunTestsAsync(solutionPath, null, filter, false, onProgress, null, ct);
-
-    public Task<TestRunResult> RunTestsAsync(
-        string solutionPath, IReadOnlyList<string>? testProjectPaths, string? filter, bool collectCoverage,
-        Action<IReadOnlyList<TestSuite>>? onProgress, CancellationToken ct) =>
-        RunTestsAsync(solutionPath, testProjectPaths, filter, collectCoverage, onProgress, null, ct);
-
-    public async Task<TestRunResult> RunTestsAsync(
-        string solutionPath, IReadOnlyList<string>? testProjectPaths, string? filter, bool collectCoverage,
-        Action<IReadOnlyList<TestSuite>>? onProgress, Action<ProjectTestResult>? onProjectCompleted, CancellationToken ct)
-    {
-        LastFilter = filter;
-        Calls.Add((testProjectPaths, filter, collectCoverage));
-        DuringRun?.Invoke();
-        var failing = FailingTest is not null && FailuresRemaining is not <= 0;
-        if (failing && FailuresRemaining is { } remaining && testProjectPaths?.Any(p => FailingTest!.StartsWith(Path.GetFileNameWithoutExtension(p) + ".", StringComparison.Ordinal)) == true)
-        {
-            FailuresRemaining = remaining - 1;
-        }
-
-        if (RunningTest is { } running)
-        {
-            onProgress?.Invoke([new TestSuite("A.Tests",
-                [new TestResult(running, running, TestStatus.Running, TimeSpan.Zero, null, null, null, null)],
-                DateTimeOffset.UtcNow, TimeSpan.Zero)]);
-            await Task.Delay(HoldRunning, ct);
-        }
-
-        var all = new List<TestSuite>();
-        var projects = new List<ProjectTestResult>();
-        void Complete(ProjectTestResult project)
-        {
-            projects.Add(project);
-            onProjectCompleted?.Invoke(project);
-        }
-
-        foreach (var path in testProjectPaths ?? [])
-        {
-            var name = Path.GetFileNameWithoutExtension(path);
-            if (CrashedProjects.Contains(path))
-            {
-                Complete(new ProjectTestResult(path, [], "crashed", [], Crashed: true));
-                continue;
-            }
-            if (TimedOutProjects.TryGetValue(path, out var timeout))
-            {
-                var timedOutTest = new TestResult(timeout.Test, timeout.Test, TestStatus.Failed, timeout.Limit, null, "Timed out", null, null);
-                var timedOutSuite = new TestSuite(name, [timedOutTest], DateTimeOffset.UtcNow, timeout.Limit);
-                all.Add(timedOutSuite);
-                Complete(new ProjectTestResult(path, [timedOutSuite], null, [], Crashed: false) { TimedOut = timeout });
-                continue;
-            }
-            if (ProjectsWithoutResults.Contains(path))
-            {
-                Complete(new ProjectTestResult(path, [], null, [], Crashed: false));
-                continue;
-            }
-
-            var fqn = $"{name}.Test1";
-            var tests = new List<TestResult>
-            {
-                new(fqn, "Test1", failing && fqn == FailingTest ? TestStatus.Failed : TestStatus.Passed,
-                    TimeSpan.FromMilliseconds(1), null, failing && fqn == FailingTest ? "boom" : null, null, null)
-                {
-                    TargetFramework = filter is null && fqn == FailingTest ? FailingTestFramework : null,
-                    Attachments = Attachments?.Invoke(path) ?? [],
-                },
-            };
-            for (var i = 0; i < ExtraFailures; i++)
-            {
-                tests.Add(new($"{name}.Extra{i}", $"Extra{i}", TestStatus.Failed, TimeSpan.FromMilliseconds(1), null, "boom", null, null));
-            }
-
-            if (DuplicateFirstTest && all.Count == 0)
-            {
-                tests.Add(tests[0]);
-            }
-
-            var suite = new TestSuite(name, tests, DateTimeOffset.UtcNow, TimeSpan.FromMilliseconds(1))
-            {
-                ExecutionLog = AttachExecutionLog ? new ExecutionLog(path) : null,
-            };
-            all.Add(suite);
-            Complete(new ProjectTestResult(path, [suite], null, [], Crashed: false));
-        }
-
-        return new TestRunResult(all, null, []) { Projects = projects };
     }
 }

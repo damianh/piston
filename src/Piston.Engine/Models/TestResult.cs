@@ -48,33 +48,3 @@ public sealed record TestResult(
     /// </summary>
     public IReadOnlyList<TestAttempt> Attempts { get; init; } = [];
 }
-
-/// <summary>A file produced by a test and retained with its run when it fits the artifact limits.</summary>
-public sealed record TestAttachment(
-    string? Path,
-    string? DisplayName = null,
-    string? Description = null)
-{
-    /// <summary>The index used by the dashboard artifact endpoint within <see cref="RunId"/>.</summary>
-    public int Index { get; init; }
-
-    /// <summary>The run that owns this attachment.</summary>
-    public string? RunId { get; init; }
-
-    /// <summary>The original path reported by the test runner.</summary>
-    public string? OriginalPath { get; init; }
-
-    /// <summary>Size in bytes of the source file, when it could be inspected.</summary>
-    public long? SizeBytes { get; init; }
-
-    public bool Retained { get; init; }
-
-    /// <summary>Why the file was not copied into Piston's artifact store.</summary>
-    public string? NotRetainedReason { get; init; }
-}
-/// <summary>One earlier attempt of a test that was retried within a run.</summary>
-/// <param name="Status">Outcome of the attempt.</param>
-/// <param name="Duration">How long the attempt took.</param>
-/// <param name="ErrorMessage">Failure message, when it failed.</param>
-/// <param name="StackTrace">Failure stack trace, when it failed.</param>
-public sealed record TestAttempt(TestStatus Status, TimeSpan Duration, string? ErrorMessage, string? StackTrace);

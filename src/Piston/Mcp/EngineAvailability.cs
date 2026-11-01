@@ -6,23 +6,6 @@ using Piston.Engine.Execution;
 
 namespace Piston.Mcp;
 
-public enum EngineAvailabilityState
-{
-    Available,
-
-    /// <summary>Another process owns the worktree; this server started no engine.</summary>
-    OwnedElsewhere,
-
-    /// <summary>The worktree or solution was deleted; the engine has stopped.</summary>
-    WorktreeDeleted,
-
-    /// <summary>The engine could not start (no SDK, no solution, coordination failure, ...).</summary>
-    Faulted,
-
-    /// <summary>The server is shutting down.</summary>
-    Stopped,
-}
-
 /// <summary>
 /// Gate checked by every MCP tool. When the engine is unavailable, tools fail with an actionable message
 /// telling the agent to fall back to <c>dotnet test</c> instead of hanging or reporting stale results.

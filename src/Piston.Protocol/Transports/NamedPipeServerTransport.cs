@@ -12,13 +12,10 @@ namespace Piston.Protocol.Transports;
 /// supports exactly one connection.
 /// Restricted to the current user via Windows ACL or Unix peer-credential checks.
 /// </summary>
-public sealed class NamedPipeServerTransport : IAsyncDisposable
+public sealed class NamedPipeServerTransport(string pipeName) : IAsyncDisposable
 {
     internal const PipeOptions UnixPipeOptions = PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly;
-    private readonly string _pipeName;
     private NamedPipeServerStream? _pipe;
-
-    public NamedPipeServerTransport(string pipeName) => _pipeName = pipeName;
 
     /// <summary>
     /// Waits for one client to connect, then returns the connected stream.
@@ -45,7 +42,7 @@ public sealed class NamedPipeServerTransport : IAsyncDisposable
         }
 
         return new NamedPipeServerStream(
-            _pipeName,
+            pipeName,
             PipeDirection.InOut,
             maxNumberOfServerInstances: NamedPipeServerStream.MaxAllowedServerInstances,
             transmissionMode: PipeTransmissionMode.Byte,
@@ -58,7 +55,7 @@ public sealed class NamedPipeServerTransport : IAsyncDisposable
         var security = PipeSecurityHelper.CreateCurrentUserOnly();
 
         return NamedPipeServerStreamAcl.Create(
-            _pipeName,
+            pipeName,
             PipeDirection.InOut,
             maxNumberOfServerInstances: NamedPipeServerStream.MaxAllowedServerInstances,
             transmissionMode: PipeTransmissionMode.Byte,

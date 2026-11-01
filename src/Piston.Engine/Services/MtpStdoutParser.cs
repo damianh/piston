@@ -1,7 +1,6 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
-using System.Text;
 using System.Text.RegularExpressions;
 using Piston.Engine.Models;
 
@@ -30,27 +29,19 @@ namespace Piston.Engine.Services;
 /// output follows any error info under "Standard output" / "Error output" headings, with
 /// every line (blank lines included) indented by four spaces.
 /// </remarks>
-internal sealed class MtpStdoutParser
+internal sealed partial class MtpStdoutParser
 {
     // Matches: "passed FQN (7ms)" or "failed FQN (< 1ms)" or "skipped FQN (1.2s)"
-    private static readonly Regex StatusLineRegex = new(
-        @"^\s*(passed|failed|skipped)\s+(.+?)\s+\((.+?)\)\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex StatusLineRegex = CreateStatusLineRegex();
 
     // Matches: "  from C:\path\to.dll (net10.0|x64)"; the parenthesised part starts with the target framework.
-    private static readonly Regex SourceLineRegex = new(
-        @"^\s+from\s+(.+?)\s+\(([^|)]+).*?\)\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex SourceLineRegex = CreateSourceLineRegex();
 
     // Matches stack trace line like "  at Ns.Class.Method() in file.cs:line 42"
     // Works both with and without leading whitespace (since extra lines are trimmed)
-    private static readonly Regex StackTraceLineRegex = new(
-        @"^\s*at\s+",
-        RegexOptions.Compiled);
+    private static readonly Regex StackTraceLineRegex = CreateStackTraceLineRegex();
 
-    private static readonly Regex ArtifactLineRegex = new(
-        @"^\s*-\s+For test '(.+)':\s*(.+?)\s*$",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private static readonly Regex ArtifactLineRegex = CreateArtifactLineRegex();
 
     private const string StandardOutputHeading = "  Standard output";
     private const string ErrorOutputHeading = "  Error output";
@@ -241,149 +232,13 @@ internal sealed class MtpStdoutParser
 
         return TimeSpan.Zero;
     }
-}
 
-internal sealed record MtpParsedAttachment(string TestName, string Path);
-
-internal sealed class BoundedTextBuffer(int maxLength)
-{
-    private readonly StringBuilder _head = new();
-    private readonly Queue<char> _tail = new();
-    private readonly StringBuilder _pendingWhitespace = new();
-    private bool _hasLine;
-    private long _totalLength;
-    private long _pendingWhitespaceLength;
-
-    public long TrimmedLength => _totalLength - _pendingWhitespaceLength;
-
-    public void AppendLine(string line)
-    {
-        if (_hasLine)
-        {
-            Append(Environment.NewLine);
-        }
-
-        _hasLine = true;
-        Append(line);
-    }
-
-    public string? GetHeadValue()
-    {
-        var trimmedLength = TrimmedLength;
-        if (trimmedLength == 0)
-        {
-            return null;
-        }
-
-        var headLength = (int)Math.Min(trimmedLength, _head.Length);
-        return RetentionLimits.TruncateHead(_head.ToString(0, headLength), trimmedLength, maxLength);
-    }
-
-    public string? GetHeadTailValue()
-    {
-        var length = TrimmedLength;
-        if (length == 0)
-        {
-            return null;
-        }
-
-        var headLength = (int)Math.Min(length, _head.Length);
-        var head = _head.ToString(0, headLength);
-        return length <= maxLength
-            ? head
-            : RetentionLimits.TruncateHeadTail(head, GetSuffix(maxLength), length, maxLength);
-    }
-
-    public string GetPrefix(int length) => length == 0 ? string.Empty : _head.ToString(0, Math.Min(length, _head.Length));
-
-    public string GetSuffix(int length)
-    {
-        if (length == 0)
-        {
-            return string.Empty;
-        }
-
-        if (TrimmedLength <= _head.Length)
-        {
-            return _head.ToString(0, (int)TrimmedLength)[^length..];
-        }
-
-        var characters = _tail.ToArray();
-        var available = (int)Math.Min(TrimmedLength, characters.Length);
-        var count = Math.Min(length, available);
-        return new string(characters, available - count, count);
-    }
-
-    public void Reset()
-    {
-        _ = _head.Clear();
-        _tail.Clear();
-        _ = _pendingWhitespace.Clear();
-        _hasLine = false;
-        _totalLength = 0;
-        _pendingWhitespaceLength = 0;
-    }
-
-    private void Append(string text)
-    {
-        foreach (var character in text)
-        {
-            _totalLength++;
-            if (_head.Length < maxLength)
-            {
-                _ = _head.Append(character);
-            }
-
-            if (char.IsWhiteSpace(character))
-            {
-                _pendingWhitespaceLength++;
-                if (_pendingWhitespace.Length == maxLength)
-                {
-                    _ = _pendingWhitespace.Remove(0, 1);
-                }
-
-                _ = _pendingWhitespace.Append(character);
-                continue;
-            }
-
-            if (_pendingWhitespace.Length > 0)
-            {
-                foreach (var whitespace in _pendingWhitespace.ToString())
-                {
-                    AppendTail(whitespace);
-                }
-
-                _ = _pendingWhitespace.Clear();
-            }
-            _pendingWhitespaceLength = 0;
-            AppendTail(character);
-        }
-    }
-
-    private void AppendTail(char character)
-    {
-        _tail.Enqueue(character);
-        if (_tail.Count > maxLength)
-        {
-            _ = _tail.Dequeue();
-        }
-    }
-}
-
-/// <summary>
-/// A parsed MTP test result produced by <see cref="MtpStdoutParser"/>.
-/// </summary>
-internal sealed record MtpParsedResult(
-    string FullyQualifiedName,
-    TestStatus Status,
-    TimeSpan Duration,
-    string? Source,
-    string? ErrorMessage,
-    string? StackTrace,
-    string? Output = null,
-    string? ErrorOutput = null,
-    string? TargetFramework = null)
-{
-    /// <summary>Identifies the result within one run: a multi-targeted project reports each test once per framework.</summary>
-    public string Key => TargetFramework is null ? FullyQualifiedName : $"{FullyQualifiedName} [{TargetFramework}]";
+    [GeneratedRegex(@"^\s*(passed|failed|skipped)\s+(.+?)\s+\((.+?)\)\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled, "en-US")]
+    private static partial Regex CreateStatusLineRegex();
+    [GeneratedRegex(@"^\s+from\s+(.+?)\s+\(([^|)]+).*?\)\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled, "en-US")]
+    private static partial Regex CreateSourceLineRegex();
+    [GeneratedRegex(@"^\s*at\s+", RegexOptions.Compiled)]
+    private static partial Regex CreateStackTraceLineRegex();
+    [GeneratedRegex(@"^\s*-\s+For test '(.+)':\s*(.+?)\s*$", RegexOptions.IgnoreCase | RegexOptions.Compiled, "en-US")]
+    private static partial Regex CreateArtifactLineRegex();
 }

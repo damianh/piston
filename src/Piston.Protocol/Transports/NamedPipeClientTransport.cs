@@ -9,24 +9,16 @@ namespace Piston.Protocol.Transports;
 /// <summary>
 /// Client-side <see cref="IProtocolTransport"/> over a named pipe.
 /// </summary>
-public sealed class NamedPipeClientTransport : IProtocolTransport
+public sealed class NamedPipeClientTransport(string pipeName, string serverName = ".") : IProtocolTransport
 {
-    private readonly string _pipeName;
-    private readonly string _serverName;
     private NamedPipeClientStream? _pipe;
     private BufferedStream? _reader;
-
-    public NamedPipeClientTransport(string pipeName, string serverName = ".")
-    {
-        _pipeName = pipeName;
-        _serverName = serverName;
-    }
 
     public async Task ConnectAsync(CancellationToken ct)
     {
         _pipe = new NamedPipeClientStream(
-            _serverName,
-            _pipeName,
+            serverName,
+            pipeName,
             PipeDirection.InOut,
             PipeOptions.Asynchronous);
 
