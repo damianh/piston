@@ -31,18 +31,22 @@ piston --help
 ```
 
 Use `--version <version>` to pin a published version, or `--prerelease` for preview
-releases. Publication is not implied by the examples: until the first release is
-published, build and install locally:
+releases. Published versions use `YYYY.MDD.N`, with UTC year, numeric month and
+two-digit day, and a daily release counter; `-dev` identifies a development
+package. For example, `2026.101.1-dev` is a January 1 development version and
+`2026.1101.2` is a November 1 stable version. These are calendar versions,
+not compatibility guarantees. Publication is not implied by the examples:
+until the first release is published, build and install locally:
 
 ```sh
 dotnet pack src/Piston/Piston.csproj -c Release -o packages
-dotnet tool install Piston --version 0.1.0 --tool-path ./tools --source ./packages --no-cache
+dotnet tool install Piston --version 0.0.0-local --tool-path ./tools --source ./packages --no-cache
 ./tools/piston --help
 ./tools/piston daemon /path/to/solution.slnx
 ```
 
 Use an actual solution path in the last command. On Windows, the executable is
-`.\tools\piston.exe`. Package ID is `Piston`, command name is `piston`, and `0.1.0`
+`.\tools\piston.exe`. Package ID is `Piston`, command name is `piston`, and `0.0.0-local`
 is the local development package version; use the built/released version when
 it differs. The package is framework-dependent and requires the .NET 10 SDK
 and ASP.NET Core 10 runtime, plus the target solution's own SDK requirements.

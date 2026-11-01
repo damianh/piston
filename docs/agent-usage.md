@@ -12,11 +12,11 @@ dotnet tool install --global Piston
 
 This requires an actual published NuGet release. Until one is available, or for
 local development, pack with `dotnet pack src/Piston/Piston.csproj -c Release -o packages`
-and install with `--version 0.1.0 --source ./packages --no-cache`.
-To pick up a rebuilt package, use a new version (`-p:Version=0.1.0-dev.2`).
+and install with `--version 0.0.0-local --source ./packages --no-cache`.
+To pick up a rebuilt local package, use a new version (`-p:Version=0.0.0-local.2`).
 **Disconnect all stdio MCP sessions and stop daemons before updating on every OS**,
 then run `dotnet tool update --global Piston` (for a local package, add
-`--version 0.1.0-dev.2 --source ./packages`) and reconnect the clients.
+`--version 0.0.0-local.2 --source ./packages`) and reconnect the clients.
 See the [upgrade behavior and publishing prerequisites](user-guide.md#upgrading).
 To uninstall, run `dotnet tool uninstall -g Piston`
 and remove the `piston` entry from your MCP config, plus any `skills/piston` and

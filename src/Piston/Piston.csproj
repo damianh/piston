@@ -6,7 +6,6 @@
     <PackageId>Piston</PackageId>
     <PackageType>DotnetTool;McpServer</PackageType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <Version>0.1.0</Version>
     <Authors>Damian Hickey</Authors>
     <Description>Continuous .NET test backend with stdio and HTTP MCP test tools and a web dashboard.</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>

@@ -132,9 +132,9 @@ ARCHITECTURE describe the implementation in detail.
 ## Near-term
 
 ### Distribution
-- Complete the first public tagged NuGet release after package ownership and
-  Trusted Publisher setup; tagged publishing uses GitHub OIDC, manual publishing
-  remains opt-in.
+- Complete the first public NuGet release after package ownership and Trusted
+  Publisher setup; successful `main` CI publishes tagged dev packages, while
+  stable publishing is manually dispatched. Both use GitHub OIDC.
 - NuGet MCP discovery metadata and local-feed `dnx` are checked by distribution
   smoke tests. Official MCP Registry publication remains deferred.
 - Three-OS distribution validation confirmed that Linux/macOS live updates remove

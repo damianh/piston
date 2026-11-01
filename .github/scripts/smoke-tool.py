@@ -43,8 +43,15 @@ def rpc(url, method, params, request_id):
 
 
 def main():
+    if len(sys.argv) not in (2, 3, 4) or (len(sys.argv) == 4 and sys.argv[3] != "--version-only"):
+        raise SystemExit("Usage: smoke-tool.py TOOL [VERSION [--version-only]]")
     tool = str(pathlib.Path(sys.argv[1]).resolve())
+    expected_version = sys.argv[2] if len(sys.argv) > 2 else None
+    version_only = len(sys.argv) == 4
     subprocess.run([tool, "--help"], check=True)
+    if expected_version is not None:
+        version = subprocess.run([tool, "--version"], check=True, capture_output=True, text=True)
+        assert version.stdout.strip().split("+", 1)[0] == expected_version, version.stdout
     with tempfile.TemporaryDirectory(prefix="piston-tool-smoke-") as directory:
         root = pathlib.Path(directory) / "solution"
         root.mkdir()
@@ -97,46 +104,55 @@ def main():
                         if time.monotonic() >= deadline:
                             raise TimeoutError("Installed tool did not start its web and MCP servers")
                         time.sleep(0.25)
-                assert "_framework/" in page, page
-                framework = re.search(r'src="(_framework/blazor\.webassembly[^"]*\.js)"', page)
-                assert framework is not None, page
-                with urllib.request.urlopen(f"{web_url}/{framework[1]}", timeout=10) as response:
-                    assert response.status == 200
-                    assert len(response.read()) > 1000
-                    assert "javascript" in response.headers.get("Content-Type", "")
+                if not version_only:
+                    assert "_framework/" in page, page
+                    framework = re.search(r'src="(_framework/blazor\.webassembly[^"]*\.js)"', page)
+                    assert framework is not None, page
+                    with urllib.request.urlopen(f"{web_url}/{framework[1]}", timeout=10) as response:
+                        assert response.status == 200
+                        assert len(response.read()) > 1000
+                        assert "javascript" in response.headers.get("Content-Type", "")
 
-                rpc(mcp_url, "initialize", {
+                initialization = rpc(mcp_url, "initialize", {
                     "protocolVersion": "2025-06-18", "capabilities": {},
                     "clientInfo": {"name": "piston-package-smoke", "version": "1.0"},
                 }, 1)
-                tools = rpc(mcp_url, "tools/list", {}, 2)["tools"]
-                names = {tool["name"] for tool in tools}
-                assert names == {
-                    "verify", "run_tests", "get_test_run", "get_test_results",
-                    "get_test_result", "get_test_history", "set_test_filter", "clear_results",
-                    "get_coverage", "get_changed_line_coverage", "plan_affected_tests",
-                    "run_affected_tests", "export_coverage",
-                }, names
-                verification = rpc(mcp_url, "tools/call", {"name": "verify", "arguments": {}}, 3)
-                assert not verification.get("isError", False), verification
-                verified = "\n".join(item.get("text", "") for item in verification["content"])
-                assert "Verdict: Passed" in verified, verified
-                assert "Tests: 1 (Passed: 1, Failed: 0, Skipped: 0)" in verified, verified
-                result = rpc(mcp_url, "tools/call", {"name": "run_tests", "arguments": {}}, 4)
-                assert not result.get("isError", False), result
-                text = "\n".join(item.get("text", "") for item in result["content"])
-                assert "Passed: 1, Failed: 0" in text, text
-                assert "Phase: Watching" in text, text
-                database = root / ".piston" / "piston.db"
-                with database.open("rb") as stream:
-                    assert stream.read(16) == b"SQLite format 3\x00"
+                if expected_version is not None:
+                    assert initialization["serverInfo"]["version"] == expected_version, initialization
+                if not version_only:
+                    tools = rpc(mcp_url, "tools/list", {}, 2)["tools"]
+                    names = {tool["name"] for tool in tools}
+                    assert names == {
+                        "verify", "run_tests", "get_test_run", "get_test_results",
+                        "get_test_result", "get_test_history", "set_test_filter", "clear_results",
+                        "get_coverage", "get_changed_line_coverage", "plan_affected_tests",
+                        "run_affected_tests", "export_coverage",
+                    }, names
+                    verification = rpc(mcp_url, "tools/call", {"name": "verify", "arguments": {}}, 3)
+                    assert not verification.get("isError", False), verification
+                    verified = "\n".join(item.get("text", "") for item in verification["content"])
+                    assert "Verdict: Passed" in verified, verified
+                    assert "Tests: 1 (Passed: 1, Failed: 0, Skipped: 0)" in verified, verified
+                    result = rpc(mcp_url, "tools/call", {"name": "run_tests", "arguments": {}}, 4)
+                    assert not result.get("isError", False), result
+                    text = "\n".join(item.get("text", "") for item in result["content"])
+                    assert "Passed: 1, Failed: 0" in text, text
+                    assert "Phase: Watching" in text, text
+                    database = root / ".piston" / "piston.db"
+                    with database.open("rb") as stream:
+                        assert stream.read(16) == b"SQLite format 3\x00"
                 status = subprocess.run(
                     [tool, "status", solution, "--pipe-name", pipe],
                     check=True, capture_output=True, text=True, timeout=15,
                 )
                 assert "Daemon running." in status.stdout, status.stdout
-                print("PASS: installed CLI, bundled web/framework assets, HTTP MCP tool surface, "
-                      "one passing test, native SQLite coverage store and named-pipe status")
+                if expected_version is not None:
+                    assert expected_version in status.stdout, status.stdout
+                if version_only:
+                    print("PASS: installed CLI, daemon and HTTP MCP version")
+                else:
+                    print("PASS: installed CLI, bundled web/framework assets, HTTP MCP tool surface, "
+                          "one passing test, native SQLite coverage store and named-pipe status")
             except BaseException:
                 log.flush()
                 log.seek(0)
