@@ -21,6 +21,8 @@ not an email address. No long-lived `NUGET_API_KEY` repository secret is used.
 Publishing errors, including duplicate versions, fail the workflow. After a
 push, `smoke-public` waits for NuGet indexing with bounded retries, checks the
 downloaded metadata, and exercises public-feed `dnx` over real stdio MCP.
+If this verification fails after the package was pushed, rerun the failed
+`verify-public` job rather than the `publish` job, which would push the same
+version again.
 The first public tagged release remains an acceptance gate until it actually
 succeeds; local-feed validation alone is not proof of publication.
-

@@ -135,6 +135,20 @@ jobs:
         run: |
           dotnet nuget push "packages/*.nupkg" --source https://api.nuget.org/v3/index.json \
             --api-key "$NUGET_API_KEY"
+
+  verify-public:
+    needs: publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
+      - uses: actions/download-artifact@v4
+        with:
+          name: piston-nuget-tool
+          path: packages
       - name: Verify public package and dnx MCP after indexing
         env:
           PISTON_PACKAGES: packages
