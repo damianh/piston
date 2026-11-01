@@ -4,6 +4,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -137,6 +138,97 @@ class ApiFixture(unittest.TestCase):
         path = self.root / f"Piston.{version.version}.nupkg"
         path.write_bytes(_package(version, source_sha, **kwargs))
         return path
+
+
+class ReleaseWorkflowGateTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = (Path(__file__).resolve().parents[1] / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+
+    def can_run(self, job, results, *, publish=True, cancelled=False):
+        job_match = re.search(
+            rf"(?ms)^  {re.escape(job)}:\n(.*?)(?=^  [a-z][a-z0-9-]*:\n|\Z)",
+            self.workflow,
+        )
+        self.assertIsNotNone(job_match, f"Missing job: {job}")
+        body = job_match.group(1)
+        needs_match = re.search(r"(?m)^    needs: \[([^\]]+)\]\s*$", body)
+        self.assertIsNotNone(needs_match, f"Missing direct dependencies: {job}")
+        direct_dependencies = {name.strip() for name in needs_match.group(1).split(",")}
+        guard_match = re.search(r"(?m)^    if: >-\n((?:^      .+\n)+)", body)
+        self.assertIsNotNone(guard_match, f"Missing explicit job guard: {job}")
+        guard = " ".join(line.strip() for line in guard_match.group(1).splitlines())
+
+        checks = []
+        result_checks = set()
+        has_cancellation_check = False
+        has_publish_check = False
+        for clause in guard.split(" && "):
+            if clause == "!cancelled()":
+                has_cancellation_check = True
+                checks.append(not cancelled)
+            elif clause == "needs.context.outputs.publish == 'true'":
+                has_publish_check = True
+                checks.append(publish)
+            else:
+                match = re.fullmatch(r"needs\.([a-z-]+)\.result == 'success'", clause)
+                self.assertIsNotNone(match, f"Unsupported job guard clause: {clause}")
+                dependency = match.group(1)
+                result_checks.add(dependency)
+                checks.append(results[dependency] == "success")
+
+        # A status function removes the implicit success() gate on skipped ancestors.
+        self.assertTrue(has_cancellation_check, f"Missing cancellation guard: {job}")
+        self.assertEqual(direct_dependencies, result_checks)
+        self.assertEqual(job == "publish", has_publish_check)
+        return all(checks)
+
+    def test_skipped_stable_checks_do_not_block_dev_publish_or_verification(self):
+        results = {
+            "context": "success",
+            "test": "skipped",
+            "distribution": "skipped",
+            "package": "success",
+            "publish": "success",
+        }
+        self.assertTrue(self.can_run("publish", results))
+        self.assertTrue(self.can_run("verify-public", results))
+
+    def test_stable_success_allows_publish_and_verification(self):
+        results = {
+            "context": "success",
+            "test": "success",
+            "distribution": "success",
+            "package": "success",
+            "publish": "success",
+        }
+        self.assertTrue(self.can_run("publish", results))
+        self.assertTrue(self.can_run("verify-public", results))
+
+    def test_failed_cancelled_or_skipped_direct_dependencies_block_jobs(self):
+        baseline = {"context": "success", "package": "success", "publish": "success"}
+        for job, dependencies in (
+            ("publish", ("context", "package")),
+            ("verify-public", ("context", "package", "publish")),
+        ):
+            for dependency in dependencies:
+                for result in ("failure", "cancelled", "skipped"):
+                    with self.subTest(job=job, dependency=dependency, result=result):
+                        results = dict(baseline, **{dependency: result})
+                        self.assertFalse(self.can_run(job, results))
+
+    def test_workflow_cancellation_blocks_publish_and_verification(self):
+        results = {"context": "success", "package": "success", "publish": "success"}
+        for job in ("publish", "verify-public"):
+            with self.subTest(job=job):
+                self.assertFalse(self.can_run(job, results, cancelled=True))
+
+    def test_validation_only_skips_publish_and_verification(self):
+        results = {"context": "success", "package": "success", "publish": "skipped"}
+        self.assertFalse(self.can_run("publish", results, publish=False))
+        self.assertFalse(self.can_run("verify-public", results, publish=False))
 
 
 class ReleaseContextTests(unittest.TestCase):

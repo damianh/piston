@@ -168,7 +168,10 @@ jobs:
 
   publish:
     needs: [context, package]
-    if: needs.context.outputs.publish == 'true'
+    if: >-
+      !cancelled() && needs.context.result == 'success' &&
+      needs.package.result == 'success' &&
+      needs.context.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: nuget
@@ -223,6 +226,9 @@ jobs:
 
   verify-public:
     needs: [context, package, publish]
+    if: >-
+      !cancelled() && needs.context.result == 'success' &&
+      needs.package.result == 'success' && needs.publish.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
