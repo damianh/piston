@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Piston.Engine;
 
@@ -24,13 +25,16 @@ public static class McpServiceRegistration
     {
         _ = services.AddSingleton<IMcpCallRecorder>(recorder ?? NullMcpCallRecorder.Instance);
         _ = services.AddSingleton(availability ?? new EngineAvailability());
+        var informationalVersion = typeof(McpServiceRegistration).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+            ?? throw new InvalidOperationException("Piston assembly informational version is unavailable.");
 
         return services.AddMcpServer(options =>
             {
                 options.ServerInfo = new ModelContextProtocol.Protocol.Implementation
                 {
                     Name = "piston",
-                    Version = typeof(McpServiceRegistration).Assembly.GetName().Version?.ToString() ?? "0.0.0",
+                    Version = informationalVersion.Split('+', 2)[0],
                 };
             })
             .WithToolsFromAssembly(typeof(McpServiceRegistration).Assembly);

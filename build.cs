@@ -63,11 +63,12 @@ Target("check-package",
 Target("install-tool", $"Install the packed tool into {ToolPath}.", dependsOn: ["pack"], async () =>
 {
     DeleteDirectory(ToolPath);
-    // The package version does not change between local builds, so restore into a fresh packages folder
-    // rather than reusing a stale copy from the global one.
+    // Restore into a fresh packages folder rather than reusing a stale local build.
     var nugetPackages = Path.GetFullPath("artifacts/nuget-packages");
     DeleteDirectory(nugetPackages);
-    await RunAsync("dotnet", ["tool", "install", "Piston", "--tool-path", ToolPath, "--source", Packages],
+    var package = Directory.GetFiles(Packages, "Piston.*.nupkg").Single();
+    await RunAsync("dotnet", ["tool", "install", "Piston", "--version", ReadPackageVersion(package),
+            "--tool-path", ToolPath, "--source", Packages],
         configureEnvironment: env => env["NUGET_PACKAGES"] = nugetPackages);
 });
 
@@ -263,8 +264,8 @@ async Task SmokeMcpAsync(string? command = null, string[]? arguments = null,
 
 async Task SmokeDistributionAsync()
 {
-    const string oldVersion = "0.0.1-distribution.1";
-    const string newVersion = "0.0.2-distribution.2";
+    const string oldVersion = "2026.101.1-dev";
+    const string newVersion = "2026.101.2";
     var root = Path.Combine(Path.GetTempPath(), $"piston-distribution-{Guid.NewGuid():N}");
     var feed = Path.Combine(root, "feed");
     var originalTool = tool;
@@ -317,12 +318,16 @@ async Task SmokeDistributionAsync()
         }
     }
 
-    async Task CheckVersionAsync()
+    static bool HasVersion(string output, string expectedVersion) =>
+        output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Any(line => line.Trim().Split('+', 2)[0] == expectedVersion);
+
+    async Task CheckVersionAsync(string expectedVersion)
     {
         var (version, error) = await ReadAsync(tool, ["--version"]);
-        if (!version.Contains(newVersion, StringComparison.Ordinal))
+        if (!HasVersion(version, expectedVersion))
         {
-            throw new SmokeTestException($"Restarted CLI is not {newVersion}: {version}{error}");
+            throw new SmokeTestException($"CLI is not {expectedVersion}: {version}{error}");
         }
     }
 
@@ -353,12 +358,24 @@ async Task SmokeDistributionAsync()
             throw new SmokeTestException($"dnx did not forward --help: {help}{helpError}");
         }
 
+        foreach (var version in new[] { oldVersion, newVersion })
+        {
+            var (actual, error) = await ReadAsync("dotnet",
+                ["dnx", $"Piston@{version}", "--source", feed, "--", "--version"],
+                configureEnvironment: Configure);
+            if (!HasVersion(actual, version))
+            {
+                throw new SmokeTestException($"dnx CLI is not {version}: {actual}{error}");
+            }
+        }
+
         await SmokeMcpAsync("dotnet",
             ["dnx", $"Piston@{oldVersion}", "--source", feed, "--", "mcp", samples], environment,
-            expectedServerVersion: "0.0.1.0");
+            expectedServerVersion: oldVersion);
 
         tool = Path.Combine(root, "mcp-tool", OperatingSystem.IsWindows() ? "piston.exe" : "piston");
         await ToolCommandAsync("install", oldVersion);
+        await CheckVersionAsync(oldVersion);
         using (var timeout = new CancellationTokenSource(smokeTimeout))
         {
             var transport = new StdioClientTransport(new StdioClientTransportOptions
@@ -373,7 +390,7 @@ async Task SmokeDistributionAsync()
             var baselineText = string.Join('\n', baseline.Content.OfType<TextContentBlock>().Select(c => c.Text));
             if (baseline.IsError == true || !baselineText.Contains("Verdict: TestsFailed", StringComparison.Ordinal)
                 || !baselineText.Contains("Tests: 12 (Passed: 4, Failed: 4, Skipped: 4)", StringComparison.Ordinal)
-                || client.ServerInfo.Version != "0.0.1.0")
+                || client.ServerInfo.Version != oldVersion)
             {
                 throw new SmokeTestException("Old MCP version failed before updating.");
             }
@@ -392,11 +409,12 @@ async Task SmokeDistributionAsync()
         }
 
         await ToolCommandAsync("update", newVersion);
-        await CheckVersionAsync();
-        await SmokeMcpAsync(environment: environment, expectedServerVersion: "0.0.2.0");
+        await CheckVersionAsync(newVersion);
+        await SmokeMcpAsync(environment: environment, expectedServerVersion: newVersion);
 
         tool = Path.Combine(root, "daemon-tool", OperatingSystem.IsWindows() ? "piston.exe" : "piston");
         await ToolCommandAsync("install", oldVersion);
+        await CheckVersionAsync(oldVersion);
         var daemonOutput = new StringBuilder();
         using (var daemon = StartPiston(daemonOutput, "daemon", samples, "--web-port", "5299", "--mcp-port", "5300"))
         {
@@ -420,7 +438,7 @@ async Task SmokeDistributionAsync()
         }
 
         await ToolCommandAsync("update", newVersion);
-        await CheckVersionAsync();
+        await CheckVersionAsync(newVersion);
         await SmokeDaemonAsync(newVersion);
         Console.WriteLine($"PASS: dnx MCP and stop/update/restart on {System.Runtime.InteropServices.RuntimeInformation.OSDescription}");
     }
@@ -436,9 +454,7 @@ async Task SmokePublicAsync()
 {
     var directory = Environment.GetEnvironmentVariable("PISTON_PACKAGES") ?? Packages;
     var source = Directory.GetFiles(directory, "Piston.*.nupkg").Single();
-    using var package = ZipFile.OpenRead(source);
-    using var stream = package.Entries.Single(e => e.FullName.EndsWith(".nuspec", StringComparison.Ordinal)).Open();
-    var version = XDocument.Load(stream).Descendants().Single(e => e.Name.LocalName == "version").Value;
+    var version = ReadPackageVersion(source);
     if (!Regex.IsMatch(version, @"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$"))
     {
         throw new SmokeTestException($"Invalid public package version: {version}");
@@ -479,7 +495,8 @@ async Task SmokePublicAsync()
                 ["DOTNET_CLI_HOME"] = Path.Combine(root, "cli-home"),
                 ["NUGET_PACKAGES"] = Path.Combine(root, "nuget-packages"),
                 ["DOTNET_NOLOGO"] = "true",
-            });
+            },
+            expectedServerVersion: version);
         Console.WriteLine($"PASS: NuGet.org metadata and dnx MCP for Piston {version}.");
     }
     finally
@@ -627,6 +644,13 @@ static void Append(StringBuilder output, string? line)
 }
 
 static int Number(Match match, int group) => int.Parse(match.Groups[group].Value);
+
+static string ReadPackageVersion(string packagePath)
+{
+    using var package = ZipFile.OpenRead(packagePath);
+    using var stream = package.Entries.Single(e => e.FullName.EndsWith(".nuspec", StringComparison.Ordinal)).Open();
+    return XDocument.Load(stream).Descendants().Single(e => e.Name.LocalName == "version").Value;
+}
 
 // Piston.Web reaches the tool only as static files under wwwroot/; nothing else from it belongs in the package.
 static void CheckPackageContents(string directory, string? expectedVersion = null)
