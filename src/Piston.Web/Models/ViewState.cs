@@ -251,25 +251,3 @@ public sealed class ViewState
     public DashboardSettings ToSettings() =>
         new(DetailPosition == DetailPosition.Bottom ? DetailPanePosition.Bottom : DetailPanePosition.Right);
 }
-
-/// <summary>A test result key scoped to its project identity, independent of the host's project path separators.</summary>
-public sealed record TestReference(string Project, string Key)
-{
-    public static TestReference FromProjectPath(string projectPath, string key, string? solutionPath = null) =>
-        new(solutionPath is null
-            ? Path.GetFileNameWithoutExtension(projectPath.Replace('\\', '/'))
-            : ProjectPaths.ProjectId(projectPath, solutionPath), key);
-}
-
-public enum DetailPosition
-{
-    Right,
-    Bottom,
-}
-
-public enum GroupingMode
-{
-    ProjectNamespaceClass,
-    ByStatus,
-    Flat,
-}

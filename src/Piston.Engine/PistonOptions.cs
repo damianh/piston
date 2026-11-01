@@ -4,40 +4,6 @@
 namespace Piston.Engine;
 
 /// <summary>
-/// Controls which test execution backend is used.
-/// </summary>
-public enum TestExecutionMode
-{
-    /// <summary>
-    /// Use MTP v2 in-process when detected; fall back to process-based execution.
-    /// </summary>
-    Auto,
-
-    /// <summary>
-    /// Always use <c>dotnet test</c> process-based execution. Safe universal fallback.
-    /// </summary>
-    Process,
-
-    /// <summary>
-    /// Always use MTP v2 in-process execution. Fails if the project is incompatible.
-    /// </summary>
-    InProcess,
-}
-
-/// <summary>How finely the idle-time impact backfill measures which tests execute which lines.</summary>
-public enum ImpactBackfillMode
-{
-    /// <summary>No backfill: tests are attributed to lines per test project.</summary>
-    Off,
-
-    /// <summary>Measure each test class separately when idle.</summary>
-    Class,
-
-    /// <summary>Measure each test method separately when idle; precise but slow.</summary>
-    Test,
-}
-
-/// <summary>
 /// Resolved runtime options — merged from CLI args, .piston.json, and defaults.
 /// Passed into services at startup.
 /// </summary>

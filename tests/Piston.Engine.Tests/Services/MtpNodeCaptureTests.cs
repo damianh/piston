@@ -12,7 +12,7 @@ using Xunit;
 
 namespace Piston.Engine.Tests.Services;
 
-public sealed class MtpNodeCaptureTests
+public sealed partial class MtpNodeCaptureTests
 {
     private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
 
@@ -337,10 +337,7 @@ public sealed class MtpNodeCaptureTests
                     message => TestContext.Current.TestOutputHelper?.WriteLine(message)).ConfigureAwait(false);
             }
 
-            var summary = Regex.Match(
-                output,
-                @"total:\s*(\d+)\s+failed:\s*(\d+)\s+succeeded:\s*(\d+)\s+skipped:\s*(\d+)",
-                RegexOptions.CultureInvariant);
+            var summary = MyRegex().Match(output);
             if (!summary.Success)
             {
                 throw new InvalidOperationException(
@@ -399,4 +396,6 @@ public sealed class MtpNodeCaptureTests
 
     private static string? StringProperty(JsonElement node, string name) =>
         node.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+    [GeneratedRegex(@"total:\s*(\d+)\s+failed:\s*(\d+)\s+succeeded:\s*(\d+)\s+skipped:\s*(\d+)", RegexOptions.CultureInvariant)]
+    private static partial Regex MyRegex();
 }

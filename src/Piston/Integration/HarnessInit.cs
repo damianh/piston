@@ -7,35 +7,6 @@ using System.Text.Json.Nodes;
 
 namespace Piston.Integration;
 
-internal enum Harness
-{
-    Copilot,
-    Claude,
-}
-
-internal enum InitScope
-{
-    User,
-    Repo,
-}
-
-internal sealed record InitOptions(Harness Harness, InitScope Scope, bool Write, bool Force, bool Dashboard);
-
-/// <summary>Where each scope's assets go: the repository directory and the harnesses' user directories.</summary>
-internal sealed record InitLocations(string RepoDirectory, string CopilotHome, string ClaudeHome)
-{
-    public static InitLocations FromEnvironment(string repoDirectory)
-    {
-        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        return new(
-            repoDirectory,
-            NonEmpty(Environment.GetEnvironmentVariable("COPILOT_HOME")) ?? Path.Combine(home, ".copilot"),
-            NonEmpty(Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR")) ?? Path.Combine(home, ".claude"));
-    }
-
-    private static string? NonEmpty(string? value) => string.IsNullOrWhiteSpace(value) ? null : value;
-}
-
 /// <summary>
 /// <c>piston init</c>: reports, and only with <see cref="InitOptions.Write"/> writes, a harness's Piston MCP
 /// entry, skill and (for Copilot) dashboard canvas. Differing content is never overwritten without

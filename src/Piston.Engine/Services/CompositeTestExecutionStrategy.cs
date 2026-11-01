@@ -14,18 +14,10 @@ namespace Piston.Engine.Services;
 /// This is the primary strategy installed in <see cref="Piston.Engine.PistonEngine"/>.
 /// It keeps the VSTest code path completely unchanged — MTP support is purely additive.
 /// </remarks>
-internal sealed class CompositeTestExecutionStrategy : ITestExecutionStrategy
+internal sealed class CompositeTestExecutionStrategy(
+    MtpTestExecutionStrategy mtpStrategy,
+    ProcessTestExecutionStrategy vsTestStrategy) : ITestExecutionStrategy
 {
-    private readonly MtpTestExecutionStrategy _mtpStrategy;
-    private readonly ProcessTestExecutionStrategy _vsTestStrategy;
-
-    public CompositeTestExecutionStrategy(
-        MtpTestExecutionStrategy mtpStrategy,
-        ProcessTestExecutionStrategy vsTestStrategy)
-    {
-        _mtpStrategy = mtpStrategy;
-        _vsTestStrategy = vsTestStrategy;
-    }
 
     /// <inheritdoc/>
     /// <remarks>Always returns <see langword="true"/> — falls back to VSTest when MTP is unavailable.</remarks>
@@ -37,14 +29,14 @@ internal sealed class CompositeTestExecutionStrategy : ITestExecutionStrategy
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct)
     {
-        var useMtp = _mtpStrategy.CanExecute(request.ProjectPath);
+        var useMtp = mtpStrategy.CanExecute(request.ProjectPath);
         DiagnosticLog.Instance?.Write("CompositeStrategy",
             $"Routing '{Path.GetFileName(request.ProjectPath)}': " +
             $"useMtp={useMtp} | filter={request.Filter ?? "(none)"}");
 
         return useMtp
-            ? _mtpStrategy.ExecuteAsync(request, onProgress, ct)
-            : _vsTestStrategy.ExecuteAsync(request, onProgress, ct);
+            ? mtpStrategy.ExecuteAsync(request, onProgress, ct)
+            : vsTestStrategy.ExecuteAsync(request, onProgress, ct);
     }
 
     /// <inheritdoc/>
@@ -53,7 +45,7 @@ internal sealed class CompositeTestExecutionStrategy : ITestExecutionStrategy
         string? filter,
         Action<IReadOnlyList<TestResult>>? onPartial,
         CancellationToken ct) =>
-        _mtpStrategy.CanExecute(projectPath)
-            ? _mtpStrategy.DiscoverAsync(projectPath, filter, onPartial, ct)
-            : _vsTestStrategy.DiscoverAsync(projectPath, filter, onPartial, ct);
+        mtpStrategy.CanExecute(projectPath)
+            ? mtpStrategy.DiscoverAsync(projectPath, filter, onPartial, ct)
+            : vsTestStrategy.DiscoverAsync(projectPath, filter, onPartial, ct);
 }

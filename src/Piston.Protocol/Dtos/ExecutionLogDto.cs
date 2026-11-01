@@ -3,9 +3,6 @@
 
 namespace Piston.Protocol.Dtos;
 
-/// <summary>One line of an <see cref="ExecutionLogDto"/>.</summary>
-public sealed record ExecutionLogEntryDto(DateTimeOffset Timestamp, string Category, string Message);
-
 /// <summary>
 /// What Piston did to run the test process that produced a result: runner, command, fallbacks, the
 /// process's console output, exit code and result summary.

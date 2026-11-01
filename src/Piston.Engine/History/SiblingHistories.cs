@@ -5,11 +5,6 @@ using Piston.Engine.Models;
 
 namespace Piston.Engine.History;
 
-/// <summary>A result recorded by another worktree of the same repository.</summary>
-/// <param name="Worktree">The other worktree's folder name.</param>
-/// <param name="Entry">The recorded result; it always has a source fingerprint.</param>
-internal sealed record SiblingEntry(string Worktree, TestHistoryEntry Entry);
-
 /// <summary>
 /// Reads, without locking, the run history files that other worktrees of the same repository keep for a solution
 /// with the same file name, so flaky detection can match outcomes on one source fingerprint across worktrees.
@@ -18,7 +13,7 @@ internal sealed record SiblingEntry(string Worktree, TestHistoryEntry Entry);
 /// </summary>
 internal sealed class SiblingHistories
 {
-    private readonly object _gate = new();
+    private readonly Lock _gate = new();
     private readonly string _repositoryDirectory;
     private readonly string _ownDirectory;
     private readonly string _fileName;

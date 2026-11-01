@@ -11,12 +11,6 @@ using Piston.Engine.Services;
 
 namespace Piston.Engine;
 
-/// <summary>Overrides engine services for deterministic tests.</summary>
-internal sealed record EngineServiceOverrides(
-    IBuildService? BuildService = null,
-    IImpactAnalyzer? ImpactAnalyzer = null,
-    Func<string, string?>? SdkVersionProvider = null);
-
 public sealed class PistonEngine : IEngine, IAsyncDisposable
 {
     private readonly PistonState _state;

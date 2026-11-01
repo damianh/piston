@@ -304,20 +304,3 @@ public sealed class WorktreeOwnership : IDisposable
         File.Move(temp, infoPath, overwrite: true);
     }
 }
-
-/// <summary>Whether an ownership lock is held by a live process.</summary>
-public enum OwnershipLiveness
-{
-    /// <summary>No lock file.</summary>
-    None,
-
-    /// <summary>The lock is held: <see cref="OwnershipRecord.Owner"/> describes a running process.</summary>
-    Live,
-
-    /// <summary>The lock is free but owner details remain (the owner crashed or was killed).</summary>
-    Stale,
-}
-
-/// <summary>An ownership record found by <see cref="WorktreeOwnership.ListOwners"/>.</summary>
-/// <param name="Owner">Recorded details; null when a live owner's details could not be read.</param>
-public sealed record OwnershipRecord(string Key, OwnershipLiveness Liveness, ExecutionOwnerInfo? Owner);

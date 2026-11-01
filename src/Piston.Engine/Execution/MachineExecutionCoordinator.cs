@@ -19,31 +19,21 @@ namespace Piston.Engine.Execution;
 /// Admission is strict FIFO: a run is admitted only at the head of the queue and only when its
 /// reservation fits next to the reservations of already admitted runs, so large runs are not starved.
 /// </summary>
-internal sealed class MachineExecutionCoordinator : IExecutionAdmission
+internal sealed class MachineExecutionCoordinator(
+    ExecutionCoordinationDirectory directory, ExecutionReservation reservation, TimeSpan? pollInterval = null) : IExecutionAdmission
 {
     private const string TicketExtension = ".ticket";
     private const string LeaseExtension = ".lease";
-
-    private readonly ExecutionCoordinationDirectory _directory;
-    private readonly ExecutionReservation _reservation;
-    private readonly TimeSpan _pollInterval;
+    private readonly TimeSpan _pollInterval = pollInterval ?? TimeSpan.FromMilliseconds(100);
     private volatile bool _initialized;
 
-    public MachineExecutionCoordinator(
-        ExecutionCoordinationDirectory directory, ExecutionReservation reservation, TimeSpan? pollInterval = null)
-    {
-        _directory = directory;
-        _reservation = reservation;
-        _pollInterval = pollInterval ?? TimeSpan.FromMilliseconds(100);
-    }
-
-    public ExecutionCoordinationDirectory Directory => _directory;
-    public ExecutionReservation Reservation => _reservation;
+    public ExecutionCoordinationDirectory Directory => directory;
+    public ExecutionReservation Reservation => reservation;
 
     /// <summary>Prepares the directory and validates the budget; throws when coordination is unusable.</summary>
     public ExecutionBudget Initialize()
     {
-        _directory.EnsureReady();
+        directory.EnsureReady();
         var budget = LoadValidatedBudget();
         _initialized = true;
         return budget;
@@ -73,7 +63,7 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
                 var (tickets, leases) = ScanLiveEntries();
                 sequence = inheritedSequence ?? NextSequence(tickets, leases);
                 ticketName = EntryName(sequence, runId) + TicketExtension;
-                ticket = CreateEntry(Path.Combine(_directory.QueueDirectory, ticketName));
+                ticket = CreateEntry(Path.Combine(directory.QueueDirectory, ticketName));
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -97,17 +87,17 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
                     var ahead = tickets.Count(t => t.CompareTo(sequence, ticketName) < 0);
                     var cpuInUse = leases.Sum(l => l.CpuSlots);
                     var memoryInUse = leases.Sum(l => (long)(l.MemoryMb ?? 0));
-                    var fits = (long)cpuInUse + _reservation.CpuSlots <= budget.CpuSlots
-                        && (budget.MemoryMb is not { } memoryBudget || memoryInUse + (_reservation.MemoryMb ?? 0) <= memoryBudget);
+                    var fits = (long)cpuInUse + reservation.CpuSlots <= budget.CpuSlots
+                        && (budget.MemoryMb is not { } memoryBudget || memoryInUse + (reservation.MemoryMb ?? 0) <= memoryBudget);
 
                     if (ahead == 0 && fits)
                     {
-                        var leasePath = Path.Combine(_directory.LeasesDirectory, EntryName(sequence, runId) + LeaseExtension);
+                        var leasePath = Path.Combine(directory.LeasesDirectory, EntryName(sequence, runId) + LeaseExtension);
                         unreturnedLease = CreateEntry(leasePath);
-                        ReleaseEntry(ticket, _directory.AdmissionLockPath, lockHeld: true);
+                        ReleaseEntry(ticket, directory.AdmissionLockPath, lockHeld: true);
                         var admitted = Snapshot(TestRunAdmissionState.Admitted, budget, 0, tickets.Count - 1,
                             leases.Count, cpuInUse, memoryInUse, queuedAt, DateTimeOffset.UtcNow);
-                        var lease = new Lease(unreturnedLease, admitted, _directory.AdmissionLockPath);
+                        var lease = new Lease(unreturnedLease, admitted, directory.AdmissionLockPath);
                         unreturnedLease = null;
                         return lease;
                     }
@@ -127,7 +117,7 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            ReleaseEntry(ticket, _directory.AdmissionLockPath);
+            ReleaseEntry(ticket, directory.AdmissionLockPath);
             throw new ExecutionAdmissionCancelledException(sequence, ct);
         }
         catch
@@ -136,12 +126,12 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
             {
                 if (unreturnedLease is not null)
                 {
-                    ReleaseEntry(unreturnedLease, _directory.AdmissionLockPath);
+                    ReleaseEntry(unreturnedLease, directory.AdmissionLockPath);
                 }
             }
             finally
             {
-                ReleaseEntry(ticket, _directory.AdmissionLockPath);
+                ReleaseEntry(ticket, directory.AdmissionLockPath);
             }
             throw;
         }
@@ -150,13 +140,13 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
     private TestRunAdmission Snapshot(
         TestRunAdmissionState state, ExecutionBudget budget, int ahead, int queueLength,
         int otherAdmitted, int cpuInUse, long memoryInUse, DateTimeOffset queuedAt, DateTimeOffset? admittedAt) =>
-        new(state, _reservation.CpuSlots, _reservation.MemoryMb, budget.CpuSlots, budget.MemoryMb, budget.Source,
+        new(state, reservation.CpuSlots, reservation.MemoryMb, budget.CpuSlots, budget.MemoryMb, budget.Source,
             ahead, queueLength, otherAdmitted, cpuInUse, memoryInUse, queuedAt, admittedAt);
 
     private ExecutionBudget LoadValidatedBudget()
     {
-        var budget = ExecutionBudget.Load(_directory.BudgetPath);
-        _reservation.EnsureAdmissible(budget);
+        var budget = ExecutionBudget.Load(directory.BudgetPath);
+        reservation.EnsureAdmissible(budget);
         return budget;
     }
 
@@ -164,20 +154,20 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
     {
         try
         {
-            return await ExclusiveFileLock.AcquireAsync(_directory.AdmissionLockPath, ct).ConfigureAwait(false);
+            return await ExclusiveFileLock.AcquireAsync(directory.AdmissionLockPath, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw new ExecutionCoordinationException(
-                $"Cannot acquire the machine admission lock '{_directory.AdmissionLockPath}': {ex.Message}", ex);
+                $"Cannot acquire the machine admission lock '{directory.AdmissionLockPath}': {ex.Message}", ex);
         }
     }
 
     private string EntryName(long sequence, string runId) =>
         string.Join('_',
             sequence.ToString("D20", CultureInfo.InvariantCulture),
-            _reservation.CpuSlots.ToString(CultureInfo.InvariantCulture),
-            (_reservation.MemoryMb ?? 0).ToString(CultureInfo.InvariantCulture),
+            reservation.CpuSlots.ToString(CultureInfo.InvariantCulture),
+            (reservation.MemoryMb ?? 0).ToString(CultureInfo.InvariantCulture),
             Environment.ProcessId.ToString(CultureInfo.InvariantCulture),
             runId);
 
@@ -206,7 +196,7 @@ internal sealed class MachineExecutionCoordinator : IExecutionAdmission
 
     /// <summary>Must be called under the admission lock. Removes entries of exited processes.</summary>
     private (IReadOnlyList<ExecutionQueueEntry> Tickets, IReadOnlyList<ExecutionQueueEntry> Leases) ScanLiveEntries() =>
-        (ScanLive(_directory.QueueDirectory, TicketExtension), ScanLive(_directory.LeasesDirectory, LeaseExtension));
+        (ScanLive(directory.QueueDirectory, TicketExtension), ScanLive(directory.LeasesDirectory, LeaseExtension));
 
     private static List<ExecutionQueueEntry> ScanLive(string directory, string extension)
     {

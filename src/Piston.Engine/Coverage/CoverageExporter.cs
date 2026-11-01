@@ -7,22 +7,6 @@ using System.Xml;
 
 namespace Piston.Engine.Coverage;
 
-/// <summary>Formats the solution-wide coverage report can be exported in.</summary>
-public enum CoverageExportFormat
-{
-    /// <summary>LCOV tracefile (<c>lcov.info</c>), read by most editors and coverage services.</summary>
-    Lcov,
-
-    /// <summary>Cobertura XML, read by CI systems and ReportGenerator.</summary>
-    Cobertura,
-}
-
-/// <summary>An exported coverage report.</summary>
-/// <param name="Content">The report text.</param>
-/// <param name="FileCount">Source files in the report.</param>
-/// <param name="StaleFilesSkipped">Files left out because they changed after they were measured.</param>
-public sealed record CoverageExport(string Content, int FileCount, int StaleFilesSkipped);
-
 /// <summary>
 /// Writes the stored coverage report as LCOV or Cobertura. Stale files are left out: their line numbers
 /// refer to an older version of the source.

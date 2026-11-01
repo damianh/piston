@@ -9,23 +9,14 @@ namespace Piston.Engine.Services;
 /// so the latest state is always delivered. Invocations are serialized; the action should read current
 /// state when invoked so a slower invocation can never publish an older snapshot after a newer one.
 /// </summary>
-internal sealed class TrailingThrottle : IDisposable
+internal sealed class TrailingThrottle(Action action, TimeSpan interval, TimeProvider? timeProvider = null) : IDisposable
 {
-    private readonly Action _action;
-    private readonly TimeSpan _interval;
-    private readonly TimeProvider _time;
-    private readonly object _gate = new();
-    private readonly object _invokeGate = new();
+    private readonly TimeProvider _time = timeProvider ?? TimeProvider.System;
+    private readonly Lock _gate = new();
+    private readonly Lock _invokeGate = new();
     private ITimer? _timer;
     private DateTimeOffset? _lastInvoke;
     private bool _disposed;
-
-    public TrailingThrottle(Action action, TimeSpan interval, TimeProvider? timeProvider = null)
-    {
-        _action = action;
-        _interval = interval;
-        _time = timeProvider ?? TimeProvider.System;
-    }
 
     /// <summary>Requests an invocation, now or at the end of the current interval.</summary>
     public void Signal()
@@ -38,10 +29,10 @@ internal sealed class TrailingThrottle : IDisposable
             }
 
             var now = _time.GetUtcNow();
-            var elapsed = _lastInvoke is { } last ? now - last : _interval;
-            if (elapsed < _interval)
+            var elapsed = _lastInvoke is { } last ? now - last : interval;
+            if (elapsed < interval)
             {
-                _timer = _time.CreateTimer(_ => OnTimer(), null, _interval - elapsed, Timeout.InfiniteTimeSpan);
+                _timer = _time.CreateTimer(_ => OnTimer(), null, interval - elapsed, Timeout.InfiniteTimeSpan);
                 return;
             }
 
@@ -90,7 +81,7 @@ internal sealed class TrailingThrottle : IDisposable
         {
             if (!Volatile.Read(ref _disposed))
             {
-                _action();
+                action();
             }
         }
     }

@@ -3,45 +3,6 @@
 
 namespace Piston.Protocol.Dtos;
 
-/// <summary>A test result key scoped to the project suite that produced it.</summary>
-public sealed record TestOutcomeReferenceDto(string Project, string Key)
-{
-    public string ProjectId { get; init; } = Project;
-}
-
-/// <summary>Source-input fingerprint captured for a run (see <c>piston-source-v2</c>).</summary>
-public sealed record SourceFingerprintDto(string Algorithm, string Value, int FileCount);
-
-/// <summary>The outcome of running one test project.</summary>
-public sealed record TestRunProjectOutcomeDto(
-    string ProjectPath,
-    string ProjectId,
-    string Status,
-    int TestCount,
-    string? NoTestsReason,
-    string? TimedOutTest,
-    double? TestTimeoutMs);
-
-/// <summary>
-/// Machine-wide execution admission of a run, shared by Piston daemons of the same user.
-/// CPU and memory figures are admission reservations, not measured usage.
-/// </summary>
-public sealed record TestRunAdmissionDto(
-    string State,
-    int ReservedCpuSlots,
-    int? ReservedMemoryMb,
-    int BudgetCpuSlots,
-    int? BudgetMemoryMb,
-    string BudgetSource,
-    int QueuedAhead,
-    int QueueLength,
-    int OtherAdmittedRuns,
-    int CpuSlotsInUse,
-    long MemoryMbInUse,
-    DateTimeOffset QueuedAt,
-    DateTimeOffset? AdmittedAt
-);
-
 /// <summary>
 /// Provenance metadata for a single test run. Enum-like fields are strings so new values can be
 /// added without breaking older clients. Per-test results are available through the MCP

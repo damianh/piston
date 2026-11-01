@@ -22,24 +22,48 @@
   <!-- Pure dashboard models; Piston.Web is a WebAssembly app, so they are compiled in rather than referenced -->
   <ItemGroup>
     <Compile Include="..\..\src\Piston.Web\Models\AssertionDiff.cs" Link="Web\AssertionDiff.cs" />
-    <Compile Include="..\..\src\Piston.Web\Models\CoverageTree.cs" Link="Web\CoverageTree.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\CoverageGrouping.cs" Link="Web\CoverageGrouping.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\CoverageGroup.cs" Link="Web\CoverageGroup.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\CoverageSort.cs" Link="Web\CoverageSort.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\CoverageTreeBuilder.cs" Link="Web\CoverageTreeBuilder.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\DashboardStatus.cs" Link="Web\DashboardStatus.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\TestNode.cs" Link="Web\TestNode.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\NodeCounts.cs" Link="Web\NodeCounts.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\TestNodeKind.cs" Link="Web\TestNodeKind.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\TestSort.cs" Link="Web\TestSort.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\NodeStructure.cs" Link="Web\NodeStructure.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\RunComparison.cs" Link="Web\RunComparison.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\RunComparisonEntry.cs" Link="Web\RunComparisonEntry.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\SessionTimeline.cs" Link="Web\SessionTimeline.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\SessionTimelineItem.cs" Link="Web\SessionTimelineItem.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\SessionTimelineEdit.cs" Link="Web\SessionTimelineEdit.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\SessionTimelineRun.cs" Link="Web\SessionTimelineRun.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\FailureOrigin.cs" Link="Web\FailureOrigin.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\SessionFailureTrace.cs" Link="Web\SessionFailureTrace.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\TestHistoryStrip.cs" Link="Web\TestHistoryStrip.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\TestRetries.cs" Link="Web\TestRetries.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\TestTreeBuilder.cs" Link="Web\TestTreeBuilder.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\ViewState.cs" Link="Web\ViewState.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\TestReference.cs" Link="Web\TestReference.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\DetailPosition.cs" Link="Web\DetailPosition.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\GroupingMode.cs" Link="Web\GroupingMode.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\ChangeDiffModel.cs" Link="Web\ChangeDiffModel.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\CoverageMode.cs" Link="Web\CoverageMode.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\ChangeLineRef.cs" Link="Web\ChangeLineRef.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\VerdictStyle.cs" Link="Web\VerdictStyle.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\LineTests.cs" Link="Web\LineTests.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\DashboardLink.cs" Link="Web\DashboardLink.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\NodeDetail.cs" Link="Web\NodeDetail.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\ProjectLabels.cs" Link="Web\ProjectLabels.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\ProjectPaths.cs" Link="Web\ProjectPaths.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\TreeRow.cs" Link="Web\TreeRow.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\StackTraceParser.cs" Link="Web\StackTraceParser.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\StackFrameLine.cs" Link="Web\StackFrameLine.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\CSharpHighlighter.cs" Link="Web\CSharpHighlighter.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\SourceTokenKind.cs" Link="Web\SourceTokenKind.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\SourceToken.cs" Link="Web\SourceToken.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\WatchStrip.cs" Link="Web\WatchStrip.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\WatchStripSummary.cs" Link="Web\WatchStripSummary.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\MachineOverviewView.cs" Link="Web\MachineOverviewView.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\ResourceWaitText.cs" Link="Web\ResourceWaitText.cs" />
   </ItemGroup>

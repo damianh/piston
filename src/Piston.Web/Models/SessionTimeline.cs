@@ -5,65 +5,6 @@ using Piston.Protocol.Dtos;
 
 namespace Piston.Web.Models;
 
-/// <summary>An edit or a run on the session timeline.</summary>
-public abstract record SessionTimelineItem(DateTimeOffset At);
-
-/// <summary>
-/// The tested source changed between two runs: the source fingerprint a run started from differs from the one the
-/// previous run started from.
-/// </summary>
-/// <param name="FromSource">Fingerprint the previous run tested; null when this is the first run that captured one.</param>
-/// <param name="ToSource">Fingerprint <paramref name="NextRunId"/> tested.</param>
-/// <param name="Files">Files reported changed since the previous run started, including by runs superseded meanwhile.</param>
-/// <param name="FileCount">How many files changed, including any beyond <paramref name="Files"/>.</param>
-/// <param name="NextRunId">The first run that tested the edited source.</param>
-public sealed record SessionTimelineEdit(
-    DateTimeOffset At,
-    string? FromSource,
-    string ToSource,
-    IReadOnlyList<string> Files,
-    int FileCount,
-    string NextRunId) : SessionTimelineItem(At);
-
-/// <summary>A terminal run of the session.</summary>
-/// <param name="Number">The engine's request sequence for the run, from 1; stable however the runs finish or are retained.</param>
-/// <param name="EditedDuringRun">The source changed while the run executed, so its results are not current.</param>
-public sealed record SessionTimelineRun(SessionTimelineEntryDto Entry, long Number, bool EditedDuringRun)
-    : SessionTimelineItem(Entry.RequestedAt)
-{
-    public bool Started => Entry.SourceBefore is not null || Entry.StartedAt is not null;
-}
-
-/// <summary>What the retained timeline establishes about where a failure came from.</summary>
-public enum FailureOrigin
-{
-    /// <summary>A retained run is known to have started the current failing streak.</summary>
-    Run,
-
-    /// <summary>No run of the session changed the test from passing to failing: it failed in the session's first results.</summary>
-    SessionStart,
-
-    /// <summary>
-    /// The retained data cannot say: the introducing run was dropped from the timeline, or a run's capped outcome
-    /// lists may have omitted the test.
-    /// </summary>
-    Unknown,
-}
-
-/// <summary>Where a currently failing test's failure came from.</summary>
-/// <param name="Origin">What the timeline establishes; <paramref name="IntroducedBy"/> is set only for <see cref="FailureOrigin.Run"/>.</param>
-/// <param name="IntroducedBy">The run in which the test started failing in this session.</param>
-/// <param name="Edit">The edit that produced the source the introducing run tested; null when none is recorded.</param>
-/// <param name="SourceUnchanged">No edit is recorded because the introducing run tested the source the session started with.</param>
-/// <param name="Classification">How the run history classified the failure, when history is on.</param>
-public sealed record SessionFailureTrace(
-    TestReference Test,
-    FailureOrigin Origin,
-    SessionTimelineRun? IntroducedBy,
-    SessionTimelineEdit? Edit,
-    FailureClassificationDto? Classification,
-    bool SourceUnchanged = false);
-
 /// <summary>The session's runs, with the edits between them derived from their source fingerprints.</summary>
 public sealed class SessionTimeline
 {

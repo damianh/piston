@@ -7,18 +7,31 @@ worktree's tests running continuously and answers the agent's MCP tool calls.
 ## 1. Install the tool
 
 ```sh
-dotnet pack src/Piston/Piston.csproj -c Release -o packages
-dotnet tool install -g Piston --version 0.1.0 --add-source ./packages --no-cache
+dotnet tool install --global Piston
 ```
 
-To pick up a rebuilt package, pack with a new version (`-p:Version=0.1.0-dev.2`) and
-run `dotnet tool update -g Piston --version 0.1.0-dev.2 --add-source ./packages`.
-Alternatively, uninstall first. To uninstall, run `dotnet tool uninstall -g Piston`
+This requires an actual published NuGet release. Until one is available, or for
+local development, pack with `dotnet pack src/Piston/Piston.csproj -c Release -o packages`
+and install with `--version 0.1.0 --source ./packages --no-cache`.
+To pick up a rebuilt package, use a new version (`-p:Version=0.1.0-dev.2`).
+**Disconnect all stdio MCP sessions and stop daemons before updating on every OS**,
+then run `dotnet tool update --global Piston` (for a local package, add
+`--version 0.1.0-dev.2 --source ./packages`) and reconnect the clients.
+See the [upgrade behavior and publishing prerequisites](user-guide.md#upgrading).
+To uninstall, run `dotnet tool uninstall -g Piston`
 and remove the `piston` entry from your MCP config, plus any `skills/piston` and
 `extensions/piston-dashboard` folders that `piston init` installed (section 3).
 
 A local install (`--tool-path ./tools`) also works. Then point the MCP `command`
 at that path instead of `piston`.
+
+Alternatively, after publication a client can acquire a pinned version with
+`dnx`. In the MCP entry below, replace `"command": "piston", "args": ["mcp"]`
+with `"command": "dnx", "args": ["Piston@<version>", "--", "mcp"]`, substituting
+an actual version. Retain the worktree working directory. The `mcp` subcommand is
+essential: the default Piston command starts/attaches to a daemon rather than
+serving stdio MCP. This needs the .NET 10 SDK and ASP.NET Core 10 runtime, just
+like an installed tool.
 
 ## 2. Configure the worktree (optional)
 
@@ -196,7 +209,7 @@ For the dashboard attached to an existing stdio session, use its `--dashboard`
 opt-in rather than starting a competing owner. This repository's native
 `piston-dashboard` canvas discovers the active worktree and shows the existing
 web UI, including a disconnected state. `piston dashboard --json` inspects the
-owner without starting an engine or a run. See the [canvas setup](../README.md#copilot-canvas).
+owner without starting an engine or a run. See the [canvas setup](user-guide.md#copilot-canvas).
 
 To share one engine through HTTP between a human and an agent, run the HTTP
 daemon instead. MCP is always on, at port 5200 by default:
@@ -327,7 +340,7 @@ by `base` and `baseRef`.
 
 Selection by changed lines is a heuristic, and an affected-test result does not
 count as verification, even when the plan's scope is `full`. Finish with `verify`. See
-[Coverage and impact selection](../README.md#coverage-and-impact-selection) for
+[Coverage and impact selection](user-guide.md#coverage-and-impact-selection) for
 how tests are selected and for the other tools.
 
 ### Changed-line coverage verdicts

@@ -5,15 +5,6 @@ using System.Text.RegularExpressions;
 
 namespace Piston.Web.Models;
 
-/// <summary>A line of a stack trace, with the source location it names, if any.</summary>
-/// <param name="Text">The line as written.</param>
-/// <param name="FilePath">The source file, when the frame has one.</param>
-/// <param name="Line">The 1-based line number in <paramref name="FilePath"/>.</param>
-public sealed record StackFrameLine(string Text, string? FilePath, int? Line)
-{
-    public bool HasSource => FilePath is not null && Line is not null;
-}
-
 /// <summary>Splits .NET stack traces into frames and finds the source location each names.</summary>
 public static partial class StackTraceParser
 {

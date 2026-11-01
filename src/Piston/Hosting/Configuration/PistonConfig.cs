@@ -111,32 +111,3 @@ public sealed class PistonConfig
     /// </summary>
     public List<PistonTestResourceConfig>? TestResources { get; set; }
 }
-
-/// <summary>A <c>testResources</c> entry of <c>.piston.json</c>.</summary>
-public sealed class PistonTestResourceConfig
-{
-    /// <summary>Property names an entry may use; anything else is rejected.</summary>
-    public static readonly IReadOnlyList<string> PropertyNames = ["projects", "exclusive", "containers", "isolation"];
-
-    /// <summary>Glob over project paths relative to the solution directory, e.g. <c>tests/**/*.IntegrationTests.csproj</c>.</summary>
-    public string? Projects { get; set; }
-
-    /// <summary>Exclusive resources: <c>port:5432</c>, <c>container:orders-db</c>, <c>resource:shared-queue</c>.</summary>
-    public List<string>? Exclusive { get; set; }
-
-    /// <summary>Overrides whether the projects use containers (counted against the machine's <c>containerSlots</c>).</summary>
-    public bool? Containers { get; set; }
-
-    /// <summary>"repository" (one run per repository at a time) or "none".</summary>
-    public string? Isolation { get; set; }
-}
-
-/// <summary>The <c>execution</c> section of <c>.piston.json</c>.</summary>
-public sealed class PistonExecutionConfig
-{
-    /// <summary>
-    /// Memory in MiB each run reserves from the machine execution budget. Must be positive.
-    /// Required when the machine budget limits memory. It is an admission reservation, not a cap.
-    /// </summary>
-    public int? MemoryMb { get; set; }
-}

@@ -9,8 +9,3 @@ namespace Piston.Engine.Models;
 /// <param name="StartedAt">When Piston first saw it running.</param>
 /// <param name="PossiblyHanging">True once it has run longer than the hang threshold.</param>
 public sealed record RunningTest(string Name, string ProjectPath, DateTimeOffset StartedAt, bool PossiblyHanging);
-
-/// <summary>The test that made its project's run time out.</summary>
-/// <param name="Test">The test's result key.</param>
-/// <param name="Limit">The test timeout it exceeded.</param>
-public sealed record TestTimeout(string Test, TimeSpan Limit);

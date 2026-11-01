@@ -29,18 +29,3 @@ public sealed record TestResultDto(
 
     public IReadOnlyList<TestAttachmentDto> Attachments { get; init; } = [];
 }
-
-/// <summary>A test-produced file retained with its run, or metadata explaining why it was not retained.</summary>
-public sealed record TestAttachmentDto(
-    string? RunId,
-    int Index,
-    string? DisplayName,
-    string? Description,
-    string? FileName,
-    long? SizeBytes,
-    bool Retained,
-    string? NotRetainedReason,
-    string? Url);
-
-/// <summary>An earlier attempt of a test that was retried within its run; the result itself is the final attempt.</summary>
-public sealed record TestAttemptDto(TestStatusDto Status, double DurationMs, string? ErrorMessage, string? StackTrace);

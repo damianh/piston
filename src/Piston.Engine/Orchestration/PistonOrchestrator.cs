@@ -28,7 +28,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
     private CancellationTokenSource? _cts;
     private volatile bool _stopping;
-    private readonly object _lifecycleLock = new();
+    private readonly Lock _lifecycleLock = new();
     private int _activePipelines;
     private TaskCompletionSource? _pipelinesDrained;
     private Task? _disposeTask;
@@ -44,7 +44,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     // Retention, retries and result publication form one transaction with respect to clearing artifacts.
     private readonly SemaphoreSlim _artifactPublicationLock = new(1, 1);
     private readonly string _engineInstanceId = Guid.NewGuid().ToString("N");
-    private readonly object _runRecordsLock = new();
+    private readonly Lock _runRecordsLock = new();
     private readonly Dictionary<string, TaskCompletionSource<TestRunRecord>> _runWaiters = new(StringComparer.Ordinal);
     private long _runSequence;
     private long _fileChangeGeneration;

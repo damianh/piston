@@ -3,17 +3,6 @@
 
 namespace Piston.Web.Models;
 
-public enum SourceTokenKind
-{
-    Plain,
-    Keyword,
-    String,
-    Comment,
-    Number,
-}
-
-public sealed record SourceToken(string Text, SourceTokenKind Kind);
-
 /// <summary>
 /// A light, line-by-line C# highlighter for showing source in the dashboard: keywords, strings, comments and
 /// numbers. Block comments and raw string literals carry over to the following lines; other multi-line constructs

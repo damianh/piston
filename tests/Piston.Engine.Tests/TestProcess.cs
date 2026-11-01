@@ -9,8 +9,6 @@ using Xunit;
 
 namespace Piston.Engine.Tests;
 
-internal sealed record TestProcessResult(int ExitCode, string Output);
-
 internal static class TestProcess
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(90);

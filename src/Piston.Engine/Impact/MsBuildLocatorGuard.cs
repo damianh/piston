@@ -20,7 +20,7 @@ internal static class MsBuildLocatorGuard
     internal static readonly string[] LocatorEnvironmentVariables =
         ["MSBUILD_EXE_PATH", "MSBuildExtensionsPath", "MSBuildSDKsPath"];
 
-    private static readonly object Lock = new();
+    private static readonly Lock Lock = new();
     private static bool _registered;
     private static Dictionary<string, string?>? _originalEnvironment;
 

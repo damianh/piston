@@ -7,41 +7,6 @@ using System.Text.RegularExpressions;
 
 namespace Piston.Mcp.Tools;
 
-/// <summary>How a file differs from the base.</summary>
-internal enum DiffFileStatus
-{
-    Modified,
-    Added,
-    Deleted,
-
-    /// <summary>Git reports the file as binary, so it has no hunks.</summary>
-    Binary,
-}
-
-internal enum DiffLineKind
-{
-    Context,
-    Added,
-    Removed,
-}
-
-/// <summary>One line of a hunk.</summary>
-/// <param name="OldLine">The line's number in the base, for context and removed lines.</param>
-/// <param name="NewLine">The line's number in the changed file, for context and added lines.</param>
-/// <param name="Text">The line's text, without its line ending.</param>
-internal sealed record DiffLine(DiffLineKind Kind, int? OldLine, int? NewLine, string Text);
-
-/// <summary>A hunk of a unified diff.</summary>
-internal sealed record DiffHunk(int OldStart, int OldCount, int NewStart, int NewCount, IReadOnlyList<DiffLine> Lines);
-
-/// <summary>One changed file of a unified diff.</summary>
-internal sealed record DiffFile(DiffFileStatus Status, IReadOnlyList<DiffHunk> Hunks)
-{
-    /// <summary>The added lines' numbers in the changed file.</summary>
-    public IEnumerable<int> AddedLines =>
-        Hunks.SelectMany(h => h.Lines).Where(l => l.Kind == DiffLineKind.Added).Select(l => l.NewLine!.Value);
-}
-
 /// <summary>Parses <c>git diff</c> output (without renames) into files and hunks.</summary>
 internal static partial class UnifiedDiff
 {

@@ -254,23 +254,16 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
 /// Minimal stub of <see cref="ISolutionGraph"/> that treats a single project as the owner
 /// of any file query. Used to avoid MSBuild in the coverage pipeline integration tests.
 /// </summary>
-file sealed class StubSolutionGraph : ISolutionGraph
+file sealed class StubSolutionGraph(string projectPath, bool isTestProject) : ISolutionGraph
 {
-    private readonly string _projectPath;
-    private readonly bool _isTestProject;
-
-    public StubSolutionGraph(string projectPath, bool isTestProject)
-    {
-        _projectPath = Path.GetFullPath(projectPath);
-        _isTestProject = isTestProject;
-    }
+    private readonly string _projectPath = Path.GetFullPath(projectPath);
 
     public IReadOnlyList<string> AllProjectPaths => [_projectPath];
-    public IReadOnlyList<string> TestProjectPaths => _isTestProject ? [_projectPath] : [];
+    public IReadOnlyList<string> TestProjectPaths => isTestProject ? [_projectPath] : [];
 
     public string? FindOwningProject(string filePath) => _projectPath;
 
-    public bool IsTestProject(string projectPath) => _isTestProject;
+    public bool IsTestProject(string projectPath) => isTestProject;
 
     public IReadOnlySet<string> GetTransitiveDependents(string projectPath) =>
         new HashSet<string>(StringComparer.OrdinalIgnoreCase);

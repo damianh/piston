@@ -15,15 +15,12 @@ namespace Piston.Engine.Services;
 /// kills it). A host serves one request at a time: a request for a busy host runs in a cold process.
 /// Hosts get <c>PISTON_WARM_HOST=1</c>.
 /// </summary>
-internal sealed class MtpWarmHostPool : IAsyncDisposable
+internal sealed class MtpWarmHostPool(MtpServerSession.StageTimeouts? timeouts = null) : IAsyncDisposable
 {
     private readonly Lock _gate = new();
     private readonly Dictionary<string, WarmHost> _hosts = new(StringComparer.Ordinal);
-    private readonly MtpServerSession.StageTimeouts _timeouts;
+    private readonly MtpServerSession.StageTimeouts _timeouts = timeouts ?? MtpServerSession.StageTimeouts.Default;
     private bool _disposed;
-
-    public MtpWarmHostPool(MtpServerSession.StageTimeouts? timeouts = null) =>
-        _timeouts = timeouts ?? MtpServerSession.StageTimeouts.Default;
 
     /// <summary>The number of live hosts.</summary>
     internal int Count

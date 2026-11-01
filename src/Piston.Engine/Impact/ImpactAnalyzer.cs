@@ -13,7 +13,7 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
     private readonly ICoverageStore? _coverageStore;
     private ISolutionGraph? _graph;
     private string? _solutionPath;
-    private readonly object _graphLock = new();
+    private readonly Lock _graphLock = new();
 
     public ImpactAnalyzer(Func<string, ISolutionGraph> graphFactory) => _graphFactory = graphFactory;
 
@@ -23,14 +23,15 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         _coverageStore = coverageStore;
     }
 
-    public async Task InitializeAsync(string solutionPath, CancellationToken ct) => await Task.Run(() =>
-                                                                                         {
-                                                                                             lock (_graphLock)
-                                                                                             {
-                                                                                                 _solutionPath = solutionPath;
-                                                                                                 RefreshGraph(solutionPath);
-                                                                                             }
-                                                                                         }, ct).ConfigureAwait(false);
+    public async Task InitializeAsync(string solutionPath, CancellationToken ct) =>
+        await Task.Run(() =>
+        {
+            lock (_graphLock)
+            {
+                _solutionPath = solutionPath;
+                RefreshGraph(solutionPath);
+            }
+        }, ct).ConfigureAwait(false);
 
     // Reevaluate rather than trusting the impact graph cached before the agent's latest edit.
     public string? GetVerificationCoverageIssue(string solutionPath) =>

@@ -5,9 +5,6 @@ using Piston.Engine.Services;
 
 namespace Piston.Engine.Models;
 
-/// <summary>One timestamped line of an <see cref="ExecutionLog"/>.</summary>
-public sealed record ExecutionLogEntry(DateTimeOffset Timestamp, string Category, string Message);
-
 /// <summary>
 /// What Piston did to run one test process (one project, every framework it ran under): the runner it chose,
 /// the command, fallbacks, the process's console output, exit code and result summary. Bounded: it keeps the

@@ -148,36 +148,36 @@ public static class JsonRpcSerializer
 
         return paramsNode.Deserialize<T>(Options);
     }
-}
 
-// Internal envelope types for serialization (internal so PistonJsonContext can reference them)
+    // ── Wire envelopes (internal so PistonJsonContext can reference them) ──────
 
-internal sealed class RequestEnvelope
-{
-    public string? JsonRpc { get; set; }
-    public string? Id { get; set; }
-    public string? Method { get; set; }
-    public JsonNode? Params { get; set; }
-}
+    internal sealed class RequestEnvelope
+    {
+        public string? JsonRpc { get; set; }
+        public string? Id { get; set; }
+        public string? Method { get; set; }
+        public JsonNode? Params { get; set; }
+    }
 
-internal sealed class ResponseEnvelope
-{
-    public string? JsonRpc { get; set; }
-    public string? Id { get; set; }
-    public JsonNode? Result { get; set; }
-    public ErrorEnvelope? Error { get; set; }
-}
+    internal sealed class ResponseEnvelope
+    {
+        public string? JsonRpc { get; set; }
+        public string? Id { get; set; }
+        public JsonNode? Result { get; set; }
+        public ErrorEnvelope? Error { get; set; }
+    }
 
-internal sealed class NotificationEnvelope
-{
-    public string? JsonRpc { get; set; }
-    public string? Method { get; set; }
-    public JsonNode? Params { get; set; }
-}
+    internal sealed class NotificationEnvelope
+    {
+        public string? JsonRpc { get; set; }
+        public string? Method { get; set; }
+        public JsonNode? Params { get; set; }
+    }
 
-internal sealed class ErrorEnvelope
-{
-    public int Code { get; set; }
-    public string? Message { get; set; }
-    public JsonNode? Data { get; set; }
+    internal sealed class ErrorEnvelope
+    {
+        public int Code { get; set; }
+        public string? Message { get; set; }
+        public JsonNode? Data { get; set; }
+    }
 }

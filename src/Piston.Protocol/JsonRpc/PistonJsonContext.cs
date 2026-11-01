@@ -19,11 +19,11 @@ namespace Piston.Protocol.JsonRpc;
     WriteIndented = false,
     UseStringEnumConverter = true)]
 
-// ── Envelope types (internal, promoted from private nested in Task 1) ─────
-[JsonSerializable(typeof(RequestEnvelope))]
-[JsonSerializable(typeof(ResponseEnvelope))]
-[JsonSerializable(typeof(NotificationEnvelope))]
-[JsonSerializable(typeof(ErrorEnvelope))]
+// ── Envelope types (nested in JsonRpcSerializer) ──────────────────────────
+[JsonSerializable(typeof(JsonRpcSerializer.RequestEnvelope))]
+[JsonSerializable(typeof(JsonRpcSerializer.ResponseEnvelope))]
+[JsonSerializable(typeof(JsonRpcSerializer.NotificationEnvelope))]
+[JsonSerializable(typeof(JsonRpcSerializer.ErrorEnvelope))]
 
 // ── JsonNode for envelope Params/Result/Data ─────────────────────────────
 [JsonSerializable(typeof(JsonNode))]

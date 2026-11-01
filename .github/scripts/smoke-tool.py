@@ -46,7 +46,8 @@ def main():
     tool = str(pathlib.Path(sys.argv[1]).resolve())
     subprocess.run([tool, "--help"], check=True)
     with tempfile.TemporaryDirectory(prefix="piston-tool-smoke-") as directory:
-        root = pathlib.Path(directory)
+        root = pathlib.Path(directory) / "solution"
+        root.mkdir()
         (root / "Smoke.csproj").write_text(
             """<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
@@ -68,13 +69,14 @@ def main():
         )
         (root / "Smoke.slnx").write_text('<Solution><Project Path="Smoke.csproj" /></Solution>\n')
         solution = str(root / "Smoke.slnx")
+        subprocess.run(["dotnet", "restore", solution], cwd=root, check=True, timeout=120)
         web_port, mcp_port = free_port(), free_port()
         while mcp_port == web_port:
             mcp_port = free_port()
         pipe = f"piston-smoke-{uuid.uuid4().hex}"
         web_url = f"http://localhost:{web_port}"
         mcp_url = f"http://localhost:{mcp_port}"
-        with (root / "daemon.log").open("w+") as log:
+        with (pathlib.Path(directory) / "daemon.log").open("w+") as log:
             daemon = subprocess.Popen(
                 [tool, "daemon", solution, "--web-port", str(web_port),
                  "--mcp-port", str(mcp_port), "--pipe-name", pipe, "--coverage"],
@@ -109,8 +111,18 @@ def main():
                 }, 1)
                 tools = rpc(mcp_url, "tools/list", {}, 2)["tools"]
                 names = {tool["name"] for tool in tools}
-                assert names == {"run_tests", "get_test_run", "get_test_results", "set_test_filter", "clear_results"}, names
-                result = rpc(mcp_url, "tools/call", {"name": "run_tests", "arguments": {}}, 3)
+                assert names == {
+                    "verify", "run_tests", "get_test_run", "get_test_results",
+                    "get_test_result", "get_test_history", "set_test_filter", "clear_results",
+                    "get_coverage", "get_changed_line_coverage", "plan_affected_tests",
+                    "run_affected_tests", "export_coverage",
+                }, names
+                verification = rpc(mcp_url, "tools/call", {"name": "verify", "arguments": {}}, 3)
+                assert not verification.get("isError", False), verification
+                verified = "\n".join(item.get("text", "") for item in verification["content"])
+                assert "Verdict: Passed" in verified, verified
+                assert "Tests: 1 (Passed: 1, Failed: 0, Skipped: 0)" in verified, verified
+                result = rpc(mcp_url, "tools/call", {"name": "run_tests", "arguments": {}}, 4)
                 assert not result.get("isError", False), result
                 text = "\n".join(item.get("text", "") for item in result["content"])
                 assert "Passed: 1, Failed: 0" in text, text
@@ -123,7 +135,7 @@ def main():
                     check=True, capture_output=True, text=True, timeout=15,
                 )
                 assert "Daemon running." in status.stdout, status.stdout
-                print("PASS: installed CLI, bundled web/framework assets, HTTP MCP test-only surface, "
+                print("PASS: installed CLI, bundled web/framework assets, HTTP MCP tool surface, "
                       "one passing test, native SQLite coverage store and named-pipe status")
             except BaseException:
                 log.flush()

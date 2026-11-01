@@ -24,33 +24,20 @@ namespace Piston.Engine.Execution;
 /// <c>containerSlots</c>, and no earlier queued run conflicts with it, so a run is never starved. Runs take
 /// all their resources at once, so they cannot deadlock.
 /// </summary>
-internal sealed class MachineResourceCoordinator : ITestResourceGate
+internal sealed class MachineResourceCoordinator(
+    ExecutionCoordinationDirectory directory,
+    Func<string, TestResourceNeeds> resolve,
+    string? worktree,
+    TimeSpan? pollInterval = null,
+    Func<int, bool>? isPortInUse = null) : ITestResourceGate
 {
     private const string TicketExtension = ".ticket";
     private const string LeaseExtension = ".lease";
     private const string InfoExtension = ".json";
+    private readonly TimeSpan _pollInterval = pollInterval ?? TimeSpan.FromMilliseconds(100);
+    private readonly Func<int, bool> _isPortInUse = isPortInUse ?? IsPortInUse;
 
-    private readonly ExecutionCoordinationDirectory _directory;
-    private readonly Func<string, TestResourceNeeds> _resolve;
-    private readonly string? _worktree;
-    private readonly TimeSpan _pollInterval;
-    private readonly Func<int, bool> _isPortInUse;
-
-    public MachineResourceCoordinator(
-        ExecutionCoordinationDirectory directory,
-        Func<string, TestResourceNeeds> resolve,
-        string? worktree,
-        TimeSpan? pollInterval = null,
-        Func<int, bool>? isPortInUse = null)
-    {
-        _directory = directory;
-        _resolve = resolve;
-        _worktree = worktree;
-        _pollInterval = pollInterval ?? TimeSpan.FromMilliseconds(100);
-        _isPortInUse = isPortInUse ?? IsPortInUse;
-    }
-
-    public TestResourceNeeds Resolve(string projectPath) => _resolve(projectPath);
+    public TestResourceNeeds Resolve(string projectPath) => resolve(projectPath);
 
     public async Task<TestResourceLease> AcquireAsync(
         TestResourceNeeds needs, Action<TestResourceWait> onWaiting, CancellationToken ct)
@@ -61,7 +48,7 @@ internal sealed class MachineResourceCoordinator : ITestResourceGate
         }
 
         var requestedAt = DateTimeOffset.UtcNow;
-        var info = new EntryInfo(needs.Keys, needs.UsesContainers, Environment.ProcessId, _worktree, needs.ProjectPath, requestedAt, null);
+        var info = new EntryInfo(needs.Keys, needs.UsesContainers, Environment.ProcessId, worktree, needs.ProjectPath, requestedAt, null);
         var id = Guid.NewGuid().ToString("N");
 
         Held ticket;
@@ -71,7 +58,7 @@ internal sealed class MachineResourceCoordinator : ITestResourceGate
             var (tickets, leases) = Scan();
             sequence = tickets.Concat(leases).Select(e => e.Sequence).DefaultIfEmpty(0).Max() + 1;
             sequence = Math.Max(DateTime.UtcNow.Ticks, sequence);
-            ticket = CreateEntry(_directory.ResourceQueueDirectory, Stem(sequence, id), TicketExtension, info);
+            ticket = CreateEntry(directory.ResourceQueueDirectory, Stem(sequence, id), TicketExtension, info);
         }
 
         TestResourceWait? lastPublished = null;
@@ -83,14 +70,14 @@ internal sealed class MachineResourceCoordinator : ITestResourceGate
                 TestResourceWait status;
                 using (await AcquireLockAsync(ct).ConfigureAwait(false))
                 {
-                    var budget = ExecutionBudget.Load(_directory.BudgetPath);
+                    var budget = ExecutionBudget.Load(directory.BudgetPath);
                     var (tickets, leases) = Scan();
                     status = Evaluate(needs, sequence, ticket.Name, tickets, leases, budget, requestedAt);
 
                     if (status.State == TestResourceWaitState.Acquired)
                     {
                         var leaseInfo = info with { AcquiredAt = status.AcquiredAt };
-                        unreturnedLease = CreateEntry(_directory.ResourceLeasesDirectory, Path.GetFileNameWithoutExtension(ticket.Name), LeaseExtension, leaseInfo);
+                        unreturnedLease = CreateEntry(directory.ResourceLeasesDirectory, Path.GetFileNameWithoutExtension(ticket.Name), LeaseExtension, leaseInfo);
                         Release(ticket, lockHeld: true);
                     }
                 }
@@ -233,12 +220,12 @@ internal sealed class MachineResourceCoordinator : ITestResourceGate
     {
         try
         {
-            return await ExclusiveFileLock.AcquireAsync(_directory.ResourceLockPath, ct).ConfigureAwait(false);
+            return await ExclusiveFileLock.AcquireAsync(directory.ResourceLockPath, ct).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             throw new ExecutionCoordinationException(
-                $"Cannot acquire the test resource lock '{_directory.ResourceLockPath}': {ex.Message}", ex);
+                $"Cannot acquire the test resource lock '{directory.ResourceLockPath}': {ex.Message}", ex);
         }
     }
 
@@ -275,7 +262,7 @@ internal sealed class MachineResourceCoordinator : ITestResourceGate
             // Under the lock, so no evaluator sees a live entry without its sidecar.
             using var resourceLock = lockHeld
                 ? null
-                : ExclusiveFileLock.AcquireAsync(_directory.ResourceLockPath, CancellationToken.None).GetAwaiter().GetResult();
+                : ExclusiveFileLock.AcquireAsync(directory.ResourceLockPath, CancellationToken.None).GetAwaiter().GetResult();
             entry.Stream.Dispose();
             if (OperatingSystem.IsWindows())
             {
@@ -293,7 +280,7 @@ internal sealed class MachineResourceCoordinator : ITestResourceGate
 
     /// <summary>Must be called under the resource lock. Removes entries and sidecars of exited processes.</summary>
     private (IReadOnlyList<Entry> Tickets, IReadOnlyList<Entry> Leases) Scan() =>
-        (ScanLive(_directory.ResourceQueueDirectory, TicketExtension), ScanLive(_directory.ResourceLeasesDirectory, LeaseExtension));
+        (ScanLive(directory.ResourceQueueDirectory, TicketExtension), ScanLive(directory.ResourceLeasesDirectory, LeaseExtension));
 
     private static List<Entry> ScanLive(string directory, string extension)
     {

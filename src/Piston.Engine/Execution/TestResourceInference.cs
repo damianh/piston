@@ -16,21 +16,12 @@ namespace Piston.Engine.Execution;
 /// repository's worktrees, since such tests commonly reuse fixed container names and ports.
 /// <c>testResources</c> rules in <c>.piston.json</c> declare further exclusive resources or relax the default.
 /// </summary>
-public sealed class TestResourceInference
+public sealed class TestResourceInference(
+    string solutionPath, IReadOnlyList<TestResourceRule> rules, Func<string, TestProjectFacts?> facts)
 {
-    private readonly string _solutionDirectory;
-    private readonly IReadOnlyList<CompiledRule> _rules;
-    private readonly Func<string, TestProjectFacts?> _facts;
-    private readonly Lazy<(string Root, string RepositoryId)> _repository;
-
-    public TestResourceInference(
-        string solutionPath, IReadOnlyList<TestResourceRule> rules, Func<string, TestProjectFacts?> facts)
-    {
-        _solutionDirectory = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? Path.GetFullPath(solutionPath);
-        _rules = [.. rules.Select(Compile)];
-        _facts = facts;
-        _repository = new Lazy<(string, string)>(() => ResolveRepository(solutionPath));
-    }
+    private readonly string _solutionDirectory = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? Path.GetFullPath(solutionPath);
+    private readonly IReadOnlyList<CompiledRule> _rules = [.. rules.Select(Compile)];
+    private readonly Lazy<(string Root, string RepositoryId)> _repository = new Lazy<(string, string)>(() => ResolveRepository(solutionPath));
 
     /// <summary>Whether a package reference marks a project as using containers.</summary>
     public static bool IsContainerPackage(string package) =>
@@ -47,7 +38,7 @@ public sealed class TestResourceInference
         var reasons = new List<string>();
         var keys = new SortedSet<string>(StringComparer.Ordinal);
 
-        var containerPackages = _facts(projectPath)?.PackageReferences
+        var containerPackages = facts(projectPath)?.PackageReferences
             .Where(IsContainerPackage)
             .Order(StringComparer.OrdinalIgnoreCase)
             .ToList() ?? [];

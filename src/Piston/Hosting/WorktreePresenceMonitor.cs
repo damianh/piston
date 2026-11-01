@@ -8,40 +8,25 @@ namespace Piston.Hosting;
 /// root are missing on <see cref="RequiredMisses"/> consecutive checks. Requiring both, repeatedly, avoids
 /// reacting to a branch switch that briefly removes the solution file.
 /// </summary>
-public sealed class WorktreePresenceMonitor : IDisposable
+public sealed class WorktreePresenceMonitor(
+    string solutionPath,
+    string worktreeRoot,
+    Action<string> onDeleted,
+    TimeSpan? interval = null,
+    TimeProvider? timeProvider = null,
+    Func<string, bool>? fileExists = null,
+    Func<string, bool>? directoryExists = null) : IDisposable
 {
     public const int RequiredMisses = 2;
     public static readonly TimeSpan DefaultInterval = TimeSpan.FromMilliseconds(2500);
-
-    private readonly string _solutionPath;
-    private readonly string _worktreeRoot;
-    private readonly Action<string> _onDeleted;
-    private readonly TimeSpan _interval;
-    private readonly TimeProvider _timeProvider;
-    private readonly Func<string, bool> _fileExists;
-    private readonly Func<string, bool> _directoryExists;
+    private readonly TimeSpan _interval = interval ?? DefaultInterval;
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    private readonly Func<string, bool> _fileExists = fileExists ?? File.Exists;
+    private readonly Func<string, bool> _directoryExists = directoryExists ?? Directory.Exists;
     private readonly Lock _lock = new();
     private ITimer? _timer;
     private int _misses;
     private bool _fired;
-
-    public WorktreePresenceMonitor(
-        string solutionPath,
-        string worktreeRoot,
-        Action<string> onDeleted,
-        TimeSpan? interval = null,
-        TimeProvider? timeProvider = null,
-        Func<string, bool>? fileExists = null,
-        Func<string, bool>? directoryExists = null)
-    {
-        _solutionPath = solutionPath;
-        _worktreeRoot = worktreeRoot;
-        _onDeleted = onDeleted;
-        _interval = interval ?? DefaultInterval;
-        _timeProvider = timeProvider ?? TimeProvider.System;
-        _fileExists = fileExists ?? File.Exists;
-        _directoryExists = directoryExists ?? Directory.Exists;
-    }
 
     public void Start()
     {
@@ -61,7 +46,7 @@ public sealed class WorktreePresenceMonitor : IDisposable
                 return false;
             }
 
-            var missing = !_fileExists(_solutionPath) && !_directoryExists(_worktreeRoot);
+            var missing = !_fileExists(solutionPath) && !_directoryExists(worktreeRoot);
             _misses = missing ? _misses + 1 : 0;
             if (_misses < RequiredMisses)
             {
@@ -73,7 +58,7 @@ public sealed class WorktreePresenceMonitor : IDisposable
             _timer = null;
         }
 
-        _onDeleted(_worktreeRoot);
+        onDeleted(worktreeRoot);
         return true;
     }
 
