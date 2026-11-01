@@ -14,7 +14,8 @@
     <PackageProjectUrl>https://github.com/damianh/piston</PackageProjectUrl>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <!-- The NuGet README is intentionally separate from the repository README. -->
+    <None Update="README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
   <Target Name="GenerateMcpMetadata" BeforeTargets="_GetPackageFiles">
     <PropertyGroup>

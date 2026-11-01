@@ -2,8 +2,6 @@
 
 Piston keeps .NET test results current while you work. It watches a solution, runs affected tests, and shows results in a dashboard or to an AI coding agent over MCP.
 
-<!-- mcp-name: io.github.damianh/piston -->
-
 ## Requirements
 
 - .NET 10 SDK and ASP.NET Core 10 runtime
