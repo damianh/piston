@@ -17,7 +17,7 @@ To pick up a rebuilt package, use a new version (`-p:Version=0.1.0-dev.2`).
 **Disconnect all stdio MCP sessions and stop daemons before updating on every OS**,
 then run `dotnet tool update --global Piston` (for a local package, add
 `--version 0.1.0-dev.2 --source ./packages`) and reconnect the clients.
-See the [upgrade behavior and publishing prerequisites](../README.md#upgrading).
+See the [upgrade behavior and publishing prerequisites](user-guide.md#upgrading).
 To uninstall, run `dotnet tool uninstall -g Piston`
 and remove the `piston` entry from your MCP config, plus any `skills/piston` and
 `extensions/piston-dashboard` folders that `piston init` installed (section 3).
@@ -209,7 +209,7 @@ For the dashboard attached to an existing stdio session, use its `--dashboard`
 opt-in rather than starting a competing owner. This repository's native
 `piston-dashboard` canvas discovers the active worktree and shows the existing
 web UI, including a disconnected state. `piston dashboard --json` inspects the
-owner without starting an engine or a run. See the [canvas setup](../README.md#copilot-canvas).
+owner without starting an engine or a run. See the [canvas setup](user-guide.md#copilot-canvas).
 
 To share one engine through HTTP between a human and an agent, run the HTTP
 daemon instead. MCP is always on, at port 5200 by default:
@@ -340,7 +340,7 @@ by `base` and `baseRef`.
 
 Selection by changed lines is a heuristic, and an affected-test result does not
 count as verification, even when the plan's scope is `full`. Finish with `verify`. See
-[Coverage and impact selection](../README.md#coverage-and-impact-selection) for
+[Coverage and impact selection](user-guide.md#coverage-and-impact-selection) for
 how tests are selected and for the other tools.
 
 ### Changed-line coverage verdicts
