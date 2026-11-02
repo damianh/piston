@@ -88,10 +88,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          global-json-file: global.json
       - name: Test release allocation and recovery
-        env:
-          PYTHONDONTWRITEBYTECODE: "1"
-        run: python3 -m unittest discover -s .github/scripts -p 'test_release*.py' -v
+        run: dotnet run build.cs -- test-release
 
   distribution:
     name: Distribution (${{ matrix.os }})

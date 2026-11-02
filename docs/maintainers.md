@@ -73,3 +73,12 @@ its original source and tooling still target the old package ID.
 
 The first public release remains an acceptance gate until it actually succeeds;
 local-feed validation alone is not proof of publication.
+
+## Release tooling
+
+The release workflow's steps are `build.cs` targets (`release-context`,
+`release-prepare`, `release-reconcile`, `release-verify-package`,
+`release-github-release` and `smoke-tool`), run from the trusted workflow
+commit and configured through `GITHUB_*` and `RELEASE_*` environment variables.
+`dotnet run build.cs -- test-release` runs their self-tests against fake GitHub
+and NuGet endpoints and local git repositories; CI runs it on every push.
