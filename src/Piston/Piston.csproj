@@ -3,7 +3,7 @@
     <OutputType>Exe</OutputType>
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>piston</ToolCommandName>
-    <PackageId>Piston</PackageId>
+    <PackageId>DamianH.Piston</PackageId>
     <PackageType>DotnetTool;McpServer</PackageType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <Authors>Damian Hickey</Authors>

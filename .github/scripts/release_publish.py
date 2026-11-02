@@ -20,8 +20,29 @@ import zipfile
 from release_version import ReleaseVersion, allocate_version, parse_tag
 
 
+PACKAGE_ID = "DamianH.Piston"
+
+
 class ReleaseError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class RetiredReservation:
+    run_id: int
+    source_sha: str
+    package_id: str
+    reason: str
+
+
+RETIRED_RESERVATIONS = {
+    "v2026.1101.1-dev": RetiredReservation(
+        run_id=41339003060,
+        source_sha="ce5c63d4da00690f40141435e59db7e8122b972f",
+        package_id="Piston",
+        reason="NuGet trusted-publisher login failed before publication.",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -89,6 +110,35 @@ def checked_sha(value: str) -> str:
     if not re.fullmatch(r"[0-9a-fA-F]{40}", value):
         raise ReleaseError("The source commit must be a full GitHub commit SHA.")
     return value.lower()
+
+
+def verify_source_identity(source_dir: Path, source_sha: str) -> None:
+    message = f"Source commit {source_sha} must declare package identity {PACKAGE_ID} in its project and MCP metadata."
+    try:
+        project = ET.fromstring(git(source_dir, "show", f"{source_sha}:src/Piston/Piston.csproj"))
+        server = json.loads(git(source_dir, "show", f"{source_sha}:src/Piston/Integration/server.json"))
+    except (ReleaseError, ET.ParseError, json.JSONDecodeError) as error:
+        raise ReleaseError(message) from error
+
+    declarations = [
+        (group, element)
+        for group in project
+        if group.tag.rsplit("}", 1)[-1] == "PropertyGroup"
+        for element in group
+        if element.tag.rsplit("}", 1)[-1] == "PackageId"
+    ]
+    packages = server.get("packages") if isinstance(server, dict) else None
+    if (
+        len(declarations) != 1
+        or declarations[0][0].get("Condition") is not None
+        or declarations[0][1].get("Condition") is not None
+        or (declarations[0][1].text or "").strip() != PACKAGE_ID
+        or not isinstance(packages, list)
+        or len(packages) != 1
+        or not isinstance(packages[0], dict)
+        or packages[0].get("identifier") != PACKAGE_ID
+    ):
+        raise ReleaseError(message)
 
 
 def read_reservation(source_dir: Path, tag: str, version: ReleaseVersion) -> Reservation:
@@ -202,11 +252,16 @@ def repo_path(repo: str) -> str:
     return f"/repos/{repo}"
 
 
-def public_package(version: ReleaseVersion, allow_missing: bool = False) -> bytes | None:
+def public_package(
+    version: ReleaseVersion, allow_missing: bool = False, *, package_id: str = PACKAGE_ID,
+) -> bytes | None:
     package_version = version.version.lower()
+    identifier = package_id.lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", identifier):
+        raise ReleaseError("Invalid NuGet package ID.")
     url = (
-        f"https://api.nuget.org/v3-flatcontainer/piston/{package_version}/"
-        f"piston.{package_version}.nupkg"
+        f"https://api.nuget.org/v3-flatcontainer/{identifier}/{package_version}/"
+        f"{identifier}.{package_version}.nupkg"
     )
     return request_bytes(url, allow_missing=allow_missing)
 
@@ -243,7 +298,7 @@ def package_identity(data: bytes, version: ReleaseVersion, source_sha: str, repo
     repository = values.get("repository")
     if (
         values.get("id") is None
-        or values["id"].text != "Piston"
+        or values["id"].text != PACKAGE_ID
         or values.get("version") is None
         or values["version"].text != version.version
         or repository is None
@@ -252,7 +307,7 @@ def package_identity(data: bytes, version: ReleaseVersion, source_sha: str, repo
         or repository.get("commit", "").lower() != source_sha
         or server.get("version") != version.version
         or package.get("version") != version.version
-        or package.get("identifier") != "Piston"
+        or package.get("identifier") != PACKAGE_ID
         or not any(name.endswith("/Piston.dll") for name in entries)
     ):
         raise ReleaseError(f"Package {version.version} does not match its tag, repository, or source commit.")
@@ -293,14 +348,81 @@ def verify_public_reservation(record: Reservation, repo: str) -> None:
         release = github_release(repo, record.version)
         if release is None:
             raise ReleaseError(f"GitHub release {record.version.tag} is unavailable.")
-        expected_name = f"Piston.{record.version.version}.nupkg"
+        expected_name = f"{PACKAGE_ID}.{record.version.version}.nupkg"
         assets = [asset for asset in release.get("assets", []) if asset.get("name") == expected_name]
         if len(assets) != 1 or assets[0].get("state") != "uploaded":
             raise ReleaseError(f"GitHub release {record.version.tag} is missing {expected_name}.")
         compare_packages(data, download_github_asset(repo, record.version, expected_name))
 
 
+def verify_retired_reservation(record: Reservation, retirement: RetiredReservation, repo: str) -> None:
+    if record.run_id != retirement.run_id or record.source_sha != retirement.source_sha:
+        raise ReleaseError(f"Retired reservation {record.version.tag} does not match its recorded identity.")
+
+    run = github_json(f"{repo_path(repo)}/actions/runs/{record.run_id}")
+    path = run.get("path") if run is not None else None
+    if (
+        run is None
+        or run.get("id") != retirement.run_id
+        or not isinstance(path, str)
+        or path.split("@", 1)[0] != ".github/workflows/release.yml"
+        or run.get("event") != "workflow_run"
+        or run.get("head_sha") != retirement.source_sha
+        or type(run.get("run_attempt")) is not int
+        or run["run_attempt"] != 1
+        or run.get("status") != "completed"
+        or run.get("conclusion") != "failure"
+    ):
+        raise ReleaseError(f"Retired reservation {record.version.tag} no longer has the expected failed run.")
+
+    result = github_json(f"{repo_path(repo)}/actions/runs/{record.run_id}/attempts/1/jobs?per_page=100")
+    jobs = result.get("jobs") if result is not None else None
+    if (
+        result is None
+        or not isinstance(jobs, list)
+        or type(result.get("total_count")) is not int
+        or result["total_count"] != len(jobs)
+        or any(not isinstance(job, dict) for job in jobs)
+    ):
+        raise ReleaseError(f"Retired reservation {record.version.tag} has incomplete job evidence.")
+    publish_jobs = [job for job in jobs if job.get("name") == "publish"]
+    if len(publish_jobs) != 1:
+        raise ReleaseError(f"Retired reservation {record.version.tag} has ambiguous publish-job evidence.")
+    job = publish_jobs[0]
+    steps = job.get("steps")
+    if (
+        job.get("status") != "completed"
+        or job.get("conclusion") != "failure"
+        or not isinstance(steps, list)
+        or any(not isinstance(step, dict) for step in steps)
+    ):
+        raise ReleaseError(f"Retired reservation {record.version.tag} has invalid publish-job evidence.")
+    login = [step for step in steps if step.get("name") == "Run NuGet/login@v1"]
+    publish = [step for step in steps if step.get("name") == "Publish tool to NuGet.org"]
+    if (
+        len(login) != 1
+        or login[0].get("status") != "completed"
+        or login[0].get("conclusion") != "failure"
+        or len(publish) != 1
+        or publish[0].get("status") != "completed"
+        or publish[0].get("conclusion") != "skipped"
+    ):
+        raise ReleaseError(f"Retired reservation {record.version.tag} does not prove publication was skipped.")
+
+    tag = urllib.parse.quote(record.version.tag, safe="")
+    if github_json(f"{repo_path(repo)}/releases/tags/{tag}", allow_missing=True) is not None:
+        raise ReleaseError(f"Retired reservation {record.version.tag} unexpectedly has a GitHub release.")
+    for package_id in (retirement.package_id, PACKAGE_ID):
+        if public_package(record.version, allow_missing=True, package_id=package_id) is not None:
+            raise ReleaseError(f"Retired reservation {record.version.tag} unexpectedly has a {package_id} package.")
+    print(f"Verified retirement of {record.version.tag}: {retirement.reason} Its version remains reserved.")
+
+
 def verify_previous(record: Reservation, repo: str) -> None:
+    retirement = RETIRED_RESERVATIONS.get(record.version.tag)
+    if retirement is not None:
+        verify_retired_reservation(record, retirement, repo)
+        return
     run = github_json(f"{repo_path(repo)}/actions/runs/{record.run_id}", allow_missing=True)
     if run is None:
         workflow = github_json(f"{repo_path(repo)}/actions/workflows/release.yml")
@@ -321,7 +443,7 @@ def verify_previous(record: Reservation, repo: str) -> None:
 
 
 def verify_history(records: list[Reservation], repo: str) -> None:
-    # A checkpoint records that all preceding reservations were verified before this tag was created.
+    # A checkpoint records that preceding publications or retirements were verified before this tag.
     start = next(
         (index for index in range(len(records) - 1, -1, -1) if records[index].has_verified_history),
         0,
@@ -336,6 +458,7 @@ def prepare(source_dir: Path, repo: str, source_sha: str, run_id: int, dev: bool
         raise ReleaseError("The workflow run ID must be positive.")
     if git(source_dir, "cat-file", "-t", source_sha) != "commit":
         raise ReleaseError(f"Source {source_sha} is not a commit.")
+    verify_source_identity(source_dir, source_sha)
     git(source_dir, "fetch", "--tags", "--no-recurse-submodules", "origin")
     tags = git(source_dir, "tag", "--list").splitlines()
     if preview:
@@ -344,6 +467,8 @@ def prepare(source_dir: Path, repo: str, source_sha: str, run_id: int, dev: bool
     records = reservations(source_dir, tags)
     own = next((record for record in records if record.run_id == run_id), None)
     if own is not None:
+        if own.version.tag in RETIRED_RESERVATIONS:
+            raise ReleaseError(f"Release {own.version.tag} is retired and cannot be retried.")
         if own.source_sha != source_sha or own.version.dev != dev:
             raise ReleaseError(f"Workflow run {run_id} already reserved {own.version.tag} for different inputs.")
         if records[-1] != own:

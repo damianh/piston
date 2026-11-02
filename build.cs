@@ -28,6 +28,7 @@ using static SimpleExec.Command;
 const string Solution = "Piston.slnx";
 const string Samples = "samples/Samples.slnx";
 const string Packages = "artifacts/packages";
+const string PackageId = "DamianH.Piston";
 const string ToolPath = ".tools";
 var expected = new Counts(Total: 12, Passed: 4, Failed: 4, Skipped: 4);
 const int ExpectedSuites = 4;
@@ -66,8 +67,8 @@ Target("install-tool", $"Install the packed tool into {ToolPath}.", dependsOn: [
     // Restore into a fresh packages folder rather than reusing a stale local build.
     var nugetPackages = Path.GetFullPath("artifacts/nuget-packages");
     DeleteDirectory(nugetPackages);
-    var package = Directory.GetFiles(Packages, "Piston.*.nupkg").Single();
-    await RunAsync("dotnet", ["tool", "install", "Piston", "--version", ReadPackageVersion(package),
+    var package = Directory.GetFiles(Packages, $"{PackageId}.*.nupkg").Single();
+    await RunAsync("dotnet", ["tool", "install", PackageId, "--version", ReadPackageVersion(package),
             "--tool-path", ToolPath, "--source", Packages],
         configureEnvironment: env => env["NUGET_PACKAGES"] = nugetPackages);
 });
@@ -288,7 +289,7 @@ async Task SmokeDistributionAsync()
     async Task ToolCommandAsync(string operation, string version)
     {
         var (output, error) = await ReadAsync("dotnet",
-            ["tool", operation, "Piston", "--version", version, "--tool-path", Path.GetDirectoryName(tool)!,
+            ["tool", operation, PackageId, "--version", version, "--tool-path", Path.GetDirectoryName(tool)!,
                     "--source", feed], configureEnvironment: Configure);
         Console.WriteLine(output + error);
     }
@@ -297,7 +298,7 @@ async Task SmokeDistributionAsync()
     {
         var exitCode = 0;
         var (output, error) = await ReadAsync("dotnet",
-            ["tool", "update", "Piston", "--version", newVersion, "--tool-path", Path.GetDirectoryName(tool)!,
+            ["tool", "update", PackageId, "--version", newVersion, "--tool-path", Path.GetDirectoryName(tool)!,
                     "--source", feed], configureEnvironment: Configure, handleExitCode: code =>
             {
                 exitCode = code;
@@ -351,7 +352,7 @@ async Task SmokeDistributionAsync()
         }
 
         var (help, helpError) = await ReadAsync("dotnet",
-            ["dnx", $"Piston@{oldVersion}", "--source", feed, "--", "--help"],
+            ["dnx", $"{PackageId}@{oldVersion}", "--source", feed, "--", "--help"],
             configureEnvironment: Configure);
         if (!help.Contains("mcp", StringComparison.Ordinal) || !help.Contains("daemon", StringComparison.Ordinal))
         {
@@ -361,7 +362,7 @@ async Task SmokeDistributionAsync()
         foreach (var version in new[] { oldVersion, newVersion })
         {
             var (actual, error) = await ReadAsync("dotnet",
-                ["dnx", $"Piston@{version}", "--source", feed, "--", "--version"],
+                ["dnx", $"{PackageId}@{version}", "--source", feed, "--", "--version"],
                 configureEnvironment: Configure);
             if (!HasVersion(actual, version))
             {
@@ -370,7 +371,7 @@ async Task SmokeDistributionAsync()
         }
 
         await SmokeMcpAsync("dotnet",
-            ["dnx", $"Piston@{oldVersion}", "--source", feed, "--", "mcp", samples], environment,
+            ["dnx", $"{PackageId}@{oldVersion}", "--source", feed, "--", "mcp", samples], environment,
             expectedServerVersion: oldVersion);
 
         tool = Path.Combine(root, "mcp-tool", OperatingSystem.IsWindows() ? "piston.exe" : "piston");
@@ -453,7 +454,7 @@ async Task SmokeDistributionAsync()
 async Task SmokePublicAsync()
 {
     var directory = Environment.GetEnvironmentVariable("PISTON_PACKAGES") ?? Packages;
-    var source = Directory.GetFiles(directory, "Piston.*.nupkg").Single();
+    var source = Directory.GetFiles(directory, $"{PackageId}.*.nupkg").Single();
     var version = ReadPackageVersion(source);
     if (!Regex.IsMatch(version, @"^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$"))
     {
@@ -466,8 +467,9 @@ async Task SmokePublicAsync()
     try
     {
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-        var url = $"https://api.nuget.org/v3-flatcontainer/piston/{version.ToLowerInvariant()}/piston.{version.ToLowerInvariant()}.nupkg";
-        var destination = Path.Combine(root, $"Piston.{version}.nupkg");
+        var packageId = PackageId.ToLowerInvariant();
+        var url = $"https://api.nuget.org/v3-flatcontainer/{packageId}/{version.ToLowerInvariant()}/{packageId}.{version.ToLowerInvariant()}.nupkg";
+        var destination = Path.Combine(root, $"{PackageId}.{version}.nupkg");
         for (var attempt = 1; ; attempt++)
         {
             using var response = await http.GetAsync(url);
@@ -489,7 +491,7 @@ async Task SmokePublicAsync()
         CheckPackageContents(root, expectedVersion: version);
         samples = CreateSmokeFixture(root, originalSamples);
         await SmokeMcpAsync("dotnet",
-            ["dnx", $"Piston@{version}", "--source", "https://api.nuget.org/v3/index.json", "--", "mcp", samples],
+            ["dnx", $"{PackageId}@{version}", "--source", "https://api.nuget.org/v3/index.json", "--", "mcp", samples],
             new Dictionary<string, string?>
             {
                 ["DOTNET_CLI_HOME"] = Path.Combine(root, "cli-home"),
@@ -497,7 +499,7 @@ async Task SmokePublicAsync()
                 ["DOTNET_NOLOGO"] = "true",
             },
             expectedServerVersion: version);
-        Console.WriteLine($"PASS: NuGet.org metadata and dnx MCP for Piston {version}.");
+        Console.WriteLine($"PASS: NuGet.org metadata and dnx MCP for {PackageId} {version}.");
     }
     finally
     {
@@ -655,7 +657,7 @@ static string ReadPackageVersion(string packagePath)
 // Piston.Web reaches the tool only as static files under wwwroot/; nothing else from it belongs in the package.
 static void CheckPackageContents(string directory, string? expectedVersion = null)
 {
-    var package = Directory.GetFiles(directory, "Piston.*.nupkg").Single();
+    var package = Directory.GetFiles(directory, $"{PackageId}.*.nupkg").Single();
     using var archive = ZipFile.OpenRead(package);
     var entries = archive.Entries.Select(e => e.FullName).ToList();
     var unexpected = entries
@@ -671,6 +673,10 @@ static void CheckPackageContents(string directory, string? expectedVersion = nul
     var ns = specification.Root!.Name.Namespace;
     var metadata = specification.Root.Element(ns + "metadata")!;
     var version = metadata.Element(ns + "version")!.Value;
+    if (metadata.Element(ns + "id")?.Value != PackageId)
+    {
+        problems.Add($"package ID must be {PackageId}");
+    }
     if (expectedVersion is not null && version != expectedVersion)
     {
         problems.Add($"expected package version {expectedVersion}, got {version}");
@@ -707,7 +713,7 @@ static void CheckPackageContents(string directory, string? expectedVersion = nul
         || json["name"]!.GetValue<string>() != "io.github.damianh/piston"
         || json["version"]!.GetValue<string>() != version
         || serverPackage["version"]!.GetValue<string>() != version
-        || serverPackage["identifier"]!.GetValue<string>() != "Piston"
+        || serverPackage["identifier"]!.GetValue<string>() != PackageId
         || serverPackage["registryType"]!.GetValue<string>() != "nuget"
         || serverPackage["registryBaseUrl"]!.GetValue<string>() != "https://api.nuget.org/v3/index.json"
         || serverPackage["runtimeHint"]!.GetValue<string>() != "dnx"

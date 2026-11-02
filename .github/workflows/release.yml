@@ -151,7 +151,7 @@ jobs:
         env:
           VERSION: ${{ steps.prepare.outputs.version }}
         run: |
-          dotnet tool install Piston --version "$VERSION" --tool-path "$RUNNER_TEMP/piston-tool" \
+          dotnet tool install DamianH.Piston --version "$VERSION" --tool-path "$RUNNER_TEMP/piston-tool" \
             --source "$GITHUB_WORKSPACE/packages" --no-cache
           tool="$RUNNER_TEMP/piston-tool/piston"
           if cmp -s source/.github/scripts/smoke-tool.py release-tooling/.github/scripts/smoke-tool.py; then
@@ -212,7 +212,7 @@ jobs:
           ARTIFACT: ${{ needs.package.outputs.artifact }}
         run: |
           python3 release-tooling/.github/scripts/release_publish.py reconcile \
-            --package "packages/Piston.$VERSION.nupkg" --version "$VERSION" \
+            --package "packages/DamianH.Piston.$VERSION.nupkg" --version "$VERSION" \
             --source-sha "$SOURCE_SHA" --repo "$GITHUB_REPOSITORY" --reused "$REUSED" \
             --artifact "$ARTIFACT" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
       - name: Publish tool to NuGet.org
@@ -221,7 +221,7 @@ jobs:
           VERSION: ${{ needs.package.outputs.version }}
           NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
-          dotnet nuget push "packages/Piston.$VERSION.nupkg" --source https://api.nuget.org/v3/index.json \
+          dotnet nuget push "packages/DamianH.Piston.$VERSION.nupkg" --source https://api.nuget.org/v3/index.json \
             --api-key "$NUGET_API_KEY"
 
   verify-public:
@@ -260,7 +260,7 @@ jobs:
           SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
         run: |
           python3 release-tooling/.github/scripts/release_publish.py verify-package \
-            --package "packages/Piston.$VERSION.nupkg" --version "$VERSION" \
+            --package "packages/DamianH.Piston.$VERSION.nupkg" --version "$VERSION" \
             --source-sha "$SOURCE_SHA" --repo "$GITHUB_REPOSITORY"
 
   github-release:
@@ -286,5 +286,5 @@ jobs:
           SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
         run: |
           python3 release-tooling/.github/scripts/release_publish.py github-release \
-            --package "packages/Piston.$VERSION.nupkg" --version "$VERSION" \
+            --package "packages/DamianH.Piston.$VERSION.nupkg" --version "$VERSION" \
             --source-sha "$SOURCE_SHA" --repo "$GITHUB_REPOSITORY"

@@ -32,9 +32,14 @@ def _release_url(version):
     return f"{API}/repos/{REPO}/releases/tags/{version.tag}"
 
 
-def _package_url(version):
+def _package_url(version, package_id="DamianH.Piston"):
     number = version.version.lower()
-    return f"https://api.nuget.org/v3-flatcontainer/piston/{number}/piston.{number}.nupkg"
+    package_id = package_id.lower()
+    return f"https://api.nuget.org/v3-flatcontainer/{package_id}/{number}/{package_id}.{number}.nupkg"
+
+
+def _attempt_jobs_url(run_id):
+    return f"{API}/repos/{REPO}/actions/runs/{run_id}/attempts/1/jobs?per_page=100"
 
 
 def _package(
@@ -44,7 +49,8 @@ def _package(
     repo=REPO,
     nuspec_version=None,
     mcp_version=None,
-    identifier="Piston",
+    package_id="DamianH.Piston",
+    identifier="DamianH.Piston",
     dll=b"expected executable",
     signature=b"signature",
 ):
@@ -52,7 +58,7 @@ def _package(
     nuspec = (
         '<package xmlns="http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd">'
         "<metadata>"
-        f"<id>Piston</id><version>{nuspec_version or number}</version>"
+        f"<id>{package_id}</id><version>{nuspec_version or number}</version>"
         f'<repository type="git" url="https://github.com/{repo}" commit="{source_sha}" />'
         "</metadata></package>"
     )
@@ -62,7 +68,7 @@ def _package(
     }
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr("Piston.nuspec", nuspec)
+        archive.writestr(f"{package_id}.nuspec", nuspec)
         archive.writestr(".mcp/server.json", json.dumps(server))
         archive.writestr("tools/net10.0/any/Piston.dll", dll)
         archive.writestr(".signature.p7s", signature)
@@ -128,14 +134,14 @@ class ApiFixture(unittest.TestCase):
             "draft": False,
             "prerelease": False,
             "assets": assets if assets is not None else [
-                {"name": f"Piston.{version.version}.nupkg", "state": "uploaded"}
+                {"name": f"DamianH.Piston.{version.version}.nupkg", "state": "uploaded"}
             ],
         }
         response.update(changes)
         self.http.json(_release_url(version), response)
 
     def local_package(self, version, source_sha, **kwargs):
-        path = self.root / f"Piston.{version.version}.nupkg"
+        path = self.root / f"DamianH.Piston.{version.version}.nupkg"
         path.write_bytes(_package(version, source_sha, **kwargs))
         return path
 
@@ -329,11 +335,15 @@ class ReleaseContextTests(unittest.TestCase):
 class GitFixture(ApiFixture):
     def setUp(self):
         super().setUp()
+        retirements = patch.object(release_publish, "RETIRED_RESERVATIONS", {})
+        retirements.start()
+        self.addCleanup(retirements.stop)
         self.origin = self.root / "origin.git"
         self.worktree = self.root / "worktree"
         self.worktree.mkdir()
         self.command("git", "init", "--bare", "--initial-branch=main", str(self.origin))
         self.git("init", "--initial-branch=main")
+        self.write_source_identity()
         self.source_sha = self.commit("First tested commit")
         self.git("remote", "add", "origin", str(self.origin))
         self.git("push", "--quiet", "--set-upstream", "origin", "main")
@@ -344,6 +354,17 @@ class GitFixture(ApiFixture):
 
     def git(self, *arguments):
         return self.command("git", *arguments, cwd=self.worktree)
+
+    def write_source_identity(self, package_id="DamianH.Piston", identifier="DamianH.Piston"):
+        project = self.worktree / "src/Piston/Piston.csproj"
+        server = self.worktree / "src/Piston/Integration/server.json"
+        server.parent.mkdir(parents=True, exist_ok=True)
+        project.write_text(
+            f"<Project><PropertyGroup><PackageId>{package_id}</PackageId></PropertyGroup></Project>",
+            encoding="utf-8",
+        )
+        server.write_text(json.dumps({"packages": [{"identifier": identifier}]}), encoding="utf-8")
+        self.git("add", str(project), str(server))
 
     def commit(self, message):
         self.git(
@@ -478,6 +499,49 @@ class ReleaseReservationTests(GitFixture):
         self.assertEqual("2026.1101.1", version.version)
         self.assertIs(reused, False)
         self.assertEqual([], self.origin_tags())
+
+    def test_prepare_rejects_stale_or_inconsistent_source_before_reserving(self):
+        cases = (
+            ("old_package", "Piston", "DamianH.Piston"),
+            ("old_mcp_identifier", "DamianH.Piston", "Piston"),
+            ("both_old", "Piston", "Piston"),
+        )
+        for label, package_id, identifier in cases:
+            with self.subTest(case=label):
+                self.write_source_identity(package_id, identifier)
+                source_sha = self.commit(label)
+                with self.assertRaisesRegex(ReleaseError, "package identity"):
+                    self.prepare_at(DAY, source_sha=source_sha, run_id=41)
+                self.assertEqual([], self.origin_tags())
+                self.assertEqual([], self.git("tag", "--list").splitlines())
+                self.assertEqual([], self.http.requests)
+
+    def test_prepare_rejects_missing_or_invalid_source_metadata_before_reserving(self):
+        project = self.worktree / "src/Piston/Piston.csproj"
+        server = self.worktree / "src/Piston/Integration/server.json"
+        cases = (
+            ("invalid_project", project, "<Project>"),
+            ("conditional_package", project,
+             '<Project><PropertyGroup Condition="true"><PackageId>DamianH.Piston</PackageId></PropertyGroup></Project>'),
+            ("missing_project", project, None),
+            ("invalid_server", server, "{"),
+            ("missing_server_identifier", server, '{"packages": [{}]}'),
+            ("missing_server", server, None),
+        )
+        for label, path, content in cases:
+            with self.subTest(case=label):
+                self.write_source_identity()
+                if content is None:
+                    path.unlink()
+                else:
+                    path.write_text(content, encoding="utf-8")
+                self.git("add", "-A")
+                source_sha = self.commit(label)
+                with self.assertRaisesRegex(ReleaseError, "package identity"):
+                    self.prepare_at(DAY, source_sha=source_sha, run_id=41)
+                self.assertEqual([], self.origin_tags())
+                self.assertEqual([], self.git("tag", "--list").splitlines())
+                self.assertEqual([], self.http.requests)
 
     def test_prepare_blocks_incomplete_or_failed_previous_run(self):
         prior = ReleaseVersion(DAY, 1, True)
@@ -756,6 +820,184 @@ class ReleaseReservationTests(GitFixture):
         self.assertTrue(raw.endswith("competing reservation"))
 
 
+class RetiredReservationIdentityTests(unittest.TestCase):
+    def test_only_the_known_unpublished_reservation_is_pinned_for_retirement(self):
+        self.assertEqual({"v2026.1101.1-dev"}, set(release_publish.RETIRED_RESERVATIONS))
+        retirement = release_publish.RETIRED_RESERVATIONS["v2026.1101.1-dev"]
+        self.assertEqual(41339003060, retirement.run_id)
+        self.assertEqual("ce5c63d4da00690f40141435e59db7e8122b972f", retirement.source_sha)
+        self.assertEqual("Piston", retirement.package_id)
+        self.assertTrue(retirement.reason)
+
+
+class RetiredReservationTests(GitFixture):
+    def setUp(self):
+        super().setUp()
+        self.prior = ReleaseVersion(DAY, 1, True)
+        self.tag(self.prior, 41)
+        self.retirement = release_publish.RetiredReservation(
+            run_id=41,
+            source_sha=self.source_sha,
+            package_id="Piston",
+            reason="Unpublished after the NuGet login failure.",
+        )
+        release_publish.RETIRED_RESERVATIONS[self.prior.tag] = self.retirement
+        self.configure_evidence()
+
+    def failed_run(self):
+        return {
+            "id": 41,
+            "path": ".github/workflows/release.yml@refs/heads/main",
+            "event": "workflow_run",
+            "head_sha": self.source_sha,
+            "run_attempt": 1,
+            "status": "completed",
+            "conclusion": "failure",
+        }
+
+    def failed_jobs(self):
+        return {
+            "total_count": 1,
+            "jobs": [{
+                "name": "publish",
+                "status": "completed",
+                "conclusion": "failure",
+                "steps": [
+                    {"name": "Run NuGet/login@v1", "status": "completed", "conclusion": "failure"},
+                    {"name": "Publish tool to NuGet.org", "status": "completed", "conclusion": "skipped"},
+                ],
+            }],
+        }
+
+    def configure_evidence(self):
+        self.http.json(_action_url(41), self.failed_run())
+        self.http.json(_attempt_jobs_url(41), self.failed_jobs())
+        self.http.responses[_release_url(self.prior)] = 404
+        self.http.responses[_package_url(self.prior, "Piston")] = 404
+        self.http.responses[_package_url(self.prior)] = 404
+
+    def test_prepare_retires_verified_failure_without_changing_or_reusing_its_tag(self):
+        original_tag = self.git("--git-dir", str(self.origin), "cat-file", "-p", f"refs/tags/{self.prior.tag}")
+        version, reused = self.prepare_at(DAY, run_id=42)
+        self.assertEqual("2026.1101.2-dev", version.version)
+        self.assertIs(reused, False)
+        self.assertEqual(
+            original_tag,
+            self.git("--git-dir", str(self.origin), "cat-file", "-p", f"refs/tags/{self.prior.tag}"),
+        )
+        raw = self.git("--git-dir", str(self.origin), "cat-file", "-p", f"refs/tags/{version.tag}")
+        self.assertEqual(self.prior.tag, json.loads(raw.split("\n\n", 1)[1])["verified_through"])
+        self.assertEqual(
+            [_action_url(41), _attempt_jobs_url(41), _release_url(self.prior),
+             _package_url(self.prior, "Piston"), _package_url(self.prior)],
+            self.http.requests,
+        )
+
+    def test_prepare_continues_history_after_verified_retirement(self):
+        previous, _ = self.prepare_at(DAY, run_id=42)
+        self.success(42)
+        self.public_package(previous, self.source_sha)
+        version, reused = self.prepare_at(DAY, run_id=43)
+        self.assertEqual("2026.1101.3-dev", version.version)
+        self.assertIs(reused, False)
+        self.assertEqual(
+            ["v2026.1101.1-dev", "v2026.1101.2-dev", "v2026.1101.3-dev"],
+            self.origin_tags(),
+        )
+
+    def test_prepare_never_reuses_the_retired_run(self):
+        with self.assertRaisesRegex(ReleaseError, "retired"):
+            self.prepare_at(DAY, run_id=41)
+        self.assertEqual([self.prior.tag], self.origin_tags())
+        self.assertEqual([], self.http.requests)
+
+    def test_prepare_rejects_unmatched_retirement_fingerprints(self):
+        cases = (
+            ("wrong_run", self.prior.tag, 99, self.source_sha),
+            ("wrong_commit", self.prior.tag, 41, "f" * 40),
+            ("wrong_tag", "v2026.1101.2-dev", 41, self.source_sha),
+        )
+        for label, tag, run_id, source_sha in cases:
+            with self.subTest(case=label):
+                retirement = release_publish.RetiredReservation(run_id, source_sha, "Piston", "fixture")
+                with patch.dict(release_publish.RETIRED_RESERVATIONS, {tag: retirement}, clear=True):
+                    with self.assertRaises(ReleaseError):
+                        self.prepare_at(DAY, run_id=42)
+                self.assertEqual([self.prior.tag], self.origin_tags())
+
+    def test_prepare_rejects_changed_retired_workflow_runs(self):
+        cases = (
+            ("wrong_run_id", {"id": 99}),
+            ("wrong_workflow", {"path": ".github/workflows/ci.yml"}),
+            ("wrong_event", {"event": "workflow_dispatch"}),
+            ("wrong_source", {"head_sha": "f" * 40}),
+            ("retried", {"run_attempt": 2}),
+            ("running", {"status": "in_progress", "conclusion": None}),
+            ("succeeded", {"conclusion": "success"}),
+            ("cancelled", {"conclusion": "cancelled"}),
+        )
+        for label, changes in cases:
+            with self.subTest(case=label):
+                self.configure_evidence()
+                run = self.failed_run()
+                run.update(changes)
+                self.http.json(_action_url(41), run)
+                with self.assertRaises(ReleaseError):
+                    self.prepare_at(DAY, run_id=42)
+                self.assertEqual([self.prior.tag], self.origin_tags())
+
+    def test_prepare_requires_the_failed_login_and_skipped_publish_steps(self):
+        job = self.failed_jobs()["jobs"][0]
+        cases = (
+            ("missing_job", {"total_count": 0, "jobs": []}),
+            ("partial_jobs", {"total_count": 2, "jobs": [job]}),
+            ("duplicate_job", {"total_count": 2, "jobs": [job, job]}),
+            ("job_succeeded", {"total_count": 1, "jobs": [{**job, "conclusion": "success"}]}),
+            ("login_succeeded", {"total_count": 1, "jobs": [{**job, "steps": [
+                {"name": "Run NuGet/login@v1", "status": "completed", "conclusion": "success"},
+                {"name": "Publish tool to NuGet.org", "status": "completed", "conclusion": "skipped"},
+            ]}]}),
+            ("publish_ran", {"total_count": 1, "jobs": [{**job, "steps": [
+                {"name": "Run NuGet/login@v1", "status": "completed", "conclusion": "failure"},
+                {"name": "Publish tool to NuGet.org", "status": "completed", "conclusion": "success"},
+            ]}]}),
+            ("missing_steps", {"total_count": 1, "jobs": [{**job, "steps": []}]}),
+        )
+        for label, jobs in cases:
+            with self.subTest(case=label):
+                self.configure_evidence()
+                self.http.json(_attempt_jobs_url(41), jobs)
+                with self.assertRaises(ReleaseError):
+                    self.prepare_at(DAY, run_id=42)
+                self.assertEqual([self.prior.tag], self.origin_tags())
+
+    def test_prepare_fails_closed_when_retirement_evidence_is_missing_or_conflicting(self):
+        cases = (
+            ("run_missing", _action_url(41), 404),
+            ("run_unavailable", _action_url(41), 503),
+            ("jobs_missing", _attempt_jobs_url(41), 404),
+            ("jobs_unavailable", _attempt_jobs_url(41), 503),
+            ("release_unavailable", _release_url(self.prior), 403),
+            ("legacy_published", _package_url(self.prior, "Piston"), b"published"),
+            ("renamed_published", _package_url(self.prior), b"published"),
+            ("legacy_unavailable", _package_url(self.prior, "Piston"), 503),
+            ("renamed_unavailable", _package_url(self.prior), URLError("controlled outage")),
+        )
+        for label, url, response in cases:
+            with self.subTest(case=label):
+                self.configure_evidence()
+                self.http.responses[url] = response
+                with self.assertRaises(ReleaseError):
+                    self.prepare_at(DAY, run_id=42)
+                self.assertEqual([self.prior.tag], self.origin_tags())
+
+        self.configure_evidence()
+        self.http.json(_release_url(self.prior), {"tag_name": self.prior.tag})
+        with self.assertRaises(ReleaseError):
+            self.prepare_at(DAY, run_id=42)
+        self.assertEqual([self.prior.tag], self.origin_tags())
+
+
 class NuGetReconciliationTests(ApiFixture):
     def setUp(self):
         super().setUp()
@@ -837,6 +1079,8 @@ class NuGetReconciliationTests(ApiFixture):
             ("wrong_repository", {"repo": "other/piston"}),
             ("wrong_nuspec_version", {"nuspec_version": "2026.1101.3-dev"}),
             ("wrong_mcp_version", {"mcp_version": "2026.1101.3-dev"}),
+            ("old_nuspec_id", {"package_id": "Piston"}),
+            ("old_mcp_identifier", {"identifier": "Piston"}),
             ("wrong_mcp_identifier", {"identifier": "Other"}),
         )
         for label, changes in cases:

@@ -106,7 +106,7 @@ ARCHITECTURE describe the implementation in detail.
   the FIFO queue; `piston status --all` prints the same machine overview.
 
 **Distribution and CI**
-- A framework-dependent .NET tool (`Piston` package, `piston` command) attached
+- A framework-dependent .NET tool (`DamianH.Piston` package, `piston` command) attached
   to GitHub Releases.
 - CI on Linux and Windows, driven by a file-based `build.cs`. Packed-tool smoke
   tests run the MSTest, NUnit, xUnit v3 and TUnit samples through `piston daemon`

@@ -23,10 +23,10 @@ is the dashboard. See [ARCHITECTURE.md](../ARCHITECTURE.md) for details and
 Piston ships as a framework-dependent .NET tool that provides the stdio MCP server, the daemon (HTTP MCP and the
 dashboard) and the CLI.
 
-Once a release is available on [NuGet.org](https://www.nuget.org/packages/Piston), install it globally:
+Once a release is available on [NuGet.org](https://www.nuget.org/packages/DamianH.Piston), install it globally:
 
 ```sh
-dotnet tool install --global Piston
+dotnet tool install --global DamianH.Piston
 piston --help
 ```
 
@@ -40,13 +40,13 @@ until the first release is published, build and install locally:
 
 ```sh
 dotnet pack src/Piston/Piston.csproj -c Release -o packages
-dotnet tool install Piston --version 0.0.0-local --tool-path ./tools --source ./packages --no-cache
+dotnet tool install DamianH.Piston --version 0.0.0-local --tool-path ./tools --source ./packages --no-cache
 ./tools/piston --help
 ./tools/piston daemon /path/to/solution.slnx
 ```
 
 Use an actual solution path in the last command. On Windows, the executable is
-`.\tools\piston.exe`. Package ID is `Piston`, command name is `piston`, and `0.0.0-local`
+`.\tools\piston.exe`. Package ID is `DamianH.Piston`, command name is `piston`, and `0.0.0-local`
 is the local development package version; use the built/released version when
 it differs. The package is framework-dependent and requires the .NET 10 SDK
 and ASP.NET Core 10 runtime, plus the target solution's own SDK requirements.
@@ -58,13 +58,13 @@ not replace its CLI or daemon.
 `dnx` (from the .NET 10 SDK) can acquire and run a specific published version:
 
 ```sh
-dnx Piston@<version> -- --help
-dnx Piston@<version> -- mcp /path/to/solution.slnx
+dnx DamianH.Piston@<version> -- --help
+dnx DamianH.Piston@<version> -- mcp /path/to/solution.slnx
 ```
 
 Replace `<version>` with an actual release version. For local packages, add
 `--source ./packages` before `--`. Arguments after `--` go to Piston. **Include
-`mcp` for an MCP client**: bare `dnx Piston` uses Piston's normal default command,
+`mcp` for an MCP client**: bare `dnx DamianH.Piston` uses Piston's normal default command,
 which starts/attaches to a daemon and opens a browser, not a stdio server.
 The client's working directory must be the intended worktree. Pin versions in
 MCP configuration so an agent restart does not unexpectedly acquire a new version.
@@ -85,7 +85,7 @@ check for remaining owners. Do not use `--force` unless you intend to terminate
 the identified process.
 
 ```sh
-dotnet tool update --global Piston
+dotnet tool update --global DamianH.Piston
 piston --version
 ```
 
@@ -94,11 +94,23 @@ replace `--global` with `--tool-path ./tools`; for a local feed, also add
 `--source ./packages`. Reconnect MCP clients and restart any daemon with its
 previous options (including `--coverage`) after updating.
 
+If an earlier local build was installed under the `Piston` package ID, stop its
+processes and uninstall it before installing the renamed package:
+
+```sh
+dotnet tool uninstall --global Piston
+dotnet tool install --global DamianH.Piston
+```
+
+For an isolated installation, use the same `--tool-path` for both commands and
+add `--source ./packages` when installing from a local feed. An update does not
+rename the package, and both IDs provide the same `piston` command.
+
 | Platform | Live update behavior and required procedure |
 |---|---|
 | Linux | Two-version validation on Ubuntu found that updating succeeds while the old process remains live. Its removed package directory makes the dashboard return 404 and a forced MCP test run return `Incomplete`. Stop/update/restart restores the dashboard and full test execution. |
 | macOS | Validation on macOS found the same behavior as Linux: updating succeeds, but the old daemon loses dashboard assets and the old MCP process cannot complete a forced test run. Stop/update/restart restores both. |
-| Windows | Validation found that both live MCP and daemon updates fail to uninstall the old version with `Access to the path ...\.store\piston\<version> is denied`. The old processes continue working. Closing the clients/stopping the daemon, retrying the update and restarting succeeds. |
+| Windows | Validation found that both live MCP and daemon updates fail to uninstall the old version with an access-denied error for the tool store. The old processes continue working. Closing the clients/stopping the daemon, retrying the update and restarting succeeds. |
 
 These observations come from a [three-OS non-publishing release validation](https://github.com/damianh/piston/actions/runs/41178160412)
 using .NET 10 and isolated `--tool-path` installations (the same `.store` layout).
@@ -261,7 +273,7 @@ The agent host starts one `piston mcp` process per session, with the working dir
 - exits when the session ends (stdin EOF, SIGTERM, or parent death on Unix), killing build/test processes and releasing worktree ownership;
 - exits if the worktree is deleted.
 
-If another Piston process already owns the worktree, or the engine cannot start, the server still answers. Every tool then returns an error that ends with ``Use `dotnet test` instead.``. To uninstall, run `dotnet tool uninstall -g Piston` and remove the config entry.
+If another Piston process already owns the worktree, or the engine cannot start, the server still answers. Every tool then returns an error that ends with ``Use `dotnet test` instead.``. To uninstall, run `dotnet tool uninstall -g DamianH.Piston` and remove the config entry.
 
 The daemon always exposes an HTTP MCP endpoint backed by the running engine, on port 5200 unless `--mcp-port` (or `mcpPort` in `.piston.json`) says otherwise. Connect at `http://localhost:5200` (the root endpoint, not `/mcp`). The daemon retains current state. Runs launch `dotnet build` and fresh test processes, unless [warm test hosts](#warm-test-hosts) are enabled for MTP projects.
 
