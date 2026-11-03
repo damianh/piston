@@ -267,7 +267,10 @@ internal sealed class CoverageProcessor(ICoberturaParser parser) : ICoverageProc
             }
 
             await impactMap.RecordImpactAsync(new ImpactRecording(
-                unit.ProjectPath, impact.Granularity, unit.UnitKey, runId, unit.TestFqns, files, unit.Merge, unit.MethodsComplete)).ConfigureAwait(false);
+                unit.ProjectPath, impact.Granularity, unit.UnitKey, runId, unit.TestFqns, files, unit.Merge, unit.MethodsComplete)
+            {
+                TestResultKeys = unit.TestResultKeys,
+            }).ConfigureAwait(false);
         }
 
         return unverifiedReports;

@@ -4,6 +4,7 @@
 using Microsoft.Data.Sqlite;
 using Piston.Engine.Coverage;
 using Piston.Engine.Impact;
+using Piston.Engine.Models;
 using Xunit;
 
 namespace Piston.Engine.Tests.Coverage;
@@ -51,10 +52,14 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         string? content = null,
         bool merge = false,
         bool methodsComplete = false,
-        BranchLine[]? branches = null) =>
+        BranchLine[]? branches = null,
+        string[]? testResultKeys = null) =>
         _sut.RecordImpactAsync(new ImpactRecording(
             Project, granularity, unitKey, _sut.CreateRunId(), tests,
-            [new ImpactFile(File, spans, content ?? Original, branches)], merge, methodsComplete));
+            [new ImpactFile(File, spans, content ?? Original, branches)], merge, methodsComplete)
+        {
+            TestResultKeys = testResultKeys ?? tests,
+        });
 
     [Fact]
     public async Task SelectTests_ChangeInsideAnExecutedSpan_SelectsTheUnitsTestsWithTheSpan()
@@ -172,6 +177,63 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         Assert.True(Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Run)).IsCurrent);
         Assert.Equal(["T.A.One", "T.B.One"], _sut.SelectTests([edited]).Tests.Keys.Order());
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task FrameworkChangesInvalidateFineEvidenceBeforeItCanSuppressRunCoverage(bool added)
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A.One", "T.B.One"], [new(1, 30)]);
+        await Record(ImpactGranularity.Test, "T.A.One", ["T.A.One"], [new(3, 5)],
+            testResultKeys: added ? ["T.A.One [net8.0]"] : ["T.A.One [net8.0]", "T.A.One [net9.0]"]);
+        await Record(ImpactGranularity.Test, "T.B.One", ["T.B.One"], [new(10, 12)],
+            testResultKeys: ["T.B.One [net8.0]", "T.B.One [net9.0]"]);
+        var changed = new ChangedFile(File, Edit(Original, 11, "changed"));
+        Assert.Equal(["T.B.One"], _sut.SelectTests([changed]).Tests.Keys);
+
+        var results = added
+            ? new[] { Result("T.A.One", "net8.0"), Result("T.A.One", "net9.0"), Result("T.B.One", "net8.0"), Result("T.B.One", "net9.0") }
+            : new[] { Result("T.A.One", "net8.0"), Result("T.B.One", "net8.0"), Result("T.B.One", "net9.0") };
+        await ImpactBackfill.InvalidateOutdatedAsync(_sut, Project, results, complete: true, _ct);
+
+        Assert.Equal("T.B.One", Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Test)).UnitKey);
+        var selection = _sut.SelectTests([changed]);
+        Assert.Equal(["T.A.One", "T.B.One"], selection.Tests.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(ImpactGranularity.Run, Assert.Single(selection.Tests["T.A.One"]).Granularity);
+        Assert.Equal(ImpactGranularity.Test, Assert.Single(selection.Tests["T.B.One"]).Granularity);
+    }
+
+    [Fact]
+    public async Task FrameworkResultKeysAreNormalizedAndPersistedAcrossReopen()
+    {
+        await Record(ImpactGranularity.Test, "T.A.One", ["T.A.One"], [new(3, 5)],
+            testResultKeys: ["T.A.One [net9.0]", "T.A.One [net8.0]", "T.A.One [net8.0]"]);
+        _sut.Dispose();
+        _sut = new SqliteCoverageStore();
+        await _sut.InitializeAsync(_tempDir);
+
+        var unit = Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Test));
+        Assert.True(unit.IsCurrent);
+        Assert.Equal(["T.A.One [net8.0]", "T.A.One [net9.0]"], unit.TestResultKeys);
+    }
+
+    [Fact]
+    public async Task FilteredResultsPreserveKnownInstancesButInvalidateAnUnseenFramework()
+    {
+        await Record(ImpactGranularity.Test, "T.A.One", ["T.A.One"], [new(3, 5)],
+            testResultKeys: ["T.A.One [net8.0]", "T.A.One [net9.0]"]);
+
+        await ImpactBackfill.InvalidateOutdatedAsync(
+            _sut, Project, [Result("T.A.One", "net8.0")], complete: false, _ct);
+        _ = Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Test));
+
+        await ImpactBackfill.InvalidateOutdatedAsync(
+            _sut, Project, [Result("T.A.One", "net10.0")], complete: false, _ct);
+        Assert.Empty(_sut.GetUnits(Project, ImpactGranularity.Test));
+    }
+
+    private static TestResult Result(string name, string framework) =>
+        new(name, name, TestStatus.Passed, TimeSpan.Zero, null, null, null, null) { TargetFramework = framework };
 
     [Fact]
     public async Task MarkChangedAsync_InsertingMemberAboveExecutedMethod_DirtiesBindingEvidence()
@@ -526,6 +588,36 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         Assert.Equal(
             ["T.A.One"],
             _sut.SelectTests([new ChangedFile(File, Edit(Original, 4, "changed"))]).Tests.Keys);
+    }
+
+    [Fact]
+    public async Task InitializeAsync_InvalidatesLegacyFineUnitsWithoutDiscardingRunEvidence()
+    {
+        await Record(ImpactGranularity.Run, "run", ["T.A.One", "T.B.One"], [new(1, 30)]);
+        await Record(ImpactGranularity.Test, "T.A.One", ["T.A.One"], [new(3, 5)]);
+        await Record(ImpactGranularity.Test, "T.B.One", ["T.B.One"], [new(10, 12)]);
+        _sut.Dispose();
+        var database = Path.Combine(_tempDir, ".piston", "piston.db");
+        using (var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = database,
+            Pooling = false,
+        }.ToString()))
+        {
+            await connection.OpenAsync(_ct);
+            using var command = connection.CreateCommand();
+            command.CommandText = "ALTER TABLE impact_units DROP COLUMN test_result_keys;";
+            _ = await command.ExecuteNonQueryAsync(_ct);
+        }
+
+        _sut = new SqliteCoverageStore();
+        await _sut.InitializeAsync(_tempDir);
+
+        Assert.All(_sut.GetUnits(Project, ImpactGranularity.Test), unit => Assert.False(unit.IsCurrent));
+        Assert.True(Assert.Single(_sut.GetUnits(Project, ImpactGranularity.Run)).IsCurrent);
+        var selection = _sut.SelectTests([new ChangedFile(File, Edit(Original, 11, "changed"))]);
+        Assert.Equal(["T.A.One", "T.B.One"], selection.Tests.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(ImpactGranularity.Run, Assert.Single(selection.Tests["T.A.One"]).Granularity);
     }
 
     [Fact]

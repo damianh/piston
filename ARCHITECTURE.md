@@ -232,11 +232,16 @@ counts are not additive across tests.
   project. When the daemon is idle, `ImpactBackfill` plans class (or test) units
   that are missing or outdated, and the orchestrator runs each with a name filter
   and coverage, recording a `class`/`test` unit. Legacy units without branch data
-  are re-measured after missing and outdated units. A unit is skipped when not every
-  planned test ran. Any new run cancels the backfill; progress is published as
-  `ImpactBackfill` in the state snapshot. A completed pass logs elapsed time and
-  approximate bytes for spans, branches and snapshots. Projects without a trustworthy
-  primary measurement are skipped until a later successful unfiltered run.
+  are re-measured after missing and outdated units. Finer units also record
+  framework-qualified test-result identities. Changed identities invalidate those
+  units before new run results are published; filtered runs preserve known units
+  containing every observed identity. Existing databases add this
+  provenance column and mark legacy finer units dirty so run-level evidence remains
+  available until remeasurement. A unit is skipped when not every planned test ran.
+  Any new run cancels the backfill; progress is published as `ImpactBackfill` in the
+  state snapshot. A completed pass logs elapsed time and approximate bytes for
+  spans, branches and snapshots. Projects without a trustworthy primary measurement
+  are skipped until a later successful unfiltered run.
 - **Selection.** `SelectTests` compares member keys and body hashes against each
   unit's snapshot. A changed or removed executed member selects its tests and
   includes the member identity and recorded branch counts in its `TestSelectionReason`; edits outside
@@ -512,7 +517,7 @@ and uses WAL mode. Its tables are:
 | `coverage_set_tests` | The tests credited with a set. |
 | `coverage_set_lines` | The lines a set covers, with stale flag. |
 | `coverage_summary` | File path, last run ID, last-updated timestamp. |
-| `impact_units` | One row per impact unit: test project, granularity, unit key, run ID, dirty flag. |
+| `impact_units` | One row per impact unit: test project, granularity, unit key, run ID, dirty flag, framework-qualified result identities. |
 | `impact_unit_tests` | The tests a unit measured. |
 | `impact_unit_files` | Per unit and file: executed member keys, fallback spans and the snapshot they were measured against. |
 | `impact_snapshots` | Deduplicated file content by hash, shared by the report and impact map. |

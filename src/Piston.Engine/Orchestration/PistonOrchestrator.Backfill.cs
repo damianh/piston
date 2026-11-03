@@ -470,8 +470,14 @@ public sealed partial class PistonOrchestrator
                     return;
                 }
 
+                var testNames = tests.ToHashSet(StringComparer.Ordinal);
+                var resultKeys = unit.ExpectedResults.Where(test => testNames.Contains(test.FullyQualifiedName))
+                    .Select(test => test.ResultKey).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
                 var impact = new CoverageImpactOptions(
-                    [new CoverageRunUnit(unit.ProjectPath, unit.Key, result.CoverageReportPaths, tests, Merge: false)],
+                    [new CoverageRunUnit(unit.ProjectPath, unit.Key, result.CoverageReportPaths, tests, Merge: false)
+                    {
+                        TestResultKeys = resultKeys,
+                    }],
                     granularity,
                     builtAtUtc);
                 CoverageProcessingResult processed;

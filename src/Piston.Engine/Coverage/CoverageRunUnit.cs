@@ -16,4 +16,8 @@ internal sealed record CoverageRunUnit(
     IReadOnlyList<string> ReportPaths,
     IReadOnlyList<string> TestFqns,
     bool Merge,
-    bool MethodsComplete = false);
+    bool MethodsComplete = false)
+{
+    /// <summary>Framework-qualified results represented by a complete finer-grained measurement.</summary>
+    public IReadOnlyList<string>? TestResultKeys { get; init; }
+}

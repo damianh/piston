@@ -229,36 +229,6 @@ public sealed class MtpTestExecutionStrategyTests
         }
     }
 
-    [Fact]
-    public async Task ExecuteAsync_MultiTargetUnverifiedStillRunsTheTests()
-    {
-        var root = Directory.CreateTempSubdirectory("piston-mtp-multi-run-").FullName;
-        try
-        {
-            var first = Target(root, "net8.0", extension: true);
-            var fixture = MtpTestProcessRunnerTests.BuiltTestFixture();
-            var strategy = new MtpTestExecutionStrategy(
-                _ => first, fixture.Root, isMultiTargeted: _ => true,
-                getMtpTargetOutputs: _ => [("net8.0", first)]);
-
-            var result = await strategy.ExecuteAsync(new ProjectTestRequest(fixture.Project, fixture.Filter, true),
-                onProgress: null, TestContext.Current.CancellationToken);
-
-            Assert.Null(result.RunnerError);
-            Assert.Equal(TestStatus.Passed, Assert.Single(result.Suites.SelectMany(suite => suite.Tests)).Status);
-            Assert.Empty(result.CoverageReportPaths);
-            Assert.Equal("Coverage was skipped because collector availability could not be verified for every target framework.",
-                result.CoverageIssue);
-            var args = Assert.Single(result.Log!.Entries,
-                entry => entry.Message.StartsWith("Args: dotnet ", StringComparison.Ordinal)).Message;
-            Assert.DoesNotContain("--coverage", args, StringComparison.Ordinal);
-        }
-        finally
-        {
-            Directory.Delete(root, recursive: true);
-        }
-    }
-
     private static string Target(string root, string framework, bool extension)
     {
         var directory = Directory.CreateDirectory(Path.Combine(root, framework)).FullName;

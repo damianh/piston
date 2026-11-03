@@ -12,4 +12,8 @@ internal sealed record ImpactUnitInfo(
     bool IsCurrent,
     DateTimeOffset RecordedAt,
     IReadOnlyList<string> Tests,
-    bool HasBranches = false);
+    bool HasBranches = false)
+{
+    /// <summary>Framework-qualified test results represented by the measurement, or null for legacy units.</summary>
+    public IReadOnlyList<string>? TestResultKeys { get; init; }
+}

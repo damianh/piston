@@ -189,6 +189,30 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
             _ = await migrateCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
 
+        var hasTestResultKeys = false;
+        using (var columnsCmd = _connection.CreateCommand())
+        {
+            columnsCmd.CommandText = "PRAGMA table_info(impact_units);";
+            using var reader = await columnsCmd.ExecuteReaderAsync().ConfigureAwait(false);
+            while (await reader.ReadAsync().ConfigureAwait(false))
+            {
+                hasTestResultKeys |= string.Equals(reader.GetString(1), "test_result_keys", StringComparison.Ordinal);
+            }
+        }
+
+        if (!hasTestResultKeys)
+        {
+            using var transaction = _connection.BeginTransaction();
+            using var migrateCmd = _connection.CreateCommand();
+            migrateCmd.Transaction = transaction;
+            migrateCmd.CommandText = """
+                ALTER TABLE impact_units ADD COLUMN test_result_keys TEXT;
+                UPDATE impact_units SET is_dirty = 1 WHERE granularity > 0;
+                """;
+            _ = await migrateCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            await transaction.CommitAsync().ConfigureAwait(false);
+        }
+
         // Older databases stored one coverage_map row per test per line, which grows to millions of rows on
         // real solutions. It is only a cache, so drop it; the next run with coverage refills the sets.
         // Seed the run counter from the current max run_id

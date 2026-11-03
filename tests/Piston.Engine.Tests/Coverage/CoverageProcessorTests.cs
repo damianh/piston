@@ -200,6 +200,28 @@ public sealed class CoverageProcessorTests : IDisposable
     }
 
     [Fact]
+    public async Task RecordImpactAsync_PersistsFrameworkQualifiedTestResults()
+    {
+        var source = Path.Combine(_tempDir, "Code.cs");
+        File.WriteAllText(source, "class Code { }");
+        var report = WriteCoberturaXml(SimpleXml(source, 1));
+        using var store = new SqliteCoverageStore();
+        await store.InitializeAsync(_tempDir);
+        var unit = new CoverageRunUnit("/repo/A.Tests.csproj", "A.Test", [report], ["A.Test"], Merge: false)
+        {
+            TestResultKeys = ["A.Test [net8.0]", "A.Test [net9.0]"],
+        };
+        var impact = new CoverageImpactOptions([unit], ImpactGranularity.Test, DateTime.UtcNow.AddMinutes(1));
+
+        var result = await new CoverageProcessor(new CoberturaParser()).RecordImpactAsync(
+            store.CreateRunId(), impact, store);
+
+        Assert.Null(result.Reports[report].Error);
+        Assert.Equal(["A.Test [net8.0]", "A.Test [net9.0]"],
+            Assert.Single(store.GetUnits("/repo/A.Tests.csproj", ImpactGranularity.Test)).TestResultKeys);
+    }
+
+    [Fact]
     public async Task ProcessCoverageAsync_EmptyXmlPaths_DoesNotStoreAnything()
     {
         var store = new StubCoverageStore();

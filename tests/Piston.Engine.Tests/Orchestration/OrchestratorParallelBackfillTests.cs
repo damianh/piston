@@ -572,7 +572,10 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
             foreach (var unit in impact.Units)
             {
                 await store.RecordImpactAsync(new ImpactRecording(
-                    unit.ProjectPath, impact.Granularity, unit.UnitKey, runId, unit.TestFqns, [], unit.Merge));
+                    unit.ProjectPath, impact.Granularity, unit.UnitKey, runId, unit.TestFqns, [], unit.Merge)
+                {
+                    TestResultKeys = unit.TestResultKeys,
+                });
             }
 
             Recorded.Enqueue(impact);

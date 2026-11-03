@@ -93,6 +93,36 @@ public sealed class OrchestratorBackfillTests : IDisposable
     }
 
     [Fact]
+    public async Task FrameworkChangeInvalidatesFineUnitsBeforeBackfillCanRemeasureThem()
+    {
+        _runner.TargetFramework = "net8.0";
+        await StartAsync();
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        var originalUnits = _store.GetUnits(Project, ImpactGranularity.Class);
+        Assert.Equal(2, originalUnits.Count);
+        Assert.All(originalUnits, unit => Assert.All(unit.TestResultKeys!,
+            key => Assert.EndsWith(" [net8.0]", key, StringComparison.Ordinal)));
+
+        _analyzer.TargetFrameworkCount = 2;
+        _runner.MultiTargetTests = true;
+        _runner.MultiTargetForegroundReports = true;
+        _runner.BlockFiltered = true;
+        var unitsDuringCoverageProcessing = -1;
+        _processor.OnProcess = () => unitsDuringCoverageProcessing = _store.GetUnits(Project, ImpactGranularity.Class).Count;
+        var previousBackfill = _orchestrator.BackfillTask;
+
+        var run = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        await WaitForAsync(() => !ReferenceEquals(previousBackfill, _orchestrator.BackfillTask));
+        await _runner.FilteredStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(TestRunStatus.Completed, run!.Status);
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[Project].Status);
+        Assert.Equal(0, unitsDuringCoverageProcessing);
+        Assert.Empty(_store.GetUnits(Project, ImpactGranularity.Class));
+        Assert.Equal(2, _processor.Recorded.Count);
+    }
+
+    [Fact]
     public async Task ANewRunCancelsTheBackfill()
     {
         _runner.BlockFiltered = true;
@@ -742,7 +772,10 @@ public sealed class OrchestratorBackfillTests : IDisposable
             foreach (var unit in impact.Units)
             {
                 await store.RecordImpactAsync(new ImpactRecording(
-                    unit.ProjectPath, impact.Granularity, unit.UnitKey, runId, unit.TestFqns, [], unit.Merge));
+                    unit.ProjectPath, impact.Granularity, unit.UnitKey, runId, unit.TestFqns, [], unit.Merge)
+                {
+                    TestResultKeys = unit.TestResultKeys,
+                });
             }
 
             lock (Recorded)

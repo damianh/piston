@@ -1962,6 +1962,38 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             _state.BeginResultsUpdate();
             try
             {
+                if (_coverageEnabled && _coverageStoreReady && _state.CoverageError is null
+                    && _coverageStore is IImpactMapStore impactMap)
+                {
+                    try
+                    {
+                        await _coverageLock.WaitAsync(ct).ConfigureAwait(false);
+                        try
+                        {
+                            foreach (var project in projectResults.Where(project => TestProjectNames.IsProjectFile(project.ProjectPath)))
+                            {
+                                var results = project.Suites.SelectMany(suite => suite.Tests).ToList();
+                                if (results.Count > 0)
+                                {
+                                    await ImpactBackfill.InvalidateOutdatedAsync(
+                                        impactMap, project.ProjectPath, results,
+                                        complete: string.IsNullOrWhiteSpace(effectiveFilter) && ProjectRunCompleted(project), ct)
+                                        .ConfigureAwait(false);
+                                }
+                            }
+                        }
+                        finally
+                        {
+                            _ = _coverageLock.Release();
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+                    {
+                        ReportCoverageStorageFailure("validating impact measurements", ex);
+                        coverageProcessingError = _state.CoverageError;
+                    }
+                }
+
                 // ── Coverage processing ────────────────────────────────────────────
                 if (_coverageEnabled && _coverageStoreReady && _state.CoverageError is null
                     && _coverageStore is not null && _coverageProcessor is not null

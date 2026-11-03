@@ -27,4 +27,8 @@ internal sealed record ImpactRecording(
     IReadOnlyList<string> TestFqns,
     IReadOnlyList<ImpactFile> Files,
     bool Merge,
-    bool MethodsComplete = false);
+    bool MethodsComplete = false)
+{
+    /// <summary>Framework-qualified results represented by a complete finer-grained measurement.</summary>
+    public IReadOnlyList<string>? TestResultKeys { get; init; }
+}

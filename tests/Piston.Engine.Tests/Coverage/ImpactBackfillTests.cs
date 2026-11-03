@@ -24,7 +24,7 @@ public sealed class ImpactBackfillTests
         new(fqn, fqn, TestStatus.Passed, TimeSpan.Zero, null, null, null, null) { Method = method };
 
     private static ImpactUnitInfo Recorded(string key, bool current, bool hasBranches = true, params string[] tests) =>
-        new(key, 1, current, DateTimeOffset.UtcNow, tests, hasBranches);
+        new(key, 1, current, DateTimeOffset.UtcNow, tests, hasBranches) { TestResultKeys = tests };
 
     [Fact]
     public void Create_PlansEveryClassWithAFilterRunningJustIt()
@@ -79,6 +79,55 @@ public sealed class ImpactBackfillTests
         ], ImpactGranularity.Class, new HashSet<(string, string)> { (Project, "A.Tests.Outer+Inner") });
 
         Assert.Equal("A.Tests.Foo", Assert.Single(plan.Units).Key);
+    }
+
+    [Fact]
+    public void Create_RemeasuresLegacyUnitsWithoutFrameworkProvenance()
+    {
+        var suite = new TestSuite("A.Tests",
+        [
+            Test("A.Tests.Foo.One") with { TargetFramework = "net8.0" },
+            Test("A.Tests.Foo.One") with { TargetFramework = "net9.0" },
+        ], DateTimeOffset.UtcNow, TimeSpan.Zero);
+        var legacy = Recorded("A.Tests.Foo", current: true, true, "A.Tests.Foo.One") with { TestResultKeys = null };
+
+        var plan = ImpactBackfill.Create([Project], [suite], _ => [legacy], ImpactGranularity.Class);
+
+        Assert.Equal("A.Tests.Foo", Assert.Single(plan.Units).Key);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Create_RemeasuresWhenFrameworkInstancesChange(bool added)
+    {
+        var one = Test("A.Tests.Foo.One") with { TargetFramework = "net8.0" };
+        var two = Test("A.Tests.Foo.One") with { TargetFramework = "net9.0" };
+        var suite = new TestSuite("A.Tests", added ? [one, two] : [one], DateTimeOffset.UtcNow, TimeSpan.Zero);
+        var recorded = Recorded("A.Tests.Foo", current: true, true, "A.Tests.Foo.One") with
+        {
+            TestResultKeys = added ? [one.ResultKey] : [one.ResultKey, two.ResultKey],
+        };
+
+        var plan = ImpactBackfill.Create([Project], [suite], _ => [recorded], ImpactGranularity.Class);
+
+        Assert.Equal("A.Tests.Foo", Assert.Single(plan.Units).Key);
+    }
+
+    [Fact]
+    public void Create_KeepsAUnitWithMatchingFrameworkInstances()
+    {
+        var one = Test("A.Tests.Foo.One") with { TargetFramework = "net8.0" };
+        var two = Test("A.Tests.Foo.One") with { TargetFramework = "net9.0" };
+        var suite = new TestSuite("A.Tests", [one, two], DateTimeOffset.UtcNow, TimeSpan.Zero);
+        var recorded = Recorded("A.Tests.Foo", current: true, true, "A.Tests.Foo.One") with
+        {
+            TestResultKeys = [one.ResultKey, two.ResultKey],
+        };
+
+        var plan = ImpactBackfill.Create([Project], [suite], _ => [recorded], ImpactGranularity.Class);
+
+        Assert.Empty(plan.Units);
     }
 
     [Fact]
