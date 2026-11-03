@@ -18,7 +18,10 @@ internal static class ImpactBackfill
     /// <param name="Key">The class (or test method) name, which is the unit key.</param>
     /// <param name="Filter">The <c>dotnet test</c> filter that runs just the unit.</param>
     /// <param name="Tests">The unit's tests as last run.</param>
-    internal sealed record Unit(string ProjectPath, string Key, string Filter, IReadOnlyList<string> Tests);
+    internal sealed record Unit(string ProjectPath, string Key, string Filter, IReadOnlyList<string> Tests)
+    {
+        internal IReadOnlyList<TestResult> ExpectedResults { get; init; } = [];
+    }
 
     /// <summary>What to measure and what to forget.</summary>
     /// <param name="Units">Units never measured first, then those whose evidence is outdated.</param>
@@ -66,30 +69,27 @@ internal static class ImpactBackfill
                 continue;
             }
 
-            var units = tests
-                .Select(t => (Key: UnitKey(t, granularity), t.FullyQualifiedName))
-                .Where(t => t.Key is not null)
-                .GroupBy(t => t.Key!, StringComparer.Ordinal)
-                .ToDictionary(
-                    g => g.Key,
-                    g => (IReadOnlyList<string>)[.. g.Select(t => t.FullyQualifiedName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
-                    StringComparer.Ordinal);
-
+            var units = GroupUnits(tests, granularity);
             var existing = recorded(project).ToDictionary(u => u.UnitKey, StringComparer.Ordinal);
 
-            foreach (var (key, unitTests) in units.OrderBy(u => u.Key, StringComparer.Ordinal))
+            foreach (var (key, expectedResults) in units.OrderBy(u => u.Key, StringComparer.Ordinal))
             {
                 if (skip?.Contains((project, key)) == true || key.Contains('"', StringComparison.Ordinal))
                 {
                     continue;
                 }
 
-                var unit = new Unit(project, key, Filter(key, granularity), unitTests);
+                var unitTests = expectedResults.Select(test => test.FullyQualifiedName)
+                    .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+                var unit = new Unit(project, key, Filter(key, granularity), unitTests)
+                {
+                    ExpectedResults = expectedResults,
+                };
                 if (!existing.TryGetValue(key, out var info))
                 {
                     missing.Add(unit);
                 }
-                else if (!info.IsCurrent || !info.Tests.SequenceEqual(unitTests, StringComparer.Ordinal))
+                else if (!info.IsCurrent || !MatchesResults(info, expectedResults, complete: true))
                 {
                     outdated.Add(unit);
                 }
@@ -109,6 +109,56 @@ internal static class ImpactBackfill
         return new Plan(
             [.. InterleaveProjects(missing), .. InterleaveProjects(outdated), .. InterleaveProjects(legacy)],
             obsolete);
+    }
+
+    /// <summary>
+    /// Removes finer evidence that no longer represents the observed, executed framework-qualified tests
+    /// before it can override the latest run-level evidence. A filtered run only proves the results it contains.
+    /// </summary>
+    internal static async Task InvalidateOutdatedAsync(
+        IImpactMapStore store, string project, IReadOnlyList<TestResult> results, bool complete, CancellationToken ct)
+    {
+        foreach (var granularity in new[] { ImpactGranularity.Class, ImpactGranularity.Test })
+        {
+            ct.ThrowIfCancellationRequested();
+            var units = GroupUnits(results, granularity);
+            var outdated = store.GetUnits(project, granularity)
+                .Where(info => info.TestResultKeys is null
+                    || (units.TryGetValue(info.UnitKey, out var observed)
+                        ? !MatchesResults(info, observed, complete)
+                        : complete))
+                .Select(info => info.UnitKey)
+                .ToList();
+            await store.RemoveUnitsAsync(project, granularity, outdated).ConfigureAwait(false);
+        }
+    }
+
+    private static Dictionary<string, IReadOnlyList<TestResult>> GroupUnits(
+        IEnumerable<TestResult> tests, ImpactGranularity granularity) =>
+        tests.Select(test => (Key: UnitKey(test, granularity), Test: test))
+            .Where(item => item.Key is not null)
+            .GroupBy(item => item.Key!, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => (IReadOnlyList<TestResult>)[.. group.Select(item => item.Test)],
+                StringComparer.Ordinal);
+
+    private static bool MatchesResults(ImpactUnitInfo info, IReadOnlyList<TestResult> observed, bool complete)
+    {
+        if (info.TestResultKeys is null
+            || observed.Any(test => test.Status is not (TestStatus.Passed or TestStatus.Failed)))
+        {
+            return false;
+        }
+
+        var tests = observed.Select(test => test.FullyQualifiedName)
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+        var resultKeys = observed.Select(test => test.ResultKey)
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+        return complete
+            ? info.Tests.SequenceEqual(tests, StringComparer.Ordinal)
+                && info.TestResultKeys.SequenceEqual(resultKeys, StringComparer.Ordinal)
+            : tests.All(info.Tests.Contains) && resultKeys.All(info.TestResultKeys.Contains);
     }
 
     private static IEnumerable<Unit> InterleaveProjects(IEnumerable<Unit> units)

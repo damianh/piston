@@ -15,6 +15,7 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
 {
     private string _projectDir = string.Empty;
     private string _projectFile = string.Empty;
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
 
     public async ValueTask InitializeAsync()
     {
@@ -129,6 +130,23 @@ public sealed class TestRunnerServiceTests : IAsyncLifetime
         var allTests = result.Suites.SelectMany(s => s.Tests).ToList();
         Assert.Contains(allTests, t => t.Status == TestStatus.Passed);
         Assert.Contains(allTests, t => t.Status == TestStatus.Failed);
+    }
+
+    [Fact]
+    public async Task RunTestsAsync_WithoutCoverageCollector_StillRunsTestsAndReportsMissingCoverage()
+    {
+        var sut = new TestRunnerService(new ProcessTestExecutionStrategy(new TrxResultParser()));
+
+        var result = await sut.RunTestsAsync(
+            _projectFile, [_projectFile], filter: null, collectCoverage: true, onProgress: null, _ct);
+
+        var project = Assert.Single(result.Projects);
+        Assert.Null(project.RunnerError);
+        Assert.Empty(project.CoverageReportPaths);
+        Assert.Contains("no Cobertura coverage report", project.CoverageIssue, StringComparison.Ordinal);
+        var tests = project.Suites.SelectMany(suite => suite.Tests).ToList();
+        Assert.Contains(tests, test => test.Status == TestStatus.Passed);
+        Assert.Contains(tests, test => test.Status == TestStatus.Failed);
     }
 
     private static Task<int> RunDotnetAsync(string args, string workDir) =>

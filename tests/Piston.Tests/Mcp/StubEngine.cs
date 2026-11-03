@@ -129,6 +129,15 @@ internal sealed class StubEngine : IEngine
         }
     }
 
+    // The engine owns these setters; the host-facing fake injects its observed state without
+    // changing production visibility or constructing a real engine.
+    public void SetProjectCoverage(params ProjectCoverageStatus[] projects) =>
+        typeof(PistonState).GetProperty(nameof(PistonState.ProjectCoverage))!.SetValue(
+            State, projects.ToDictionary(project => project.ProjectPath, StringComparer.Ordinal));
+
+    public void SetCoverageError(string? error) =>
+        typeof(PistonState).GetProperty(nameof(PistonState.CoverageError))!.SetValue(State, error);
+
     /// <summary>Replaces <see cref="CoverageReport"/> in <see cref="GetCoverageReport"/>, e.g. to block like the coverage lock.</summary>
     public Func<Engine.Coverage.CoverageReportSnapshot?>? OnGetCoverageReport { get; set; }
 

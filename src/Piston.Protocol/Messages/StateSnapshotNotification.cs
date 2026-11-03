@@ -37,5 +37,7 @@ public sealed record StateSnapshotNotification(
     RunningTestDto? LongestRunningTest = null,
     IReadOnlyDictionary<string, TestResourceWaitDto>? ProjectResourceWaits = null,
     string? RetryStatus = null,
-    long TimelineRevision = 0
+    long TimelineRevision = 0,
+    IReadOnlyList<ProjectCoverageDto>? ProjectCoverage = null,
+    string? CoverageError = null
 );

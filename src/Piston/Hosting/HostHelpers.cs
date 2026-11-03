@@ -112,7 +112,7 @@ public static class HostHelpers
         string solutionPath,
         int cliDebounceMs,
         string? cliFilter,
-        bool cliCoverage,
+        bool? cliCoverage,
         int cliParallelism,
         PistonConfig config,
         string? ownerHost = null,
@@ -123,7 +123,7 @@ public static class HostHelpers
             : 300;
 
         var filter = cliFilter ?? config.TestFilter;
-        var coverageEnabled = cliCoverage || (config.CoverageEnabled ?? false);
+        var coverageEnabled = cliCoverage ?? config.CoverageEnabled ?? true;
 
         var processPoolSize = cliParallelism > 0 ? cliParallelism
             : config.Parallelism is > 0 ? config.Parallelism.Value

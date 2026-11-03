@@ -36,10 +36,13 @@ internal static class ChangedLineVerdicts
         TimeSpan? settleTimeout = null, int contextLines = 0)
     {
         var state = engine.State;
+        ThrowIfCoverageFailed(state);
         var runBefore = state.CurrentRun;
         var deadline = DateTimeOffset.UtcNow + (settleTimeout ?? DefaultSettleTimeout);
         var changes = await ChangedLines.GetCheckedAsync(solutionDirectory, @base, baseRef, contextLines, ct).ConfigureAwait(false);
         ChangedLineCoverageResult? result = null;
+        IReadOnlyList<string>? unmeasuredProjects = null;
+        var coverageInventoryPending = false;
         var unsettled = UnknownReason.ResultsUpdating;
         while (true)
         {
@@ -58,18 +61,30 @@ internal static class ChangedLineVerdicts
 
                 if (!state.IsPublishingResults && state.ResultsVersion == version)
                 {
+                    var projectCoverage = state.ProjectCoverage;
+                    var unmeasured = projectCoverage.Values
+                        .Where(project => project.Status != CoverageCollectionStatus.Measured)
+                        .Select(project => Path.GetFileName(project.ProjectPath))
+                        .Order(StringComparer.Ordinal)
+                        .ToList();
+                    var inventoryPending = state.HasCoverageData && projectCoverage.Count == 0;
                     var again = await ChangedLines.GetCheckedAsync(solutionDirectory, @base, baseRef, contextLines, ct)
                         .ConfigureAwait(false);
-                    if (SameChanges(changes, again) && SameContents(contents, ContentHashes(changes)))
+                    if (SameChanges(changes, again) && SameContents(contents, ContentHashes(changes))
+                        && !state.IsPublishingResults && state.ResultsVersion == version)
                     {
                         // The second read's hunks hold the content the verdicts were judged against.
                         changes = again;
                         result = read;
+                        unmeasuredProjects = unmeasured;
+                        coverageInventoryPending = inventoryPending;
                         break;
                     }
 
                     changes = again;
-                    unsettled = UnknownReason.Stale;
+                    unsettled = state.IsPublishingResults || state.ResultsVersion != version
+                        ? UnknownReason.ResultsUpdating
+                        : UnknownReason.Stale;
                 }
                 else
                 {
@@ -106,8 +121,26 @@ internal static class ChangedLineVerdicts
                 "and may change when it finishes.");
         }
 
+        if (coverageInventoryPending)
+        {
+            warnings.Add("Coverage availability for test projects has not been established in this engine session; verdicts use only measured data.");
+        }
+        else if (unmeasuredProjects is { Count: > 0 })
+        {
+            warnings.Add($"Coverage is incomplete for {string.Join(", ", unmeasuredProjects)}; verdicts use only measured data.");
+        }
+
+        ThrowIfCoverageFailed(state);
         result = result with { Diff = changes.Diff, DivergedFiles = changes.DivergedFiles };
         return warnings.Count == 0 ? result : result with { Warnings = [.. result.Warnings, .. warnings] };
+    }
+
+    private static void ThrowIfCoverageFailed(PistonState state)
+    {
+        if (state.CoverageError is { } error)
+        {
+            throw new InvalidOperationException($"Coverage is unavailable: {error}");
+        }
     }
 
     private static readonly TimeSpan DefaultSettleTimeout = TimeSpan.FromSeconds(5);

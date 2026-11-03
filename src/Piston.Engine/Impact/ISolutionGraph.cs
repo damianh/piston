@@ -20,6 +20,12 @@ internal interface ISolutionGraph
     /// <summary>Whether the project builds more than one target framework.</summary>
     bool IsMultiTargeted(string projectPath) => false;
 
+    /// <summary>The number of target frameworks, or zero when it cannot be established.</summary>
+    int GetTargetFrameworkCount(string projectPath) => IsMultiTargeted(projectPath) ? 0 : 1;
+
+    /// <summary>Framework names and MTP outputs for a multi-targeted project, or empty when incomplete.</summary>
+    IReadOnlyList<(string Framework, string OutputPath)> GetMtpTargetOutputs(string projectPath) => [];
+
     /// <summary>How a test project runs tests, or <see langword="null"/> when it is not a known test project.</summary>
     TestProjectFacts? GetTestProjectFacts(string projectPath) => null;
     string? VerificationCoverageIssue => "Build-input coverage is unavailable.";

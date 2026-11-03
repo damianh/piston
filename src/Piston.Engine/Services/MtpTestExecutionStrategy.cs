@@ -23,7 +23,8 @@ internal sealed class MtpTestExecutionStrategy(
     Func<string, bool>? isMultiTargeted = null,
     MtpWarmHostPool? warmHosts = null,
     Func<string, bool>? requiresResources = null,
-    MtpDiscoveryCache? discoveryCache = null) : ITestExecutionStrategy
+    MtpDiscoveryCache? discoveryCache = null,
+    Func<string, IReadOnlyList<(string Framework, string OutputPath)>>? getMtpTargetOutputs = null) : ITestExecutionStrategy
 {
     private readonly Func<string, bool> _isMultiTargeted = isMultiTargeted ?? (_ => false);
     private readonly Func<string, bool> _requiresResources = requiresResources ?? (_ => false);
@@ -31,8 +32,8 @@ internal sealed class MtpTestExecutionStrategy(
 
     /// <summary>
     /// The test app to drive in server mode, or <see langword="null"/> to use <c>dotnet test</c>.
-    /// A multi-targeted project has one output per framework but only one is known here, so it always
-    /// uses <c>dotnet test --project</c>, which runs every framework.
+    /// Multi-targeted discovery and runs without verified target outputs use <c>dotnet test --project</c>.
+    /// When coverage is requested, verified target outputs run separately even if a collector is missing.
     /// </summary>
     internal string? ServerAppPath(string projectPath) =>
         _isMultiTargeted(projectPath) ? null : getMtpOutputPath(projectPath);
@@ -46,29 +47,61 @@ internal sealed class MtpTestExecutionStrategy(
     public Task<ProjectTestResult> ExecuteAsync(
         ProjectTestRequest request,
         Action<IReadOnlyList<TestSuite>>? onProgress,
-        CancellationToken ct) => MtpTestProcessRunner.RunAsync(
+        CancellationToken ct)
+    {
+        var decision = CoverageFor(request);
+        return MtpTestProcessRunner.RunAsync(
             request.ProjectPath,
             ServerAppPath(request.ProjectPath),
             solutionDirectory,
             request.Filter,
             onProgress,
             ct,
-            CoverageFor(request),
+            decision.Coverage,
             WarmHostsFor(request.ProjectPath),
-            request.ReuseDiscovery ? _discoveryCache : null);
+            request.ReuseDiscovery ? _discoveryCache : null,
+            decision.ExpectedReports,
+            decision.TargetOutputs);
+    }
 
     // A successful warm host outlives the resource lease; coordinated projects must exit with it.
     internal MtpWarmHostPool? WarmHostsFor(string projectPath) =>
         _requiresResources(projectPath) ? null : warmHosts;
 
-    private MtpCoverage CoverageFor(ProjectTestRequest request)
+    internal sealed record CoverageDecision(
+        MtpCoverage Coverage, int ExpectedReports, IReadOnlyList<(string Framework, string OutputPath)> TargetOutputs);
+
+    internal CoverageDecision CoverageFor(ProjectTestRequest request)
     {
         if (!request.CollectCoverage)
         {
-            return MtpCoverage.Off;
+            return new(MtpCoverage.Off, 0, []);
         }
 
-        return HasCoverageExtension(getMtpOutputPath(request.ProjectPath)) ? MtpCoverage.Collect : MtpCoverage.ExtensionMissing;
+        if (!_isMultiTargeted(request.ProjectPath))
+        {
+            var output = getMtpOutputPath(request.ProjectPath);
+            if (output is null || !File.Exists(output))
+            {
+                return new(MtpCoverage.OutputUnverified, 0, []);
+            }
+
+            return HasCoverageExtension(output)
+                ? new(MtpCoverage.Collect, 1, [])
+                : new(MtpCoverage.ExtensionMissing, 0, []);
+        }
+
+        var targets = getMtpTargetOutputs?.Invoke(request.ProjectPath) ?? [];
+        if (targets.Count < 2 || targets.Any(target => !File.Exists(target.OutputPath) || string.IsNullOrWhiteSpace(target.Framework))
+            || targets.Select(target => target.Framework).Distinct(StringComparer.OrdinalIgnoreCase).Count() != targets.Count
+            || targets.Select(target => target.OutputPath).Distinct(StringComparer.OrdinalIgnoreCase).Count() != targets.Count)
+        {
+            return new(MtpCoverage.OutputUnverified, 0, []);
+        }
+
+        return targets.All(target => HasCoverageExtension(target.OutputPath))
+            ? new(MtpCoverage.Collect, targets.Count, targets)
+            : new(MtpCoverage.MultiTargetExtensionMissing, 0, targets);
     }
 
     /// <summary>

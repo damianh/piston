@@ -19,8 +19,8 @@ public sealed class PistonConfig
     public string? TestFilter { get; set; }
 
     /// <summary>
-    /// When true, enables code coverage collection during test runs.
-    /// Corresponds to the <c>--coverage</c> CLI flag.
+    /// Requests code coverage collection during test runs. Default is true.
+    /// Overridden by the <c>--coverage</c> and <c>--no-coverage</c> CLI flags.
     /// </summary>
     public bool? CoverageEnabled { get; set; }
 

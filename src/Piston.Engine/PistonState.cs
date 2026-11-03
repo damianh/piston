@@ -126,6 +126,28 @@ public sealed class PistonState
     /// <summary>Whether any coverage data has been stored in the current session.</summary>
     public bool HasCoverageData { get; set; }
 
+    /// <summary>Latest collection outcome per test project, including the run it came from.</summary>
+    public IReadOnlyDictionary<string, ProjectCoverageStatus> ProjectCoverage { get; internal set; }
+        = new Dictionary<string, ProjectCoverageStatus>(StringComparer.Ordinal);
+
+    /// <summary>A coverage storage or processing failure, when the stored report cannot be trusted.</summary>
+    public string? CoverageError { get; internal set; }
+
+    internal void SetCoverageError(string error)
+    {
+        BeginResultsUpdate();
+        try
+        {
+            CoverageError = error;
+        }
+        finally
+        {
+            EndResultsUpdate();
+        }
+
+        NotifyChanged();
+    }
+
     /// <summary>Human-readable Tier 3 impact detail, e.g. "Tier 3: 5 test(s) (coverage)". Null when using Tier 2.</summary>
     public string? CoverageImpactDetail { get; set; }
 

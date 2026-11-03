@@ -19,10 +19,12 @@ internal sealed class StubCoverageStore : ICoverageStore
     public Dictionary<string, List<string>> TestsCoveringFile { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, List<string>> TestsCoveringLines { get; } = new(StringComparer.OrdinalIgnoreCase);
     public HashSet<string> FilesWithCoverage { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Exception? InitializationError { get; set; }
 
     private long _runCounter;
 
-    public Task InitializeAsync(string solutionDirectory) => Task.CompletedTask;
+    public Task InitializeAsync(string solutionDirectory) =>
+        InitializationError is { } error ? Task.FromException(error) : Task.CompletedTask;
 
     public long CreateRunId() => Interlocked.Increment(ref _runCounter);
 

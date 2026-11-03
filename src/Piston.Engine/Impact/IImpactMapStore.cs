@@ -16,6 +16,9 @@ internal interface IImpactMapStore
     /// </summary>
     ImpactSelection SelectTests(IReadOnlyList<ChangedFile> changes);
 
+    /// <summary>Whether a project's run-level report measured this file, including zero-hit lines.</summary>
+    bool HasProjectFileCoverage(string projectPath, string filePath);
+
     /// <summary>
     /// Flags class- and test-level units that executed a changed file as needing re-measurement: once their
     /// code has changed the set of files they execute may differ, so coarser evidence is used for them until

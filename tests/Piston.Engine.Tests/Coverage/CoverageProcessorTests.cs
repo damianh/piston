@@ -63,7 +63,7 @@ public sealed class CoverageProcessorTests : IDisposable
         var testFqns = new[] { "Lib.Tests.Test1", "Lib.Tests.Test2" };
         var runId = store.CreateRunId();
 
-        await processor.ProcessCoverageAsync(runId, [xmlPath], testFqns, store);
+        _ = await processor.ProcessCoverageAsync(runId, [xmlPath], testFqns, store);
 
         _ = Assert.Single(store.StoredCoverage);
         var (storedRunId, map) = store.StoredCoverage[0];
@@ -88,7 +88,7 @@ public sealed class CoverageProcessorTests : IDisposable
         var inside = WriteCoberturaXml(SimpleXml("src/Lib/Code.cs", 1, 2));
         var outside = WriteCoberturaXml(SimpleXml("/tmp/fixture/Fixture.cs", 3));
 
-        await processor.ProcessCoverageAsync(
+        _ = await processor.ProcessCoverageAsync(
             store.CreateRunId(), [inside, outside], ["Lib.Tests.Test1"], store, sourceRoot: "/repo");
 
         var report = Assert.Single(store.StoredReports);
@@ -109,7 +109,7 @@ public sealed class CoverageProcessorTests : IDisposable
         var testFqns = new[] { "Lib.Tests.Test1" };
         var runId = store.CreateRunId();
 
-        await processor.ProcessCoverageAsync(runId, [xml1, xml2], testFqns, store);
+        _ = await processor.ProcessCoverageAsync(runId, [xml1, xml2], testFqns, store);
 
         _ = Assert.Single(store.StoredCoverage);
         var (_, map) = store.StoredCoverage[0];
@@ -142,20 +142,23 @@ public sealed class CoverageProcessorTests : IDisposable
             ImpactGranularity.Run,
             DateTime.UtcNow.AddMinutes(startedOffsetMinutes));
 
-        await new CoverageProcessor(new CoberturaParser()).ProcessCoverageAsync(
+        var result = await new CoverageProcessor(new CoberturaParser()).ProcessCoverageAsync(
             store.CreateRunId(), [reportA, reportB], ["A.Test", "B.Test"], store, impact: impact);
 
-        _ = Assert.Single(store.GetUnits("/repo/A.Tests.csproj", ImpactGranularity.Run));
+        Assert.Equal(!expectMapped, result.Reports[reportA].SourceChanged);
+        Assert.Equal(!expectMapped, result.Reports[reportB].SourceChanged);
         var edited = File.ReadAllText(source).Replace("line 3", "changed", StringComparison.Ordinal);
         var selection = store.SelectTests([new ChangedFile(source, edited)]);
         if (expectMapped)
         {
+            _ = Assert.Single(store.GetUnits("/repo/A.Tests.csproj", ImpactGranularity.Run));
             var (fqn, reasons) = Assert.Single(selection.Tests);
             Assert.Equal("A.Test", fqn);
             Assert.Equal(new LineSpan(2, 3), Assert.Single(reasons).ExecutedSpan);
         }
         else
         {
+            Assert.Empty(store.GetUnits("/repo/A.Tests.csproj", ImpactGranularity.Run));
             Assert.Empty(selection.Tests);
             Assert.Equal([source], selection.UnmappedFiles);
         }
@@ -184,7 +187,7 @@ public sealed class CoverageProcessorTests : IDisposable
             ImpactGranularity.Test,
             DateTime.UtcNow.AddMinutes(1));
 
-        await new CoverageProcessor(new CoberturaParser()).ProcessCoverageAsync(
+        _ = await new CoverageProcessor(new CoberturaParser()).ProcessCoverageAsync(
             store.CreateRunId(), [xml], ["A.Test"], store, impact: impact);
 
         var reason = Assert.Single(store.SelectTests([
@@ -197,13 +200,35 @@ public sealed class CoverageProcessorTests : IDisposable
     }
 
     [Fact]
+    public async Task RecordImpactAsync_PersistsFrameworkQualifiedTestResults()
+    {
+        var source = Path.Combine(_tempDir, "Code.cs");
+        File.WriteAllText(source, "class Code { }");
+        var report = WriteCoberturaXml(SimpleXml(source, 1));
+        using var store = new SqliteCoverageStore();
+        await store.InitializeAsync(_tempDir);
+        var unit = new CoverageRunUnit("/repo/A.Tests.csproj", "A.Test", [report], ["A.Test"], Merge: false)
+        {
+            TestResultKeys = ["A.Test [net8.0]", "A.Test [net9.0]"],
+        };
+        var impact = new CoverageImpactOptions([unit], ImpactGranularity.Test, DateTime.UtcNow.AddMinutes(1));
+
+        var result = await new CoverageProcessor(new CoberturaParser()).RecordImpactAsync(
+            store.CreateRunId(), impact, store);
+
+        Assert.Null(result.Reports[report].Error);
+        Assert.Equal(["A.Test [net8.0]", "A.Test [net9.0]"],
+            Assert.Single(store.GetUnits("/repo/A.Tests.csproj", ImpactGranularity.Test)).TestResultKeys);
+    }
+
+    [Fact]
     public async Task ProcessCoverageAsync_EmptyXmlPaths_DoesNotStoreAnything()
     {
         var store = new StubCoverageStore();
         var processor = new CoverageProcessor(new CoberturaParser());
         var runId = store.CreateRunId();
 
-        await processor.ProcessCoverageAsync(runId, [], ["Lib.Tests.Test1"], store);
+        _ = await processor.ProcessCoverageAsync(runId, [], ["Lib.Tests.Test1"], store);
 
         Assert.Empty(store.StoredCoverage);
     }
@@ -217,7 +242,7 @@ public sealed class CoverageProcessorTests : IDisposable
         var xmlPath = WriteCoberturaXml(SimpleXml("src/Lib/Code.cs", 5));
         var runId = store.CreateRunId();
 
-        await processor.ProcessCoverageAsync(runId, [xmlPath], [], store);
+        _ = await processor.ProcessCoverageAsync(runId, [xmlPath], [], store);
 
         Assert.Empty(store.StoredCoverage);
     }
@@ -248,7 +273,7 @@ public sealed class CoverageProcessorTests : IDisposable
             """);
 
         var runId = store.CreateRunId();
-        await processor.ProcessCoverageAsync(runId, [xmlPath], ["Lib.Tests.Test1"], store);
+        _ = await processor.ProcessCoverageAsync(runId, [xmlPath], ["Lib.Tests.Test1"], store);
 
         var (_, map) = store.StoredCoverage[0];
         var lineNumbers = map["Lib.Tests.Test1"].Select(l => l.LineNumber).ToList();
@@ -268,7 +293,7 @@ public sealed class CoverageProcessorTests : IDisposable
         var runId = store.CreateRunId();
 
         // Should not throw; bad file is skipped, good file processed
-        await processor.ProcessCoverageAsync(runId, [badXml, goodXml], ["Lib.Tests.Test1"], store);
+        _ = await processor.ProcessCoverageAsync(runId, [badXml, goodXml], ["Lib.Tests.Test1"], store);
 
         // Good file coverage is stored
         _ = Assert.Single(store.StoredCoverage);
@@ -284,7 +309,7 @@ public sealed class CoverageProcessorTests : IDisposable
         var xml1 = WriteCoberturaXml(SimpleXml(source, 1, 2));
         var xml2 = WriteCoberturaXml(SimpleXml(source, 2, 3));
 
-        await processor.ProcessCoverageAsync(store.CreateRunId(), [xml1, xml2], [], store, isFullRun: true);
+        _ = await processor.ProcessCoverageAsync(store.CreateRunId(), [xml1, xml2], [], store, isFullRun: true);
 
         var (_, files, isFullRun) = Assert.Single(store.StoredReports);
         Assert.True(isFullRun);
@@ -302,8 +327,176 @@ public sealed class CoverageProcessorTests : IDisposable
         var store = new StubCoverageStore();
         var processor = new CoverageProcessor(new CoberturaParser());
 
-        await processor.ProcessCoverageAsync(store.CreateRunId(), [WriteCoberturaXml("<not xml")], ["T"], store, isFullRun: true);
+        _ = await processor.ProcessCoverageAsync(store.CreateRunId(), [WriteCoberturaXml("<not xml")], ["T"], store, isFullRun: true);
 
         Assert.Empty(store.StoredReports);
+    }
+
+    [Fact]
+    public async Task ProcessCoverageAsync_AttributesEachProjectsReportOnlyToItsOwnTests()
+    {
+        var store = new StubCoverageStore();
+        var sourceA = Path.Combine(_tempDir, "A.cs");
+        var sourceB = Path.Combine(_tempDir, "B.cs");
+        File.WriteAllLines(sourceA, ["first line", "covered A"]);
+        File.WriteAllLines(sourceB, ["1", "2", "3", "4", "5", "6", "covered B"]);
+        var reportA = WriteCoberturaXml(SimpleXml(sourceA, 2));
+        var reportB = WriteCoberturaXml(SimpleXml(sourceB, 7));
+        var impact = new CoverageImpactOptions(
+            [
+                new CoverageRunUnit("/repo/A.Tests.csproj", "run", [reportA], ["A.Test"], Merge: false),
+                new CoverageRunUnit("/repo/B.Tests.csproj", "run", [reportB], ["B.Test"], Merge: false),
+            ],
+            ImpactGranularity.Run,
+            DateTime.UtcNow.AddMinutes(1));
+
+        var result = await new CoverageProcessor(new CoberturaParser()).ProcessCoverageAsync(
+            store.CreateRunId(), [reportA, reportB], ["A.Test", "B.Test"], store, impact: impact);
+
+        Assert.Equal(new CoverageReportResult(1, null), result.Reports[reportA]);
+        Assert.Equal(new CoverageReportResult(1, null), result.Reports[reportB]);
+        var (_, map) = Assert.Single(store.StoredCoverage);
+        Assert.Equal([new TestLineCoverage(sourceA, 2, 1)], map["A.Test"]);
+        Assert.Equal([new TestLineCoverage(sourceB, 7, 1)], map["B.Test"]);
+    }
+
+    [Fact]
+    public async Task ProcessCoverageAsync_MalformedCompanionReportCannotReplaceEarlierFullCoverage()
+    {
+        var oldSource = Path.Combine(_tempDir, "Old.cs");
+        var newSource = Path.Combine(_tempDir, "New.cs");
+        File.WriteAllText(oldSource, "old");
+        File.WriteAllText(newSource, "new");
+        var good = WriteCoberturaXml(SimpleXml(newSource, 3));
+        var malformed = WriteCoberturaXml("<coverage");
+        using var store = new SqliteCoverageStore();
+        await store.InitializeAsync(_tempDir);
+        await store.StoreReportAsync(store.CreateRunId(),
+            [new CoverageReportFile(new FileCoverage(oldSource, [new LineCoverage(1, 1)], "Old"), null)],
+            isFullRun: true);
+
+        var result = await new CoverageProcessor(new CoberturaParser()).ProcessCoverageAsync(
+            store.CreateRunId(), [good, malformed], ["T"], store, isFullRun: true, sourceRoot: _tempDir);
+
+        Assert.Equal(new CoverageReportResult(1, null), result.Reports[good]);
+        Assert.Equal(0, result.Reports[malformed].FileCount);
+        Assert.Contains("Cannot read coverage report", result.Reports[malformed].Error, StringComparison.Ordinal);
+        var files = store.GetReportFiles().OrderBy(file => file.FilePath, StringComparer.Ordinal).ToList();
+        Assert.Equal([newSource, oldSource], files.Select(file => file.FilePath));
+        Assert.True(files[0].IsPartial);
+        Assert.False(files[1].IsPartial);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProcessCoverageAsync_ReportWithoutMeasuredLinesCannotBeAFullMeasurement(bool malformedLine)
+    {
+        var store = new StubCoverageStore();
+        var source = Path.Combine(_tempDir, "Code.cs");
+        var lines = malformedLine ? """<line number="invalid" hits="1" />""" : "";
+        var report = WriteCoberturaXml($$"""
+            <coverage><packages><package name="Lib"><classes>
+              <class filename="{{source}}"><lines>{{lines}}</lines></class>
+            </classes></package></packages></coverage>
+            """);
+
+        var result = await new CoverageProcessor(new CoberturaParser()).ProcessCoverageAsync(
+            store.CreateRunId(), [report], ["T"], store, isFullRun: true);
+
+        Assert.True(result.Reports[report].FileCount == 0 || result.Reports[report].Error is not null);
+        Assert.DoesNotContain(store.StoredReports, stored => stored.IsFullRun);
+        Assert.Empty(store.StoredCoverage);
+    }
+
+    [Theory]
+    [InlineData("wrong-root")]
+    [InlineData("invalid-line")]
+    public async Task ProcessCoverageAsync_PartiallyMalformedReportCannotMasqueradeAsFull(string kind)
+    {
+        var source = Path.Combine(_tempDir, "Code.cs");
+        var root = kind == "wrong-root" ? "unrelated" : "coverage";
+        var invalidLine = kind == "invalid-line" ? """<line number="bad" hits="1" />""" : "";
+        var report = WriteCoberturaXml($$"""
+            <{{root}}><packages><package name="Lib"><classes>
+              <class filename="{{source}}"><lines>
+                <line number="1" hits="1" />{{invalidLine}}
+              </lines></class>
+            </classes></package></packages></{{root}}>
+            """);
+        var store = new StubCoverageStore();
+
+        var result = await new CoverageProcessor(new CoberturaParser()).ProcessCoverageAsync(
+            store.CreateRunId(), [report], ["T"], store, isFullRun: true);
+
+        Assert.True(result.Reports[report].FileCount == 0 || result.Reports[report].Error is not null);
+        Assert.DoesNotContain(store.StoredReports, stored => stored.IsFullRun);
+    }
+
+    [Fact]
+    public async Task RecordImpactAsync_InvalidOrMixedUnitDoesNotReplaceImpactEvidence()
+    {
+        var source = Path.Combine(_tempDir, "Code.cs");
+        File.WriteAllText(source, "class C { int Value = 1; }");
+        var good = WriteCoberturaXml(SimpleXml(source, 1));
+        var malformed = WriteCoberturaXml("<coverage");
+        using var store = new SqliteCoverageStore();
+        await store.InitializeAsync(_tempDir);
+        await store.RecordImpactAsync(new ImpactRecording(
+            "/repo/B.Tests.csproj", ImpactGranularity.Run, "run", store.CreateRunId(), ["B.Old"],
+            [new ImpactFile(source, [new(1, 1)], File.ReadAllText(source))], Merge: false));
+        var impact = new CoverageImpactOptions(
+            [
+                new CoverageRunUnit("/repo/A.Tests.csproj", "run", [good], ["A.New"], Merge: false),
+                new CoverageRunUnit("/repo/B.Tests.csproj", "run", [malformed], ["B.New"], Merge: false),
+                new CoverageRunUnit("/repo/C.Tests.csproj", "run", [good, malformed], ["C.New"], Merge: false),
+            ],
+            ImpactGranularity.Run,
+            DateTime.UtcNow.AddMinutes(1));
+
+        var result = await new CoverageProcessor(new CoberturaParser()).RecordImpactAsync(
+            store.CreateRunId(), impact, store, _tempDir);
+
+        Assert.Equal(new CoverageReportResult(1, null), result.Reports[good]);
+        Assert.Contains("Cannot read coverage report", result.Reports[malformed].Error, StringComparison.Ordinal);
+        Assert.Equal(["A.New", "B.Old"],
+            store.GetTestsExecuting(source).Select(test => test.TestFqn).Order(StringComparer.Ordinal));
+        Assert.Empty(store.GetUnits("/repo/C.Tests.csproj", ImpactGranularity.Run));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RecordImpactAsync_UnreadableOrChangedSourceRejectsEntireUnit(bool changedSinceBuild)
+    {
+        var goodSource = Path.Combine(_tempDir, "Good.cs");
+        var badSource = Path.Combine(_tempDir, "Bad.cs");
+        File.WriteAllText(goodSource, "class Good { }");
+        if (changedSinceBuild)
+        {
+            File.SetLastWriteTimeUtc(goodSource, DateTime.UtcNow.AddMinutes(-2));
+            File.WriteAllText(badSource, "class Changed { }");
+        }
+
+        var goodReport = WriteCoberturaXml(SimpleXml(goodSource, 1));
+        var badReport = WriteCoberturaXml(SimpleXml(badSource, 1));
+        using var store = new SqliteCoverageStore();
+        await store.InitializeAsync(_tempDir);
+        const string project = "/repo/A.Tests.csproj";
+        await store.RecordImpactAsync(new ImpactRecording(
+            project, ImpactGranularity.Test, "T", store.CreateRunId(), ["T.Old"],
+            [new ImpactFile(goodSource, [new(1, 1)], File.ReadAllText(goodSource))], Merge: false));
+        var impact = new CoverageImpactOptions(
+            [new CoverageRunUnit(project, "T", [goodReport, badReport], ["T.New"], Merge: false)],
+            ImpactGranularity.Test,
+            DateTime.UtcNow.AddMinutes(changedSinceBuild ? -1 : 1));
+
+        var result = await new CoverageProcessor(new CoberturaParser()).RecordImpactAsync(
+            store.CreateRunId(), impact, store, _tempDir);
+
+        Assert.True(result.Reports[goodReport].SourceChanged);
+        Assert.True(result.Reports[badReport].SourceChanged);
+        Assert.Equal(["T.Old"], Assert.Single(store.GetUnits(project, ImpactGranularity.Test)).Tests);
+        Assert.Equal(["T.Old"], store.GetTestsExecuting(goodSource).Select(test => test.TestFqn));
     }
 }

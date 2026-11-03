@@ -42,13 +42,18 @@ The setup installs the MCP entry and Piston's agent instructions. The client sta
 
 ## Coverage
 
-Start the daemon with coverage enabled to see line and branch coverage and test impact in the dashboard:
+Coverage is on by default for the daemon and MCP engine. The dashboard shows line and branch coverage
+and test impact. To opt out, set `"coverageEnabled": false` in `.piston.json`, or start an engine with:
 
 ```sh
-piston daemon path/to/solution.slnx --coverage
+piston daemon path/to/solution.slnx --no-coverage
 ```
 
-Coverage requires a collector for VSTest projects or `Microsoft.Testing.Extensions.CodeCoverage` for Microsoft.Testing.Platform projects. See the [user guide](docs/user-guide.md#coverage-and-impact-selection).
+Coverage requires a collector such as `coverlet.collector` for VSTest projects or
+`Microsoft.Testing.Extensions.CodeCoverage` for Microsoft.Testing.Platform projects. Tests still run without
+coverage when a report is unavailable; the dashboard and MCP report incomplete collection. Idle per-test
+backfill can be expensive; configure `"impactBackfill": "class"` or `"off"` to reduce its cost.
+See the [user guide](docs/user-guide.md#coverage-and-impact-selection).
 
 ## Upgrade safely
 

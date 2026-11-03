@@ -142,6 +142,10 @@ public sealed class EngineCommandDispatcher(IEngine engine) : ICommandDispatcher
                                 .GetAsync(engine, solutionDirectory, cmd?.Base, cmd?.BaseRef, ct)
                                 .ConfigureAwait(false)).ToDto(solutionDirectory);
                         }
+                        catch (InvalidOperationException ex) when (engine.State.CoverageError is not null)
+                        {
+                            throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, ex.Message);
+                        }
                         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
                         {
                             throw new JsonRpcException(JsonRpcErrorCodes.InvalidParams, ex.Message);
@@ -179,6 +183,10 @@ public sealed class EngineCommandDispatcher(IEngine engine) : ICommandDispatcher
                             result = (await ChangedLineVerdicts
                                 .GetAsync(engine, solutionDirectory, cmd?.Base, cmd?.BaseRef, ct, contextLines: context)
                                 .ConfigureAwait(false)).ToChangeDiffDto(solutionDirectory);
+                        }
+                        catch (InvalidOperationException ex) when (engine.State.CoverageError is not null)
+                        {
+                            throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, ex.Message);
                         }
                         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
                         {
@@ -417,8 +425,16 @@ public sealed class EngineCommandDispatcher(IEngine engine) : ICommandDispatcher
             }
 
             _pendingCoverageExport = null;
-            var export = CoverageExporter.Export(engine, format)
-                ?? throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, "Coverage is disabled.");
+            CoverageExport export;
+            try
+            {
+                export = CoverageExporter.Export(engine, format)
+                    ?? throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, "Coverage is disabled.");
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest, ex.Message);
+            }
             snapshot = new CoverageExportDto(
                 format.ToString().ToLowerInvariant(), CoverageExporter.FileName(format),
                 export.Content, export.FileCount, export.StaleFilesSkipped);

@@ -99,4 +99,37 @@ public sealed class MtpTestProcessRunnerTests
 
         Assert.Equal(projectPath, result.ProjectPath);
     }
+
+    [Fact]
+    public async Task RunAsync_NoCoverageReportRemovesTheResultsDirectory()
+    {
+        var root = Directory.CreateTempSubdirectory("piston-mtp-no-report-").FullName;
+        try
+        {
+            var result = await MtpTestProcessRunner.RunAsync(
+                projectPath: Path.Combine(root, "Missing.csproj"),
+                appPath: null,
+                solutionDirectory: root,
+                filter: null,
+                onProgress: null,
+                ct: TestContext.Current.CancellationToken,
+                coverage: MtpCoverage.Collect);
+
+            var args = Assert.Single(result.Log!.Entries,
+                entry => entry.Message.StartsWith("Args: dotnet ", StringComparison.Ordinal)).Message;
+            const string marker = "--results-directory \"";
+            var start = args.IndexOf(marker, StringComparison.Ordinal);
+            Assert.True(start >= 0);
+            var directory = args[(start + marker.Length)..].Split('"')[0];
+            Assert.StartsWith(Path.GetTempPath(), directory, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(result.CoverageReportPaths);
+            Assert.Equal("The test run produced no Cobertura coverage report.", result.CoverageIssue);
+            Assert.False(Directory.Exists(directory));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
 }

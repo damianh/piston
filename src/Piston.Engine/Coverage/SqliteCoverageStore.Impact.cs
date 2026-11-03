@@ -12,7 +12,7 @@ namespace Piston.Engine.Coverage;
 /// <remarks>
 /// Impact map schema:
 /// <code>
-/// impact_units      (unit_id, project_path, granularity, unit_key, run_id, is_dirty, recorded_at)
+/// impact_units      (unit_id, project_path, granularity, unit_key, run_id, is_dirty, recorded_at, test_result_keys)
 ///                   -- a measured unit: a project's run (granularity 0), a class (1) or a test (2)
 /// impact_unit_tests (unit_id, test_fqn)                      -- the tests credited with the unit's files
 /// impact_unit_files (unit_id, file_path, snapshot_hash, spans, member_keys, branches) -- member identities and per-line branch counts
@@ -30,6 +30,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             run_id       INTEGER NOT NULL,
             is_dirty     INTEGER NOT NULL DEFAULT 0,
             recorded_at  TEXT    NOT NULL,
+            test_result_keys TEXT,
             UNIQUE (project_path, granularity, unit_key)
         );
 
@@ -76,12 +77,13 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
         try
         {
             using var unitCmd = Command(transaction, """
-                INSERT INTO impact_units (project_path, granularity, unit_key, run_id, is_dirty, recorded_at)
-                VALUES ($project, $granularity, $key, $run_id, 0, $now)
+                INSERT INTO impact_units (project_path, granularity, unit_key, run_id, is_dirty, recorded_at, test_result_keys)
+                VALUES ($project, $granularity, $key, $run_id, 0, $now, $test_result_keys)
                 ON CONFLICT (project_path, granularity, unit_key) DO UPDATE SET
                     run_id = excluded.run_id,
                     recorded_at = excluded.recorded_at,
-                    is_dirty = CASE WHEN $merge THEN impact_units.is_dirty ELSE 0 END
+                    is_dirty = CASE WHEN $merge THEN impact_units.is_dirty ELSE 0 END,
+                    test_result_keys = excluded.test_result_keys
                 RETURNING unit_id;
                 """);
             _ = unitCmd.Parameters.AddWithValue("$project", recording.ProjectPath);
@@ -90,6 +92,10 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             _ = unitCmd.Parameters.AddWithValue("$run_id", recording.RunId);
             _ = unitCmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToString("O"));
             _ = unitCmd.Parameters.AddWithValue("$merge", recording.Merge);
+            object testResultKeys = recording.Merge || recording.TestResultKeys is null
+                ? DBNull.Value
+                : JsonSerializer.Serialize(recording.TestResultKeys.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+            _ = unitCmd.Parameters.AddWithValue("$test_result_keys", testResultKeys);
             var unitId = Convert.ToInt64(await unitCmd.ExecuteScalarAsync().ConfigureAwait(false), CultureInfo.InvariantCulture);
 
             if (!recording.Merge)
@@ -249,6 +255,24 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             await transaction.RollbackAsync().ConfigureAwait(false);
             throw;
         }
+    }
+
+    public bool HasProjectFileCoverage(string projectPath, string filePath)
+    {
+        using var gate = Enter();
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = """
+            SELECT EXISTS (
+                SELECT 1 FROM impact_units u
+                JOIN impact_unit_files f ON f.unit_id = u.unit_id
+                WHERE u.project_path = $project AND u.granularity = $granularity
+                    AND u.unit_key = 'run' AND f.file_path = $path
+            );
+            """;
+        _ = cmd.Parameters.AddWithValue("$project", projectPath);
+        _ = cmd.Parameters.AddWithValue("$granularity", (int)ImpactGranularity.Run);
+        _ = cmd.Parameters.AddWithValue("$path", filePath);
+        return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
     }
 
     public ImpactSelection SelectTests(IReadOnlyList<ChangedFile> changes)
@@ -547,7 +571,8 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
             SELECT u.unit_key, u.run_id, u.is_dirty, u.recorded_at,
                 NOT EXISTS (
                     SELECT 1 FROM impact_unit_files f
-                    WHERE f.unit_id = u.unit_id AND f.branches IS NULL)
+                    WHERE f.unit_id = u.unit_id AND f.branches IS NULL),
+                u.test_result_keys
             FROM impact_units u
             WHERE u.project_path = $project AND u.granularity = $granularity
             ORDER BY u.unit_key;
@@ -555,7 +580,7 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
         _ = cmd.Parameters.AddWithValue("$project", projectPath);
         _ = cmd.Parameters.AddWithValue("$granularity", (int)granularity);
 
-        var rows = new List<(string Key, long RunId, bool IsCurrent, DateTimeOffset RecordedAt, bool HasBranches)>();
+        var rows = new List<(string Key, long RunId, bool IsCurrent, DateTimeOffset RecordedAt, bool HasBranches, string? TestResultKeys)>();
         using (var reader = cmd.ExecuteReader())
         {
             while (reader.Read())
@@ -565,7 +590,8 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
                     reader.GetInt64(1),
                     reader.GetInt64(2) == 0,
                     DateTimeOffset.Parse(reader.GetString(3), CultureInfo.InvariantCulture),
-                    reader.GetInt64(4) != 0));
+                    reader.GetInt64(4) != 0,
+                    reader.IsDBNull(5) ? null : reader.GetString(5)));
             }
         }
 
@@ -595,7 +621,13 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
         return [.. rows.Select(r => new ImpactUnitInfo(
             r.Key, r.RunId, r.IsCurrent, r.RecordedAt,
             tests.TryGetValue(r.Key, out var list) ? [.. list.Order(StringComparer.Ordinal)] : [],
-            r.HasBranches))];
+            r.HasBranches)
+        {
+            TestResultKeys = r.TestResultKeys is null
+                ? null
+                : JsonSerializer.Deserialize<string[]>(r.TestResultKeys)
+                    ?? throw new InvalidDataException("A recorded impact unit has invalid test-result provenance."),
+        })];
     }
 
     public ImpactStoreStats GetStats()

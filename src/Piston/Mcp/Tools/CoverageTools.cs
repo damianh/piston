@@ -36,12 +36,15 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
 
     private const string Granularity =
         "Coverage is aggregated over the tests that ran; it does not say which test covered a line.";
+    private const string DisabledCoverage =
+        "Coverage is disabled. Restart the engine with --coverage or set \"coverageEnabled\": true in .piston.json and restart it.";
 
     [McpServerTool(Name = GetCoverageTool), Description(
         "Get line and branch coverage as JSON (schema piston.coverage/v1). Without a file: solution totals, per-module " +
         "totals and the files with the most uncovered lines. With a file (absolute or solution-relative): its totals plus " +
-        "uncovered and partially covered line ranges. Requires the daemon to run with coverage enabled. " +
+        "uncovered and partially covered line ranges. Coverage is enabled by default; an empty report is an error. " +
         "stale means the file changed since it was measured; partial means only a selective run measured it. " +
+        "unmeasuredProjects identifies incomplete collection, so totals do not represent every test project. " +
         "impactBackfill, when present, is the progress of measuring which tests execute which lines.")]
     public string GetCoverage(
         [Description("Source file to report on. Omit for the solution summary.")] string? file = null,
@@ -53,9 +56,24 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         string? summary = null;
         try
         {
+            ThrowIfCoverageFailed();
+            var resultsVersion = engine.State.ResultsVersion;
+            if (engine.State.IsPublishingResults)
+            {
+                throw new McpException("Coverage results are being updated. Try again when the run finishes.");
+            }
             var report = engine.GetCoverageReport()
-                ?? throw new McpException("Coverage is disabled. Start Piston with --coverage or set coverageEnabled in .piston.json.");
+                ?? throw new McpException(DisabledCoverage);
             var solutionDirectory = SolutionDirectory();
+            if (report.Files.Count == 0 || report.LinesTotal == 0)
+            {
+                var issues = CoverageIssues().Select(project =>
+                    $"{Relative(project.ProjectPath, solutionDirectory)}: {project.Message ?? project.Status.ToString()}");
+                var detail = string.Join("; ", issues);
+                throw new McpException("No coverage data was measured. Run the tests and ensure each test project has a " +
+                    "compatible coverage collector." + (detail.Length == 0 ? "" : $" {detail}"));
+            }
+
             JsonObject json;
             if (string.IsNullOrWhiteSpace(file))
             {
@@ -78,10 +96,21 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
             {
                 var coverage = engine.GetFileCoverage(file)
                     ?? throw new McpException($"No coverage for '{file}'. It may not be compiled into a tested assembly, or no run has measured it yet.");
+                if (coverage.File.LinesTotal == 0)
+                {
+                    throw new McpException($"No coverage data was measured for '{file}'.");
+                }
+
                 json = FileDetail(coverage, solutionDirectory);
                 summary = $"{coverage.File.LinesCovered}/{coverage.File.LinesTotal} lines";
             }
 
+            AddCoverageIssues(json, solutionDirectory);
+            ThrowIfCoverageFailed();
+            if (engine.State.IsPublishingResults || engine.State.ResultsVersion != resultsVersion)
+            {
+                throw new McpException("Coverage results changed while they were read. Try again when the run finishes.");
+            }
             succeeded = true;
             return json.ToJsonString(WriteOptions);
         }
@@ -119,8 +148,9 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
             // The flag, not the report: reading the report waits on the lock a run holds while storing coverage.
             if (!engine.State.CoverageEnabled)
             {
-                throw new McpException("Coverage is disabled. Start Piston with --coverage or set coverageEnabled in .piston.json.");
+                throw new McpException(DisabledCoverage);
             }
+            ThrowIfCoverageFailed();
 
             var solutionDirectory = SolutionDirectory()
                 ?? throw new McpException("No solution is loaded.");
@@ -134,6 +164,7 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                 throw new McpException(ex.Message);
             }
 
+            ThrowIfCoverageFailed();
             var totals = result.Totals;
             summary = $"{totals.CoveredByPassing} covered by passing, {totals.Uncovered} uncovered, " +
                 $"{totals.Unknown} unknown of {totals.ChangedLines} changed line(s)";
@@ -564,14 +595,26 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                 throw new McpException("format must be 'lcov' or 'cobertura'.");
             }
 
+            ThrowIfCoverageFailed();
+            var resultsVersion = engine.State.ResultsVersion;
+            if (engine.State.IsPublishingResults)
+            {
+                throw new McpException("Coverage results are being updated. Try again when the run finishes.");
+            }
+
             var solutionDirectory = SolutionDirectory()
                 ?? throw new McpException("The daemon has no solution loaded.");
             var target = ResolveOutputPath(outputPath, solutionDirectory, CoverageExporter.FileName(exportFormat));
-            var export = CoverageExporter.Export(engine, exportFormat)
-                ?? throw new McpException("Coverage is disabled. Start Piston with --coverage or set coverageEnabled in .piston.json.");
-
-            _ = Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.WriteAllText(target, export.Content);
+            CoverageExport export;
+            try
+            {
+                export = CoverageExporter.Export(engine, exportFormat)
+                    ?? throw new McpException(DisabledCoverage);
+            }
+            catch (InvalidOperationException ex)
+            {
+                throw new McpException(ex.Message);
+            }
 
             var json = new JsonObject
             {
@@ -581,6 +624,15 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
                 ["files"] = export.FileCount,
                 ["staleFilesSkipped"] = export.StaleFilesSkipped,
             };
+            AddCoverageIssues(json, solutionDirectory);
+            ThrowIfCoverageFailed();
+            if (engine.State.IsPublishingResults || engine.State.ResultsVersion != resultsVersion)
+            {
+                throw new McpException("Coverage results changed while they were read. Try again when the run finishes.");
+            }
+
+            _ = Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.WriteAllText(target, export.Content);
             summary = $"{export.FileCount} file(s) -> {Relative(target, solutionDirectory)}";
             succeeded = true;
             return json.ToJsonString(WriteOptions);
@@ -608,6 +660,43 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         }
 
         return target;
+    }
+
+    private void ThrowIfCoverageFailed()
+    {
+        if (engine.State.CoverageError is { } error)
+        {
+            throw new McpException($"Coverage is unavailable: {error}");
+        }
+    }
+
+    private IReadOnlyList<ProjectCoverageStatus> CoverageIssues() =>
+        [.. engine.State.ProjectCoverage.Values
+            .Where(project => project.Status != CoverageCollectionStatus.Measured)
+            .OrderBy(project => project.ProjectPath, StringComparer.Ordinal)];
+
+    private void AddCoverageIssues(JsonObject json, string? solutionDirectory)
+    {
+        var issues = CoverageIssues();
+        var inventoryPending = engine.State.HasCoverageData && engine.State.ProjectCoverage.Count == 0;
+        if (issues.Count == 0 && !inventoryPending)
+        {
+            return;
+        }
+
+        json["measurementStatus"] = "partial";
+        if (inventoryPending)
+        {
+            json["measurementWarning"] = "Coverage availability for test projects has not been established in this engine session.";
+        }
+
+        json["unmeasuredProjects"] = new JsonArray([.. issues.Select(project => (JsonNode)new JsonObject
+        {
+            ["project"] = Relative(project.ProjectPath, solutionDirectory),
+            ["status"] = project.Status.ToString().ToLowerInvariant(),
+            ["message"] = project.Message,
+            ["runId"] = project.RunId,
+        })]);
     }
 
     private static string Relative(string path, string? solutionDirectory) =>

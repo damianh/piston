@@ -99,7 +99,7 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
         var xmlPath = WriteCoberturaXml(_coveredFilePath, 5, 6, 7);
         var runId = _store.CreateRunId();
 
-        await processor.ProcessCoverageAsync(runId, [xmlPath], testFqns, _store);
+        _ = await processor.ProcessCoverageAsync(runId, [xmlPath], testFqns, _store);
 
         Assert.True(_store.HasCoverageData(_coveredFilePath));
     }
@@ -112,7 +112,7 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
         var xmlPath = WriteCoberturaXml(_coveredFilePath, 10, 11);
         var runId = _store.CreateRunId();
 
-        await processor.ProcessCoverageAsync(runId, [xmlPath], testFqns, _store);
+        _ = await processor.ProcessCoverageAsync(runId, [xmlPath], testFqns, _store);
 
         var tests = _store.GetTestsCoveringFile(_coveredFilePath);
 
@@ -134,7 +134,7 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
         var processor = new CoverageProcessor(new CoberturaParser());
         var xmlPath = WriteCoberturaXml(_coveredFilePath, 1);
         var runId = _store.CreateRunId();
-        await processor.ProcessCoverageAsync(runId, [xmlPath], ["Lib.Tests.T1"], _store);
+        _ = await processor.ProcessCoverageAsync(runId, [xmlPath], ["Lib.Tests.T1"], _store);
 
         Assert.True(_store.HasCoverageData(_coveredFilePath));
     }
@@ -142,12 +142,20 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
     [Fact]
     public async Task ImpactAnalyzer_WithCoverageStore_ProducesTier3FqnsForCoveredFile()
     {
-        // Seed the store with coverage for the covered file
+        var source = "namespace Lib;\npublic class Code\n{\n    public int Value() => 1;\n}\n";
+        File.WriteAllText(_coveredFilePath, source);
         var processor = new CoverageProcessor(new CoberturaParser());
         var testFqns = new[] { "Lib.Tests.LibTests.Passes" };
-        var xmlPath = WriteCoberturaXml(_coveredFilePath, 5, 6);
+        var testProject = Path.Combine(_tempDir, "tests", "Lib.Tests.csproj");
+        var xmlPath = WriteCoberturaXml(_coveredFilePath, 4);
         var runId = _store.CreateRunId();
-        await processor.ProcessCoverageAsync(runId, [xmlPath], testFqns, _store);
+        var processing = await processor.ProcessCoverageAsync(runId, [xmlPath], testFqns, _store,
+            sourceRoot: _tempDir,
+            impact: new CoverageImpactOptions(
+                [new CoverageRunUnit(testProject, "run", [xmlPath], testFqns, Merge: false)],
+                ImpactGranularity.Run,
+                DateTime.UtcNow.AddSeconds(1)));
+        Assert.Null(processing.Reports[xmlPath].Error);
 
         // Create a .csproj next to the covered file so Tier 1 can find the owning project
         var libDir = Path.GetDirectoryName(_coveredFilePath)!;
@@ -158,10 +166,12 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
             </Project>
             """);
 
+        File.WriteAllText(_coveredFilePath, source.Replace("=> 1", "=> 2", StringComparison.Ordinal));
+
         // Use a stub solution graph so we don't need MSBuild loaded
         var analyzer = new ImpactAnalyzer(
-            _ => new StubSolutionGraph(libCsproj, isTestProject: false),
-            _store);
+            _ => new StubSolutionGraph(libCsproj, isTestProject: false, testProject),
+            _store, hasCompleteProjectCoverage: project => project == testProject);
 
         await analyzer.InitializeAsync("fake.slnx", CancellationToken.None);
 
@@ -173,6 +183,7 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
         var result = analyzer.Analyze(changes);
 
         Assert.NotNull(result.AffectedTestFqns);
+        Assert.Equal([testProject], result.AffectedTestProjectPaths);
         Assert.Contains("Lib.Tests.LibTests.Passes", result.AffectedTestFqns!);
     }
 
@@ -212,7 +223,7 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
         var processor = new CoverageProcessor(new CoberturaParser());
         var xmlPath = WriteCoberturaXml(_coveredFilePath, 5);
         var runId = _store.CreateRunId();
-        await processor.ProcessCoverageAsync(runId, [xmlPath], ["Lib.Tests.T1"], _store);
+        _ = await processor.ProcessCoverageAsync(runId, [xmlPath], ["Lib.Tests.T1"], _store);
 
         // Confirm data exists
         Assert.True(_store.HasCoverageData(_coveredFilePath));
@@ -234,7 +245,7 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
         // Run 1: lines 1, 2, 3
         var xml1 = WriteCoberturaXml(_coveredFilePath, 1, 2, 3);
         var run1 = _store.CreateRunId();
-        await processor.ProcessCoverageAsync(run1, [xml1], [testFqn], _store);
+        _ = await processor.ProcessCoverageAsync(run1, [xml1], [testFqn], _store);
 
         // Verify run 1 data
         Assert.True(_store.HasCoverageData(_coveredFilePath));
@@ -243,7 +254,7 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
         // Run 2: line 10 only (run1's lines should be gone)
         var xml2 = WriteCoberturaXml(_coveredFilePath, 10);
         var run2 = _store.CreateRunId();
-        await processor.ProcessCoverageAsync(run2, [xml2], [testFqn], _store);
+        _ = await processor.ProcessCoverageAsync(run2, [xml2], [testFqn], _store);
 
         Assert.Empty(_store.GetTestsCoveringLines(_coveredFilePath, 1, 3));
         Assert.NotEmpty(_store.GetTestsCoveringLines(_coveredFilePath, 10, 10));
@@ -254,19 +265,26 @@ public sealed class CoveragePipelineTests : IAsyncLifetime
 /// Minimal stub of <see cref="ISolutionGraph"/> that treats a single project as the owner
 /// of any file query. Used to avoid MSBuild in the coverage pipeline integration tests.
 /// </summary>
-file sealed class StubSolutionGraph(string projectPath, bool isTestProject) : ISolutionGraph
+file sealed class StubSolutionGraph(string projectPath, bool isTestProject, string? dependentTestProject = null) : ISolutionGraph
 {
     private readonly string _projectPath = Path.GetFullPath(projectPath);
+    private readonly string? _dependentTestProject = dependentTestProject is null ? null : Path.GetFullPath(dependentTestProject);
 
-    public IReadOnlyList<string> AllProjectPaths => [_projectPath];
-    public IReadOnlyList<string> TestProjectPaths => isTestProject ? [_projectPath] : [];
+    public IReadOnlyList<string> AllProjectPaths =>
+        _dependentTestProject is { } project ? [_projectPath, project] : [_projectPath];
+    public IReadOnlyList<string> TestProjectPaths =>
+        _dependentTestProject is { } project ? [project] : isTestProject ? [_projectPath] : [];
 
     public string? FindOwningProject(string filePath) => _projectPath;
 
-    public bool IsTestProject(string projectPath) => isTestProject;
+    public bool IsTestProject(string projectPath) =>
+        (isTestProject && string.Equals(projectPath, _projectPath, StringComparison.Ordinal))
+        || string.Equals(projectPath, _dependentTestProject, StringComparison.Ordinal);
 
     public IReadOnlySet<string> GetTransitiveDependents(string projectPath) =>
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        new HashSet<string>(
+            _dependentTestProject is { } project && string.Equals(projectPath, _projectPath, StringComparison.Ordinal)
+                ? [project] : [], StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<string> GetSourceFiles(string projectPath) => [];
     public bool IsMtpProject(string projectPath) => false;

@@ -38,6 +38,10 @@ internal sealed class CoberturaParser : ICoberturaParser
     {
         var doc = XDocument.Load(coberturaXmlPath);
         var root = doc.Root ?? throw new InvalidOperationException("Cobertura XML has no root element.");
+        if (root.Name != "coverage")
+        {
+            throw new InvalidDataException("Cobertura XML must have a coverage root element.");
+        }
 
         // Extract source directories — coverlet emits one <source> per repo root
         var sources = root
@@ -57,6 +61,11 @@ internal sealed class CoberturaParser : ICoberturaParser
             var filename = classEl.Attribute("filename")?.Value;
             if (string.IsNullOrEmpty(filename))
             {
+                if (classEl.Descendants("line").Any())
+                {
+                    throw new InvalidDataException("Cobertura XML contains measured lines without a source filename.");
+                }
+
                 continue;
             }
 
@@ -81,13 +90,9 @@ internal sealed class CoberturaParser : ICoberturaParser
                 var methodLines = new List<int>();
                 foreach (var lineEl in methodEl.Elements("lines").Elements("line"))
                 {
-                    if (!int.TryParse(lineEl.Attribute("number")?.Value, out var number))
-                    {
-                        continue;
-                    }
-
+                    var (number, methodHits) = ReadLine(lineEl);
                     methodLines.Add(number);
-                    executed |= int.TryParse(lineEl.Attribute("hits")?.Value, out var methodHits) && methodHits > 0;
+                    executed |= methodHits > 0;
                 }
 
                 if (executed && methodLines.Count > 0)
@@ -103,16 +108,13 @@ internal sealed class CoberturaParser : ICoberturaParser
 
             foreach (var lineEl in classEl.Elements("lines").Elements("line"))
             {
-                var numberStr = lineEl.Attribute("number")?.Value;
-                var hitsStr = lineEl.Attribute("hits")?.Value;
-
-                if (!int.TryParse(numberStr, out var lineNumber) ||
-                    !int.TryParse(hitsStr, out var hits))
-                {
-                    continue;
-                }
+                var (lineNumber, hits) = ReadLine(lineEl);
 
                 var (branchesCovered, branchesTotal) = ParseConditionCoverage(lineEl.Attribute("condition-coverage")?.Value);
+                if (branchesTotal == 0 && string.Equals(lineEl.Attribute("branch")?.Value, "true", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidDataException("Cobertura XML contains invalid branch coverage.");
+                }
 
                 // Accumulate hits for lines that appear in multiple methods/classes
                 lineMap[lineNumber] = lineMap.TryGetValue(lineNumber, out var existing)
@@ -140,6 +142,17 @@ internal sealed class CoberturaParser : ICoberturaParser
             .ToList();
 
         return new CoberturaReport(files);
+    }
+
+    private static (int Number, int Hits) ReadLine(XElement line)
+    {
+        if (!int.TryParse(line.Attribute("number")?.Value, out var number) || number <= 0
+            || !int.TryParse(line.Attribute("hits")?.Value, out var hits) || hits < 0)
+        {
+            throw new InvalidDataException("Cobertura XML contains a line with an invalid number or hit count.");
+        }
+
+        return (number, hits);
     }
 
     /// <summary>Parses <c>condition-coverage="50% (1/2)"</c> into (covered, total).</summary>

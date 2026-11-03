@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Collections.Concurrent;
 using Piston.Engine.Coverage;
 using Piston.Engine.Execution;
 using Piston.Engine.History;
@@ -21,6 +22,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     private readonly ICoverageStore? _coverageStore;
     private readonly ICoverageProcessor? _coverageProcessor;
     private readonly bool _coverageEnabled;
+    private bool _coverageStoreReady;
     private readonly IActivityEventSink _activitySink;
     private readonly IExecutionAdmission _admission;
     internal SavedResultsStore? ResultsStore { get; set; }
@@ -148,11 +150,16 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             try
             {
                 await _coverageStore.InitializeAsync(solutionDir).ConfigureAwait(false);
-                _state.HasCoverageData = false;
+                _coverageStoreReady = true;
+                _state.HasCoverageData = _coverageStore.GetReportFiles().Count > 0;
+                _state.CoverageError = null;
             }
-            catch
+            catch (Exception ex) when (ex is not OutOfMemoryException)
             {
-                // Coverage store initialization failure is non-fatal
+                _coverageStoreReady = false;
+                var error = $"Cannot initialize coverage storage: {ex.Message}. Check .piston/piston.db and restart the engine.";
+                _state.SetCoverageError(error);
+                DiagnosticLog.Instance?.Write("Coverage", error);
             }
         }
 
@@ -164,6 +171,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             {
                 await _impactAnalyzer.InitializeAsync(solutionPath, CancellationToken.None)
                     .ConfigureAwait(false);
+                if (_coverageEnabled)
+                {
+                    AddUnknownCoverageProjects(_impactAnalyzer.GetAllTestProjectPaths());
+                    _state.NotifyChanged();
+                }
             }
             catch
             {
@@ -603,9 +615,18 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     ArtifactStore?.Clear();
                 }
 
-                SqliteCoverageStore.Clear(solutionDirectory);
+                try
+                {
+                    SqliteCoverageStore.Clear(solutionDirectory);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+                {
+                    ReportCoverageStorageFailure("clearing coverage", ex);
+                    throw;
+                }
                 _state.HasCoverageData = false;
                 _state.CoverageImpactDetail = null;
+                _state.ProjectCoverage = new Dictionary<string, ProjectCoverageStatus>(StringComparer.Ordinal);
             }
             finally
             {
@@ -673,10 +694,10 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         }
     }
 
-    /// <summary>What a run triggered by changes to <paramref name="filePaths"/> would select, without changing state.</summary>
     /// <summary>Absolute paths of the solution's test projects; empty until the project graph has loaded.</summary>
     internal IReadOnlyList<string> GetTestProjectPaths() => _impactAnalyzer.GetAllTestProjectPaths();
 
+    /// <summary>What a run triggered by changes to <paramref name="filePaths"/> would select, without changing state.</summary>
     internal ImpactAnalysisResult PlanAffected(IReadOnlyList<string> filePaths) =>
         _impactAnalyzer.Preview([.. filePaths.Select(p => new FileChangeEvent(
             p, File.Exists(p) ? WatcherChangeTypes.Changed : WatcherChangeTypes.Deleted, DateTimeOffset.UtcNow))]);
@@ -689,11 +710,17 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             return null;
         }
 
+        ThrowIfCoverageUnavailable();
         IReadOnlyList<CoverageFileSummary> files;
         _coverageLock.Wait();
         try
         {
             files = _coverageStore.GetReportFiles();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+        {
+            ReportCoverageStorageFailure("reading the coverage report", ex);
+            throw;
         }
         finally
         {
@@ -714,6 +741,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             return null;
         }
 
+        ThrowIfCoverageUnavailable();
         CoverageFileSummary? file;
         IReadOnlyList<LineCoverage> lines;
         IReadOnlyList<LineSpan> staleLines;
@@ -723,6 +751,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             file = _coverageStore.GetReportFile(filePath);
             lines = file is null ? [] : _coverageStore.GetReportLines(filePath);
             staleLines = file is null ? [] : _coverageStore.GetReportStaleLines(filePath);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+        {
+            ReportCoverageStorageFailure("reading file coverage", ex);
+            throw;
         }
         finally
         {
@@ -748,11 +781,17 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             return null;
         }
 
+        ThrowIfCoverageUnavailable();
         IReadOnlyList<ImpactExecutor> executors;
         _coverageLock.Wait();
         try
         {
             executors = store.GetTestsExecuting(filePath);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+        {
+            ReportCoverageStorageFailure("reading test coverage", ex);
+            throw;
         }
         finally
         {
@@ -796,9 +835,12 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             p.ProjectPath,
             RunUnitKey,
             p.CoverageReportPaths,
-            [.. p.Suites.SelectMany(s => s.Tests).Select(t => t.FullyQualifiedName).Distinct(StringComparer.Ordinal)],
-            Merge: filtered || p.Crashed || p.RunnerError is not null,
-            MethodsComplete: filtered && !p.Crashed && p.RunnerError is null))];
+            [.. p.Suites.SelectMany(s => s.Tests)
+                .Where(t => t.Status is TestStatus.Passed or TestStatus.Failed or TestStatus.Skipped)
+                .Select(t => t.FullyQualifiedName).Distinct(StringComparer.Ordinal)],
+            Merge: filtered || !ProjectRunCompleted(p) || p.CoverageIssue is not null
+                || p.Suites.SelectMany(s => s.Tests).Any(t => t.Status == TestStatus.Failed),
+            MethodsComplete: filtered && ProjectRunCompleted(p) && p.CoverageIssue is null))];
     }
 
     private const string RunUnitKey = "run";
@@ -818,7 +860,15 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             : file with { IsStale = true };
     }
 
-    internal async Task ProcessCoverageAsync(
+    private void ThrowIfCoverageUnavailable()
+    {
+        if (_state.CoverageError is { } error)
+        {
+            throw new InvalidOperationException(error);
+        }
+    }
+
+    internal async Task<CoverageProcessingResult> ProcessCoverageAsync(
         long runId,
         IReadOnlyList<string> reportPaths,
         IReadOnlyList<string> testFqns,
@@ -833,14 +883,161 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         try
         {
             var solutionDir = _solutionPath is null ? null : Path.GetDirectoryName(_solutionPath);
-            await processor.ProcessCoverageAsync(runId, reportPaths, testFqns, store, isFullRun, solutionDir, impact)
+            var result = await processor.ProcessCoverageAsync(runId, reportPaths, testFqns, store, isFullRun, solutionDir, impact)
                 .ConfigureAwait(false);
-            _state.HasCoverageData = true;
+            _state.HasCoverageData = store.GetReportFiles().Count > 0;
+            return result;
         }
         finally
         {
             _ = _coverageLock.Release();
         }
+    }
+
+    private static bool ProjectRunCompleted(ProjectTestResult project)
+    {
+        var tests = project.Suites.SelectMany(suite => suite.Tests).ToList();
+        return !project.Crashed && project.TimedOut is null && project.RunnerError is null
+            && tests.Count > 0 && tests.All(test => test.Status is not (TestStatus.NotRun or TestStatus.Running));
+    }
+
+    private void AddUnknownCoverageProjects(IReadOnlyList<string> projects)
+    {
+        var updated = new Dictionary<string, ProjectCoverageStatus>(_state.ProjectCoverage, StringComparer.Ordinal);
+        var changed = false;
+        foreach (var project in projects)
+        {
+            changed |= updated.TryAdd(project, new ProjectCoverageStatus(project, CoverageCollectionStatus.Unknown,
+                "The project has not been measured in this engine session.", null));
+        }
+
+        if (changed)
+        {
+            _state.BeginResultsUpdate();
+            try
+            {
+                _state.ProjectCoverage = updated;
+            }
+            finally
+            {
+                _state.EndResultsUpdate();
+            }
+        }
+    }
+
+    private void ReportCoverageStorageFailure(string operation, Exception ex)
+    {
+        var error = $"Coverage {operation} failed: {ex.Message}. Check coverage storage and restart the engine.";
+        _state.SetCoverageError(error);
+        DiagnosticLog.Instance?.Write("Coverage", error);
+    }
+
+    private void UpdateProjectCoverage(
+        IReadOnlyList<ProjectTestResult> projects,
+        IReadOnlyList<string>? targets,
+        bool fullRun,
+        bool filtered,
+        CoverageProcessingResult? processed,
+        string? processingError,
+        bool sourceUnverified,
+        TestRunRecord run)
+    {
+        var previous = _state.ProjectCoverage;
+        var updated = fullRun && !filtered && targets is not null
+            ? new Dictionary<string, ProjectCoverageStatus>(StringComparer.Ordinal)
+            : new Dictionary<string, ProjectCoverageStatus>(previous, StringComparer.Ordinal);
+
+        if (processingError is not null)
+        {
+            foreach (var (path, status) in updated.ToArray())
+            {
+                updated[path] = status with
+                {
+                    Status = CoverageCollectionStatus.Unknown,
+                    Message = "Coverage storage failed; run this project again after the error is resolved.",
+                };
+            }
+        }
+
+        foreach (var project in projects)
+        {
+            var old = previous.GetValueOrDefault(project.ProjectPath);
+            CoverageCollectionStatus status;
+            string? message;
+            if (processingError is not null)
+            {
+                status = CoverageCollectionStatus.Failed;
+                message = processingError;
+            }
+            else if (!ProjectRunCompleted(project))
+            {
+                status = CoverageCollectionStatus.Failed;
+                message = project.RunnerError ?? project.CoverageIssue
+                    ?? "The project did not complete all selected tests, so its coverage is incomplete.";
+            }
+            else if (project.CoverageReportPaths.Count == 0)
+            {
+                status = CoverageCollectionStatus.Unavailable;
+                message = project.CoverageIssue ?? "The test run produced no Cobertura coverage report.";
+            }
+            else if (project.CoverageIssue is not null)
+            {
+                status = CoverageCollectionStatus.Partial;
+                message = project.CoverageIssue;
+            }
+            else if (sourceUnverified || run.Freshness != ResultFreshness.Current
+                || project.CoverageReportPaths.Any(path => processed?.Reports.GetValueOrDefault(path)?.SourceChanged == true))
+            {
+                status = CoverageCollectionStatus.Partial;
+                message = run.FreshnessReason is { } reason
+                    ? $"The measured sources could not be verified: {reason}"
+                    : "Some measured sources changed or could not be verified during the run.";
+            }
+            else if (project.CoverageReportPaths
+                .Select(path => processed?.Reports.GetValueOrDefault(path))
+                .FirstOrDefault(report => report is null || report.Error is not null || report.FileCount == 0) is { } badReport)
+            {
+                status = CoverageCollectionStatus.Failed;
+                message = badReport.Error ?? "The coverage report contains no measured files in this solution.";
+            }
+            else if (processed is null || project.CoverageReportPaths.Any(path => !processed.Reports.ContainsKey(path)))
+            {
+                status = CoverageCollectionStatus.Failed;
+                message = "A coverage report could not be processed.";
+            }
+            else if (!TestProjectNames.IsProjectFile(project.ProjectPath)
+                || (filtered && old?.Status != CoverageCollectionStatus.Measured))
+            {
+                status = CoverageCollectionStatus.Partial;
+                message = "An unfiltered run of this project is needed to establish complete coverage.";
+            }
+            else
+            {
+                status = CoverageCollectionStatus.Measured;
+                message = null;
+                if (old?.Status != CoverageCollectionStatus.Measured)
+                {
+                    foreach (var key in _backfillFailed.Keys.Where(key => key.Project == project.ProjectPath))
+                    {
+                        _ = _backfillFailed.TryRemove(key, out _);
+                    }
+                }
+            }
+
+            updated[project.ProjectPath] = new ProjectCoverageStatus(project.ProjectPath, status, message, run.RunId);
+        }
+
+        if (targets is not null)
+        {
+            var completed = projects.Select(project => project.ProjectPath).ToHashSet(StringComparer.Ordinal);
+            foreach (var target in targets.Where(target => !completed.Contains(target)))
+            {
+                updated[target] = new ProjectCoverageStatus(target, CoverageCollectionStatus.Unknown,
+                    "The project did not return a coverage outcome for this run.", run.RunId);
+            }
+        }
+
+        _state.ProjectCoverage = updated;
     }
 
     public void Stop()
@@ -1008,6 +1205,9 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
         BuildBaseline? builtBaseline = null;
         var artifactPublicationLockHeld = false;
+        IReadOnlyList<string> temporaryCoverageReports = [];
+        IReadOnlyList<ProjectTestResult> temporaryProjects = [];
+        var completedTemporaryProjects = new ConcurrentBag<ProjectTestResult>();
 
         TestRunRecord Finish(TestRunStatus status, string? reason, bool computeAfter = true)
         {
@@ -1040,6 +1240,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 await initTask.ConfigureAwait(false);
                 log0?.Write("Orchestrator", "Graph initialization complete.");
                 _graphInitTask = null;
+            }
+
+            if (_coverageEnabled)
+            {
+                AddUnknownCoverageProjects(_impactAnalyzer.GetAllTestProjectPaths());
             }
 
             // ── Analyzing ─────────────────────────────────────────────────────
@@ -1511,64 +1716,68 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     runningClock.Observe(projectPath, liveSuites);
                 }, throttle: true);
 
-            void OnProjectCompleted(Models.ProjectTestResult result) => UpdateOverlay(() =>
+            void OnProjectCompleted(Models.ProjectTestResult result)
             {
-                _state.CompletedTestProjects++;
-                runningClock.Clear(result.ProjectPath);
-                _ = resourceWaits.Remove(result.ProjectPath);
-
-                var projectStatus = result.TimedOut is not null
-                    ? Models.ProjectRunStatus.TimedOut
-                    : result.Crashed
-                    ? Models.ProjectRunStatus.Crashed
-                    : result.RunnerError is not null && result.Suites.Count == 0
-                        ? Models.ProjectRunStatus.Failed
-                        : Models.ProjectRunStatus.Completed;
-
-                if (projectStatuses.ContainsKey(result.ProjectPath))
+                completedTemporaryProjects.Add(result);
+                UpdateOverlay(() =>
                 {
-                    projectStatuses[result.ProjectPath] = projectStatus;
-                }
+                    _state.CompletedTestProjects++;
+                    runningClock.Clear(result.ProjectPath);
+                    _ = resourceWaits.Remove(result.ProjectPath);
 
-                var testCount = result.Suites.Sum(s => s.Tests.Count);
-                string? noTestsReason = null;
-                if (testCount == 0 && !filtered && !result.Crashed && result.TimedOut is null)
-                {
-                    noTestsReason = NoTestsDiagnosis.Diagnose(_impactAnalyzer.GetTestProjectFacts(result.ProjectPath), result.Log);
-                    DiagnosticLog.Instance?.Write("Orchestrator",
-                        $"{Path.GetFileNameWithoutExtension(result.ProjectPath)} reported no tests: {noTestsReason}");
-                }
+                    var projectStatus = result.TimedOut is not null
+                        ? Models.ProjectRunStatus.TimedOut
+                        : result.Crashed
+                        ? Models.ProjectRunStatus.Crashed
+                        : result.RunnerError is not null && result.Suites.Count == 0
+                            ? Models.ProjectRunStatus.Failed
+                            : Models.ProjectRunStatus.Completed;
 
-                var suspectedConflict = ResourceConflictScanner.Scan(result);
-                if (suspectedConflict is not null)
-                {
-                    DiagnosticLog.Instance?.Write("Orchestrator",
-                        $"{Path.GetFileNameWithoutExtension(result.ProjectPath)}: {suspectedConflict}");
-                }
-
-                projectOutcomes[result.ProjectPath] = new TestRunProjectOutcome(
-                    result.ProjectPath, projectStatus, testCount, noTestsReason, result.TimedOut)
-                {
-                    ProjectId = TestProjectNames.ProjectId(solutionDirectory, result.ProjectPath),
-                    Resources = result.Resources,
-                    SuspectedResourceConflict = suspectedConflict,
-                };
-
-                if (result.Suites.Count > 0)
-                {
-                    var projectId = TestProjectNames.IsProjectFile(result.ProjectPath)
-                        ? TestProjectNames.ProjectId(solutionDirectory, result.ProjectPath) : null;
-                    liveByProject[result.ProjectPath] = result.Suites.Select(s => s with { ProjectId = projectId ?? s.ProjectId }).ToList();
-
-                    // The project's final results are the authority on what ran: drop its discovery
-                    // placeholders, whose listed names may not match the final identities.
-                    if (!result.Crashed)
+                    if (projectStatuses.ContainsKey(result.ProjectPath))
                     {
-                        _ = settledProjects.Add(result.ProjectPath);
-                        _ = discoveredByProject.Remove(result.ProjectPath);
+                        projectStatuses[result.ProjectPath] = projectStatus;
                     }
-                }
-            });
+
+                    var testCount = result.Suites.Sum(s => s.Tests.Count);
+                    string? noTestsReason = null;
+                    if (testCount == 0 && !filtered && !result.Crashed && result.TimedOut is null)
+                    {
+                        noTestsReason = NoTestsDiagnosis.Diagnose(_impactAnalyzer.GetTestProjectFacts(result.ProjectPath), result.Log);
+                        DiagnosticLog.Instance?.Write("Orchestrator",
+                            $"{Path.GetFileNameWithoutExtension(result.ProjectPath)} reported no tests: {noTestsReason}");
+                    }
+
+                    var suspectedConflict = ResourceConflictScanner.Scan(result);
+                    if (suspectedConflict is not null)
+                    {
+                        DiagnosticLog.Instance?.Write("Orchestrator",
+                            $"{Path.GetFileNameWithoutExtension(result.ProjectPath)}: {suspectedConflict}");
+                    }
+
+                    projectOutcomes[result.ProjectPath] = new TestRunProjectOutcome(
+                        result.ProjectPath, projectStatus, testCount, noTestsReason, result.TimedOut)
+                    {
+                        ProjectId = TestProjectNames.ProjectId(solutionDirectory, result.ProjectPath),
+                        Resources = result.Resources,
+                        SuspectedResourceConflict = suspectedConflict,
+                    };
+
+                    if (result.Suites.Count > 0)
+                    {
+                        var projectId = TestProjectNames.IsProjectFile(result.ProjectPath)
+                            ? TestProjectNames.ProjectId(solutionDirectory, result.ProjectPath) : null;
+                        liveByProject[result.ProjectPath] = result.Suites.Select(s => s with { ProjectId = projectId ?? s.ProjectId }).ToList();
+
+                        // The project's final results are the authority on what ran: drop its discovery
+                        // placeholders, whose listed names may not match the final identities.
+                        if (!result.Crashed)
+                        {
+                            _ = settledProjects.Add(result.ProjectPath);
+                            _ = discoveredByProject.Remove(result.ProjectPath);
+                        }
+                    }
+                });
+            }
 
             // Best-effort discovery, streamed, so a project's test list shows before its results arrive.
             // Unfiltered runs only discover projects without known results (those are already seeded);
@@ -1628,9 +1837,18 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             }
 
             // Generate a run ID before running tests (per plan: CreateRunId before ProcessCoverageAsync)
-            var runId = _coverageEnabled && _coverageStore is not null
-                ? _coverageStore.CreateRunId()
-                : 0;
+            var runId = 0L;
+            if (_coverageEnabled && _coverageStoreReady && _state.CoverageError is null && _coverageStore is not null)
+            {
+                try
+                {
+                    runId = _coverageStore.CreateRunId();
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+                {
+                    ReportCoverageStorageFailure("starting a coverage run", ex);
+                }
+            }
 
             IReadOnlyList<TestSuite> newSuites;
             IReadOnlyList<string> coverageReportPaths;
@@ -1642,7 +1860,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     solutionPath,
                     testTargets,
                     effectiveFilter,
-                    _coverageEnabled,
+                    _coverageEnabled && _coverageStoreReady && _state.CoverageError is null,
                     new TestRunCallbacks
                     {
                         OnProjectWaiting = OnProjectWaiting,
@@ -1652,15 +1870,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                         OnProjectCompleted = OnProjectCompleted,
                     },
                     ct).ConfigureAwait(false);
-                try
-                {
-                    await _artifactPublicationLock.WaitAsync(ct).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException)
-                {
-                    CleanUpRunnerTemporaryDirectories(result.Projects, result.CoverageReportPaths);
-                    throw;
-                }
+                temporaryCoverageReports = [.. result.CoverageReportPaths
+                    .Concat(result.Projects.SelectMany(project => project.CoverageReportPaths))
+                    .Distinct(StringComparer.Ordinal)];
+                temporaryProjects = result.Projects;
+                await _artifactPublicationLock.WaitAsync(ct).ConfigureAwait(false);
                 artifactPublicationLockHeld = true;
                 coverageReportPaths = result.CoverageReportPaths;
                 projectResults = result.Projects.Select(project =>
@@ -1672,7 +1886,22 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                         RunId = run.RunId,
                     }).ToList();
                     var retainedSuites = ArtifactStore?.Retain(run.RunId, suites) ?? suites;
-                    return project with { Suites = retainedSuites };
+                    var coverageIssue = project.CoverageIssue;
+                    if (_coverageEnabled && coverageIssue is null && project.CoverageReportPaths.Count > 0
+                        && TestProjectNames.IsProjectFile(project.ProjectPath))
+                    {
+                        var frameworkCount = _impactAnalyzer.GetTargetFrameworkCount(project.ProjectPath);
+                        if (frameworkCount == 0)
+                        {
+                            coverageIssue = "The number of target frameworks could not be verified.";
+                        }
+                        else if (project.CoverageReportPaths.Count < frameworkCount)
+                        {
+                            coverageIssue = $"The test run produced {project.CoverageReportPaths.Count} coverage report(s) for {frameworkCount} target frameworks.";
+                        }
+                    }
+
+                    return project with { Suites = retainedSuites, CoverageIssue = coverageIssue };
                 }).ToList();
                 newSuites = projectResults.Count > 0
                     ? projectResults.SelectMany(project => project.Suites).ToList()
@@ -1700,7 +1929,6 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
             if (ct.IsCancellationRequested)
             {
-                CleanUpRunnerTemporaryDirectories(projectResults, coverageReportPaths);
                 _state.Phase = PistonPhase.Watching;
                 _state.NotifyChanged();
                 return Finish(TestRunStatus.Cancelled, "Cancelled after test execution; results discarded.");
@@ -1715,7 +1943,6 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             }
             catch (OperationCanceledException)
             {
-                CleanUpRunnerTemporaryDirectories(projectResults, coverageReportPaths);
                 _state.Phase = PistonPhase.Watching;
                 _state.NotifyChanged();
                 return Finish(TestRunStatus.Cancelled, "Cancelled while retrying failed tests; results discarded.");
@@ -1729,48 +1956,94 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             // Coverage and outcomes change together: readers that combine them see the update and retry.
             IReadOnlyList<TestOutcomeReference> fixedTests, newlyFailingTests;
             var noEarlierResults = false;
+            CoverageProcessingResult? coverageResult = null;
+            var coverageProcessingError = _state.CoverageError;
+            var coverageSourceUnverified = false;
             _state.BeginResultsUpdate();
             try
             {
+                if (_coverageEnabled && _coverageStoreReady && _state.CoverageError is null
+                    && _coverageStore is IImpactMapStore impactMap)
+                {
+                    try
+                    {
+                        await _coverageLock.WaitAsync(ct).ConfigureAwait(false);
+                        try
+                        {
+                            foreach (var project in projectResults.Where(project => TestProjectNames.IsProjectFile(project.ProjectPath)))
+                            {
+                                var results = project.Suites.SelectMany(suite => suite.Tests).ToList();
+                                if (results.Count > 0)
+                                {
+                                    await ImpactBackfill.InvalidateOutdatedAsync(
+                                        impactMap, project.ProjectPath, results,
+                                        complete: string.IsNullOrWhiteSpace(effectiveFilter) && ProjectRunCompleted(project), ct)
+                                        .ConfigureAwait(false);
+                                }
+                            }
+                        }
+                        finally
+                        {
+                            _ = _coverageLock.Release();
+                        }
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+                    {
+                        ReportCoverageStorageFailure("validating impact measurements", ex);
+                        coverageProcessingError = _state.CoverageError;
+                    }
+                }
+
                 // ── Coverage processing ────────────────────────────────────────────
-                if (_coverageEnabled && _coverageStore is not null && _coverageProcessor is not null
+                if (_coverageEnabled && _coverageStoreReady && _state.CoverageError is null
+                    && _coverageStore is not null && _coverageProcessor is not null
                     && coverageReportPaths.Count > 0 && newSuites.Count > 0)
                 {
                     var testFqns = newSuites
                         .SelectMany(s => s.Tests)
+                        .Where(t => t.Status is TestStatus.Passed or TestStatus.Failed or TestStatus.Skipped)
                         .Select(t => t.FullyQualifiedName)
                         .Distinct(StringComparer.Ordinal)
                         .ToList();
 
                     try
                     {
-                        // Only an unfiltered run of every test project, with none crashing, measures the whole solution.
+                        coverageSourceUnverified = run.SourceBefore is not { } before
+                            || SourceFingerprinter.TryCompute(solutionDir) != before
+                            || Interlocked.Read(ref _fileChangeGeneration) != changeGenerationAtStart
+                            || ct.IsCancellationRequested;
+                        var suppliedReports = coverageReportPaths.ToHashSet(StringComparer.Ordinal);
                         var isFullCoverageRun = impactResult.IsFullRun
                             && string.IsNullOrWhiteSpace(effectiveFilter)
-                            && runnerError is null;
+                            && runnerError is null
+                            && testTargets is { Count: > 0 }
+                            && testTargets.All(target => projectResults.Any(project =>
+                                project.ProjectPath == target && ProjectRunCompleted(project)
+                                && project.CoverageReportPaths.Count > 0 && project.CoverageIssue is null
+                                && project.CoverageReportPaths.All(suppliedReports.Contains)));
                         var impact = new CoverageImpactOptions(
                             RunImpactUnits(projectResults, solutionPath, coverageReportPaths, testFqns, effectiveFilter),
                             ImpactGranularity.Run,
                             (run.StartedAt ?? DateTimeOffset.UtcNow).UtcDateTime);
-                        await ProcessCoverageAsync(runId, coverageReportPaths, testFqns, isFullCoverageRun, impact)
-                            .ConfigureAwait(false);
+                        if (coverageSourceUnverified)
+                        {
+                            log?.Write("Coverage", "Skipped coverage because the sources changed or could not be verified during the run.");
+                        }
+                        else
+                        {
+                            coverageResult = await ProcessCoverageAsync(runId, coverageReportPaths, testFqns, isFullCoverageRun, impact)
+                                .ConfigureAwait(false);
+                        }
                     }
-                    catch
+                    catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
                     {
-                        // Coverage processing failure is non-fatal
+                        coverageProcessingError = $"Coverage processing failed: {ex.Message}. Check coverage storage and restart the engine.";
+                        _state.SetCoverageError(coverageProcessingError);
+                        log?.Write("Coverage", coverageProcessingError);
                     }
-                    finally
-                    {
-                        // Clean up temp results directories after coverage has been processed
-                        CleanUpCoverageResultsDirs(coverageReportPaths);
-                    }
-                }
-                else if (coverageReportPaths.Count > 0)
-                {
-                    CleanUpCoverageResultsDirs(coverageReportPaths);
                 }
 
-                CleanUpRunnerTemporaryDirectories(projectResults, coverageReportPaths);
+                ct.ThrowIfCancellationRequested();
                 noEarlierResults = !_state.TestSuites.Any(s => s.Tests.Count > 0) && newSuites.Any(s => s.Tests.Count > 0);
                 (fixedTests, newlyFailingTests) = TestOutcomeChanges.Compare(_state.TestSuites, newSuites);
 
@@ -1778,80 +2051,103 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 _state.TestSuites = impactResult.IsFullRun
                     ? newSuites
                     : MergeTestSuites(_state.TestSuites, newSuites);
+
+                _state.InProgressSuites = [];
+                _state.LastRunTime = DateTimeOffset.UtcNow;
+                _state.LastTestDuration = DateTimeOffset.UtcNow - testStart;
+
+                // Emit test run completion activity event
+                EmitTestRunCompleted(solutionPath, newSuites, _state.LastTestDuration.Value);
+
+                // Compute how many tests are verified since the last file change
+                if (_state.LastFileChangeTime.HasValue)
+                {
+                    var changeTime = _state.LastFileChangeTime.Value;
+                    _state.VerifiedSinceChangeCount = newSuites
+                        .Where(s => s.Timestamp >= changeTime)
+                        .SelectMany(s => s.Tests)
+                        .Count();
+                }
+                else
+                {
+                    _state.VerifiedSinceChangeCount = _state.TestSuites
+                        .Where(s => !s.Restored)
+                        .SelectMany(s => s.Tests)
+                        .Count();
+                }
+
+                List<TestRunProjectOutcome> outcomes;
+                List<string> hangingTests;
+                lock (liveResultsLock)
+                {
+                    outcomes = projectOutcomes.Values.ToList();
+                    hangingTests = [.. possiblyHanging];
+                }
+
+                var duplicates = newSuites
+                    .SelectMany(s => s.Tests.Select(t => (Project: s.Key, t.ResultKey)))
+                    .GroupBy(t => (t.Project, t.ResultKey))
+                    .Where(g => g.Count() > 1)
+                    .Select(g => g.Key.ResultKey)
+                    .Distinct(StringComparer.Ordinal)
+                    .Order(StringComparer.Ordinal)
+                    .ToList();
+
+                run = run with
+                {
+                    Suites = newSuites,
+                    Projects = outcomes,
+                    DuplicateTestIds = duplicates,
+                    PossiblyHangingTests = hangingTests,
+                    FixedTests = fixedTests,
+                    NewlyFailingTests = newlyFailingTests,
+                    NoEarlierResults = noEarlierResults,
+                    RunnerError = runnerError,
+                    RetryLimit = RetryFailedTests,
+                    RetriesSkippedReason = retriesSkippedReason,
+                };
+
+                var incompleteReason = DescribeIncomplete(
+                    outcomes, testTargets is null, newSuites, runnerError,
+                    filtered: !string.IsNullOrWhiteSpace(effectiveFilter));
+                var finished = Finish(
+                    incompleteReason is null ? TestRunStatus.Completed : TestRunStatus.Incomplete,
+                    incompleteReason,
+                    computeAfter: true);
+
+                if (_coverageEnabled)
+                {
+                    UpdateProjectCoverage(projectResults, testTargets, impactResult.IsFullRun,
+                        !string.IsNullOrWhiteSpace(effectiveFilter), coverageResult, coverageProcessingError,
+                        coverageSourceUnverified, finished);
+                }
+
+                _state.Phase = PistonPhase.Watching;
+                _state.NotifyChanged();
+
+                ScheduleGraphRebuildIfNeeded(impactResult);
+                return finished;
+            }
+            catch (OperationCanceledException)
+            {
+                if (_coverageEnabled)
+                {
+                    _state.ProjectCoverage = _state.ProjectCoverage.ToDictionary(
+                        pair => pair.Key,
+                        pair => pair.Value with
+                        {
+                            Status = CoverageCollectionStatus.Unknown,
+                            Message = "Coverage publication was interrupted; run this project again.",
+                        },
+                        StringComparer.Ordinal);
+                }
+
+                throw;
             }
             finally
             {
                 _state.EndResultsUpdate();
             }
-
-            _state.InProgressSuites = [];
-            _state.LastRunTime = DateTimeOffset.UtcNow;
-            _state.LastTestDuration = DateTimeOffset.UtcNow - testStart;
-
-            // Emit test run completion activity event
-            EmitTestRunCompleted(solutionPath, newSuites, _state.LastTestDuration.Value);
-
-            // Compute how many tests are verified since the last file change
-            if (_state.LastFileChangeTime.HasValue)
-            {
-                var changeTime = _state.LastFileChangeTime.Value;
-                _state.VerifiedSinceChangeCount = newSuites
-                    .Where(s => s.Timestamp >= changeTime)
-                    .SelectMany(s => s.Tests)
-                    .Count();
-            }
-            else
-            {
-                _state.VerifiedSinceChangeCount = _state.TestSuites
-                    .Where(s => !s.Restored)
-                    .SelectMany(s => s.Tests)
-                    .Count();
-            }
-
-            List<TestRunProjectOutcome> outcomes;
-            List<string> hangingTests;
-            lock (liveResultsLock)
-            {
-                outcomes = projectOutcomes.Values.ToList();
-                hangingTests = [.. possiblyHanging];
-            }
-
-            var duplicates = newSuites
-                .SelectMany(s => s.Tests.Select(t => (Project: s.Key, t.ResultKey)))
-                .GroupBy(t => (t.Project, t.ResultKey))
-                .Where(g => g.Count() > 1)
-                .Select(g => g.Key.ResultKey)
-                .Distinct(StringComparer.Ordinal)
-                .Order(StringComparer.Ordinal)
-                .ToList();
-
-            run = run with
-            {
-                Suites = newSuites,
-                Projects = outcomes,
-                DuplicateTestIds = duplicates,
-                PossiblyHangingTests = hangingTests,
-                FixedTests = fixedTests,
-                NewlyFailingTests = newlyFailingTests,
-                NoEarlierResults = noEarlierResults,
-                RunnerError = runnerError,
-                RetryLimit = RetryFailedTests,
-                RetriesSkippedReason = retriesSkippedReason,
-            };
-
-            var incompleteReason = DescribeIncomplete(
-                outcomes, testTargets is null, newSuites, runnerError,
-                filtered: !string.IsNullOrWhiteSpace(effectiveFilter));
-            var finished = Finish(
-                incompleteReason is null ? TestRunStatus.Completed : TestRunStatus.Incomplete,
-                incompleteReason,
-                computeAfter: true);
-
-            _state.Phase = PistonPhase.Watching;
-            _state.NotifyChanged();
-
-            ScheduleGraphRebuildIfNeeded(impactResult);
-            return finished;
         }
         catch (OperationCanceledException)
         {
@@ -1867,6 +2163,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         }
         finally
         {
+            var completedProjects = temporaryProjects.Concat(completedTemporaryProjects).ToList();
+            var reportPaths = temporaryCoverageReports.Concat(completedProjects.SelectMany(project => project.CoverageReportPaths))
+                .Distinct(StringComparer.Ordinal).ToList();
+            CleanUpCoverageResultsDirs(reportPaths);
+            CleanUpRunnerTemporaryDirectories(completedProjects, reportPaths);
             if (artifactPublicationLockHeld)
             {
                 _ = _artifactPublicationLock.Release();
@@ -2157,7 +2458,14 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
         foreach (var dir in resultsDirs)
         {
-            try { Directory.Delete(dir!, recursive: true); } catch { /* ignore */ }
+            try
+            {
+                Directory.Delete(dir!, recursive: true);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                DiagnosticLog.Instance?.Write("Coverage", $"Could not remove temporary results directory {dir}: {ex.Message}");
+            }
         }
     }
 
@@ -2189,8 +2497,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
     /// <summary>
     /// The <c>piston-*</c> temp directory a runner wrote <paramref name="reportPath"/> under, or
-    /// <see langword="null"/> when it is not in one. Reports are at different depths: coverlet nests each in
-    /// a GUID directory, the MTP extension writes them directly in the results directory.
+    /// <see langword="null"/> when it is not in one. Reports may be nested by collector or target framework.
     /// </summary>
     internal static string? CoverageResultsDirectory(string reportPath)
     {

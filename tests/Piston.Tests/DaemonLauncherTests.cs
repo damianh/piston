@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.IO.Pipes;
 using Piston.Hosting;
 using Xunit;
 
@@ -8,8 +9,10 @@ namespace Piston.Tests;
 
 public sealed class DaemonLauncherTests
 {
-    [Fact]
-    public void CreateStartInfo_PreservesSelectingConfigForSolutionInAnotherDirectory()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CreateStartInfo_PreservesSelectingConfigForSolutionInAnotherDirectory(bool coverageEnabled)
     {
         var root = Directory.CreateTempSubdirectory("piston-daemon-config-").FullName;
         try
@@ -18,18 +21,21 @@ public sealed class DaemonLauncherTests
             var solutionPath = Path.Combine(solutionDir, "Test.slnx");
             File.WriteAllText(solutionPath, "<Solution />");
             File.WriteAllText(Path.Combine(root, ".piston.json"),
-                """{"solution":"nested/Test.slnx","coverageEnabled":true,"mcpPort":5210,"parallelism":3}""");
-            File.WriteAllText(Path.Combine(solutionDir, ".piston.json"), """{"coverageEnabled":false}""");
+                $$"""{"solution":"nested/Test.slnx","coverageEnabled":{{coverageEnabled.ToString().ToLowerInvariant()}},"mcpPort":5210,"parallelism":3}""");
+            File.WriteAllText(Path.Combine(solutionDir, ".piston.json"),
+                $$"""{"coverageEnabled":{{(!coverageEnabled).ToString().ToLowerInvariant()}}}""");
 
             var (selectedPath, _) = HostHelpers.ResolveSolution(null, root);
             var start = DaemonLauncher.CreateStartInfo("Piston", selectedPath, "test-pipe", 5321, root);
             Assert.Contains("--no-stdio", start.ArgumentList);
+            Assert.DoesNotContain("--coverage", start.ArgumentList);
+            Assert.DoesNotContain("--no-coverage", start.ArgumentList);
             var configIndex = start.ArgumentList.IndexOf("--config-directory");
             Assert.True(configIndex >= 0);
             var (_, daemonConfig) = HostHelpers.ResolveSolution(new FileInfo(start.ArgumentList[1]),
                 configurationDirectory: start.ArgumentList[configIndex + 1]);
 
-            Assert.True(daemonConfig.CoverageEnabled);
+            Assert.Equal(coverageEnabled, daemonConfig.CoverageEnabled);
             Assert.Equal(5210, daemonConfig.McpPort);
             Assert.Equal(3, daemonConfig.Parallelism);
         }
@@ -37,6 +43,22 @@ public sealed class DaemonLauncherTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task EnsureRunningAsync_ReusesExistingDaemonWithoutSendingConfiguration()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var pipeName = $"piston-existing-{Guid.NewGuid():N}";
+        await using var daemon = new NamedPipeServerStream(pipeName, PipeDirection.InOut, 1,
+            PipeTransmissionMode.Byte, PipeOptions.Asynchronous);
+        var connection = daemon.WaitForConnectionAsync(ct);
+
+        await DaemonLauncher.EnsureRunningAsync("App.slnx", pipeName, 5199, Path.GetTempPath(), ct);
+        await connection.WaitAsync(TimeSpan.FromSeconds(10), ct);
+
+        // The dashboard probes the live daemon but must not send options or a reconfiguration command.
+        Assert.Equal(0, await daemon.ReadAsync(new byte[1], ct).AsTask().WaitAsync(TimeSpan.FromSeconds(10), ct));
     }
 
     [Theory]

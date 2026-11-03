@@ -43,8 +43,11 @@ var filterOpt = new Option<string?>(
 
 var coverageOpt = new Option<bool>(
     name: "--coverage",
-    description: "Enable code coverage collection during test runs.",
-    getDefaultValue: () => false);
+    description: "Enable code coverage collection (default: on), overriding .piston.json.");
+
+var noCoverageOpt = new Option<bool>(
+    name: "--no-coverage",
+    description: "Disable code coverage collection, overriding .piston.json.");
 
 var parallelismOpt = new Option<int>(
     name: "--parallelism",
@@ -109,6 +112,7 @@ var daemonCmd = new Command("daemon", "Start the Piston daemon in the foreground
     debounceOpt,
     filterOpt,
     coverageOpt,
+    noCoverageOpt,
     parallelismOpt,
     stdioOpt,
     noStdioOpt,
@@ -123,7 +127,8 @@ daemonCmd.SetHandler(async ctx =>
     var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
     var debounceMs = ctx.ParseResult.GetValueForOption(debounceOpt);
     var filter = ctx.ParseResult.GetValueForOption(filterOpt);
-    var coverage = ctx.ParseResult.GetValueForOption(coverageOpt);
+    var enableCoverage = ctx.ParseResult.GetValueForOption(coverageOpt);
+    var noCoverage = ctx.ParseResult.GetValueForOption(noCoverageOpt);
     var parallelism = ctx.ParseResult.GetValueForOption(parallelismOpt);
     var stdio = ctx.ParseResult.GetValueForOption(stdioOpt);
     var noStdio = ctx.ParseResult.GetValueForOption(noStdioOpt);
@@ -131,6 +136,15 @@ daemonCmd.SetHandler(async ctx =>
     var mcpPort = ctx.ParseResult.GetValueForOption(mcpPortOpt);
     var webPort = ctx.ParseResult.GetValueForOption(webPortOpt);
     var configDirectory = ctx.ParseResult.GetValueForOption(configDirectoryOpt);
+
+    var coverageSpecified = ctx.ParseResult.FindResultFor(coverageOpt) is { IsImplicit: false };
+    var noCoverageSpecified = ctx.ParseResult.FindResultFor(noCoverageOpt) is { IsImplicit: false };
+    if (coverageSpecified && noCoverageSpecified)
+    {
+        Console.Error.WriteLine("error: --coverage and --no-coverage cannot be used together.");
+        ctx.ExitCode = 1;
+        return;
+    }
 
     if (stdio && noStdio)
     {
@@ -159,6 +173,7 @@ daemonCmd.SetHandler(async ctx =>
         stdio = false;
     }
 
+    bool? coverage = coverageSpecified ? enableCoverage : noCoverageSpecified ? !noCoverage : null;
     if (stdio)
     {
         await RunDaemonStdioAsync(solutionFile, debounceMs, filter, coverage, parallelism, configDirectory);
@@ -182,6 +197,7 @@ var mcpCmd = new Command("mcp",
     debounceOpt,
     filterOpt,
     coverageOpt,
+    noCoverageOpt,
     parallelismOpt,
     configDirectoryOpt,
     dashboardOpt,
@@ -192,9 +208,20 @@ mcpCmd.SetHandler(async ctx =>
     var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
     var debounceMs = ctx.ParseResult.GetValueForOption(debounceOpt);
     var filter = ctx.ParseResult.GetValueForOption(filterOpt);
-    var coverage = ctx.ParseResult.GetValueForOption(coverageOpt);
+    var enableCoverage = ctx.ParseResult.GetValueForOption(coverageOpt);
+    var noCoverage = ctx.ParseResult.GetValueForOption(noCoverageOpt);
     var parallelism = ctx.ParseResult.GetValueForOption(parallelismOpt);
     var configDirectory = ctx.ParseResult.GetValueForOption(configDirectoryOpt);
+    var coverageSpecified = ctx.ParseResult.FindResultFor(coverageOpt) is { IsImplicit: false };
+    var noCoverageSpecified = ctx.ParseResult.FindResultFor(noCoverageOpt) is { IsImplicit: false };
+    if (coverageSpecified && noCoverageSpecified)
+    {
+        Console.Error.WriteLine("error: --coverage and --no-coverage cannot be used together.");
+        ctx.ExitCode = 1;
+        return;
+    }
+
+    bool? coverage = coverageSpecified ? enableCoverage : noCoverageSpecified ? !noCoverage : null;
     ctx.ExitCode = await RunMcpAsync(solutionFile, debounceMs, filter, coverage, parallelism, configDirectory,
         ctx.ParseResult.GetValueForOption(dashboardOpt));
 });
@@ -405,7 +432,7 @@ static async Task RunDaemonAsync(
     FileInfo? solutionArg,
     int cliDebounceMs,
     string? cliFilter,
-    bool cliCoverage,
+    bool? cliCoverage,
     int cliParallelism,
     string? cliPipeName,
     int? cliMcpPort,
@@ -493,7 +520,7 @@ static async Task RunDaemonStdioAsync(
     FileInfo? solutionArg,
     int cliDebounceMs,
     string? cliFilter,
-    bool cliCoverage,
+    bool? cliCoverage,
     int cliParallelism,
     string? configDirectory)
 {
@@ -624,7 +651,7 @@ static async Task<int> RunMcpAsync(
     FileInfo? solutionArg,
     int cliDebounceMs,
     string? cliFilter,
-    bool cliCoverage,
+    bool? cliCoverage,
     int cliParallelism,
     string? configDirectory,
     bool dashboard)
@@ -878,7 +905,7 @@ static async Task<int> RunCoverageExportAsync(FileInfo? solutionArg, string? cli
     }
     catch
     {
-        Console.Error.WriteLine($"error: no daemon running for {solutionPath}. Start one with 'piston daemon --coverage'.");
+        Console.Error.WriteLine($"error: no daemon running for {solutionPath}. Start one with 'piston daemon'.");
         return 1;
     }
 

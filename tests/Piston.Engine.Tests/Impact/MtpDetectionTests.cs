@@ -178,6 +178,68 @@ public sealed class MtpDetectionTests : IAsyncLifetime
         Assert.False(sut.IsMultiTargeted(_libCsproj));
     }
 
+    [Fact]
+    public async Task GetMtpTargetOutputs_MultiTarget_ReturnsEveryFrameworkOutput()
+    {
+        await File.WriteAllTextAsync(_mtpCsproj,
+            BuildMtpCsproj("<IsTestingPlatformApplication>true</IsTestingPlatformApplication>")
+                .Replace("<TargetFramework>net10.0</TargetFramework>",
+                    "<TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>", StringComparison.Ordinal), _ct);
+        var graph = new MsBuildSolutionGraph(_slnPath);
+        var outputRoot = Path.Combine(Path.GetDirectoryName(_mtpCsproj)!, "bin", "Debug");
+
+        Assert.True(graph.IsMultiTargeted(_mtpCsproj));
+        Assert.Equal(3, graph.GetTargetFrameworkCount(_mtpCsproj));
+        Assert.Equal(1, graph.GetTargetFrameworkCount(_vsTestCsproj));
+        Assert.Equal(0, graph.GetTargetFrameworkCount(Path.Combine(_root, "Unknown.csproj")));
+        _ = Assert.Single(graph.AllProjectPaths, path => path == _mtpCsproj);
+        _ = Assert.Single(graph.TestProjectPaths, path => path == _mtpCsproj);
+        Assert.Equal(
+            new[] { "net8.0", "net9.0", "net10.0" }
+                .Select(framework => (framework, Path.Combine(outputRoot, framework, "MtpProject.dll"))),
+            graph.GetMtpTargetOutputs(_mtpCsproj));
+    }
+
+    [Fact]
+    public async Task GetMtpTargetOutputs_UsesEvaluatedCustomOutputPaths()
+    {
+        const string properties = """
+            <IsTestingPlatformApplication>true</IsTestingPlatformApplication>
+            <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+            <OutputPath Condition="'$(TargetFramework)' == 'net9.0'">$(MSBuildProjectDirectory)/custom/older/</OutputPath>
+            <OutputPath Condition="'$(TargetFramework)' == 'net10.0'">$(MSBuildProjectDirectory)/custom/newer/</OutputPath>
+            """;
+        await File.WriteAllTextAsync(_mtpCsproj, BuildMtpCsproj(properties)
+            .Replace("<TargetFramework>net10.0</TargetFramework>",
+                "<TargetFrameworks>net9.0;net10.0</TargetFrameworks>", StringComparison.Ordinal), _ct);
+        var graph = new MsBuildSolutionGraph(_slnPath);
+        var projectDirectory = Path.GetDirectoryName(_mtpCsproj)!;
+
+        Assert.Equal(
+            [("net9.0", Path.Combine(projectDirectory, "custom", "older", "MtpProject.dll")),
+                ("net10.0", Path.Combine(projectDirectory, "custom", "newer", "MtpProject.dll"))],
+            graph.GetMtpTargetOutputs(_mtpCsproj));
+    }
+
+    [Theory]
+    [InlineData("non-mtp-target")]
+    [InlineData("shared-output")]
+    public async Task GetMtpTargetOutputs_IncompleteOrAmbiguousTargetsReturnNoVerifiedSet(string scenario)
+    {
+        var marker = scenario == "non-mtp-target"
+            ? """<IsTestingPlatformApplication Condition="'$(TargetFramework)' == 'net10.0'">true</IsTestingPlatformApplication>"""
+            : "<IsTestingPlatformApplication>true</IsTestingPlatformApplication><AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>";
+        await File.WriteAllTextAsync(_mtpCsproj, BuildMtpCsproj(marker)
+            .Replace("<TargetFramework>net10.0</TargetFramework>",
+                "<TargetFrameworks>net9.0;net10.0</TargetFrameworks>", StringComparison.Ordinal), _ct);
+        var graph = new MsBuildSolutionGraph(_slnPath);
+
+        Assert.True(graph.IsMtpProject(_mtpCsproj));
+        Assert.True(graph.IsMultiTargeted(_mtpCsproj));
+        Assert.Equal(2, graph.GetTargetFrameworkCount(_mtpCsproj));
+        Assert.Empty(graph.GetMtpTargetOutputs(_mtpCsproj));
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private async Task SetMtpProjectContent(string? property, string? packageRef = null)

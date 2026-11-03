@@ -35,16 +35,29 @@ public static class CoverageExporter
         format == CoverageExportFormat.Lcov ? "lcov.info" : "cobertura.xml";
 
     /// <summary>Exports <paramref name="engine"/>'s coverage report, or returns null when coverage is disabled.</summary>
+    /// <exception cref="InvalidOperationException">Coverage changed while the export was being read.</exception>
     public static CoverageExport? Export(IEngine engine, CoverageExportFormat format)
     {
         ArgumentNullException.ThrowIfNull(engine);
+        var version = engine.State.ResultsVersion;
+        if (engine.State.IsPublishingResults)
+        {
+            throw new InvalidOperationException("Coverage results are being updated. Try again when the run finishes.");
+        }
+
         if (engine.GetCoverageReport() is not { } report)
         {
             return null;
         }
 
         var root = engine.State.SolutionPath is { } solution ? Path.GetDirectoryName(Path.GetFullPath(solution)) : null;
-        return Export(format, report, engine.GetFileCoverage, root);
+        var export = Export(format, report, engine.GetFileCoverage, root);
+        if (engine.State.IsPublishingResults || engine.State.ResultsVersion != version)
+        {
+            throw new InvalidOperationException("Coverage results changed while they were read. Try again when the run finishes.");
+        }
+
+        return export;
     }
 
     /// <summary>Exports <paramref name="report"/>, reading each file's lines through <paramref name="getFile"/>.</summary>

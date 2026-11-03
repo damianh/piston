@@ -9,7 +9,7 @@ namespace Piston.Engine.Coverage;
 /// <summary>
 /// SQLite-backed implementation of <see cref="ICoverageStore"/>.
 /// Uses WAL journal mode for concurrent read performance.
-/// Connections are not pooled so disposal releases the database's file handles.
+/// Connections are not pooled and are closed between operations so an idle worktree can be removed.
 /// </summary>
 /// <remarks>
 /// Schema:
@@ -105,20 +105,36 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
         _ = Directory.CreateDirectory(pistonDir);
 
         var dbPath = Path.Combine(pistonDir, "piston.db");
-        _connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        var connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = dbPath,
             Pooling = false,
-        }.ToString());
-        await _connection.OpenAsync().ConfigureAwait(false);
+        };
+        var connection = new SqliteConnection(connectionString.ToString());
+        _connection = connection;
+        await connection.OpenAsync().ConfigureAwait(false);
+        try
+        {
+            await InitializeDatabaseAsync(connection).ConfigureAwait(false);
+        }
+        finally
+        {
+            await connection.CloseAsync().ConfigureAwait(false);
+        }
 
+        connectionString.Mode = SqliteOpenMode.ReadWrite;
+        connection.ConnectionString = connectionString.ToString();
+    }
+
+    private async Task InitializeDatabaseAsync(SqliteConnection connection)
+    {
         // Enable WAL mode for concurrent read performance
-        using var walCmd = _connection.CreateCommand();
+        using var walCmd = connection.CreateCommand();
         walCmd.CommandText = "PRAGMA journal_mode=WAL;";
         _ = await walCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
 
         long legacyMaxRunId = 0;
-        using (var legacyCmd = _connection.CreateCommand())
+        using (var legacyCmd = connection.CreateCommand())
         {
             legacyCmd.CommandText = "SELECT COUNT(1) FROM sqlite_master WHERE type = 'table' AND name = 'coverage_map';";
             if (await legacyCmd.ExecuteScalarAsync().ConfigureAwait(false) is 1L)
@@ -128,7 +144,7 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
             }
         }
 
-        using (var versionCmd = _connection.CreateCommand())
+        using (var versionCmd = connection.CreateCommand())
         {
             versionCmd.CommandText = "PRAGMA user_version;";
             var version = Convert.ToInt32(await versionCmd.ExecuteScalarAsync().ConfigureAwait(false), System.Globalization.CultureInfo.InvariantCulture);
@@ -155,7 +171,7 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
         }
 
         // Create tables
-        using var createCmd = _connection.CreateCommand();
+        using var createCmd = connection.CreateCommand();
         createCmd.CommandText = """
             CREATE TABLE IF NOT EXISTS coverage_summary (
                 file_path    TEXT    PRIMARY KEY,
@@ -165,14 +181,14 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
 
             """ + SetSchema + ReportSchema + ImpactSchema;
         _ = await createCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
-        using (var versionCmd = _connection.CreateCommand())
+        using (var versionCmd = connection.CreateCommand())
         {
             versionCmd.CommandText = $"PRAGMA user_version={SchemaVersion};";
             _ = await versionCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
         }
 
         var hasBranches = false;
-        using (var columnsCmd = _connection.CreateCommand())
+        using (var columnsCmd = connection.CreateCommand())
         {
             columnsCmd.CommandText = "PRAGMA table_info(impact_unit_files);";
             using var reader = await columnsCmd.ExecuteReaderAsync().ConfigureAwait(false);
@@ -184,15 +200,39 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
 
         if (!hasBranches)
         {
-            using var migrateCmd = _connection.CreateCommand();
+            using var migrateCmd = connection.CreateCommand();
             migrateCmd.CommandText = "ALTER TABLE impact_unit_files ADD COLUMN branches TEXT;";
             _ = await migrateCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+        }
+
+        var hasTestResultKeys = false;
+        using (var columnsCmd = connection.CreateCommand())
+        {
+            columnsCmd.CommandText = "PRAGMA table_info(impact_units);";
+            using var reader = await columnsCmd.ExecuteReaderAsync().ConfigureAwait(false);
+            while (await reader.ReadAsync().ConfigureAwait(false))
+            {
+                hasTestResultKeys |= string.Equals(reader.GetString(1), "test_result_keys", StringComparison.Ordinal);
+            }
+        }
+
+        if (!hasTestResultKeys)
+        {
+            using var transaction = connection.BeginTransaction();
+            using var migrateCmd = connection.CreateCommand();
+            migrateCmd.Transaction = transaction;
+            migrateCmd.CommandText = """
+                ALTER TABLE impact_units ADD COLUMN test_result_keys TEXT;
+                UPDATE impact_units SET is_dirty = 1 WHERE granularity > 0;
+                """;
+            _ = await migrateCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
+            await transaction.CommitAsync().ConfigureAwait(false);
         }
 
         // Older databases stored one coverage_map row per test per line, which grows to millions of rows on
         // real solutions. It is only a cache, so drop it; the next run with coverage refills the sets.
         // Seed the run counter from the current max run_id
-        using var maxRunCmd = _connection.CreateCommand();
+        using var maxRunCmd = connection.CreateCommand();
         maxRunCmd.CommandText = """
             SELECT MAX(
                 $legacy,
@@ -205,7 +245,7 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
         _runCounter = result is long l ? l : Convert.ToInt64(result ?? 0L);
 
         // Reclaim the space a dropped legacy table or deleted rows left behind.
-        using var checkpointCmd = _connection.CreateCommand();
+        using var checkpointCmd = connection.CreateCommand();
         checkpointCmd.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
         _ = await checkpointCmd.ExecuteNonQueryAsync().ConfigureAwait(false);
     }
@@ -861,24 +901,41 @@ internal sealed partial class SqliteCoverageStore : ICoverageStore
     }
 
     /// <summary>
-    /// Serializes use of the single connection: the orchestrator and the impact analyzer call the store from
-    /// different threads, and a <see cref="SqliteConnection"/> must not be used concurrently.
+    /// Serializes access and opens the connection only for the duration of an operation.
     /// </summary>
     private Gate Enter()
     {
         _gate.Wait();
-        if (_connection is null)
+        try
+        {
+            if (_connection is null)
+            {
+                throw new InvalidOperationException(
+                    $"{nameof(SqliteCoverageStore)} has not been initialized. Call {nameof(InitializeAsync)} first.");
+            }
+
+            _connection.Open();
+            return new Gate(_gate, _connection);
+        }
+        catch
         {
             _ = _gate.Release();
-            throw new InvalidOperationException(
-                $"{nameof(SqliteCoverageStore)} has not been initialized. Call {nameof(InitializeAsync)} first.");
+            throw;
         }
-
-        return new Gate(_gate);
     }
 
-    private readonly struct Gate(SemaphoreSlim semaphore) : IDisposable
+    private readonly struct Gate(SemaphoreSlim semaphore, SqliteConnection connection) : IDisposable
     {
-        public void Dispose() => semaphore.Release();
+        public void Dispose()
+        {
+            try
+            {
+                connection.Close();
+            }
+            finally
+            {
+                _ = semaphore.Release();
+            }
+        }
     }
 }

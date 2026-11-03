@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Piston.Engine.Coverage;
+using Piston.Engine.Models;
 using Piston.Hosting.Mapping;
 using Piston.Hosting.Protocol;
 using Piston.Mcp.Tools;
@@ -33,6 +34,31 @@ public sealed class CoverageCommandTests : IDisposable
 
     private static CoverageFileSummary Summary(string path, int total, int covered, bool stale = false) =>
         new(path, "Lib", total, covered, 4, 3, stale, IsPartial: false, "hash", 3, DateTimeOffset.UnixEpoch);
+
+    [Fact]
+    public void StateSnapshot_MapsAndSerializesProjectCoverageAndStorageError()
+    {
+        var engine = new StubEngine();
+        engine.SetProjectCoverage(
+            new("/repo/Z.Tests.csproj", CoverageCollectionStatus.Measured, null, "run-ok"),
+            new("/repo/A.Tests.csproj", CoverageCollectionStatus.Failed, "Bad report.", "run-bad"),
+            new("/repo/B.Tests.csproj", CoverageCollectionStatus.Unknown, "Not measured.", null));
+        engine.SetCoverageError("storage unavailable");
+
+        var snapshot = engine.State.ToSnapshot();
+        var json = JsonSerializer.SerializeToNode(snapshot, JsonRpcSerializer.Options)!;
+        var roundTrip = JsonSerializer.Deserialize<StateSnapshotNotification>(json.ToJsonString(), JsonRpcSerializer.Options)!;
+
+        Assert.Equal("storage unavailable", json["coverageError"]!.GetValue<string>());
+        var projects = json["projectCoverage"]!.AsArray();
+        Assert.Equal(["/repo/A.Tests.csproj", "/repo/B.Tests.csproj", "/repo/Z.Tests.csproj"],
+            projects.Select(project => project!["projectPath"]!.GetValue<string>()));
+        Assert.Equal(["failed", "unknown", "measured"], projects.Select(project => project!["status"]!.GetValue<string>()));
+        Assert.Equal("Bad report.", projects[0]!["message"]!.GetValue<string>());
+        Assert.Equal("run-bad", projects[0]!["runId"]!.GetValue<string>());
+        Assert.Equal(snapshot.ProjectCoverage, roundTrip.ProjectCoverage);
+        Assert.Equal("storage unavailable", roundTrip.CoverageError);
+    }
 
     [Fact]
     public async Task GetSummary_WithCoverageDisabled_ReportsDisabled()
@@ -566,6 +592,27 @@ public sealed class CoverageCommandTests : IDisposable
         Assert.Equal("lcov.info", result["fileName"]!.GetValue<string>());
         Assert.Equal(1, result["fileCount"]!.GetValue<int>());
         Assert.Contains("DA:2,0", result["content"]!.GetValue<string>(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Export_WhenResultsChangeDuringReadRejectsTheSnapshot()
+    {
+        var engine = new StubEngine();
+        var path = Path.Combine(_root, "A.cs");
+        var summary = Summary(path, 1, 1);
+        engine.CoverageReport = new CoverageReportSnapshot([summary]);
+        engine.FileCoverage[path] = new FileCoverageSnapshot(summary, [new(1, 1)]);
+        engine.OnGetFileCoverage = _ =>
+        {
+            engine.State.BeginResultsUpdate();
+            engine.State.EndResultsUpdate();
+        };
+
+        var error = await Assert.ThrowsAsync<JsonRpcException>(() => new EngineCommandDispatcher(engine)
+            .HandleCommandAsync(ProtocolMethods.CoverageExport, new JsonObject { ["format"] = "lcov" }, _ct));
+
+        Assert.Equal(JsonRpcErrorCodes.InvalidRequest, error.Code);
+        Assert.Contains("changed while they were read", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]

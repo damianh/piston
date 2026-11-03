@@ -98,6 +98,56 @@ public sealed class SqliteCoverageStoreTests : IAsyncLifetime
         Assert.False(File.Exists(dbPath));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IdleStore_AllowsWorktreeRemovalAndDoesNotReadDeletedCoverage(bool afterWrite)
+    {
+        const string file = "/repo/Code.cs";
+        if (afterWrite)
+        {
+            await _sut.StoreCoverageAsync(_sut.CreateRunId(), MakeMap("Tests.Pass", file, 1));
+            Assert.Equal(["Tests.Pass"], _sut.GetTestsCoveringFile(file));
+        }
+
+        var pistonDir = Path.Combine(_dbDir, ".piston");
+        Directory.Delete(pistonDir, recursive: true);
+
+        Assert.False(Directory.Exists(pistonDir));
+        _ = Assert.Throws<SqliteException>(() => _sut.GetTestsCoveringFile(file));
+        Assert.False(Directory.Exists(pistonDir));
+    }
+
+    [Fact]
+    public async Task MissingDatabase_IsNotRecreatedAndFailedOpenReleasesTheGate()
+    {
+        var dbPath = Path.Combine(_dbDir, ".piston", "piston.db");
+        File.Delete(dbPath);
+
+        _ = Assert.Throws<SqliteException>(() => _sut.GetReportFiles());
+        var retry = Task.Run(() => _sut.GetReportFiles(), _ct);
+        _ = await Assert.ThrowsAsync<SqliteException>(() => retry.WaitAsync(TimeSpan.FromSeconds(5), _ct));
+        Assert.False(File.Exists(dbPath));
+    }
+
+    [Fact]
+    public async Task ConcurrentReadersAndWritersKeepTheirCoverageAcrossReopens()
+    {
+        var tasks = Enumerable.Range(0, 12).Select(index => Task.Run(async () =>
+        {
+            var file = $"/repo/Code{index}.cs";
+            var test = $"Tests.Case{index}";
+            await _sut.StoreCoverageAsync(_sut.CreateRunId(), MakeMap(test, file, index + 1));
+            Assert.Equal([test], _sut.GetTestsCoveringFile(file));
+        }, _ct));
+
+        await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        for (var index = 0; index < 12; index++)
+        {
+            Assert.Equal([$"Tests.Case{index}"], _sut.GetTestsCoveringFile($"/repo/Code{index}.cs"));
+        }
+    }
+
     [Fact]
     public async Task Clear_DoesNotAffectAnotherSolutionDirectory()
     {

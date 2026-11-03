@@ -108,6 +108,34 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
     }
 
     [Fact]
+    public async Task MixedProjectsBackfillOnlyMeasuredProjectsAndResumeAfterCollectorAppears()
+    {
+        _runner.UnitCounts[_projectA] = 1;
+        _runner.UnitCounts[_projectB] = 1;
+        _ = _runner.ProjectsWithoutCoverage.Add(_projectB);
+        await StartAsync();
+        await WaitForAsync(() => _state.ProjectCoverage.ContainsKey(_projectB) && _processor.Recorded.Count == 1);
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(15), _ct);
+
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[_projectA].Status);
+        Assert.Equal(CoverageCollectionStatus.Unavailable, _state.ProjectCoverage[_projectB].Status);
+        Assert.Equal(_state.LastRun!.RunId, _state.ProjectCoverage[_projectB].RunId);
+        Assert.Equal(TestRunStatus.Completed, _state.LastRun.Status);
+        Assert.Equal(2, _state.LastRun.Tests.Count());
+        Assert.All(_state.LastRun.Tests, test => Assert.Equal(TestStatus.Passed, test.Status));
+        Assert.Equal([_projectA], _processor.Recorded.SelectMany(record => record.Units).Select(unit => unit.ProjectPath));
+        Assert.DoesNotContain(_runner.Started, unit => unit.Project == _projectB);
+
+        _ = _runner.ProjectsWithoutCoverage.Remove(_projectB);
+        var recovered = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(15), _ct);
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(15), _ct);
+
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[_projectB].Status);
+        Assert.Equal(recovered!.RunId, _state.ProjectCoverage[_projectB].RunId);
+        Assert.Contains(_processor.Recorded.SelectMany(record => record.Units), unit => unit.ProjectPath == _projectB);
+    }
+
+    [Fact]
     public async Task CancellationDrainsAllMeasurements_BeforeReleasingAdmission()
     {
         _runner.UnitCounts[_projectA] = 3;
@@ -397,6 +425,7 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
 
         public Dictionary<string, int> UnitCounts { get; } = projects.ToDictionary(project => project, _ => 0, StringComparer.Ordinal);
         public HashSet<string> FailedFilters { get; } = new(StringComparer.Ordinal);
+        public HashSet<string> ProjectsWithoutCoverage { get; } = new(StringComparer.Ordinal);
         public ConcurrentQueue<UnitControl> Started { get; } = new();
         public ConcurrentQueue<string> Completed { get; } = new();
         public ConcurrentQueue<IReadOnlyDictionary<string, int>> ActiveSnapshots { get; } = new();
@@ -439,14 +468,17 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
         {
             if (filter is null)
             {
-                var results = (testProjectPaths ?? projects).Select(project => Result(project, null, collectCoverage: false)).ToList();
+                var results = (testProjectPaths ?? projects).Select(project => Result(project, null, collectCoverage)).ToList();
                 foreach (var result in results)
                 {
                     callbacks.OnProjectStarted?.Invoke(result.ProjectPath);
                     callbacks.OnProjectCompleted?.Invoke(result);
                 }
 
-                return new TestRunResult([.. results.SelectMany(result => result.Suites)], null, []) { Projects = results };
+                return new TestRunResult(
+                    [.. results.SelectMany(result => result.Suites)], null,
+                    [.. results.SelectMany(result => result.CoverageReportPaths)])
+                { Projects = results };
             }
 
             var project = Assert.Single(testProjectPaths!);
@@ -512,8 +544,12 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
                 ProjectId = TestProjectNames.ProjectId(solutionDirectory, project),
             };
             var failed = filter is not null && FailedFilters.Contains(filter);
-            string[] reports = collectCoverage && !failed ? [$"/nowhere/{Guid.NewGuid():N}.cobertura.xml"] : [];
-            return new ProjectTestResult(project, [suite], failed ? "failed" : null, reports, Crashed: failed);
+            string[] reports = collectCoverage && !failed && !ProjectsWithoutCoverage.Contains(project)
+                ? [$"/nowhere/{Guid.NewGuid():N}.cobertura.xml"] : [];
+            return new ProjectTestResult(project, [suite], failed ? "failed" : null, reports, Crashed: failed)
+            {
+                CoverageIssue = collectCoverage && ProjectsWithoutCoverage.Contains(project) ? "Collector missing." : null,
+            };
         }
     }
 
@@ -526,20 +562,29 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
     {
         public ConcurrentQueue<CoverageImpactOptions> Recorded { get; } = new();
 
-        public Task ProcessCoverageAsync(
+        public Task<CoverageProcessingResult> ProcessCoverageAsync(
             long runId, IReadOnlyList<string> coberturaXmlPaths, IReadOnlyList<string> testFqns, ICoverageStore store,
-            bool isFullRun, string? sourceRoot, CoverageImpactOptions? impact) => Task.CompletedTask;
+            bool isFullRun, string? sourceRoot, CoverageImpactOptions? impact) =>
+            Task.FromResult(SuccessfulReports(coberturaXmlPaths));
 
-        public async Task RecordImpactAsync(long runId, CoverageImpactOptions impact, IImpactMapStore store, string? sourceRoot)
+        public async Task<CoverageProcessingResult> RecordImpactAsync(long runId, CoverageImpactOptions impact, IImpactMapStore store, string? sourceRoot)
         {
             foreach (var unit in impact.Units)
             {
                 await store.RecordImpactAsync(new ImpactRecording(
-                    unit.ProjectPath, impact.Granularity, unit.UnitKey, runId, unit.TestFqns, [], unit.Merge));
+                    unit.ProjectPath, impact.Granularity, unit.UnitKey, runId, unit.TestFqns, [], unit.Merge)
+                {
+                    TestResultKeys = unit.TestResultKeys,
+                });
             }
 
             Recorded.Enqueue(impact);
+            return SuccessfulReports(impact.Units.SelectMany(unit => unit.ReportPaths));
         }
+
+        private static CoverageProcessingResult SuccessfulReports(IEnumerable<string> paths) =>
+            new(paths.Distinct(StringComparer.Ordinal)
+                .ToDictionary(path => path, _ => new CoverageReportResult(1, null), StringComparer.Ordinal));
     }
 
     private sealed class TrackingAdmission : IExecutionAdmission
