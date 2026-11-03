@@ -120,6 +120,26 @@ public sealed class VerificationInputCoverageTests : IDisposable
     }
 
     [Fact]
+    public void NixLinkerItemWithPropertyFunctionIncludeIsNotTrusted()
+    {
+        var target = ProjectRootElement.Create();
+        _ = target.AddItemGroup().AddItem(
+            "CustomLinkerArg",
+            "$([System.IO.File]::ReadAllText('/outside/linker-flags.txt'))");
+
+        Assert.False(VerificationInputCoverage.HasOnlyUnconditionalLinkerArguments(target));
+    }
+
+    [Fact]
+    public void NixLinkerItemWithWildcardIncludeIsNotTrusted()
+    {
+        var target = ProjectRootElement.Create();
+        _ = target.AddItemGroup().AddItem("CustomLinkerArg", "-Wl,-rpath,/nix/store/*/lib");
+
+        Assert.False(VerificationInputCoverage.HasOnlyUnconditionalLinkerArguments(target));
+    }
+
+    [Fact]
     public void LinkedCompileFileOutsideSolutionIsNotCovered()
     {
         File.WriteAllText(Path.Combine(_root, "Linked.cs"), "class Linked {}");

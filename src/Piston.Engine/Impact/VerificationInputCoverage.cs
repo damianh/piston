@@ -312,8 +312,17 @@ internal static class VerificationInputCoverage
             && itemGroup.Items.All(item =>
                 item.ItemType == "CustomLinkerArg"
                 && item.Metadata.Count == 0
-                && string.IsNullOrWhiteSpace(item.Condition)));
+                && string.IsNullOrWhiteSpace(item.Condition)
+                && IsLiteralLinkerArgument(item.Include)));
     }
+
+    private static bool IsLiteralLinkerArgument(string include) =>
+        !string.IsNullOrWhiteSpace(include)
+        && !include.Contains("$(", StringComparison.Ordinal)
+        && !include.Contains("@(", StringComparison.Ordinal)
+        && !include.Contains("%(", StringComparison.Ordinal)
+        && !include.Contains('*')
+        && !include.Contains('?');
 
     internal static bool IsInstalledPackInput(string inputPath, string declaringPath, string sdkRoot, string userDotnetRoot)
     {

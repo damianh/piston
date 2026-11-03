@@ -151,7 +151,13 @@ public sealed class TestProcessTests
         try
         {
             using var process = Process.GetProcessById(pid);
-            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            try
+            {
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            catch (TimeoutException)
+            {
+            }
             Assert.True(process.HasExited, $"Process {pid} survived timeout cleanup.");
         }
         catch (ArgumentException)
