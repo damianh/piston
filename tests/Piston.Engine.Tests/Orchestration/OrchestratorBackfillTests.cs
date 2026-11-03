@@ -123,6 +123,28 @@ public sealed class OrchestratorBackfillTests : IDisposable
     }
 
     [Fact]
+    public async Task SkippedTestInvalidatesItsClassBeforeCoveragePublication()
+    {
+        await StartAsync();
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        Assert.Equal(2, _store.GetUnits(Project, ImpactGranularity.Class).Count);
+
+        _runner.SkippedTest = "A.Tests.Foo.Two";
+        _orchestrator.BackfillDelay = TimeSpan.FromMinutes(1);
+        var unitsDuringCoverageProcessing = Array.Empty<string>();
+        _processor.OnProcess = () => unitsDuringCoverageProcessing = _store.GetUnits(Project, ImpactGranularity.Class)
+            .Select(unit => unit.UnitKey).ToArray();
+
+        var run = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(TestRunStatus.Completed, run!.Status);
+        Assert.Equal(TestStatus.Skipped, Assert.Single(run.Tests, test => test.FullyQualifiedName == _runner.SkippedTest).Status);
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[Project].Status);
+        Assert.Equal(["A.Tests.Bar"], unitsDuringCoverageProcessing);
+        Assert.Equal(["A.Tests.Bar"], _store.GetUnits(Project, ImpactGranularity.Class).Select(unit => unit.UnitKey));
+    }
+
+    [Fact]
     public async Task ANewRunCancelsTheBackfill()
     {
         _runner.BlockFiltered = true;

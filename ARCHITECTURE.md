@@ -233,9 +233,10 @@ counts are not additive across tests.
   that are missing or outdated, and the orchestrator runs each with a name filter
   and coverage, recording a `class`/`test` unit. Legacy units without branch data
   are re-measured after missing and outdated units. Finer units also record
-  framework-qualified test-result identities. Changed identities invalidate those
-  units before new run results are published; filtered runs preserve known units
-  containing every observed identity. Existing databases add this
+  framework-qualified test-result identities. Changed identities or an observed
+  test that did not execute invalidate those units before new run results are
+  published; filtered runs preserve known units containing every observed,
+  executed identity. Existing databases add this
   provenance column and mark legacy finer units dirty so run-level evidence remains
   available until remeasurement. A unit is skipped when not every planned test ran.
   Any new run cancels the backfill; progress is published as `ImpactBackfill` in the
@@ -540,8 +541,10 @@ data and prunes sets left without lines. Hit counts are association values, not
 independently measured per-test execution counts. Databases from older versions
 held a per-test `coverage_map` table; it is dropped on startup and refilled by the
 next coverage run. A schema-version change drops these derived coverage caches;
-the next coverage run and idle backfill rebuild them. The store serializes all use of its connection, since the
-orchestrator and the impact analyzer call it from different threads.
+the next coverage run and idle backfill rebuild them. The store serializes access
+from the orchestrator and impact analyzer, opening its unpooled connection only
+for each operation so an idle worktree can be removed. After initialization it
+opens the existing database without recreating one that has been removed.
 
 Clearing results deletes every coverage table's rows transactionally using a
 separate connection, including when collection is currently disabled. No database

@@ -112,8 +112,8 @@ internal static class ImpactBackfill
     }
 
     /// <summary>
-    /// Removes finer evidence that no longer represents the observed framework-qualified tests before it
-    /// can override the latest run-level evidence. A filtered run only proves the results it contains.
+    /// Removes finer evidence that no longer represents the observed, executed framework-qualified tests
+    /// before it can override the latest run-level evidence. A filtered run only proves the results it contains.
     /// </summary>
     internal static async Task InvalidateOutdatedAsync(
         IImpactMapStore store, string project, IReadOnlyList<TestResult> results, bool complete, CancellationToken ct)
@@ -145,7 +145,8 @@ internal static class ImpactBackfill
 
     private static bool MatchesResults(ImpactUnitInfo info, IReadOnlyList<TestResult> observed, bool complete)
     {
-        if (info.TestResultKeys is null)
+        if (info.TestResultKeys is null
+            || observed.Any(test => test.Status is not (TestStatus.Passed or TestStatus.Failed)))
         {
             return false;
         }

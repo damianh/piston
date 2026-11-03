@@ -203,6 +203,44 @@ public sealed class ImpactMapStoreTests : IAsyncLifetime
         Assert.Equal(ImpactGranularity.Test, Assert.Single(selection.Tests["T.B.One"]).Granularity);
     }
 
+    [Theory]
+    [InlineData(true, true, TestStatus.Skipped)]
+    [InlineData(false, true, TestStatus.Skipped)]
+    [InlineData(true, false, TestStatus.Skipped)]
+    [InlineData(false, false, TestStatus.Skipped)]
+    [InlineData(true, false, TestStatus.NotRun)]
+    [InlineData(false, false, TestStatus.Running)]
+    public async Task UnexecutedResultsInvalidateFineEvidenceAndRestoreRunSelection(
+        bool classGranularity, bool complete, TestStatus status)
+    {
+        var granularity = classGranularity ? ImpactGranularity.Class : ImpactGranularity.Test;
+        var aKey = granularity == ImpactGranularity.Class ? "T.A" : "T.A.One";
+        var bKey = granularity == ImpactGranularity.Class ? "T.B" : "T.B.One";
+        await Record(ImpactGranularity.Run, "run", ["T.A.One", "T.B.One"], [new(1, 30)]);
+        await Record(granularity, aKey, ["T.A.One"], [new(3, 5)],
+            testResultKeys: ["T.A.One [net8.0]", "T.A.One [net9.0]"]);
+        await Record(granularity, bKey, ["T.B.One"], [new(10, 12)],
+            testResultKeys: ["T.B.One [net8.0]", "T.B.One [net9.0]"]);
+        var changed = new ChangedFile(File, Edit(Original, 11, "changed"));
+        Assert.Equal(["T.B.One"], _sut.SelectTests([changed]).Tests.Keys);
+
+        var unexecuted = Result("T.A.One", "net9.0") with { Status = status };
+        var results = complete
+            ? new[]
+            {
+                Result("T.A.One", "net8.0"), unexecuted,
+                Result("T.B.One", "net8.0") with { Status = TestStatus.Failed }, Result("T.B.One", "net9.0"),
+            }
+            : [unexecuted];
+        await ImpactBackfill.InvalidateOutdatedAsync(_sut, Project, results, complete, _ct);
+
+        Assert.Equal(bKey, Assert.Single(_sut.GetUnits(Project, granularity)).UnitKey);
+        var selection = _sut.SelectTests([changed]);
+        Assert.Equal(["T.A.One", "T.B.One"], selection.Tests.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal(ImpactGranularity.Run, Assert.Single(selection.Tests["T.A.One"]).Granularity);
+        Assert.Equal(granularity, Assert.Single(selection.Tests["T.B.One"]).Granularity);
+    }
+
     [Fact]
     public async Task FrameworkResultKeysAreNormalizedAndPersistedAcrossReopen()
     {
