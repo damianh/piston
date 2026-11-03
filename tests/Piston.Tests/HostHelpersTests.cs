@@ -157,11 +157,58 @@ public sealed class HostHelpersTests : IDisposable
         Assert.Null(HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, new()).ExecutionMemoryReservationMb);
     }
 
+    [Fact]
+    public void EngineOptionsEnableCoverageAndTestBackfillByDefault()
+    {
+        var options = new PistonOptions { SolutionPath = "/w/App.slnx" };
+
+        Assert.True(options.CoverageEnabled);
+        Assert.Equal(ImpactBackfillMode.Test, options.ImpactBackfill);
+    }
+
+    [Theory]
+    [InlineData(null, null, true)]
+    [InlineData(null, true, true)]
+    [InlineData(null, false, false)]
+    [InlineData(true, null, true)]
+    [InlineData(true, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, null, false)]
+    [InlineData(false, true, true)]
+    [InlineData(false, false, false)]
+    public void CoverageCliOverridesConfigAndDefaultsOn(bool? configured, bool? cli, bool expected)
+    {
+        var config = new Piston.Hosting.Configuration.PistonConfig { CoverageEnabled = configured };
+
+        var options = HostHelpers.BuildOptions("/w/App.slnx", 0, null, cli, 0, config);
+
+        Assert.Equal(expected, options.CoverageEnabled);
+        Assert.Equal(expected ? ImpactBackfillMode.Test : ImpactBackfillMode.Off, options.ImpactBackfill);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CoverageEnabledIsReadFromConfigFile(bool configured)
+    {
+        File.WriteAllText(Path.Combine(_root, ".piston.json"),
+            $$"""{"coverageEnabled":{{configured.ToString().ToLowerInvariant()}}}""");
+
+        var config = HostHelpers.LoadConfig(_root);
+        var options = HostHelpers.BuildOptions("/w/App.slnx", 0, null, null, 0, config);
+
+        Assert.Equal(configured, config.CoverageEnabled);
+        Assert.Equal(configured, options.CoverageEnabled);
+    }
+
     [Theory]
     [InlineData(null, true, ImpactBackfillMode.Test)]
     [InlineData("test", true, ImpactBackfillMode.Test)]
+    [InlineData("class", true, ImpactBackfillMode.Class)]
     [InlineData("OFF", true, ImpactBackfillMode.Off)]
     [InlineData("class", false, ImpactBackfillMode.Off)]
+    [InlineData("test", false, ImpactBackfillMode.Off)]
+    [InlineData("off", false, ImpactBackfillMode.Off)]
     public void ImpactBackfillDefaultsToTestWhenCoverageIsEnabled(string? configured, bool coverage, ImpactBackfillMode expected)
     {
         var config = new Piston.Hosting.Configuration.PistonConfig { ImpactBackfill = configured };

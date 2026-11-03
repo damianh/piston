@@ -251,6 +251,24 @@ internal sealed partial class SqliteCoverageStore : IImpactMapStore
         }
     }
 
+    public bool HasProjectFileCoverage(string projectPath, string filePath)
+    {
+        using var gate = Enter();
+        using var cmd = _connection!.CreateCommand();
+        cmd.CommandText = """
+            SELECT EXISTS (
+                SELECT 1 FROM impact_units u
+                JOIN impact_unit_files f ON f.unit_id = u.unit_id
+                WHERE u.project_path = $project AND u.granularity = $granularity
+                    AND u.unit_key = 'run' AND f.file_path = $path
+            );
+            """;
+        _ = cmd.Parameters.AddWithValue("$project", projectPath);
+        _ = cmd.Parameters.AddWithValue("$granularity", (int)ImpactGranularity.Run);
+        _ = cmd.Parameters.AddWithValue("$path", filePath);
+        return Convert.ToInt64(cmd.ExecuteScalar(), CultureInfo.InvariantCulture) != 0;
+    }
+
     public ImpactSelection SelectTests(IReadOnlyList<ChangedFile> changes)
     {
         using var gate = Enter();

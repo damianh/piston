@@ -11,4 +11,10 @@ internal enum MtpCoverage
 
     /// <summary>Coverage was requested but the test app cannot collect it.</summary>
     ExtensionMissing,
+
+    /// <summary>At least one target framework cannot collect coverage.</summary>
+    MultiTargetExtensionMissing,
+
+    /// <summary>Not every target framework's collector availability could be checked.</summary>
+    OutputUnverified,
 }

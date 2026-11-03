@@ -6,8 +6,8 @@ using Piston.Engine.Services;
 namespace Piston.Engine.Models;
 
 /// <summary>
-/// What Piston did to run one test process (one project, every framework it ran under): the runner it chose,
-/// the command, fallbacks, the process's console output, exit code and result summary. Bounded: it keeps the
+/// What Piston did to run one project, including every framework it ran under: the runner it chose,
+/// commands, fallbacks, console output, exit code and result summary. Bounded: it keeps the
 /// first <see cref="HeadCapacity"/> and last <see cref="TailCapacity"/> entries and counts the ones between.
 /// Entries written with <see cref="Write"/> also go to the solution's <c>.piston/diagnostics.log</c>.
 /// Thread-safe.

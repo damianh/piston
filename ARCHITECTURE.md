@@ -235,7 +235,8 @@ counts are not additive across tests.
   are re-measured after missing and outdated units. A unit is skipped when not every
   planned test ran. Any new run cancels the backfill; progress is published as
   `ImpactBackfill` in the state snapshot. A completed pass logs elapsed time and
-  approximate bytes for spans, branches and snapshots.
+  approximate bytes for spans, branches and snapshots. Projects without a trustworthy
+  primary measurement are skipped until a later successful unfiltered run.
 - **Selection.** `SelectTests` compares member keys and body hashes against each
   unit's snapshot. A changed or removed executed member selects its tests and
   includes the member identity and recorded branch counts in its `TestSelectionReason`; edits outside
@@ -246,7 +247,8 @@ counts are not additive across tests.
   executed member or non-member syntax changes, or declarations are added or
   removed: even unchanged callers can bind differently after an overload is added.
   Branch counts enrich reasons only and do not alter selection.
-- **Abstaining.** A changed test file, a changed file with no recording, or more
+- **Abstaining.** Missing or untrustworthy coverage for any affected test project,
+  a changed test file, a changed file with no recording, or more
   than `ImpactAnalysisResult.MaxFilteredTests` (100) selected tests falls back to
   project selection, and the run records why (`SelectionExplanation`). Without an
   impact-map hit, the older file-level path (`coverage_set_*`) may still narrow by
@@ -483,16 +485,21 @@ Linux and Windows, and the packed-tool samples smoke on macOS as well.
 
 ## Coverage and persistence
 
-Coverage is opt-in. The VSTest path requests `XPlat Code Coverage`, so the target
+Coverage is on by default, with startup-only config and CLI opt-outs. The dashboard
+launcher uses config when starting an engine and does not change an existing one.
+The VSTest path requests `XPlat Code Coverage`, so the target
 test project needs a compatible collector (such as `coverlet.collector`). The MTP
-path passes `--coverage --coverage-output-format cobertura` when the test app
-references `Microsoft.Testing.Extensions.CodeCoverage`, running it through
-`dotnet test` rather than server mode. Both produce Cobertura XML, which
+path passes `--coverage --coverage-output-format cobertura` when each target's
+test app includes `Microsoft.Testing.Extensions.CodeCoverage`, using server mode
+when available. Multi-targeted MTP projects run their verified framework outputs
+separately with isolated result directories, retaining framework-qualified results.
+Unknown or mixed multi-target availability skips coverage without preventing tests
+from running. Both produce Cobertura XML, which
 `CoverageProcessor` parses and merges across reports, dropping files outside the
-solution directory. A probe of the current MTP coverage extension stalled in
-server mode without producing test updates or a report; see the
-[MTP server-mode investigation](docs/mtp-server-mode.md) before changing this
-fallback.
+watched solution sources, including build outputs. Tests still run when a collector is unavailable. The engine
+tracks each project's measurement outcome and run provenance in memory, reports
+missing or invalid data, and treats restored outcomes as unknown until remeasured.
+Storage errors are reported without preventing test execution.
 
 When enabled, `SqliteCoverageStore` creates `<solution-directory>/.piston/piston.db`
 and uses WAL mode. Its tables are:
@@ -511,7 +518,8 @@ and uses WAL mode. Its tables are:
 | `impact_snapshots` | Deduplicated file content by hash, shared by the report and impact map. |
 
 The report tables answer the dashboard, `get_coverage`, changed-line coverage and
-exports. A full, unfiltered run replaces them. A selective run merges its hits
+exports. A full, unfiltered run replaces them only when every test project produced
+valid coverage. An incomplete or selective run merges its hits
 into files whose source is unchanged, or remaps earlier hits through unchanged
 C# members when source has moved, provided non-member syntax is unchanged. Only
 one-to-one line mappings preserve counts; ambiguous split or joined lines remain
@@ -520,7 +528,7 @@ current lines are returned as stale ranges; changed-line coverage can still repo
 lines whose member identity and body are unchanged. Exports continue to omit stale
 files.
 
-The set tables hold coarse file-level attribution: every covered line of a run is credited to every test of that run. Tests that share one
+The set tables hold coarse file-level attribution: each project's covered lines are credited to its own tests, including skipped tests for conservative selection. Tests that share one
 line list share one set, so a run stores its covered lines once rather than once
 per test. Processing replaces old associations for files present in new coverage
 data and prunes sets left without lines. Hit counts are association values, not

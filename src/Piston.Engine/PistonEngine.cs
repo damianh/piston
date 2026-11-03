@@ -90,7 +90,16 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
         var impactAnalyzer = new ImpactAnalyzer(
             solutionPath => new MsBuildSolutionGraph(solutionPath),
-            _coverageStore);
+            _coverageStore,
+            project => _state.ProjectCoverage.TryGetValue(project, out var coverage)
+                && coverage.Status == CoverageCollectionStatus.Measured,
+            () => _state.CoverageError
+                ?? (_state.IsPublishingResults || _state.Phase == PistonPhase.Testing
+                    ? "test and coverage results are being updated"
+                    : null),
+            _state.SetCoverageError,
+            _state.BeginResultsUpdate,
+            _state.EndResultsUpdate);
 
         var resourceResolver = new TestResourceResolver(
             new TestResourceInference(options.SolutionPath, options.TestResourceRules, impactAnalyzer.GetTestProjectFacts),
@@ -107,7 +116,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             impactAnalyzer.IsMultiTargeted,
             _warmHosts,
             RequiresResources,
-            discoveryCache);
+            discoveryCache,
+            impactAnalyzer.GetMtpTargetOutputs);
 
         ITestExecutionStrategy strategy = options.TestExecutionMode switch
         {

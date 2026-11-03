@@ -83,6 +83,29 @@ public sealed class PistonJsonContextTests
     }
 
     [Fact]
+    public void StateSnapshotNotification_LegacyPayloadWithoutCoverageStatusRemainsReadable()
+    {
+        var snapshot = BuildSnapshot() with
+        {
+            ProjectCoverage = [new ProjectCoverageDto("/repo/A.Tests.csproj", "partial", "Filtered.", "run-1")],
+            CoverageError = "storage failure",
+        };
+        var node = JsonSerializer.SerializeToNode(snapshot, JsonRpcSerializer.Options)!.AsObject();
+        Assert.True(node.Remove("projectCoverage"));
+        Assert.True(node.Remove("coverageError"));
+
+        var legacy = JsonSerializer.Deserialize<StateSnapshotNotification>(node.ToJsonString(), JsonRpcSerializer.Options);
+
+        Assert.NotNull(legacy);
+        Assert.Null(legacy.ProjectCoverage);
+        Assert.Null(legacy.CoverageError);
+        Assert.Equal(snapshot.Phase, legacy.Phase);
+        var reserialized = JsonSerializer.SerializeToNode(legacy, JsonRpcSerializer.Options)!.AsObject();
+        Assert.False(reserialized.ContainsKey("projectCoverage"));
+        Assert.False(reserialized.ContainsKey("coverageError"));
+    }
+
+    [Fact]
     public void StateSnapshotNotification_RunProvenance_Roundtrip()
     {
         var fingerprint = new SourceFingerprintDto("piston-source-v2", new string('a', 64), 12);

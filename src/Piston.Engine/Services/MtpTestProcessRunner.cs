@@ -71,7 +71,8 @@ internal static partial class MtpTestProcessRunner
     /// Runs an MTP project. Uses the test app's server mode when <paramref name="appPath"/> exists, which
     /// reports each test as it starts; falls back to <c>dotnet test</c> when server mode is unavailable or
     /// the filter is unsupported. With <see cref="MtpCoverage.Collect"/>, Cobertura reports are written to a
-    /// <c>piston-*</c> temp directory that the caller deletes once it has read them.
+    /// <c>piston-*</c> temp directory that the caller deletes once it has read them. Multi-targeted coverage
+    /// runs each verified framework output in its own results directory.
     /// </summary>
     internal static async Task<ProjectTestResult> RunAsync(
         string projectPath,
@@ -82,29 +83,59 @@ internal static partial class MtpTestProcessRunner
         CancellationToken ct,
         MtpCoverage coverage = MtpCoverage.Off,
         MtpWarmHostPool? warmHosts = null,
-        MtpDiscoveryCache? discoveryCache = null)
+        MtpDiscoveryCache? discoveryCache = null,
+        int expectedCoverageReports = 1,
+        IReadOnlyList<(string Framework, string OutputPath)>? targetOutputs = null)
     {
         var log = new ExecutionLog(projectPath);
         log.Write("MtpRunner", $"Project: {projectPath}");
 
         string? resultsDir = null;
+        string? coverageSetupError = null;
         if (coverage == MtpCoverage.Collect)
         {
-            resultsDir = Path.Combine(Path.GetTempPath(), $"piston-{Guid.NewGuid():N}");
-            _ = Directory.CreateDirectory(resultsDir);
+            try
+            {
+                resultsDir = Path.Combine(Path.GetTempPath(), $"piston-{Guid.NewGuid():N}");
+                _ = Directory.CreateDirectory(resultsDir);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                resultsDir = null;
+                coverageSetupError = $"Could not create a temporary coverage directory: {ex.Message}";
+            }
         }
-        else if (coverage == MtpCoverage.ExtensionMissing)
+        var coverageIssue = coverageSetupError ?? coverage switch
         {
-            log.Write("MtpRunner",
-                "Coverage not collected: the project does not reference Microsoft.Testing.Extensions.CodeCoverage");
+            MtpCoverage.ExtensionMissing => "The test app does not include Microsoft.Testing.Extensions.CodeCoverage.",
+            MtpCoverage.MultiTargetExtensionMissing =>
+                "At least one target framework does not include Microsoft.Testing.Extensions.CodeCoverage; coverage was skipped so all targets can run.",
+            MtpCoverage.OutputUnverified =>
+                "Coverage was skipped because collector availability could not be verified for every target framework.",
+            _ => null,
+        };
+        if (coverageIssue is not null)
+        {
+            log.Write("MtpRunner", coverageIssue);
         }
-
         var coverageArgs = resultsDir is null ? null : CoverageArguments(resultsDir);
         IReadOnlyList<string> coverageReportPaths = [];
+        var delivered = false;
+        var retainResultsDirectory = false;
         try
         {
             ProjectTestResult? result = null;
-            if (appPath is not null && File.Exists(appPath))
+            var separateTargets = targetOutputs is { Count: > 1 };
+            if (separateTargets)
+            {
+                var separated = await RunFrameworksAsync(
+                    projectPath, solutionDirectory, filter, onProgress, ct, log, resultsDir, targetOutputs!,
+                    warmHosts, discoveryCache)
+                    .ConfigureAwait(false);
+                result = separated.Result;
+                coverageIssue ??= separated.CoverageIssue;
+            }
+            else if (appPath is not null && File.Exists(appPath))
             {
                 // With --coverage the extension relaunches the test host under a controller, which connects
                 // as a passive node; the run uses a host started for it alone, not a warm one.
@@ -117,35 +148,92 @@ internal static partial class MtpTestProcessRunner
                 if (resultsDir is not null)
                 {
                     // A server attempt that did not start may have left a partial report behind.
-                    ClearDirectory(resultsDir);
+                    if (!ClearDirectory(resultsDir))
+                    {
+                        DeleteResultsDirectory(resultsDir);
+                        try
+                        {
+                            resultsDir = Path.Combine(Path.GetTempPath(), $"piston-{Guid.NewGuid():N}");
+                            _ = Directory.CreateDirectory(resultsDir);
+                        }
+                        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                        {
+                            resultsDir = null;
+                            coverageIssue = $"Could not create a clean temporary coverage directory: {ex.Message}";
+                            log.Write("MtpRunner", coverageIssue);
+                        }
+                    }
                 }
 
-                result = await RunWithDotnetTestAsync(projectPath, solutionDirectory, filter, onProgress, ct, log, coverageArgs)
+                result = await RunWithDotnetTestAsync(projectPath, solutionDirectory, filter, onProgress, ct, log, resultsDir)
                     .ConfigureAwait(false);
             }
 
             if (resultsDir is not null)
             {
-                coverageReportPaths = Directory.GetFiles(resultsDir, "*.cobertura.xml", SearchOption.AllDirectories);
-                log.Write("MtpRunner", $"Coverage reports: {coverageReportPaths.Count}");
+                try
+                {
+                    coverageReportPaths = separateTargets ? result.CoverageReportPaths
+                        : Directory.GetFiles(resultsDir, "*.cobertura.xml", SearchOption.AllDirectories);
+                    log.Write("MtpRunner", $"Coverage reports: {coverageReportPaths.Count}");
+                    if (coverageReportPaths.Count == 0)
+                    {
+                        coverageIssue ??= "The test run produced no Cobertura coverage report.";
+                        log.Write("MtpRunner", coverageIssue);
+                    }
+                    else if (coverageReportPaths.Count < expectedCoverageReports)
+                    {
+                        coverageIssue ??= $"The test run produced {coverageReportPaths.Count} coverage report(s) for {expectedCoverageReports} target frameworks.";
+                        log.Write("MtpRunner", coverageIssue);
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    coverageIssue = $"Could not read the temporary coverage directory: {ex.Message}";
+                    log.Write("MtpRunner", coverageIssue);
+                }
             }
 
             log.Complete();
-            return result with { Suites = log.AttachTo(result.Suites), CoverageReportPaths = coverageReportPaths };
+            retainResultsDirectory = resultsDir is not null
+                && result.Suites.SelectMany(suite => suite.Tests).Any(test => test.Attachments.Count > 0);
+            var completed = result with
+            {
+                Suites = log.AttachTo(result.Suites),
+                CoverageReportPaths = coverageReportPaths,
+                CoverageIssue = coverageIssue,
+                TemporaryDirectories = retainResultsDirectory
+                    ? [.. result.TemporaryDirectories, resultsDir!]
+                    : result.TemporaryDirectories,
+            };
+            delivered = true;
+            return completed;
         }
         finally
         {
             // With reports, the caller deletes the directory after reading them.
-            if (resultsDir is not null && coverageReportPaths.Count == 0)
+            if (resultsDir is not null && (!delivered || (coverageReportPaths.Count == 0 && !retainResultsDirectory)))
             {
-                try { Directory.Delete(resultsDir, recursive: true); } catch { /* ignore */ }
+                DeleteResultsDirectory(resultsDir);
             }
         }
     }
 
-    private static void ClearDirectory(string directory)
+    private static bool ClearDirectory(string directory)
     {
-        foreach (var entry in new DirectoryInfo(directory).EnumerateFileSystemInfos())
+        var cleared = true;
+        FileSystemInfo[] entries;
+        try
+        {
+            entries = new DirectoryInfo(directory).GetFileSystemInfos();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            DiagnosticLog.Instance?.Write("MtpRunner", $"Could not inspect temporary results directory {directory}: {ex.Message}");
+            return false;
+        }
+
+        foreach (var entry in entries)
         {
             try
             {
@@ -160,15 +248,144 @@ internal static partial class MtpTestProcessRunner
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                // Best effort: a leftover report is at worst merged with the fallback's.
+                cleared = false;
+                DiagnosticLog.Instance?.Write("MtpRunner", $"Could not clear temporary result {entry.FullName}: {ex.Message}");
             }
+        }
+
+        return cleared;
+    }
+
+    private static void DeleteResultsDirectory(string directory)
+    {
+        try
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            DiagnosticLog.Instance?.Write("MtpRunner", $"Could not remove temporary results directory {directory}: {ex.Message}");
         }
     }
 
+    private static async Task<(ProjectTestResult Result, string? CoverageIssue)> RunFrameworksAsync(
+        string projectPath,
+        string solutionDirectory,
+        string? filter,
+        Action<IReadOnlyList<TestSuite>>? onProgress,
+        CancellationToken ct,
+        ExecutionLog log,
+        string? resultsDirectory,
+        IReadOnlyList<(string Framework, string OutputPath)> targets,
+        MtpWarmHostPool? warmHosts,
+        MtpDiscoveryCache? discoveryCache)
+    {
+        var tests = new List<TestResult>();
+        var reports = new List<string>();
+        var errors = new List<string>();
+        var coverageIssues = new List<string>();
+        var crashed = false;
+        int? failedExitCode = null;
+        for (var index = 0; index < targets.Count && !ct.IsCancellationRequested; index++)
+        {
+            var (framework, appPath) = targets[index];
+            string? targetResultsDirectory = null;
+            if (resultsDirectory is not null)
+            {
+                try
+                {
+                    targetResultsDirectory = Path.Combine(resultsDirectory, $"framework-{index}");
+                    _ = Directory.CreateDirectory(targetResultsDirectory);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    targetResultsDirectory = null;
+                    coverageIssues.Add($"Could not create the coverage directory for {framework}: {ex.Message}");
+                }
+            }
+
+            var previous = tests.ToArray();
+            Action<IReadOnlyList<TestSuite>>? reportProgress = onProgress is null ? null : suites =>
+            {
+                var current = previous.Concat(QualifyTests(suites, framework)).ToList();
+                onProgress([new TestSuite("…", current, DateTimeOffset.UtcNow,
+                    TimeSpan.FromTicks(current.Sum(test => test.Duration.Ticks)))]);
+            };
+            log.Write("MtpRunner", $"Running target framework {framework}");
+            log.ExitCode = null;
+            ProjectTestResult? result = null;
+            if (File.Exists(appPath))
+            {
+                result = await RunWithServerAsync(projectPath, appPath, solutionDirectory, filter, reportProgress,
+                    ct, log, warmHosts, targetResultsDirectory is null ? null : CoverageArguments(targetResultsDirectory),
+                    discoveryCache).ConfigureAwait(false);
+                if (result is null && targetResultsDirectory is not null && !ClearDirectory(targetResultsDirectory))
+                {
+                    coverageIssues.Add($"Could not clear incomplete coverage results for {framework}; coverage was skipped.");
+                    targetResultsDirectory = null;
+                }
+            }
+
+            result ??= await RunWithDotnetTestAsync(
+                    projectPath, solutionDirectory, filter, reportProgress, ct, log, targetResultsDirectory, framework)
+                .ConfigureAwait(false);
+            tests.AddRange(QualifyTests(result.Suites, framework));
+            crashed |= result.Crashed;
+            if (result.RunnerError is { Length: > 0 } error)
+            {
+                errors.Add($"{framework}: {error}");
+            }
+
+            if (log.ExitCode is { } code && code != 0)
+            {
+                failedExitCode ??= code;
+            }
+
+            if (targetResultsDirectory is not null)
+            {
+                try
+                {
+                    var targetReports = Directory.GetFiles(targetResultsDirectory, "*.cobertura.xml", SearchOption.AllDirectories);
+                    if (targetReports.Length == 0)
+                    {
+                        coverageIssues.Add($"The test run produced no Cobertura coverage report for {framework}.");
+                    }
+
+                    reports.AddRange(targetReports);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    coverageIssues.Add($"Could not read the coverage directory for {framework}: {ex.Message}");
+                }
+            }
+        }
+
+        if (failedExitCode is not null)
+        {
+            log.ExitCode = failedExitCode;
+        }
+
+        IReadOnlyList<TestSuite> suites = tests.Count == 0 ? []
+            : [new TestSuite(TestProjectNames.SuiteName(projectPath), tests, DateTimeOffset.UtcNow,
+                TimeSpan.FromTicks(tests.Sum(test => test.Duration.Ticks)))];
+        var issue = coverageIssues.Count == 0 ? null : string.Join(" ", coverageIssues);
+        if (issue is not null)
+        {
+            log.Write("MtpRunner", issue);
+        }
+
+        return (new ProjectTestResult(projectPath, suites, errors.Count == 0 ? null : string.Join("\n", errors), reports, crashed)
+        {
+            Log = log,
+        }, issue);
+    }
+
+    private static IEnumerable<TestResult> QualifyTests(IReadOnlyList<TestSuite> suites, string framework) =>
+        suites.SelectMany(suite => suite.Tests).Select(test => test with { TargetFramework = framework });
+
     /// <summary>
     /// Microsoft.Testing.Extensions.CodeCoverage options writing Cobertura to <paramref name="resultsDir"/>.
-    /// The report name is left to the extension, which makes it unique per test app: a multi-targeted project
-    /// writes one per framework.
+    /// Multi-targeted runs give each framework its own directory to prevent report name collisions.
     /// </summary>
     internal static string CoverageArguments(string resultsDir) =>
         $"--coverage --coverage-output-format cobertura --results-directory \"{resultsDir}\"";
@@ -180,23 +397,36 @@ internal static partial class MtpTestProcessRunner
         Action<IReadOnlyList<TestSuite>>? onProgress,
         CancellationToken ct,
         ExecutionLog? runLog = null,
-        string? extraArguments = null)
+        string? resultsDirectory = null,
+        string? targetFramework = null)
     {
         // Build CLI args: dotnet test --project <csproj> --no-build --output Detailed --no-ansi.
         // Without --no-ansi, CI environments (e.g. GitHub Actions) get coloured output even when redirected,
         // which the stdout parser cannot match.
-        var args = $"test --project \"{projectPath}\" --no-build --output Detailed --no-ansi" + TestProcessRunner.FilterArgument(filter);
-        if (!string.IsNullOrWhiteSpace(extraArguments))
+        var args = new List<string> { "test", "--project", projectPath, "--no-build", "--output", "Detailed", "--no-ansi" };
+        if (!string.IsNullOrWhiteSpace(filter))
         {
-            args += " " + extraArguments.Trim();
+            args.AddRange(["--filter", filter]);
+        }
+
+        if (targetFramework is not null)
+        {
+            args.AddRange(["--framework", targetFramework]);
+        }
+
+        if (resultsDirectory is not null)
+        {
+            args.AddRange(["--coverage", "--coverage-output-format", "cobertura", "--results-directory", resultsDirectory]);
         }
 
         var log = runLog ?? new ExecutionLog(projectPath);
         log.Runner = "MTP dotnet test";
         log.Write("MtpRunner", $"WorkDir: {solutionDirectory}");
-        log.Write("MtpRunner", $"Args: dotnet {args}");
+        log.Write("MtpRunner", $"Args: dotnet {string.Join(" ", args.Select((argument, index) =>
+            index > 0 && args[index - 1] is "--project" or "--filter" or "--framework" or "--results-directory"
+                ? $"\"{argument}\"" : argument))}");
 
-        var psi = new ProcessStartInfo("dotnet", args)
+        var psi = new ProcessStartInfo("dotnet")
         {
             WorkingDirectory = solutionDirectory,
             RedirectStandardOutput = true,
@@ -204,6 +434,10 @@ internal static partial class MtpTestProcessRunner
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        foreach (var argument in args)
+        {
+            psi.ArgumentList.Add(argument);
+        }
         // Reused MSBuild nodes can retain the redirected pipes after dotnet exits.
         psi.Environment["MSBUILDDISABLENODEREUSE"] = "1";
         if (ChildProcessEnvironment.Describe(ChildProcessEnvironment.Prepare(psi)) is { } environmentNote)
@@ -305,12 +539,23 @@ internal static partial class MtpTestProcessRunner
         log.Write("MtpRunner",
             $"Result: {totalTests} test(s) in {suites.Count} suite(s)");
 
-        // Surface stderr when there are no results (likely a runner-level failure)
+        // A failed runner can report its diagnostics on stdout instead of stderr.
         string? runnerError = null;
-        if (suites.Count == 0 && !stderrLines.IsEmpty)
+        if (suites.Count == 0)
         {
-            runnerError = string.Join(Environment.NewLine, stderrLines.OrderBy(x => x));
-            log.Write("MtpRunner", $"RunnerError: {runnerError}");
+            if (!stderrLines.IsEmpty)
+            {
+                runnerError = string.Join(Environment.NewLine, stderrLines.OrderBy(x => x));
+            }
+            else if (process.ExitCode != 0 && !(process.ExitCode == 8 && !string.IsNullOrWhiteSpace(filter)))
+            {
+                runnerError = $"dotnet test exited with code {process.ExitCode} without reporting tests.";
+            }
+
+            if (runnerError is not null)
+            {
+                log.Write("MtpRunner", $"RunnerError: {runnerError}");
+            }
         }
 
         return new ProjectTestResult(projectPath, suites, runnerError, [], Crashed: false) { Log = log };

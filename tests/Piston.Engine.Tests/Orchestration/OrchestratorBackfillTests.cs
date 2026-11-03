@@ -21,6 +21,7 @@ public sealed class OrchestratorBackfillTests : IDisposable
     private readonly SqliteCoverageStore _store = new();
     private readonly ClassRunner _runner = new();
     private readonly RecordingProcessor _processor = new();
+    private readonly ProvenanceImpactAnalyzer _analyzer = new([Project]);
     private readonly PistonOrchestrator _orchestrator;
 
     public OrchestratorBackfillTests()
@@ -28,7 +29,7 @@ public sealed class OrchestratorBackfillTests : IDisposable
         File.WriteAllText(Path.Combine(_root, "App.slnx"), "<Solution />");
         File.WriteAllText(Path.Combine(_root, "Code.cs"), "class Code { }");
         _orchestrator = new PistonOrchestrator(
-            new StubFileWatcherService(), new ProvenanceBuildService(), _runner, new ProvenanceImpactAnalyzer([Project]),
+            new StubFileWatcherService(), new ProvenanceBuildService(), _runner, _analyzer,
             _state, _store, _processor, coverageEnabled: true)
         {
             BackfillGranularity = ImpactGranularity.Class,
@@ -45,8 +46,15 @@ public sealed class OrchestratorBackfillTests : IDisposable
 
     private async Task StartAsync()
     {
+        var previousBackfill = _orchestrator.BackfillTask;
         await _orchestrator.StartAsync(Path.Combine(_root, "App.slnx"));
-        await WaitForAsync(() => _state.LastRun is { Trigger: TestRunTrigger.Startup });
+        await WaitForAsync(() => _state.LastRun is { Trigger: TestRunTrigger.Startup } run
+            && _state.ProjectCoverage.TryGetValue(Project, out var coverage) && coverage.RunId == run.RunId
+            && !_state.IsPublishingResults);
+        if (_orchestrator.BackfillGranularity is not null && _state.CoverageError is null)
+        {
+            await WaitForAsync(() => !ReferenceEquals(previousBackfill, _orchestrator.BackfillTask));
+        }
     }
 
     private async Task WaitForAsync(Func<bool> condition)
@@ -151,18 +159,411 @@ public sealed class OrchestratorBackfillTests : IDisposable
         Assert.All(_runner.Filters, f => Assert.Null(f));
     }
 
+    [Theory]
+    [InlineData("test", 3)]
+    [InlineData("class", 2)]
+    [InlineData("off", 0)]
+    public async Task MissingCollectorSuppressesBackfillUntilAValidUnfilteredRun(
+        string mode, int expectedUnits)
+    {
+        ImpactGranularity? granularity = mode switch
+        {
+            "test" => ImpactGranularity.Test,
+            "class" => ImpactGranularity.Class,
+            "off" => null,
+            _ => throw new ArgumentOutOfRangeException(nameof(mode)),
+        };
+        _orchestrator.BackfillGranularity = granularity;
+        _runner.ProduceCoverageReports = false;
+        await StartAsync();
+        await WaitForAsync(() => _state.ProjectCoverage.ContainsKey(Project));
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        var unavailable = _state.ProjectCoverage[Project];
+        Assert.Equal(CoverageCollectionStatus.Unavailable, unavailable.Status);
+        Assert.Equal("Collector missing.", unavailable.Message);
+        Assert.Equal(_state.LastRun!.RunId, unavailable.RunId);
+        Assert.Equal(TestRunStatus.Completed, _state.LastRun.Status);
+        Assert.Equal(3, _state.LastRun.Tests.Count());
+        Assert.All(_state.LastRun.Tests, test => Assert.Equal(TestStatus.Passed, test.Status));
+        Assert.Empty(_processor.Recorded);
+        Assert.All(_runner.Filters, filter => Assert.Null(filter));
+
+        _runner.ProduceCoverageReports = true;
+        var recovered = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(TestRunStatus.Completed, recovered!.Status);
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[Project].Status);
+        Assert.Equal(recovered.RunId, _state.ProjectCoverage[Project].RunId);
+        Assert.Equal(expectedUnits, _processor.Recorded.Count);
+        if (granularity is not null)
+        {
+            Assert.All(_processor.Recorded, record => Assert.Equal(granularity, record.Granularity));
+        }
+
+        var filters = _runner.Filters.OfType<string>().Order(StringComparer.Ordinal);
+        Assert.Equal(granularity switch
+        {
+            ImpactGranularity.Test =>
+            [
+                "FullyQualifiedName=A.Tests.Bar.One",
+                "FullyQualifiedName=A.Tests.Foo.One",
+                "FullyQualifiedName=A.Tests.Foo.Two",
+            ],
+            ImpactGranularity.Class =>
+            [
+                "FullyQualifiedName~A.Tests.Bar.",
+                "FullyQualifiedName~A.Tests.Foo.",
+            ],
+            _ => Array.Empty<string>(),
+        }, filters);
+    }
+
+    [Fact]
+    public async Task InvalidReportFailsMeasurementWithoutFailingTestsAndRecoversOnNextFullRun()
+    {
+        _processor.ReportError = "Invalid coverage XML.";
+        await StartAsync();
+        await WaitForAsync(() => _state.ProjectCoverage.ContainsKey(Project));
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(TestRunStatus.Completed, _state.LastRun!.Status);
+        Assert.Equal(3, _state.LastRun.Tests.Count());
+        Assert.All(_state.LastRun.Tests, test => Assert.Equal(TestStatus.Passed, test.Status));
+        Assert.Equal(CoverageCollectionStatus.Failed, _state.ProjectCoverage[Project].Status);
+        Assert.Equal("Invalid coverage XML.", _state.ProjectCoverage[Project].Message);
+        Assert.Empty(_processor.Recorded);
+
+        _processor.ReportError = null;
+        var recovered = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[Project].Status);
+        Assert.Equal(recovered!.RunId, _state.ProjectCoverage[Project].RunId);
+        Assert.Equal(2, _processor.Recorded.Count);
+    }
+
+    [Fact]
+    public async Task PartialMultiTargetReportsSuppressBackfillAndCannotReplaceFullEvidence()
+    {
+        const string issue = "The test run produced 1 coverage report(s) for 2 target frameworks.";
+        _runner.ReportIssue = issue;
+        await StartAsync();
+        await WaitForAsync(() => _state.ProjectCoverage.ContainsKey(Project));
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(TestRunStatus.Completed, _state.LastRun!.Status);
+        Assert.Equal(CoverageCollectionStatus.Partial, _state.ProjectCoverage[Project].Status);
+        Assert.Equal(issue, _state.ProjectCoverage[Project].Message);
+        Assert.False(Assert.Single(_processor.Processed).IsFull);
+        Assert.Empty(_processor.Recorded);
+        Assert.All(_runner.Filters, filter => Assert.Null(filter));
+
+        _runner.ReportIssue = null;
+        var recovered = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(TestRunStatus.Completed, recovered!.Status);
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[Project].Status);
+        Assert.True(_processor.Processed.Last().IsFull);
+        Assert.Equal(2, _processor.Recorded.Count);
+    }
+
+    [Theory]
+    [InlineData(2, "The test run produced 1 coverage report(s) for 2 target frameworks.")]
+    [InlineData(0, "The number of target frameworks could not be verified.")]
+    public async Task MissingFrameworkResultsCannotMakeOneReportACompleteMeasurement(
+        int frameworkCount, string expectedIssue)
+    {
+        _analyzer.TargetFrameworkCount = frameworkCount;
+        _runner.TargetFramework = "net8.0";
+        await StartAsync();
+        await WaitForAsync(() => _state.ProjectCoverage.ContainsKey(Project));
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(TestRunStatus.Completed, _state.LastRun!.Status);
+        Assert.All(_state.LastRun.Tests, test =>
+        {
+            Assert.Equal(TestStatus.Passed, test.Status);
+            Assert.Equal("net8.0", test.TargetFramework);
+        });
+        Assert.Equal(3, _state.LastRun.Tests.Count());
+        Assert.Equal(CoverageCollectionStatus.Partial, _state.ProjectCoverage[Project].Status);
+        Assert.Equal(expectedIssue, _state.ProjectCoverage[Project].Message);
+        Assert.False(Assert.Single(_processor.Processed).IsFull);
+        Assert.True(Assert.Single(_processor.Processed[0].Impact!.Units).Merge);
+        Assert.Empty(_processor.Recorded);
+        Assert.All(_runner.Filters, filter => Assert.Null(filter));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BackfillRejectsReportedPartialCoverageAndFrameworkReportShortfalls(bool shortfall)
+    {
+        _analyzer.TargetFrameworkCount = shortfall ? 2 : 1;
+        _runner.MultiTargetForegroundReports = shortfall;
+        _runner.FilteredReportIssue = shortfall ? null : "Only part of the coverage was collected.";
+        await StartAsync();
+        await WaitForAsync(() => _state.ProjectCoverage.ContainsKey(Project));
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[Project].Status);
+        Assert.True(Assert.Single(_processor.Processed).IsFull);
+        Assert.Equal(2, _runner.Filters.Count(filter => filter is not null));
+        Assert.Empty(_processor.Recorded);
+        Assert.Empty(_store.GetUnits(Project, ImpactGranularity.Class));
+    }
+
+    [Fact]
+    public async Task SkippedTestsRemainInRunCoverageButAreNotIndividuallyMeasuredByBackfill()
+    {
+        _orchestrator.BackfillGranularity = ImpactGranularity.Test;
+        _runner.SkippedTest = "A.Tests.Foo.Two";
+        _runner.FailedTest = "A.Tests.Bar.One";
+        await StartAsync();
+        await WaitForAsync(() => _state.ProjectCoverage.ContainsKey(Project));
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        var statuses = _state.LastRun!.Tests.ToDictionary(test => test.FullyQualifiedName, test => test.Status);
+        Assert.Equal(TestStatus.Skipped, statuses["A.Tests.Foo.Two"]);
+        Assert.Equal(TestStatus.Failed, statuses["A.Tests.Bar.One"]);
+        Assert.Equal(TestStatus.Passed, statuses["A.Tests.Foo.One"]);
+        var processed = Assert.Single(_processor.Processed);
+        Assert.Equal(["A.Tests.Bar.One", "A.Tests.Foo.One", "A.Tests.Foo.Two"],
+            processed.Tests.Order(StringComparer.Ordinal));
+        Assert.Equal(["A.Tests.Bar.One", "A.Tests.Foo.One", "A.Tests.Foo.Two"],
+            Assert.Single(processed.Impact!.Units).TestFqns.Order(StringComparer.Ordinal));
+        Assert.All(_processor.Recorded, record => Assert.Equal(ImpactGranularity.Test, record.Granularity));
+        Assert.Equal(["A.Tests.Bar.One", "A.Tests.Foo.One"],
+            _processor.Recorded.SelectMany(record => record.Units).Select(unit => unit.UnitKey).Order(StringComparer.Ordinal));
+        Assert.Contains("FullyQualifiedName=A.Tests.Foo.Two", _runner.Filters);
+        Assert.DoesNotContain(_store.GetUnits(Project, ImpactGranularity.Test),
+            unit => unit.UnitKey == "A.Tests.Foo.Two");
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task BackfillDoesNotCreditATestWhenOneTargetFrameworkSkippedOrOmittedIt(bool skipped)
+    {
+        _orchestrator.BackfillGranularity = ImpactGranularity.Test;
+        _analyzer.TargetFrameworkCount = 2;
+        _runner.MultiTargetTests = true;
+        _runner.MultiTargetForegroundReports = true;
+        _runner.MultiTargetFilteredReports = true;
+        _runner.FilteredSkippedFramework = skipped ? "net9.0" : null;
+        _runner.FilteredMissingFramework = skipped ? null : "net9.0";
+
+        await StartAsync();
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[Project].Status);
+        Assert.Equal(6, _state.LastRun!.Tests.Count());
+        Assert.All(_state.LastRun.Tests, test => Assert.Equal(TestStatus.Passed, test.Status));
+        Assert.Equal(3, _runner.Filters.Count(filter => filter is not null));
+        Assert.Empty(_processor.Recorded);
+        Assert.Empty(_store.GetUnits(Project, ImpactGranularity.Test));
+    }
+
+    [Fact]
+    public async Task BackfillPublishesImpactUpdatesAsResultsUpdates()
+    {
+        var publishing = new List<bool>();
+        _processor.OnRecord = () => publishing.Add(_state.IsPublishingResults);
+
+        await StartAsync();
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal([true, true], publishing);
+        Assert.False(_state.IsPublishingResults);
+    }
+
+    [Fact]
+    public async Task CoverageStorageFailureRemainsVisibleUntilEngineRestart()
+    {
+        _processor.ProcessingFailure = "database locked";
+        await StartAsync();
+        await WaitForAsync(() => _state.ProjectCoverage.ContainsKey(Project));
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(TestRunStatus.Completed, _state.LastRun!.Status);
+        Assert.Equal(3, _state.LastRun.Tests.Count());
+        Assert.All(_state.LastRun.Tests, test => Assert.Equal(TestStatus.Passed, test.Status));
+        Assert.Contains("database locked", _state.CoverageError, StringComparison.Ordinal);
+        Assert.Equal(CoverageCollectionStatus.Failed, _state.ProjectCoverage[Project].Status);
+        Assert.Empty(_processor.Recorded);
+        Assert.Contains("database locked",
+            Assert.Throws<InvalidOperationException>(() => _orchestrator.GetCoverageReport()).Message,
+            StringComparison.Ordinal);
+
+        _orchestrator.ClearResults(_root);
+        Assert.Contains("database locked", _state.CoverageError, StringComparison.Ordinal);
+        Assert.Empty(_state.ProjectCoverage);
+
+        _processor.ProcessingFailure = null;
+        var next = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(TestRunStatus.Completed, next!.Status);
+        Assert.Contains("database locked", _state.CoverageError, StringComparison.Ordinal);
+        Assert.Equal(CoverageCollectionStatus.Failed, _state.ProjectCoverage[Project].Status);
+        Assert.Equal(next.RunId, _state.ProjectCoverage[Project].RunId);
+        _ = Assert.Single(_processor.Processed);
+        Assert.Empty(_processor.Recorded);
+    }
+
+    [Fact]
+    public async Task FilteredRunCannotEstablishCompleteCoverageUntilAnUnfilteredRun()
+    {
+        _orchestrator.BackfillGranularity = null;
+        _state.TestFilter = "FullyQualifiedName~A.Tests.Foo.";
+        await StartAsync();
+        await WaitForAsync(() => _state.ProjectCoverage.ContainsKey(Project));
+
+        Assert.Equal(CoverageCollectionStatus.Partial, _state.ProjectCoverage[Project].Status);
+        Assert.Contains("unfiltered", _state.ProjectCoverage[Project].Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(["A.Tests.Foo.One", "A.Tests.Foo.Two"],
+            _state.LastRun!.Tests.Select(test => test.FullyQualifiedName));
+
+        _state.TestFilter = null;
+        var full = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[Project].Status);
+        Assert.Equal(full!.RunId, _state.ProjectCoverage[Project].RunId);
+        _state.TestFilter = "FullyQualifiedName~A.Tests.Foo.";
+        var filtered = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[Project].Status);
+        Assert.Equal(filtered!.RunId, _state.ProjectCoverage[Project].RunId);
+    }
+
+    [Fact]
+    public async Task SourceChangeDuringRunMakesCoveragePartialUntilFreshMeasurement()
+    {
+        _orchestrator.BackfillGranularity = null;
+        await StartAsync();
+        await WaitForAsync(() => _state.ProjectCoverage.ContainsKey(Project));
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[Project].Status);
+        _runner.OnForegroundRun = () => File.WriteAllText(Path.Combine(_root, "Code.cs"), "class Code { int Value; }");
+
+        var stale = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(ResultFreshness.Stale, stale!.Freshness);
+        Assert.Equal(CoverageCollectionStatus.Partial, _state.ProjectCoverage[Project].Status);
+        Assert.Contains("could not be verified", _state.ProjectCoverage[Project].Message, StringComparison.Ordinal);
+        _runner.OnForegroundRun = null;
+        var fresh = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        Assert.Equal(ResultFreshness.Current, fresh!.Freshness);
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[Project].Status);
+        Assert.Equal(fresh.RunId, _state.ProjectCoverage[Project].RunId);
+    }
+
+    [Fact]
+    public async Task ClearResultsForgetsProjectMeasurementState()
+    {
+        _orchestrator.BackfillGranularity = null;
+        await StartAsync();
+        await WaitForAsync(() => _state.ProjectCoverage.ContainsKey(Project));
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[Project].Status);
+
+        _orchestrator.ClearResults(_root);
+
+        Assert.Empty(_state.ProjectCoverage);
+        Assert.False(_state.HasCoverageData);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ResultsDirectoryIsRemovedAfterAttachmentsAreRetained(bool hasReport)
+    {
+        var results = Directory.CreateTempSubdirectory("piston-").FullName;
+        try
+        {
+            var attachmentPath = Path.Combine(results, "attachment.txt");
+            File.WriteAllText(attachmentPath, "retained test attachment");
+            var reportPath = Path.Combine(results, "coverage.cobertura.xml");
+            if (hasReport)
+            {
+                File.WriteAllText(reportPath, "fake report consumed by the fake processor");
+            }
+
+            var sawReportDuringProcessing = false;
+            _orchestrator.BackfillGranularity = null;
+            _orchestrator.ArtifactStore = new TestArtifactStore(_root);
+            await StartAsync();
+            await WaitForAsync(() => _state.ProjectCoverage.ContainsKey(Project));
+
+            _runner.ProduceCoverageReports = hasReport;
+            _runner.ReportPath = reportPath;
+            _runner.TemporaryDirectory = results;
+            _runner.AttachmentPath = attachmentPath;
+            _processor.OnProcess = () => sawReportDuringProcessing = File.Exists(reportPath);
+            var run = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+            Assert.Equal(hasReport, sawReportDuringProcessing);
+            Assert.False(Directory.Exists(results));
+            var attachment = Assert.Single(run!.Tests.SelectMany(test => test.Attachments));
+            Assert.True(attachment.Retained);
+            Assert.Equal("retained test attachment",
+                File.ReadAllText(_orchestrator.ArtifactStore.Resolve(attachment)!));
+            Assert.Equal(hasReport ? CoverageCollectionStatus.Measured : CoverageCollectionStatus.Unavailable,
+                _state.ProjectCoverage[Project].Status);
+        }
+        finally
+        {
+            if (Directory.Exists(results))
+            {
+                Directory.Delete(results, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ResultsDirectoryIsRemovedWhenRunnerThrowsAfterReportingAProject()
+    {
+        var results = Directory.CreateTempSubdirectory("piston-").FullName;
+        try
+        {
+            var report = Path.Combine(results, "coverage.cobertura.xml");
+            File.WriteAllText(report, "report");
+            _orchestrator.BackfillGranularity = null;
+            await StartAsync();
+            await WaitForAsync(() => _state.ProjectCoverage.ContainsKey(Project));
+            _runner.ReportPath = report;
+            _runner.TemporaryDirectory = results;
+            _runner.ThrowAfterProjectCompleted = true;
+
+            var error = await Assert.ThrowsAsync<IOException>(() => _orchestrator.RequestRunAsync());
+
+            Assert.Contains("runner failed", error.Message, StringComparison.Ordinal);
+            Assert.False(Directory.Exists(results));
+            Assert.Equal(TestRunStatus.Faulted, _state.LastRun!.Status);
+        }
+        finally
+        {
+            if (Directory.Exists(results))
+            {
+                Directory.Delete(results, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     public async Task ARunPublishesItsCoverageAndResultsAsOneResultsUpdate()
     {
         _orchestrator.BackfillGranularity = null;
-        var observed = new List<(bool Publishing, int Suites)>();
-        _processor.OnProcess = () => observed.Add((_state.IsPublishingResults, _state.TestSuites.Count));
+        var observed = new List<(bool Publishing, int Suites, long Version)>();
+        _processor.OnProcess = () => observed.Add((_state.IsPublishingResults, _state.TestSuites.Count, _state.ResultsVersion));
 
         await StartAsync();
 
-        Assert.Equal((true, 0), Assert.Single(observed));
+        var duringProcessing = Assert.Single(observed);
+        Assert.True(duringProcessing.Publishing);
+        Assert.Equal(0, duringProcessing.Suites);
         Assert.False(_state.IsPublishingResults);
-        Assert.Equal(2, _state.ResultsVersion);
+        Assert.Equal(duringProcessing.Version + 1, _state.ResultsVersion);
         Assert.NotEmpty(_state.TestSuites);
     }
 
@@ -194,6 +595,22 @@ public sealed class OrchestratorBackfillTests : IDisposable
         public List<string?> Filters { get; } = [];
         public bool BlockFiltered { get; set; }
         public bool ReportResourceWaits { get; set; }
+        public bool ProduceCoverageReports { get; set; } = true;
+        public string? ReportPath { get; set; }
+        public string? ReportIssue { get; set; }
+        public string? FilteredReportIssue { get; set; }
+        public bool MultiTargetForegroundReports { get; set; }
+        public bool MultiTargetFilteredReports { get; set; }
+        public bool MultiTargetTests { get; set; }
+        public string? FilteredSkippedFramework { get; set; }
+        public string? FilteredMissingFramework { get; set; }
+        public bool ThrowAfterProjectCompleted { get; set; }
+        public string? SkippedTest { get; set; }
+        public string? FailedTest { get; set; }
+        public string? TargetFramework { get; set; }
+        public string? TemporaryDirectory { get; set; }
+        public string? AttachmentPath { get; set; }
+        public Action? OnForegroundRun { get; set; }
         public TaskCompletionSource FilteredStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public bool FilteredCancelled { get; private set; }
 
@@ -244,14 +661,49 @@ public sealed class OrchestratorBackfillTests : IDisposable
 
             callbacks.OnProjectResourcesAcquired?.Invoke(Project);
             callbacks.OnProjectStarted?.Invoke(Project);
-            var prefix = filter?.Replace("FullyQualifiedName~", "", StringComparison.Ordinal);
+            if (filter is null)
+            {
+                OnForegroundRun?.Invoke();
+            }
+
+            var exact = filter?.StartsWith("FullyQualifiedName=", StringComparison.Ordinal) == true;
+            var prefix = filter?.Replace("FullyQualifiedName~", "", StringComparison.Ordinal)
+                .Replace("FullyQualifiedName=", "", StringComparison.Ordinal);
+            string?[] frameworks = MultiTargetTests ? ["net8.0", "net9.0"] : [TargetFramework];
             var suite = new TestSuite("A.Tests",
-                [.. Tests.Where(t => prefix is null || t.StartsWith(prefix, StringComparison.Ordinal))
-                    .Select(t => new TestResult(t, t, TestStatus.Passed, TimeSpan.Zero, null, null, null, null))],
+                [.. Tests.Where(t => prefix is null || (exact
+                    ? string.Equals(t, prefix, StringComparison.Ordinal)
+                    : t.StartsWith(prefix, StringComparison.Ordinal)))
+                    .SelectMany(t => frameworks
+                        .Where(framework => filter is null || FilteredMissingFramework is null || framework != FilteredMissingFramework)
+                        .Select(framework => new TestResult(t, t,
+                            t == SkippedTest || (filter is not null && framework is not null && framework == FilteredSkippedFramework)
+                                ? TestStatus.Skipped : t == FailedTest ? TestStatus.Failed : TestStatus.Passed,
+                            TimeSpan.Zero, null, null, null, null)
+                    {
+                        TargetFramework = framework,
+                        Attachments = t == "A.Tests.Foo.One" && AttachmentPath is not null
+                            ? [new TestAttachment(AttachmentPath)] : [],
+                    }))],
                 DateTimeOffset.UtcNow, TimeSpan.Zero);
-            string[] reports = collectCoverage ? [$"/nowhere/{Guid.NewGuid():N}.cobertura.xml"] : [];
-            var project = new ProjectTestResult(Project, [suite], null, reports, Crashed: false);
+            string[] reports = collectCoverage && ProduceCoverageReports
+                ? [ReportPath ?? $"/nowhere/{Guid.NewGuid():N}.cobertura.xml"] : [];
+            if (reports.Length > 0 && (filter is null ? MultiTargetForegroundReports : MultiTargetFilteredReports))
+            {
+                reports = [reports[0], $"/nowhere/{Guid.NewGuid():N}.cobertura.xml"];
+            }
+            var project = new ProjectTestResult(Project, [suite], null, reports, Crashed: false)
+            {
+                CoverageIssue = (filter is null ? ReportIssue : FilteredReportIssue ?? ReportIssue)
+                    ?? (collectCoverage && !ProduceCoverageReports ? "Collector missing." : null),
+                TemporaryDirectories = TemporaryDirectory is null ? [] : [TemporaryDirectory],
+            };
             callbacks.OnProjectCompleted?.Invoke(project);
+            if (ThrowAfterProjectCompleted)
+            {
+                throw new IOException("runner failed after reporting a project");
+            }
+
             return new TestRunResult([suite], null, reports) { Projects = [project] };
         }
 
@@ -263,19 +715,30 @@ public sealed class OrchestratorBackfillTests : IDisposable
     private sealed class RecordingProcessor : ICoverageProcessor
     {
         public List<CoverageImpactOptions> Recorded { get; } = [];
+        public List<(IReadOnlyList<string> Tests, CoverageImpactOptions? Impact, bool IsFull)> Processed { get; } = [];
 
         public Action? OnProcess { get; set; }
+        public Action? OnRecord { get; set; }
+        public string? ReportError { get; set; }
+        public string? ProcessingFailure { get; set; }
 
-        public Task ProcessCoverageAsync(
+        public Task<CoverageProcessingResult> ProcessCoverageAsync(
             long runId, IReadOnlyList<string> coberturaXmlPaths, IReadOnlyList<string> testFqns, ICoverageStore store,
             bool isFullRun, string? sourceRoot, CoverageImpactOptions? impact)
         {
             OnProcess?.Invoke();
-            return Task.CompletedTask;
+            Processed.Add((testFqns, impact, isFullRun));
+            if (ProcessingFailure is { } failure)
+            {
+                throw new IOException(failure);
+            }
+
+            return Task.FromResult(Reports(coberturaXmlPaths));
         }
 
-        public async Task RecordImpactAsync(long runId, CoverageImpactOptions impact, IImpactMapStore store, string? sourceRoot)
+        public async Task<CoverageProcessingResult> RecordImpactAsync(long runId, CoverageImpactOptions impact, IImpactMapStore store, string? sourceRoot)
         {
+            OnRecord?.Invoke();
             foreach (var unit in impact.Units)
             {
                 await store.RecordImpactAsync(new ImpactRecording(
@@ -286,6 +749,14 @@ public sealed class OrchestratorBackfillTests : IDisposable
             {
                 Recorded.Add(impact);
             }
+
+            return Reports(impact.Units.SelectMany(unit => unit.ReportPaths));
         }
+
+        private CoverageProcessingResult Reports(IEnumerable<string> paths) =>
+            new(paths.Distinct(StringComparer.Ordinal)
+                .ToDictionary(path => path, _ => ReportError is null
+                    ? new CoverageReportResult(1, null)
+                    : new CoverageReportResult(0, ReportError), StringComparer.Ordinal));
     }
 }

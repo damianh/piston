@@ -334,9 +334,12 @@ changes (`base`: `working`, `branch` or `range`, with `baseRef`):
 - `plan_affected_tests` previews what Piston would build and run, and why;
 - `run_affected_tests` runs that plan and waits for it.
 
-With coverage enabled, `get_changed_line_coverage` gives each changed line a
+Coverage is enabled by default unless the engine starts with an opt-out. With
+coverage enabled, `get_changed_line_coverage` gives each changed line a
 verdict (see below). It takes no `files`: it always reads the git changes given
-by `base` and `baseRef`.
+by `base` and `baseRef`. If projects did not produce coverage, heed the warnings:
+the verdicts and aggregate totals describe only the available measurements, and
+affected-test selection falls back to whole projects.
 
 Selection by changed lines is a heuristic, and an affected-test result does not
 count as verification, even when the plan's scope is `full`. Finish with `verify`. See
@@ -397,7 +400,8 @@ How to read the verdicts:
   record which run hit each line. Verdicts use each credited test's latest result.
   So if a test failed in a run that executed a line and later passed a selective
   rerun that did not execute it, the line can still be `coveredByPassing`. A full,
-  unfiltered run replaces every file's coverage and removes such hits.
+  unfiltered run with valid reports from every test project replaces every file's
+  coverage and removes such hits.
 - Coverage verdicts describe test reach, not correctness. They do not replace
   `verify`.
 

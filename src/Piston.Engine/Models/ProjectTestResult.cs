@@ -21,4 +21,7 @@ public sealed record ProjectTestResult(
 
     /// <summary>Temporary directories that must remain until Piston has copied test attachments.</summary>
     public IReadOnlyList<string> TemporaryDirectories { get; init; } = [];
+
+    /// <summary>Why this run's coverage is unavailable or incomplete, without changing its test outcome.</summary>
+    public string? CoverageIssue { get; init; }
 }

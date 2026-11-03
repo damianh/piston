@@ -871,7 +871,13 @@ public static class DtoMapper
                 ? state.ProjectResourceWaits.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.ToDto())
                 : null,
             RetryStatus: state.RetryStatus,
-            TimelineRevision: state.SessionTimelineRevision
+            TimelineRevision: state.SessionTimelineRevision,
+            ProjectCoverage: state.ProjectCoverage.Count > 0
+                ? [.. state.ProjectCoverage.Values.OrderBy(project => project.ProjectPath, StringComparer.Ordinal)
+                    .Select(project => new ProjectCoverageDto(
+                        project.ProjectPath, project.Status.ToString().ToLowerInvariant(), project.Message, project.RunId))]
+                : null,
+            CoverageError: state.CoverageError
         );
 
     public static CoverageSummaryDto ToCoverageSummaryDto(CoverageReportSnapshot? report, string? solutionDirectory) =>

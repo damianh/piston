@@ -67,6 +67,7 @@ public sealed partial class PistonOrchestrator
         _backfillCts?.Cancel();
         _backfillCts = null;
         if (BackfillGranularity is not { } granularity || _stopping || _disposed || !_coverageEnabled
+            || !_coverageStoreReady || _state.CoverageError is not null
             || _coverageStore is not IImpactMapStore || _coverageProcessor is null || _solutionPath is null)
         {
             return;
@@ -129,13 +130,23 @@ public sealed partial class PistonOrchestrator
             await _runLock.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                plan = ImpactBackfill.Create(
-                    _impactAnalyzer.GetAllTestProjectPaths(),
-                    _state.TestSuites,
-                    project => store.GetUnits(project, granularity),
-                    granularity,
-                    _backfillFailed.Keys.ToHashSet(),
-                    solutionDir);
+                try
+                {
+                    plan = ImpactBackfill.Create(
+                        [.. _impactAnalyzer.GetAllTestProjectPaths().Where(project =>
+                            _state.ProjectCoverage.TryGetValue(project, out var coverage)
+                            && coverage.Status == CoverageCollectionStatus.Measured)],
+                        _state.TestSuites,
+                        project => store.GetUnits(project, granularity),
+                        granularity,
+                        _backfillFailed.Keys.ToHashSet(),
+                        solutionDir);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+                {
+                    ReportCoverageStorageFailure("backfill planning", ex);
+                    throw;
+                }
             }
             finally
             {
@@ -144,7 +155,23 @@ public sealed partial class PistonOrchestrator
 
             foreach (var (project, keys) in plan.Obsolete)
             {
-                await store.RemoveUnitsAsync(project, granularity, keys).ConfigureAwait(false);
+                try
+                {
+                    _state.BeginResultsUpdate();
+                    try
+                    {
+                        await store.RemoveUnitsAsync(project, granularity, keys).ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        _state.EndResultsUpdate();
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+                {
+                    ReportCoverageStorageFailure("backfill cleanup", ex);
+                    throw;
+                }
             }
 
             if (plan.Units.Count == 0)
@@ -319,7 +346,16 @@ public sealed partial class PistonOrchestrator
                 }
             }
 
-            var stats = store.GetStats();
+            ImpactStoreStats stats;
+            try
+            {
+                stats = store.GetStats();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+            {
+                ReportCoverageStorageFailure("backfill statistics", ex);
+                throw;
+            }
             stopwatch.Stop();
             log?.Write(
                 "Backfill",
@@ -398,17 +434,28 @@ public sealed partial class PistonOrchestrator
                 return;
             }
 
-            var ran = result.Suites.SelectMany(s => s.Tests).Select(t => t.FullyQualifiedName).ToHashSet(StringComparer.Ordinal);
+            var actualResults = result.Suites.SelectMany(suite => suite.Tests).ToList();
+            var successfulKeys = actualResults
+                .Where(test => test.Status is TestStatus.Passed or TestStatus.Failed)
+                .Select(test => test.ResultKey).ToHashSet(StringComparer.Ordinal);
+            var ran = actualResults.GroupBy(test => test.FullyQualifiedName, StringComparer.Ordinal)
+                .Where(group => group.All(test => test.Status is TestStatus.Passed or TestStatus.Failed)
+                    && unit.ExpectedResults.Where(test => test.FullyQualifiedName == group.Key)
+                        .All(test => successfulKeys.Contains(test.ResultKey)))
+                .Select(group => group.Key).ToHashSet(StringComparer.Ordinal);
             var tests = unit.Tests.Where(ran.Contains).ToList();
-            var crashed = result.RunnerError is not null || result.Projects.Any(p => p.Crashed);
+            var crashed = result.RunnerError is not null || result.Projects.Any(p => p.Crashed || p.TimedOut is not null);
+            var frameworkCount = _impactAnalyzer.GetTargetFrameworkCount(unit.ProjectPath);
+            var incompleteCoverage = result.Projects.Any(project => project.CoverageIssue is not null)
+                || frameworkCount == 0 || result.CoverageReportPaths.Count < frameworkCount;
 
             // A test that did not run would keep the unit outdated, so it is not measured again until restart.
-            if (crashed || result.CoverageReportPaths.Count == 0 || tests.Count != unit.Tests.Count)
+            if (crashed || incompleteCoverage || tests.Count != unit.Tests.Count)
             {
                 _ = _backfillFailed.TryAdd((unit.ProjectPath, unit.Key), 0);
                 DiagnosticLog.Instance?.Write("Backfill",
-                    $"Skipped {unit.Key}: {(crashed ? "the run failed" : result.CoverageReportPaths.Count == 0 ? "no coverage report" : "not every test ran")}");
-                if (crashed || result.CoverageReportPaths.Count == 0 || tests.Count == 0)
+                    $"Skipped {unit.Key}: {(crashed ? "the run failed" : incompleteCoverage ? "coverage was incomplete" : "not every test ran")}");
+                if (crashed || incompleteCoverage || tests.Count == 0)
                 {
                     return;
                 }
@@ -427,7 +474,31 @@ public sealed partial class PistonOrchestrator
                     [new CoverageRunUnit(unit.ProjectPath, unit.Key, result.CoverageReportPaths, tests, Merge: false)],
                     granularity,
                     builtAtUtc);
-                await processor.RecordImpactAsync(_coverageStore!.CreateRunId(), impact, store, solutionDir).ConfigureAwait(false);
+                CoverageProcessingResult processed;
+                try
+                {
+                    _state.BeginResultsUpdate();
+                    try
+                    {
+                        processed = await processor.RecordImpactAsync(_coverageStore!.CreateRunId(), impact, store, solutionDir)
+                            .ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        _state.EndResultsUpdate();
+                    }
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
+                {
+                    ReportCoverageStorageFailure("backfill recording", ex);
+                    throw;
+                }
+                if (result.CoverageReportPaths.Any(path => !processed.Reports.TryGetValue(path, out var report)
+                    || report.Error is not null || report.FileCount == 0 || report.SourceChanged))
+                {
+                    _ = _backfillFailed.TryAdd((unit.ProjectPath, unit.Key), 0);
+                    DiagnosticLog.Instance?.Write("Backfill", $"Skipped {unit.Key}: coverage was invalid, empty, or based on unverified sources.");
+                }
             }
             finally
             {
@@ -437,6 +508,7 @@ public sealed partial class PistonOrchestrator
         finally
         {
             CleanUpCoverageResultsDirs(result.CoverageReportPaths);
+            CleanUpRunnerTemporaryDirectories(result.Projects, result.CoverageReportPaths);
         }
     }
 

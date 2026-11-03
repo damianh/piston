@@ -101,6 +101,131 @@ public sealed class CoverageToolsTests : IDisposable
         Assert.Contains("disabled", ex.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GetCoverage_NoMeasuredFilesOrLinesReturnsAnActionableError(bool hasEmptyFile)
+    {
+        var engine = Engine();
+        engine.CoverageReport = new CoverageReportSnapshot(hasEmptyFile
+            ? [Summary(Path.Combine(_root, "src", "Empty.cs"), 0, 0)] : []);
+        engine.SetProjectCoverage(new ProjectCoverageStatus(
+            Path.Combine(_root, "tests", "Missing.Tests.csproj"),
+            CoverageCollectionStatus.Unavailable, "Collector missing.", "run-1"));
+
+        var error = Assert.Throws<McpException>(() =>
+            new CoverageTools(engine, NullMcpCallRecorder.Instance).GetCoverage());
+
+        Assert.Contains("No coverage data was measured", error.Message, StringComparison.Ordinal);
+        Assert.Contains("compatible coverage collector", error.Message, StringComparison.Ordinal);
+        Assert.Contains("tests/Missing.Tests.csproj: Collector missing.", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetCoverage_FileWithNoMeasuredLinesReturnsAnError()
+    {
+        var engine = Engine();
+        var path = Path.Combine(_root, "src", "Empty.cs");
+        engine.CoverageReport = new CoverageReportSnapshot([
+            Summary(Path.Combine(_root, "src", "Measured.cs"), 1, 1),
+            Summary(path, 0, 0),
+        ]);
+        engine.FileCoverage["src/Empty.cs"] = new FileCoverageSnapshot(Summary(path, 0, 0), []);
+
+        var error = Assert.Throws<McpException>(() =>
+            new CoverageTools(engine, NullMcpCallRecorder.Instance).GetCoverage("src/Empty.cs"));
+
+        Assert.Contains("no coverage", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("src/Empty.cs", error.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GetCoverage_IncompleteProjectsAreFlaggedInSummaryAndFileViews(bool fileView)
+    {
+        var engine = Engine();
+        var path = Path.Combine(_root, "src", "A.cs");
+        engine.CoverageReport = new CoverageReportSnapshot([Summary(path, 4, 3)]);
+        engine.FileCoverage["src/A.cs"] = new FileCoverageSnapshot(
+            Summary(path, 4, 3), [new(1, 1), new(2, 1), new(3, 1), new(4, 0)]);
+        engine.SetProjectCoverage(
+            new(Path.Combine(_root, "tests", "Measured.csproj"), CoverageCollectionStatus.Measured, null, "run-ok"),
+            new(Path.Combine(_root, "tests", "Unknown.csproj"), CoverageCollectionStatus.Unknown, "Not run.", null),
+            new(Path.Combine(_root, "tests", "Partial.csproj"), CoverageCollectionStatus.Partial, "Filtered.", "run-p"),
+            new(Path.Combine(_root, "tests", "Unavailable.csproj"), CoverageCollectionStatus.Unavailable, "No collector.", "run-u"),
+            new(Path.Combine(_root, "tests", "Failed.csproj"), CoverageCollectionStatus.Failed, "Bad report.", "run-f"));
+
+        var json = JsonNode.Parse(new CoverageTools(engine, NullMcpCallRecorder.Instance)
+            .GetCoverage(fileView ? "src/A.cs" : null))!;
+
+        Assert.Equal("partial", json["measurementStatus"]!.GetValue<string>());
+        var issues = json["unmeasuredProjects"]!.AsArray();
+        Assert.Equal(["tests/Failed.csproj", "tests/Partial.csproj", "tests/Unavailable.csproj", "tests/Unknown.csproj"],
+            issues.Select(issue => issue!["project"]!.GetValue<string>()));
+        Assert.Equal(["failed", "partial", "unavailable", "unknown"],
+            issues.Select(issue => issue!["status"]!.GetValue<string>()));
+        Assert.Equal("Bad report.", issues[0]!["message"]!.GetValue<string>());
+        Assert.Equal("run-f", issues[0]!["runId"]!.GetValue<string>());
+        if (fileView)
+        {
+            Assert.Equal("src/A.cs", json["path"]!.GetValue<string>());
+            Assert.Equal("4", json["uncoveredLines"]!.GetValue<string>());
+        }
+        else
+        {
+            Assert.Equal(75, json["totals"]!["linePercent"]!.GetValue<double>());
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void GetCoverage_CompleteOrLegacyStateOmitsPartialMeasurementFields(bool withMeasuredProject)
+    {
+        var engine = Engine();
+        var path = Path.Combine(_root, "src", "A.cs");
+        engine.CoverageReport = new CoverageReportSnapshot([Summary(path, 4, 3)]);
+        if (withMeasuredProject)
+        {
+            engine.SetProjectCoverage(new ProjectCoverageStatus(
+                Path.Combine(_root, "tests", "A.csproj"), CoverageCollectionStatus.Measured, null, "run-1"));
+        }
+
+        var json = JsonNode.Parse(new CoverageTools(engine, NullMcpCallRecorder.Instance).GetCoverage())!.AsObject();
+
+        Assert.False(json.ContainsKey("measurementStatus"));
+        Assert.False(json.ContainsKey("unmeasuredProjects"));
+        Assert.Equal(75, json["totals"]!["linePercent"]!.GetValue<double>());
+    }
+
+    [Fact]
+    public void GetCoverage_RestoredDataWarnsUntilProjectInventoryIsKnown()
+    {
+        var engine = Engine();
+        engine.CoverageReport = new CoverageReportSnapshot([Summary(Path.Combine(_root, "A.cs"), 4, 3)]);
+        engine.State.HasCoverageData = true;
+
+        var json = JsonNode.Parse(new CoverageTools(engine, NullMcpCallRecorder.Instance).GetCoverage())!;
+
+        Assert.Equal("partial", json["measurementStatus"]!.GetValue<string>());
+        Assert.Contains("has not been established", json["measurementWarning"]!.GetValue<string>(), StringComparison.Ordinal);
+        Assert.Empty(json["unmeasuredProjects"]!.AsArray());
+    }
+
+    [Fact]
+    public void GetCoverage_StorageErrorIsReportedInsteadOfDisabledOrEmptyCoverage()
+    {
+        var engine = Engine();
+        engine.SetCoverageError("database is locked");
+
+        var error = Assert.Throws<McpException>(() =>
+            new CoverageTools(engine, NullMcpCallRecorder.Instance).GetCoverage());
+
+        Assert.Contains("Coverage is unavailable", error.Message, StringComparison.Ordinal);
+        Assert.Contains("database is locked", error.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void GetCoverage_Summary_ReportsModulesAndWorstFiles()
     {
@@ -127,7 +252,9 @@ public sealed class CoverageToolsTests : IDisposable
     public void GetCoverage_File_ReportsUncoveredAndPartialRanges()
     {
         var engine = Engine();
-        engine.CoverageReport = new CoverageReportSnapshot([]);
+        engine.CoverageReport = new CoverageReportSnapshot([
+            Summary(Path.Combine(_root, "src", "A.cs"), 5, 3),
+        ]);
         engine.FileCoverage["src/A.cs"] = new FileCoverageSnapshot(
             Summary(Path.Combine(_root, "src", "A.cs"), 5, 3),
             [new(1, 1), new(2, 0), new(3, 0), new(4, 2, 1, 2), new(6, 0)]);
@@ -146,7 +273,9 @@ public sealed class CoverageToolsTests : IDisposable
     public void GetCoverage_File_ReportsUnvalidatedCurrentLines()
     {
         var engine = Engine();
-        engine.CoverageReport = new CoverageReportSnapshot([]);
+        engine.CoverageReport = new CoverageReportSnapshot([
+            Summary(Path.Combine(_root, "src", "A.cs"), 2, 1, stale: true),
+        ]);
         engine.FileCoverage["src/A.cs"] = new FileCoverageSnapshot(
             Summary(Path.Combine(_root, "src", "A.cs"), 2, 1, stale: true),
             [new(1, 1)])
@@ -164,10 +293,13 @@ public sealed class CoverageToolsTests : IDisposable
     public void GetCoverage_UnmeasuredFile_Fails()
     {
         var engine = Engine();
-        engine.CoverageReport = new CoverageReportSnapshot([]);
+        engine.CoverageReport = new CoverageReportSnapshot([
+            Summary(Path.Combine(_root, "src", "A.cs"), 1, 1),
+        ]);
         var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
 
-        _ = Assert.Throws<McpException>(() => tools.GetCoverage("src/Nope.cs"));
+        var error = Assert.Throws<McpException>(() => tools.GetCoverage("src/Nope.cs"));
+        Assert.Contains("No coverage for 'src/Nope.cs'", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -656,6 +788,26 @@ public sealed class CoverageToolsTests : IDisposable
         Assert.Equal(written, json["path"]!.GetValue<string>());
         Assert.Equal(1, json["files"]!.GetValue<int>());
         Assert.Contains("<coverage", File.ReadAllText(written), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExportCoverage_WhenResultsChangeDuringReadDoesNotWriteMixedData()
+    {
+        var engine = Engine();
+        var path = Path.Combine(_root, "A.cs");
+        engine.CoverageReport = new CoverageReportSnapshot([Summary(path, 1, 1)]);
+        engine.FileCoverage[path] = new FileCoverageSnapshot(Summary(path, 1, 1), [new(1, 1)]);
+        engine.OnGetFileCoverage = _ =>
+        {
+            engine.State.BeginResultsUpdate();
+            engine.State.EndResultsUpdate();
+        };
+
+        var error = Assert.Throws<McpException>(() =>
+            new CoverageTools(engine, NullMcpCallRecorder.Instance).ExportCoverage());
+
+        Assert.Contains("changed while they were read", error.Message, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(_root, ".piston", "coverage", "lcov.info")));
     }
 
     [Theory]

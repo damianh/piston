@@ -137,6 +137,26 @@ public sealed class ImpactAnalyzerTests : IDisposable
     }
 
     [Fact]
+    public async Task AnalysisPublishesCoverageInvalidationButPreviewDoesNot()
+    {
+        var state = new PistonState();
+        using var store = new StubCoverageStore();
+        var analyzer = new ImpactAnalyzer(_factory, store,
+            beginCoverageUpdate: state.BeginResultsUpdate,
+            endCoverageUpdate: state.EndResultsUpdate);
+        await analyzer.InitializeAsync("solution.slnx", _ct);
+
+        _ = analyzer.Preview([Change(_libCode)]);
+        Assert.Equal(0, state.ResultsVersion);
+        Assert.Empty(store.MarkedStaleFiles);
+
+        _ = analyzer.Analyze([Change(_libCode)]);
+        Assert.Equal(2, state.ResultsVersion);
+        Assert.False(state.IsPublishingResults);
+        Assert.Equal([_libCode], store.MarkedStaleFiles);
+    }
+
+    [Fact]
     public async Task CsFileInTestProject_RunsOnlyThatTestProject_NoBuildTargets()
     {
         var analyzer = new ImpactAnalyzer(_factory);
@@ -412,6 +432,180 @@ public sealed class ImpactAnalyzerTests : IDisposable
         // Empty FQN set → falls back to Tier 2 (null)
         Assert.Null(result.AffectedTestFqns);
     }
+
+    [Fact]
+    public async Task Tier3_IncompleteAffectedProjectCannotBeNarrowedAway()
+    {
+        var otherTests = Path.Combine(_root, "Other.Tests", "Other.Tests.csproj");
+        var store = new StubCoverageStore();
+        _ = store.FilesWithCoverage.Add(_libCode);
+        store.TestsCoveringFile[_libCode] = ["T.A.One"];
+        var analyzer = new ImpactAnalyzer(
+            _ => MixedGraph(otherTests), store, project => project == _testsCsproj);
+        await analyzer.InitializeAsync("solution.slnx", _ct);
+
+        var result = analyzer.Preview([Change(_libCode)]);
+
+        Assert.False(result.IsFullRun);
+        Assert.Equal([_testsCsproj, otherTests], result.AffectedTestProjectPaths.Order(StringComparer.Ordinal));
+        Assert.Null(result.AffectedTestFqns);
+        Assert.Contains("Other.Tests.csproj", result.Explanation, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Tier3_CoverageStorageFailureFallsBackToAffectedProjects()
+    {
+        var store = new StubCoverageStore();
+        _ = store.FilesWithCoverage.Add(_libCode);
+        store.TestsCoveringFile[_libCode] = ["T.A.One"];
+        var analyzer = new ImpactAnalyzer(_factory, store, _ => true, () => "database locked");
+        await analyzer.InitializeAsync("solution.slnx", _ct);
+
+        var result = analyzer.Preview([Change(_libCode)]);
+
+        Assert.Equal([_testsCsproj], result.AffectedTestProjectPaths);
+        Assert.Null(result.AffectedTestFqns);
+        Assert.Contains("database locked", result.Explanation, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Tier3_MissingProjectFileRecordingKeepsBothProjectsAndMarksOldEvidenceStale()
+    {
+        var otherTests = Path.Combine(_root, "Other.Tests", "Other.Tests.csproj");
+        File.WriteAllText(_libCode, LibSource);
+        using var store = new SqliteCoverageStore();
+        await store.InitializeAsync(_root);
+        var reportA = WriteReport("a.xml", _libCode, line: 3, hits: 1);
+        var reportB = WriteReport("b.xml", _appProgram, line: 1, hits: 1);
+        var impact = RunImpact(otherTests, reportA, reportB);
+        var processed = await new CoverageProcessor(new CoberturaParser()).ProcessCoverageAsync(
+            store.CreateRunId(), [reportA, reportB], ["T.A.One", "T.B.One"], store, impact: impact);
+        await store.RecordImpactAsync(new ImpactRecording(
+            _testsCsproj, ImpactGranularity.Class, "T.A", store.CreateRunId(), ["T.A.One"],
+            [new ImpactFile(_libCode, [new(2, 4)], LibSource)], Merge: false));
+        await store.RecordImpactAsync(new ImpactRecording(
+            otherTests, ImpactGranularity.Test, "T.B.One", store.CreateRunId(), ["T.B.One"],
+            [new ImpactFile(_libCode, [new(3, 3)], LibSource)], Merge: false));
+        Assert.Equal(1, processed.Reports[reportA].FileCount);
+        Assert.Equal(1, processed.Reports[reportB].FileCount);
+        Assert.True(store.HasProjectFileCoverage(_testsCsproj, _libCode));
+        Assert.False(store.HasProjectFileCoverage(otherTests, _libCode));
+        Assert.True(store.HasCoverageData(_libCode));
+        var analyzer = new ImpactAnalyzer(_ => MixedGraph(otherTests), store, _ => true);
+        await analyzer.InitializeAsync("solution.slnx", _ct);
+        EditLibLine(3);
+
+        var result = analyzer.Analyze([Change(_libCode)]);
+
+        Assert.Equal([_testsCsproj, otherTests], result.AffectedTestProjectPaths.Order(StringComparer.Ordinal));
+        Assert.Null(result.AffectedTestFqns);
+        Assert.Contains("Other.Tests.csproj", result.Explanation, StringComparison.Ordinal);
+        Assert.Contains("Code.cs", result.Explanation, StringComparison.Ordinal);
+        Assert.False(store.HasCoverageData(_libCode));
+        Assert.False(Assert.Single(store.GetUnits(_testsCsproj, ImpactGranularity.Class)).IsCurrent);
+        Assert.False(Assert.Single(store.GetUnits(otherTests, ImpactGranularity.Test)).IsCurrent);
+    }
+
+    [Fact]
+    public async Task Tier3_ZeroHitProjectFileCountsAsRecordedAndAllowsSafeNarrowing()
+    {
+        var otherTests = Path.Combine(_root, "Other.Tests", "Other.Tests.csproj");
+        File.WriteAllText(_libCode, LibSource);
+        using var store = new SqliteCoverageStore();
+        await store.InitializeAsync(_root);
+        var reportA = WriteReport("a.xml", _libCode, line: 3, hits: 1);
+        var reportB = WriteReport("b.xml", _libCode, line: 3, hits: 0);
+        var processed = await new CoverageProcessor(new CoberturaParser()).ProcessCoverageAsync(
+            store.CreateRunId(), [reportA, reportB], ["T.A.One", "T.B.One"], store,
+            impact: RunImpact(otherTests, reportA, reportB));
+        Assert.Equal(1, processed.Reports[reportB].FileCount);
+        Assert.True(store.HasProjectFileCoverage(otherTests, _libCode));
+        var analyzer = new ImpactAnalyzer(_ => MixedGraph(otherTests), store, _ => true);
+        await analyzer.InitializeAsync("solution.slnx", _ct);
+        EditLibLine(3);
+
+        var result = analyzer.Preview([Change(_libCode)]);
+
+        Assert.Equal(["T.A.One"], result.AffectedTestFqns);
+        Assert.Equal([_testsCsproj, otherTests], result.AffectedTestProjectPaths.Order(StringComparer.Ordinal));
+        Assert.DoesNotContain("T.B.One", result.AffectedTestFqns!);
+    }
+
+    [Fact]
+    public async Task Tier3_SkippedTestRemainsSelectableFromCoarseRunEvidence()
+    {
+        File.WriteAllText(_libCode, LibSource);
+        using var store = new SqliteCoverageStore();
+        await store.InitializeAsync(_root);
+        var report = WriteReport("coarse.xml", _libCode, line: 3, hits: 1);
+        var run = new CoverageImpactOptions(
+            [new CoverageRunUnit(_testsCsproj, "run", [report], ["T.A.Ran", "T.A.Skipped"], Merge: false)],
+            ImpactGranularity.Run,
+            DateTime.UtcNow.AddMinutes(1));
+        var processed = await new CoverageProcessor(new CoberturaParser()).ProcessCoverageAsync(
+            store.CreateRunId(), [report], ["T.A.Ran", "T.A.Skipped"], store, impact: run);
+        await store.RecordImpactAsync(new ImpactRecording(
+            _testsCsproj, ImpactGranularity.Test, "T.A.Ran", store.CreateRunId(), ["T.A.Ran"],
+            [new ImpactFile(_libCode, [new(10, 12)], LibSource)], Merge: false));
+        Assert.Equal(1, processed.Reports[report].FileCount);
+        var analyzer = new ImpactAnalyzer(_factory, store, _ => true);
+        await analyzer.InitializeAsync("solution.slnx", _ct);
+        EditLibLine(3);
+
+        var result = analyzer.Preview([Change(_libCode)]);
+
+        Assert.Equal(["T.A.Skipped"], result.AffectedTestFqns);
+        Assert.Equal("run", Assert.Single(result.SelectionReasons!["T.A.Skipped"]).Granularity);
+    }
+
+    [Fact]
+    public async Task Tier3_CommentOnlyEditDoesNotSkipAnIncompleteAffectedProject()
+    {
+        var otherTests = Path.Combine(_root, "Other.Tests", "Other.Tests.csproj");
+        using var store = await ImpactStoreAsync();
+        var analyzer = new ImpactAnalyzer(
+            _ => MixedGraph(otherTests), store, project => project == _testsCsproj);
+        await analyzer.InitializeAsync("solution.slnx", _ct);
+        File.WriteAllText(_libCode, "// new comment\n" + LibSource);
+
+        var result = analyzer.Preview([Change(_libCode)]);
+
+        Assert.Equal([_testsCsproj, otherTests], result.AffectedTestProjectPaths.Order(StringComparer.Ordinal));
+        Assert.Null(result.AffectedTestFqns);
+        Assert.Contains("Other.Tests.csproj", result.Explanation, StringComparison.Ordinal);
+    }
+
+    private StubSolutionGraph MixedGraph(string otherTests) => new(
+        allProjects: [_libCsproj, _testsCsproj, otherTests],
+        testProjects: [_testsCsproj, otherTests],
+        transitiveDependents: new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            [_libCsproj] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { _testsCsproj, otherTests },
+        },
+        fileToProject: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [_libCode] = _libCsproj,
+        });
+
+    private string WriteReport(string name, string source, int line, int hits)
+    {
+        var report = Path.Combine(_root, name);
+        var escapedSource = System.Security.SecurityElement.Escape(source);
+        File.WriteAllText(report, $$"""
+            <coverage><packages><package name="Lib"><classes>
+              <class filename="{{escapedSource}}"><lines><line number="{{line}}" hits="{{hits}}" /></lines></class>
+            </classes></package></packages></coverage>
+            """);
+        return report;
+    }
+
+    private CoverageImpactOptions RunImpact(string otherTests, string reportA, string reportB) => new(
+        [
+            new CoverageRunUnit(_testsCsproj, "run", [reportA], ["T.A.One"], Merge: false),
+            new CoverageRunUnit(otherTests, "run", [reportB], ["T.B.One"], Merge: false),
+        ],
+        ImpactGranularity.Run,
+        DateTime.UtcNow.AddMinutes(1));
 
     // ── Tier 3 with the impact map ─────────────────────────────────────────────
 

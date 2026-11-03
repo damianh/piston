@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Collections.Concurrent;
 using Piston.Engine.Coverage;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
@@ -84,6 +85,16 @@ public sealed class MtpExecutionTests : IAsyncLifetime
                 {
                     return 22;
                 }
+
+                public static int Select(bool first)
+                {
+                    if (first)
+                    {
+                        return 11;
+                    }
+
+                    return 22;
+                }
             }
             """);
 
@@ -106,6 +117,7 @@ public sealed class MtpExecutionTests : IAsyncLifetime
                 {
                     Xunit.TestContext.Current.TestOutputHelper?.WriteLine("hello from PassingTest");
                     Xunit.Assert.Equal(11, MtpE2E.Library.CoveredCode.Passing());
+                    Xunit.Assert.Equal(11, MtpE2E.Library.CoveredCode.Select(true));
 
                     var gate = System.IO.Path.GetFullPath(System.IO.Path.Combine(System.AppContext.BaseDirectory, "../../../progress-gate"));
                     while (System.IO.File.Exists(gate))
@@ -128,6 +140,7 @@ public sealed class MtpExecutionTests : IAsyncLifetime
                 public void FailingTest()
                 {
                     Xunit.Assert.Equal(22, MtpE2E.Library.CoveredCode.Failing());
+                    Xunit.Assert.Equal(22, MtpE2E.Library.CoveredCode.Select(false));
                     throw new System.InvalidOperationException("expected failure");
                 }
             }
@@ -417,6 +430,170 @@ public sealed class MtpExecutionTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task MultiTargetCoverageProducesDistinctReportsAndFrameworkQualifiedResults()
+    {
+        Assert.SkipUnless(_restored, "MTP fixture packages could not be restored.");
+        Assert.True(_available, "The MTP fixture must restore and build.");
+        var runtimes = await TestProcess.RunDotnetResultAsync("--list-runtimes", _root);
+        Assert.True(runtimes.ExitCode == 0, runtimes.Output);
+        Assert.SkipUnless(runtimes.Output.Split('\n')
+            .Any(line => line.Contains("Microsoft.NETCore.App 9.", StringComparison.Ordinal)),
+            "The .NET 9 runtime is not installed.");
+
+        var libraryProject = Path.Combine(_root, "Lib", "Lib.csproj");
+        foreach (var project in new[] { _testCsproj, libraryProject })
+        {
+            var content = await File.ReadAllTextAsync(project, _ct);
+            await File.WriteAllTextAsync(project, content.Replace(
+                "<TargetFramework>net10.0</TargetFramework>",
+                "<TargetFrameworks>net9.0;net10.0</TargetFrameworks>",
+                StringComparison.Ordinal), _ct);
+        }
+
+        var restore = await TestProcess.RunDotnetResultAsync("restore", _root);
+        Assert.SkipUnless(restore.ExitCode == 0, $"Multi-target fixture restore failed: {restore.Output}");
+        _ = await TestProcess.RunDotnetAsync("build --no-restore", _root);
+        var runtimeProbe = await TestProcess.RunDotnetResultAsync(
+            $"test --project \"{_testCsproj}\" --framework net9.0 --no-build --no-ansi --output Detailed", _root);
+        Assert.SkipWhen(runtimeProbe.ExitCode == 150
+            && runtimeProbe.Output.Contains("You must install or update .NET to run this application.", StringComparison.Ordinal),
+            "The .NET 9 runtime is unavailable to the test host.");
+        Assert.True(runtimeProbe.ExitCode == 2 && runtimeProbe.Output.Contains("PassingTest", StringComparison.Ordinal),
+            runtimeProbe.Output);
+        var outputs = new[]
+        {
+            Path.Combine(_root, "bin", "Debug", "net9.0", "MtpE2E.dll"),
+            AppPath,
+        };
+        Assert.All(outputs, output => Assert.True(MtpTestExecutionStrategy.HasCoverageExtension(output)));
+        var strategy = new MtpTestExecutionStrategy(_ => AppPath, _root,
+            isMultiTargeted: _ => true,
+            getMtpTargetOutputs: _ => [("net9.0", outputs[0]), ("net10.0", outputs[1])]);
+
+        var snapshots = new ConcurrentQueue<IReadOnlyList<TestResult>>();
+        var result = await strategy.ExecuteAsync(new ProjectTestRequest(_testCsproj, null, CollectCoverage: true),
+            suites => snapshots.Enqueue(suites.SelectMany(suite => suite.Tests).ToArray()), _ct);
+        var results = new List<ProjectTestResult> { result };
+        try
+        {
+            Assert.True(result.RunnerError is null,
+                $"{result.RunnerError}\n{string.Join("\n", result.Log!.Entries.Select(entry => entry.Message))}");
+            Assert.Null(result.CoverageIssue);
+            Assert.Equal(2, result.CoverageReportPaths.Count);
+            var tests = result.Suites.SelectMany(suite => suite.Tests).ToList();
+            Assert.Equal(4, tests.Count);
+            Assert.Equal(["net10.0", "net9.0"], tests.Select(test => test.TargetFramework).Distinct().Order(StringComparer.Ordinal));
+            Assert.All(new[] { "net9.0", "net10.0" }, framework =>
+            {
+                Assert.Contains(tests, test => test.TargetFramework == framework && test.Status == TestStatus.Passed);
+                Assert.Contains(tests, test => test.TargetFramework == framework && test.Status == TestStatus.Failed);
+            });
+            Assert.Contains(snapshots, snapshot =>
+                snapshot.Any(test => test.TargetFramework == "net9.0")
+                && snapshot.Any(test => test.TargetFramework == "net10.0"));
+            Assert.All(result.CoverageReportPaths, report =>
+            {
+                var coverage = new CoberturaParser().Parse(report);
+                var source = Path.Combine(_root, "Lib", "CoveredCode.cs");
+                var file = Assert.Single(coverage.Files, file => file.FilePath == source);
+                Assert.Contains(file.Lines, line => line.BranchesTotal > 0);
+            });
+
+            var filtered = await strategy.ExecuteAsync(new ProjectTestRequest(
+                _testCsproj, "FullyQualifiedName=MtpE2E.SampleTests.PassingTest", CollectCoverage: true), null, _ct);
+            results.Add(filtered);
+            Assert.True(filtered.RunnerError is null,
+                $"{filtered.RunnerError}\n{string.Join("\n", filtered.Log!.Entries.Select(entry => entry.Message))}");
+            Assert.Null(filtered.CoverageIssue);
+            Assert.Equal(2, filtered.CoverageReportPaths.Count);
+            var filteredTests = filtered.Suites.SelectMany(suite => suite.Tests).ToList();
+            Assert.Equal(2, filteredTests.Count);
+            Assert.All(filteredTests, test => Assert.Equal(TestStatus.Passed, test.Status));
+            Assert.Equal(["net10.0", "net9.0"], filteredTests.Select(test => test.TargetFramework).Order(StringComparer.Ordinal));
+
+            var projectContent = await File.ReadAllTextAsync(_testCsproj, _ct);
+            var conditionalCollector = projectContent.Replace(
+                """<PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" />""",
+                """<PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" Condition="'$(TargetFramework)' == 'net10.0'" />""",
+                StringComparison.Ordinal);
+            Assert.NotEqual(projectContent, conditionalCollector);
+            await File.WriteAllTextAsync(_testCsproj, conditionalCollector, _ct);
+            _ = await TestProcess.RunDotnetAsync("restore", _root);
+            _ = await TestProcess.RunDotnetAsync("build --no-restore", _root);
+            File.Delete(Path.Combine(Path.GetDirectoryName(outputs[0])!, MtpTestExecutionStrategy.CoverageExtensionAssembly));
+            Assert.False(MtpTestExecutionStrategy.HasCoverageExtension(outputs[0]));
+            Assert.True(MtpTestExecutionStrategy.HasCoverageExtension(outputs[1]));
+
+            var withoutCollector = await strategy.ExecuteAsync(new ProjectTestRequest(
+                _testCsproj, "FullyQualifiedName=MtpE2E.SampleTests.PassingTest", CollectCoverage: true), null, _ct);
+            Assert.True(withoutCollector.RunnerError is null,
+                $"{withoutCollector.RunnerError}\n{string.Join("\n", withoutCollector.Log!.Entries.Select(entry => entry.Message))}");
+            Assert.Empty(withoutCollector.CoverageReportPaths);
+            Assert.Contains("coverage was skipped", withoutCollector.CoverageIssue, StringComparison.Ordinal);
+            var unmeasuredTests = withoutCollector.Suites.SelectMany(suite => suite.Tests).ToList();
+            Assert.Equal(2, unmeasuredTests.Count);
+            Assert.All(unmeasuredTests, test => Assert.Equal(TestStatus.Passed, test.Status));
+            Assert.Equal(["net10.0", "net9.0"], unmeasuredTests.Select(test => test.TargetFramework).Order(StringComparer.Ordinal));
+        }
+        finally
+        {
+            foreach (var dir in results.SelectMany(run => run.CoverageReportPaths)
+                .Select(PistonOrchestrator.CoverageResultsDirectory).OfType<string>().Distinct())
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { /* ignore */ }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task MultiTargetMissingAReportPreservesOtherFrameworkResults()
+    {
+        Assert.SkipUnless(_restored, "MTP fixture packages could not be restored.");
+        Assert.True(_available, "The MTP fixture must restore and build.");
+        var result = await MtpTestProcessRunner.RunAsync(
+            _testCsproj, appPath: null, _root, "FullyQualifiedName=MtpE2E.SampleTests.PassingTest",
+            onProgress: null, _ct, MtpCoverage.Collect, expectedCoverageReports: 2,
+            targetOutputs: [("net10.0", AppPath), ("net9.0", Path.Combine(_root, "bin", "Debug", "net9.0", "MtpE2E.dll"))]);
+        try
+        {
+            var tests = result.Suites.SelectMany(suite => suite.Tests).ToList();
+            Assert.True(tests.Count == 1,
+                $"{result.RunnerError}\n{string.Join("\n", result.Log!.Entries.Select(entry => entry.Message))}");
+            var test = Assert.Single(tests);
+            Assert.Equal(TestStatus.Passed, test.Status);
+            Assert.Equal("net10.0", test.TargetFramework);
+            Assert.NotNull(result.RunnerError);
+            Assert.Contains("net9.0", result.RunnerError, StringComparison.Ordinal);
+            Assert.Contains("no Cobertura coverage report for net9.0", result.CoverageIssue, StringComparison.Ordinal);
+            var report = Assert.Single(result.CoverageReportPaths);
+            Assert.True(File.Exists(report));
+            Assert.Contains(result.Log!.Entries, entry => entry.Message == "Running target framework net10.0");
+            Assert.Contains(result.Log.Entries, entry => entry.Message == "Running target framework net9.0");
+        }
+        finally
+        {
+            foreach (var dir in result.CoverageReportPaths.Select(PistonOrchestrator.CoverageResultsDirectory).OfType<string>().Distinct())
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { /* ignore */ }
+            }
+        }
+    }
+
+    [Fact]
+    public async Task DotnetTestWithoutResultsSurfacesStdoutOnlyFailure()
+    {
+        Assert.SkipUnless(_restored, "MTP fixture packages could not be restored.");
+        Assert.True(_available, "The MTP fixture must restore and build.");
+        var result = await MtpTestProcessRunner.RunAsync(
+            _testCsproj, appPath: null, _root, "FullyQualifiedName=MtpE2E.SampleTests.PassingTest",
+            onProgress: null, _ct);
+
+        Assert.Empty(result.Suites);
+        Assert.Equal(5, result.Log!.ExitCode);
+        Assert.Contains("dotnet test exited with code 5", result.RunnerError, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task SequentialFilteredCoverage_ReusesDiscoveryAndKeepsReportsSeparate()
     {
         Assert.SkipUnless(_restored, "MTP fixture packages could not be restored.");
@@ -455,6 +632,9 @@ public sealed class MtpExecutionTests : IAsyncLifetime
 
             var passHits = CoverageHits(passResult, source);
             var failHits = CoverageHits(failResult, source);
+            var passReport = new CoberturaParser().Parse(Assert.Single(passResult.CoverageReportPaths));
+            var libraryCoverage = Assert.Single(passReport.Files, file => file.FilePath == source);
+            Assert.Contains(libraryCoverage.Lines, line => line.BranchesTotal > 0 && line.BranchesCovered > 0);
             Assert.Contains(passLine, passHits);
             Assert.DoesNotContain(failLine, passHits);
             Assert.Contains(failLine, failHits);
@@ -661,8 +841,10 @@ public sealed class MtpExecutionTests : IAsyncLifetime
 
         Assert.Empty(result.CoverageReportPaths);
         Assert.Equal(2, result.Suites.SelectMany(s => s.Tests).Count());
+        Assert.Null(result.RunnerError);
+        Assert.Equal("The test app does not include Microsoft.Testing.Extensions.CodeCoverage.", result.CoverageIssue);
         Assert.Contains(Assert.Single(result.Suites).ExecutionLog!.Entries,
-            e => e.Message.Contains("Coverage not collected", StringComparison.Ordinal));
+            e => e.Message == result.CoverageIssue);
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────

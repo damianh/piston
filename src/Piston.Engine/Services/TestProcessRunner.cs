@@ -106,6 +106,8 @@ internal static partial class TestProcessRunner
         var resultsDir = Path.Combine(Path.GetTempPath(), $"piston-{Guid.NewGuid():N}");
         _ = Directory.CreateDirectory(resultsDir);
         var keepResultsDirectory = false;
+        IReadOnlyList<string> coverageReportPaths = [];
+        var delivered = false;
 
         try
         {
@@ -258,8 +260,9 @@ internal static partial class TestProcessRunner
 
             // A multi-targeted project writes one TRX file per framework; only then are results told
             // apart by framework.
-            var multiTargeted = trxFiles.Select(TargetFrameworkOfTrx).OfType<string>()
-                .Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1;
+            var targetFrameworkCount = trxFiles.Select(TargetFrameworkOfTrx).OfType<string>()
+                .Distinct(StringComparer.OrdinalIgnoreCase).Count();
+            var multiTargeted = targetFrameworkCount > 1;
             var suites = new List<TestSuite>();
             foreach (var trx in trxFiles)
             {
@@ -293,27 +296,55 @@ internal static partial class TestProcessRunner
                 $"Result: {totalTests} test(s) in {suites.Count} suite(s)");
 
             // Glob for Cobertura XML files if coverage was collected
-            IReadOnlyList<string> coverageReportPaths = [];
+            string? coverageIssue = null;
             if (collectCoverage)
             {
-                coverageReportPaths = Directory.GetFiles(
-                    resultsDir, "coverage.cobertura.xml", SearchOption.AllDirectories);
+                try
+                {
+                    coverageReportPaths = Directory.GetFiles(
+                        resultsDir, "coverage.cobertura.xml", SearchOption.AllDirectories);
+                    if (coverageReportPaths.Count == 0)
+                    {
+                        coverageIssue = "The test run produced no Cobertura coverage report.";
+                        log.Write("VSTestRunner", coverageIssue);
+                    }
+                    else if (multiTargeted && coverageReportPaths.Count < targetFrameworkCount)
+                    {
+                        coverageIssue = $"The test run produced {coverageReportPaths.Count} coverage report(s) for {targetFrameworkCount} target frameworks.";
+                        log.Write("VSTestRunner", coverageIssue);
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    coverageIssue = $"Could not read the temporary coverage directory: {ex.Message}";
+                    log.Write("VSTestRunner", coverageIssue);
+                }
             }
 
             log.Complete();
-            return new ProjectTestResult(projectPath, log.AttachTo(suites), runnerError, coverageReportPaths, Crashed: false)
+            var completed = new ProjectTestResult(projectPath, log.AttachTo(suites), runnerError, coverageReportPaths, Crashed: false)
             {
                 Log = log,
                 TemporaryDirectories = hasAttachments ? [resultsDir] : [],
+                CoverageIssue = coverageIssue,
             };
+            delivered = true;
+            return completed;
         }
         finally
         {
             // Only clean up immediately when we are not returning coverage paths to the caller.
             // When coverage is enabled and paths were found, the caller cleans up the results dir.
-            if (!collectCoverage && !keepResultsDirectory)
+            if (!delivered || (coverageReportPaths.Count == 0 && !keepResultsDirectory))
             {
-                try { Directory.Delete(resultsDir, recursive: true); } catch { /* ignore */ }
+                try
+                {
+                    Directory.Delete(resultsDir, recursive: true);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    DiagnosticLog.Instance?.Write("VSTestRunner", $"Could not remove temporary results directory {resultsDir}: {ex.Message}");
+                }
             }
         }
     }

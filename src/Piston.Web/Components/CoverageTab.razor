@@ -4,13 +4,35 @@
 @implements IAsyncDisposable
 
 <div class="flex flex-col h-full overflow-hidden text-xs">
+    @if (_coverageEnabled && _coverageError is null && (_coverageIssues.Count > 0 || _coverageInventoryPending))
+    {
+        <div class="px-4 py-2 shrink-0 border-b border-yellow-900 bg-yellow-950/30 text-yellow-300"
+             data-testid="coverage-incomplete">
+            Coverage is incomplete; totals and line verdicts include only measured data.
+            @if (_coverageInventoryPending)
+            {
+                <div>Coverage availability for test projects has not been established in this engine session.</div>
+            }
+            @foreach (var issue in _coverageIssues)
+            {
+                <div><span class="font-semibold">@issue.ProjectPath</span>: @(issue.Message ?? issue.Status)</div>
+            }
+        </div>
+    }
     @if (!_coverageEnabled)
     {
         <div class="p-6 text-gray-400 max-w-xl leading-relaxed">
             <div class="text-gray-200 font-semibold mb-2">Coverage is off</div>
-            Start the daemon with <code class="font-mono text-gray-200">--coverage</code>, or set
+            Restart the daemon with <code class="font-mono text-gray-200">--coverage</code>, or set
             <code class="font-mono text-gray-200">"coverageEnabled": true</code> in <code class="font-mono text-gray-200">.piston.json</code>,
-            to collect line and branch coverage on every run.
+            and restart it to collect line and branch coverage on every run.
+        </div>
+    }
+    else if (_coverageError is not null)
+    {
+        <div class="p-6 text-yellow-300 max-w-xl leading-relaxed" data-testid="coverage-error">
+            <div class="font-semibold mb-2">Coverage is unavailable</div>
+            @_coverageError
         </div>
     }
     else if (View.CoverageMode == CoverageMode.Changes)
@@ -72,7 +94,7 @@
         <!-- Coverage totals -->
         <div class="flex items-center gap-x-4 px-4 h-6 shrink-0 whitespace-nowrap overflow-hidden border-b border-gray-800 text-gray-500 select-none"
              data-testid="coverage-summary">
-            @if (_summary is { } s)
+            @if (_summary is { Files.Count: > 0, LinesTotal: > 0 } s)
             {
                 <span class="text-gray-400">Lines <span class="text-gray-100 font-semibold tabular-nums">@Percent(s.LinesCovered, s.LinesTotal)</span>
                     <span class="tabular-nums">(@s.LinesCovered.ToString("N0")/@s.LinesTotal.ToString("N0"))</span></span>
@@ -98,9 +120,9 @@
                 {
                     <div class="text-gray-600 italic px-4 py-4">Loading…</div>
                 }
-                else if (_summary.Files.Count == 0)
+                else if (_summary.Files.Count == 0 || _summary.LinesTotal == 0)
                 {
-                    <div class="text-gray-600 italic px-4 py-4">No coverage yet. It is collected on the next test run.</div>
+                    <div class="text-gray-600 italic px-4 py-4">No coverage data was measured. Run the tests and ensure the test projects have a coverage collector.</div>
                 }
                 else
                 {
@@ -196,6 +218,9 @@
 
 @code {
     private bool _coverageEnabled;
+    private string? _coverageError;
+    private IReadOnlyList<ProjectCoverageDto> _coverageIssues = [];
+    private bool _coverageInventoryPending;
     private DateTimeOffset? _lastRunTime;
     private DateTimeOffset? _lastChangeTime;
     private CoverageSummaryDto? _summary;
@@ -276,6 +301,9 @@
     private void Capture(StateSnapshotNotification snapshot)
     {
         _coverageEnabled = snapshot.CoverageEnabled;
+        _coverageError = snapshot.CoverageError;
+        _coverageIssues = [.. (snapshot.ProjectCoverage ?? []).Where(project => project.Status != "measured")];
+        _coverageInventoryPending = snapshot.HasCoverageData && (snapshot.ProjectCoverage?.Count ?? 0) == 0;
         _lastRunTime = snapshot.LastRunTime;
         _lastChangeTime = snapshot.LastFileChangeTime;
         _backfilling = snapshot.ImpactBackfill is not null;
@@ -286,6 +314,9 @@
         // Reload after a run finishes (new data) or a file changes (staleness).
         // A finished backfill pass refines which tests executed the selected file.
         var changed = snapshot.CoverageEnabled != _coverageEnabled
+            || snapshot.CoverageError != _coverageError
+            || !(snapshot.ProjectCoverage ?? []).Where(project => project.Status != "measured").SequenceEqual(_coverageIssues)
+            || (snapshot.HasCoverageData && (snapshot.ProjectCoverage?.Count ?? 0) == 0) != _coverageInventoryPending
             || snapshot.LastRunTime != _lastRunTime
             || snapshot.LastFileChangeTime != _lastChangeTime
             || (_backfilling && snapshot.ImpactBackfill is null);
@@ -303,13 +334,13 @@
             _selfRef = DotNetObjectReference.Create(this);
         }
 
-        if (_coverageEnabled && FilesMode && !_splitterAttached)
+        if (_coverageEnabled && _coverageError is null && FilesMode && !_splitterAttached)
         {
             await JS.InvokeVoidAsync("pistonSplitter.attach", _splitContainer, _selfRef,
                 ViewState.MinSplitPercent, ViewState.MaxSplitPercent);
             _splitterAttached = true;
         }
-        else if ((!_coverageEnabled || !FilesMode) && _splitterAttached)
+        else if ((!_coverageEnabled || _coverageError is not null || !FilesMode) && _splitterAttached)
         {
             await JS.InvokeVoidAsync("pistonSplitter.detach", _splitContainer);
             _splitterAttached = false;
@@ -319,7 +350,7 @@
     private async Task RefreshAsync()
     {
         // The Changes view reloads itself.
-        if (!_coverageEnabled || !FilesMode)
+        if (!_coverageEnabled || _coverageError is not null || !FilesMode)
         {
             StateHasChanged();
             return;

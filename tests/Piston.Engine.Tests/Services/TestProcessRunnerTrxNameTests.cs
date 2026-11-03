@@ -31,4 +31,32 @@ public sealed class TestProcessRunnerTrxNameTests
             Directory.Delete(dir, recursive: true);
         }
     }
+
+    [Fact]
+    public async Task CoverageRequestedWithoutAReportRemovesTheVSTestResultsDirectory()
+    {
+        var root = Directory.CreateTempSubdirectory("piston-vstest-no-report-").FullName;
+        try
+        {
+            var result = await TestProcessRunner.RunAsync(
+                Path.Combine(root, "Missing.csproj"), filter: null, collectCoverage: true,
+                onProgress: null, parser: new TrxResultParser(), ct: TestContext.Current.CancellationToken);
+
+            var args = Assert.Single(result.Log!.Entries,
+                entry => entry.Message.StartsWith("Args: dotnet ", StringComparison.Ordinal)).Message;
+            const string marker = "--results-directory \"";
+            var start = args.IndexOf(marker, StringComparison.Ordinal);
+            Assert.True(start >= 0);
+            var directory = args[(start + marker.Length)..].Split('"')[0];
+            Assert.StartsWith(Path.GetTempPath(), directory, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("--collect \"XPlat Code Coverage\"", args, StringComparison.Ordinal);
+            Assert.Empty(result.CoverageReportPaths);
+            Assert.Equal("The test run produced no Cobertura coverage report.", result.CoverageIssue);
+            Assert.False(Directory.Exists(directory));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }

@@ -5,6 +5,7 @@ using Piston.Engine.Coverage;
 using Piston.Engine.Impact;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
+using Piston.Engine.Tests.Coverage;
 using Xunit;
 
 namespace Piston.Engine.Tests.Orchestration;
@@ -37,7 +38,12 @@ public sealed class OrchestratorCoverageTests
     public void RunImpactUnits_FilteredRunMerges_AndWithoutProjectsUsesTheSolution()
     {
         var filtered = PistonOrchestrator.RunImpactUnits(
-            [new ProjectTestResult("A", [], null, [], false), new ProjectTestResult("B", [], null, [], Crashed: true)],
+            [
+                new ProjectTestResult("A",
+                    [new TestSuite("A", [Test("A.Test")], DateTimeOffset.UtcNow, TimeSpan.Zero)],
+                    null, ["a.xml"], false),
+                new ProjectTestResult("B", [], null, [], Crashed: true),
+            ],
             "/repo/s.slnx", [], [], filter: "FullyQualifiedName=X");
         var solution = PistonOrchestrator.RunImpactUnits([], "/repo/s.slnx", ["r.xml"], ["T"], filter: null);
 
@@ -103,9 +109,46 @@ public sealed class OrchestratorCoverageTests
             Assert.False(store.HasCoverageData(file));
 
             // A genuinely later completion may publish fresh coverage.
-            await orchestrator.ProcessCoverageAsync(store.CreateRunId(), [], ["Tests.Pass"]);
+            _ = await orchestrator.ProcessCoverageAsync(store.CreateRunId(), [], ["Tests.Pass"]);
             Assert.True(state.HasCoverageData);
             Assert.True(store.HasCoverageData(file));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task StorageInitializationFailureIsVisibleButDoesNotPreventTestExecution()
+    {
+        var root = Directory.CreateTempSubdirectory("piston-coverage-init-error-").FullName;
+        try
+        {
+            var solution = Path.Combine(root, "App.slnx");
+            var project = Path.Combine(root, "A.Tests.csproj");
+            File.WriteAllText(solution, "<Solution />");
+            File.WriteAllText(Path.Combine(root, "Code.cs"), "class Code {}");
+            var state = new PistonState();
+            var runner = new StubTestRunnerService([project], TimeSpan.Zero);
+            using var store = new StubCoverageStore { InitializationError = new IOException("disk unavailable") };
+            await using var orchestrator = new PistonOrchestrator(
+                new StubFileWatcherService(), new ProvenanceBuildService(), runner,
+                new ProvenanceImpactAnalyzer([project]), state, store,
+                new CoverageProcessor(new CoberturaParser()), coverageEnabled: true);
+
+            await orchestrator.StartAsync(solution);
+            await runner.WaitForCompletionAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            var run = await orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+            Assert.Equal(TestRunStatus.Completed, run!.Status);
+            Assert.Equal(TestStatus.Passed, Assert.Single(run.Tests).Status);
+            Assert.False(state.HasCoverageData);
+            Assert.Contains("Cannot initialize coverage storage", state.CoverageError, StringComparison.Ordinal);
+            Assert.Contains("disk unavailable", state.CoverageError, StringComparison.Ordinal);
+            Assert.Contains("disk unavailable",
+                Assert.Throws<InvalidOperationException>(() => orchestrator.GetCoverageReport()).Message,
+                StringComparison.Ordinal);
         }
         finally
         {
@@ -201,7 +244,7 @@ public sealed class OrchestratorCoverageTests
         public TaskCompletionSource Committed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public async Task ProcessCoverageAsync(
+        public async Task<CoverageProcessingResult> ProcessCoverageAsync(
             long runId, IReadOnlyList<string> paths, IReadOnlyList<string> testFqns, ICoverageStore store, bool isFullRun, string? sourceRoot, CoverageImpactOptions? impact)
         {
             await store.StoreCoverageAsync(runId,
@@ -209,11 +252,18 @@ public sealed class OrchestratorCoverageTests
                 {
                     [testFqns[0]] = [new(file, 1, 1)],
                 });
+            await store.StoreReportAsync(runId,
+                [new CoverageReportFile(new FileCoverage(file, [new LineCoverage(1, 1)], "Lib"), null)], isFullRun);
             _ = Committed.TrySetResult();
             await Release.Task;
+            return SuccessfulReports(paths);
         }
 
-        public Task RecordImpactAsync(long runId, CoverageImpactOptions impact, IImpactMapStore store, string? sourceRoot) =>
-            Task.CompletedTask;
+        public Task<CoverageProcessingResult> RecordImpactAsync(long runId, CoverageImpactOptions impact, IImpactMapStore store, string? sourceRoot) =>
+            Task.FromResult(SuccessfulReports(impact.Units.SelectMany(unit => unit.ReportPaths)));
+
+        private static CoverageProcessingResult SuccessfulReports(IEnumerable<string> paths) =>
+            new(paths.Distinct(StringComparer.Ordinal)
+                .ToDictionary(path => path, _ => new CoverageReportResult(1, null), StringComparer.Ordinal));
     }
 }

@@ -18,7 +18,10 @@ internal static class ImpactBackfill
     /// <param name="Key">The class (or test method) name, which is the unit key.</param>
     /// <param name="Filter">The <c>dotnet test</c> filter that runs just the unit.</param>
     /// <param name="Tests">The unit's tests as last run.</param>
-    internal sealed record Unit(string ProjectPath, string Key, string Filter, IReadOnlyList<string> Tests);
+    internal sealed record Unit(string ProjectPath, string Key, string Filter, IReadOnlyList<string> Tests)
+    {
+        internal IReadOnlyList<TestResult> ExpectedResults { get; init; } = [];
+    }
 
     /// <summary>What to measure and what to forget.</summary>
     /// <param name="Units">Units never measured first, then those whose evidence is outdated.</param>
@@ -67,24 +70,29 @@ internal static class ImpactBackfill
             }
 
             var units = tests
-                .Select(t => (Key: UnitKey(t, granularity), t.FullyQualifiedName))
+                .Select(t => (Key: UnitKey(t, granularity), Test: t))
                 .Where(t => t.Key is not null)
                 .GroupBy(t => t.Key!, StringComparer.Ordinal)
                 .ToDictionary(
                     g => g.Key,
-                    g => (IReadOnlyList<string>)[.. g.Select(t => t.FullyQualifiedName).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
+                    g => (IReadOnlyList<TestResult>)[.. g.Select(t => t.Test)],
                     StringComparer.Ordinal);
 
             var existing = recorded(project).ToDictionary(u => u.UnitKey, StringComparer.Ordinal);
 
-            foreach (var (key, unitTests) in units.OrderBy(u => u.Key, StringComparer.Ordinal))
+            foreach (var (key, expectedResults) in units.OrderBy(u => u.Key, StringComparer.Ordinal))
             {
                 if (skip?.Contains((project, key)) == true || key.Contains('"', StringComparison.Ordinal))
                 {
                     continue;
                 }
 
-                var unit = new Unit(project, key, Filter(key, granularity), unitTests);
+                var unitTests = expectedResults.Select(test => test.FullyQualifiedName)
+                    .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+                var unit = new Unit(project, key, Filter(key, granularity), unitTests)
+                {
+                    ExpectedResults = expectedResults,
+                };
                 if (!existing.TryGetValue(key, out var info))
                 {
                     missing.Add(unit);

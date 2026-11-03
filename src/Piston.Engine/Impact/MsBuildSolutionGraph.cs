@@ -56,6 +56,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         _multiTargetedProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         _testProjectFacts = new Dictionary<string, TestProjectFacts>(StringComparer.OrdinalIgnoreCase);
         _sortedProjectDirs = [];
+        var knownTestProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var log = DiagnosticLog.Instance;
         log?.Write("SolutionGraph", $"Loading solution: {solutionPath}");
@@ -64,10 +65,16 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
         foreach (var node in graph.ProjectNodes)
         {
             var projectPath = Path.GetFullPath(node.ProjectInstance.FullPath);
-            _allProjects.Add(projectPath);
+            bool isNewProject;
             if (!_nodesByPath.TryGetValue(projectPath, out var nodes))
             {
+                isNewProject = true;
+                _allProjects.Add(projectPath);
                 _nodesByPath[projectPath] = nodes = [];
+            }
+            else
+            {
+                isNewProject = false;
             }
 
             nodes.Add(node);
@@ -84,7 +91,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
             // Determine if this is a test project.
             // MTP v2 projects are implicitly test projects — they may lack
             // <IsTestProject>true</IsTestProject> or Microsoft.NET.Test.Sdk.
-            if (isTest || isMtp)
+            if ((isTest || isMtp) && knownTestProjects.Add(projectPath))
             {
                 _testProjects.Add(projectPath);
             }
@@ -114,25 +121,28 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
                 $"isTest={isTest} | isMtp={isMtp}" +
                 (isMtp && _mtpOutputPaths.TryGetValue(projectPath, out var mtpOut) ? $" | mtpOutput={mtpOut}" : ""));
 
-            // Cache source files (.cs) for this project (excluding bin/obj)
-            var projectDir = Path.GetDirectoryName(projectPath) ?? string.Empty;
-            var sourceFiles = new List<string>();
-            if (Directory.Exists(projectDir))
+            if (isNewProject)
             {
-                foreach (var csFile in Directory.EnumerateFiles(projectDir, "*.cs", SearchOption.AllDirectories))
+                // Cache source files (.cs) for this project (excluding bin/obj)
+                var projectDir = Path.GetDirectoryName(projectPath) ?? string.Empty;
+                var sourceFiles = new List<string>();
+                if (Directory.Exists(projectDir))
                 {
-                    if (!IsInBinOrObj(csFile))
+                    foreach (var csFile in Directory.EnumerateFiles(projectDir, "*.cs", SearchOption.AllDirectories))
                     {
-                        sourceFiles.Add(Path.GetFullPath(csFile));
+                        if (!IsInBinOrObj(csFile))
+                        {
+                            sourceFiles.Add(Path.GetFullPath(csFile));
+                        }
                     }
                 }
-            }
-            _sourceFilesByProject[projectPath] = sourceFiles;
+                _sourceFilesByProject[projectPath] = sourceFiles;
 
-            // Track directory for ownership lookup
-            if (!string.IsNullOrEmpty(projectDir))
-            {
-                _sortedProjectDirs.Add((projectDir, projectPath));
+                // Track directory for ownership lookup
+                if (!string.IsNullOrEmpty(projectDir))
+                {
+                    _sortedProjectDirs.Add((projectDir, projectPath));
+                }
             }
         }
 
@@ -209,6 +219,63 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
 
     public bool IsMultiTargeted(string projectPath) =>
         _multiTargetedProjects.Contains(Path.GetFullPath(projectPath));
+
+    public int GetTargetFrameworkCount(string projectPath) => GetTargetFrameworks(projectPath).Count;
+
+    private IReadOnlyList<string> GetTargetFrameworks(string projectPath)
+    {
+        if (!_nodesByPath.TryGetValue(Path.GetFullPath(projectPath), out var nodes))
+        {
+            return [];
+        }
+
+        var frameworks = nodes.SelectMany(node => node.ProjectInstance.GetPropertyValue("TargetFrameworks")
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return frameworks.Count > 0 ? frameworks
+            : [.. nodes.Select(node => node.ProjectInstance.GetPropertyValue("TargetFramework"))
+                .Where(framework => !string.IsNullOrWhiteSpace(framework))
+                .Distinct(StringComparer.OrdinalIgnoreCase)];
+    }
+
+    public IReadOnlyList<(string Framework, string OutputPath)> GetMtpTargetOutputs(string projectPath)
+    {
+        var normalized = Path.GetFullPath(projectPath);
+        if (!_multiTargetedProjects.Contains(normalized))
+        {
+            return [];
+        }
+
+        if (!_nodesByPath.TryGetValue(normalized, out var nodes))
+        {
+            return [];
+        }
+
+        var frameworks = GetTargetFrameworks(normalized);
+        var outputs = new List<(string Framework, string OutputPath)>();
+        foreach (var framework in frameworks)
+        {
+            var paths = nodes
+                .Where(node => IsMtpProjectNode(node)
+                    && string.Equals(node.ProjectInstance.GetPropertyValue("TargetFramework"), framework, StringComparison.OrdinalIgnoreCase))
+                .Select(node => node.ProjectInstance.GetPropertyValue("TargetPath"))
+                .Where(path => !string.IsNullOrEmpty(path))
+                .Select(Path.GetFullPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (paths.Count != 1)
+            {
+                return [];
+            }
+
+            outputs.Add((framework, paths[0]));
+        }
+
+        return frameworks.Count > 1 && outputs.Select(output => output.OutputPath).Distinct(StringComparer.OrdinalIgnoreCase).Count() == frameworks.Count
+            ? outputs
+            : [];
+    }
 
     public TestProjectFacts? GetTestProjectFacts(string projectPath) =>
         _testProjectFacts.GetValueOrDefault(Path.GetFullPath(projectPath));

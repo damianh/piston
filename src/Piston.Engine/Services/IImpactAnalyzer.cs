@@ -31,6 +31,12 @@ public interface IImpactAnalyzer
     /// </summary>
     bool IsMultiTargeted(string projectPath) => false;
 
+    /// <summary>The number of target frameworks, or zero when it cannot be established.</summary>
+    int GetTargetFrameworkCount(string projectPath) => IsMultiTargeted(projectPath) ? 0 : 1;
+
+    /// <summary>Framework names and MTP outputs from the same graph snapshot, or empty when incomplete.</summary>
+    IReadOnlyList<(string Framework, string OutputPath)> GetMtpTargetOutputs(string projectPath) => [];
+
     /// <summary>How a test project runs tests, or <see langword="null"/> when the graph is unavailable.</summary>
     Impact.TestProjectFacts? GetTestProjectFacts(string projectPath) => null;
 

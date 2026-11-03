@@ -101,6 +101,17 @@ public sealed class CoberturaParserTests : IDisposable
         Assert.Empty(report.Files);
     }
 
+    [Theory]
+    [InlineData("<class><lines><line number='1' hits='1' /></lines></class>")]
+    [InlineData("<class filename='Code.cs'><lines><line number='1' hits='1' branch='True' /></lines></class>")]
+    [InlineData("<class filename='Code.cs'><lines><line number='1' hits='1' branch='True' condition-coverage='invalid' /></lines></class>")]
+    public void Parse_RejectsUnattributableLinesAndInvalidBranchData(string classXml)
+    {
+        var xmlPath = WriteTempXml($"<coverage><packages><package><classes>{classXml}</classes></package></packages></coverage>");
+
+        _ = Assert.Throws<InvalidDataException>(() => new CoberturaParser().Parse(xmlPath));
+    }
+
     [Fact]
     public void Parse_MultipleClassesForSameFile_AccumulatesHits()
     {

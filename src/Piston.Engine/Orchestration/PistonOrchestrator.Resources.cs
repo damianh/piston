@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Collections.Concurrent;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
 
@@ -23,18 +24,31 @@ public sealed partial class PistonOrchestrator
         var resourceState = sharedState ?? ownedState!;
         using var run = resourceState.StartRun();
 
-        return await _testRunner.RunTestsAsync(solutionPath, targets, filter, collectCoverage, new TestRunCallbacks
+        var completed = new ConcurrentBag<ProjectTestResult>();
+        try
         {
-            ReuseDiscovery = reuseDiscovery,
-            OnProjectWaiting = (project, wait) => run.Update(project, wait),
-            OnProjectResourcesAcquired = project => run.Update(project, null, ProjectRunStatus.Pending),
-            OnProjectStarted = project => run.Update(project, null, ProjectRunStatus.Running),
-            OnProjectCompleted = project =>
+            return await _testRunner.RunTestsAsync(solutionPath, targets, filter, collectCoverage, new TestRunCallbacks
             {
-                run.Update(project.ProjectPath, null);
-                onProjectCompleted?.Invoke(project);
-            },
-        }, ct).ConfigureAwait(false);
+                ReuseDiscovery = reuseDiscovery,
+                OnProjectWaiting = (project, wait) => run.Update(project, wait),
+                OnProjectResourcesAcquired = project => run.Update(project, null, ProjectRunStatus.Pending),
+                OnProjectStarted = project => run.Update(project, null, ProjectRunStatus.Running),
+                OnProjectCompleted = project =>
+                {
+                    completed.Add(project);
+                    run.Update(project.ProjectPath, null);
+                    onProjectCompleted?.Invoke(project);
+                },
+            }, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            var projects = completed.ToList();
+            var reports = projects.SelectMany(project => project.CoverageReportPaths).Distinct(StringComparer.Ordinal).ToList();
+            CleanUpCoverageResultsDirs(reports);
+            CleanUpRunnerTemporaryDirectories(projects, reports);
+            throw;
+        }
     }
 
     // Concurrent backfill measurements share this overlay so one cannot erase another's wait

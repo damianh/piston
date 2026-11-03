@@ -11,16 +11,33 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
 {
     private readonly Func<string, ISolutionGraph> _graphFactory;
     private readonly ICoverageStore? _coverageStore;
+    private readonly Func<string, bool>? _hasCompleteProjectCoverage;
+    private readonly Func<string?>? _coverageError;
+    private readonly Action<string>? _reportCoverageError;
+    private readonly Action? _beginCoverageUpdate;
+    private readonly Action? _endCoverageUpdate;
     private ISolutionGraph? _graph;
     private string? _solutionPath;
     private readonly Lock _graphLock = new();
 
     public ImpactAnalyzer(Func<string, ISolutionGraph> graphFactory) => _graphFactory = graphFactory;
 
-    public ImpactAnalyzer(Func<string, ISolutionGraph> graphFactory, ICoverageStore? coverageStore)
+    public ImpactAnalyzer(
+        Func<string, ISolutionGraph> graphFactory,
+        ICoverageStore? coverageStore,
+        Func<string, bool>? hasCompleteProjectCoverage = null,
+        Func<string?>? coverageError = null,
+        Action<string>? reportCoverageError = null,
+        Action? beginCoverageUpdate = null,
+        Action? endCoverageUpdate = null)
     {
         _graphFactory = graphFactory;
         _coverageStore = coverageStore;
+        _hasCompleteProjectCoverage = hasCompleteProjectCoverage;
+        _coverageError = coverageError;
+        _reportCoverageError = reportCoverageError;
+        _beginCoverageUpdate = beginCoverageUpdate;
+        _endCoverageUpdate = endCoverageUpdate;
     }
 
     public async Task InitializeAsync(string solutionPath, CancellationToken ct) =>
@@ -90,6 +107,7 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         var graph = _graph;
         var affectedProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var affectedTestProjects = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var sourceOwners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var requiresGraphRebuild = false;
         string? unknownFile = null;
         var hasTestFileChange = false;
@@ -131,6 +149,11 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
             {
                 unknownFile ??= change.FilePath;
                 continue;
+            }
+
+            if (change.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+            {
+                sourceOwners[Path.GetFullPath(change.FilePath)] = owningProject;
             }
 
             if (graph.IsTestProject(owningProject))
@@ -194,108 +217,188 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
             .Select(c => Path.GetFullPath(c.FilePath))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+        var hasNonCSharpChange = changes.Any(c => !c.FilePath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase));
         if (csPaths.Count == 0)
         {
             return tier2Result with { Explanation = "No C# source changed, so tests are selected by project." };
         }
 
-        ImpactAnalysisResult? tier3Result = null;
-        var abstained = hasTestFileChange
-            ? "A test file changed and coverage cannot know its new tests, so tests are selected by project."
-            : null;
-
-        // An edited test file may add tests no recording knows about, so only Tier 2 is safe.
-        if (_coverageStore is IImpactMapStore impactMap)
+        if (_coverageError?.Invoke() is { } storageError)
         {
-            var changed = csPaths.Select(p => new ChangedFile(p, ImpactContent.TryRead(p))).ToList();
-            var selection = impactMap.SelectTests(changed);
-            if (selection.UnmappedFiles.Count == 0
-                && selection.Tests.Count == 0
-                && selection.UnchangedFiles.Count == changed.Count)
-            {
-                tier3Result = tier2Result with
-                {
-                    AffectedTestProjectPaths = [],
-                    AffectedTestFqns = [],
-                    Explanation = "Only comments or whitespace changed, so no tests need to run.",
-                };
-            }
-            else if (hasTestFileChange)
-            {
-                abstained = "A test file changed and coverage cannot know its new tests, so tests are selected by project.";
-            }
-            else if (selection.UnmappedFiles.Count == 0 && selection.Tests.Count > 0)
-            {
-                tier3Result = tier2Result with
-                {
-                    AffectedTestFqns = [.. selection.Tests.Keys.Order(StringComparer.Ordinal)],
-                    SelectionReasons = selection.Tests.ToDictionary(
-                        kv => kv.Key,
-                        kv => (IReadOnlyList<TestSelectionReason>)[.. kv.Value.Select(ToSelectionReason)],
-                        StringComparer.Ordinal),
-                    Explanation = "Tests whose recorded execution touches the changed code.",
-                };
-            }
-            else if (selection.UnmappedFiles.Count > 0)
-            {
-                abstained = $"No coverage recording includes {string.Join(", ", selection.UnmappedFiles.Select(Path.GetFileName))}, so tests are selected by project.";
-            }
+            return tier2Result with { Explanation = $"Coverage is unavailable ({storageError}), so tests are selected by project." };
+        }
 
-            if (record)
+        if (record)
+        {
+            _beginCoverageUpdate?.Invoke();
+        }
+
+        try
+        {
+            var unmeasuredProjects = _hasCompleteProjectCoverage is null
+                ? []
+                : affectedTestProjects.Where(project => !_hasCompleteProjectCoverage(project)).ToList();
+            var missingProjectFiles = new List<string>();
+            var changed = csPaths.Select(path => new ChangedFile(path, ImpactContent.TryRead(path))).ToList();
+            ImpactAnalysisResult? tier3Result = null;
+            var abstained = hasTestFileChange
+                ? "A test file changed and coverage cannot know its new tests, so tests are selected by project."
+                : null;
+
+            // An edited test file may add tests no recording knows about, so only Tier 2 is safe.
+            if (_coverageStore is IImpactMapStore impactMap)
             {
-                try
+                if (_hasCompleteProjectCoverage is not null && !hasTestFileChange)
+                {
+                    foreach (var (file, owner) in sourceOwners)
+                    {
+                        var dependents = graph.GetTransitiveDependents(owner);
+                        foreach (var project in affectedTestProjects.Where(dependents.Contains))
+                        {
+                            if (!impactMap.HasProjectFileCoverage(project, file))
+                            {
+                                missingProjectFiles.Add($"{Path.GetFileName(project)} ({Path.GetFileName(file)})");
+                            }
+                        }
+                    }
+                }
+
+                var selection = impactMap.SelectTests(changed);
+                if (selection.UnmappedFiles.Count == 0
+                    && selection.Tests.Count == 0
+                    && selection.UnchangedFiles.Count == changed.Count)
+                {
+                    tier3Result = tier2Result with
+                    {
+                        AffectedTestProjectPaths = [],
+                        AffectedTestFqns = [],
+                        Explanation = "Only comments or whitespace changed, so no tests need to run.",
+                    };
+                }
+                else if (hasTestFileChange)
+                {
+                    abstained = "A test file changed and coverage cannot know its new tests, so tests are selected by project.";
+                }
+                else if (selection.UnmappedFiles.Count == 0 && selection.Tests.Count > 0)
+                {
+                    tier3Result = tier2Result with
+                    {
+                        AffectedTestFqns = [.. selection.Tests.Keys.Order(StringComparer.Ordinal)],
+                        SelectionReasons = selection.Tests.ToDictionary(
+                            kv => kv.Key,
+                            kv => (IReadOnlyList<TestSelectionReason>)[.. kv.Value.Select(ToSelectionReason)],
+                            StringComparer.Ordinal),
+                        Explanation = "Tests whose recorded execution touches the changed code.",
+                    };
+                }
+                else if (selection.UnmappedFiles.Count > 0)
+                {
+                    abstained = $"No coverage recording includes {string.Join(", ", selection.UnmappedFiles.Select(Path.GetFileName))}, so tests are selected by project.";
+                }
+
+                if (record)
                 {
                     // Class and test recordings of the old content no longer describe the file.
                     var unchanged = selection.UnchangedFiles.ToHashSet(StringComparer.OrdinalIgnoreCase);
                     impactMap.MarkChangedAsync([.. changed.Where(file => !unchanged.Contains(file.FilePath))]).GetAwaiter().GetResult();
                 }
-                catch
+            }
+
+            var tier3Fqns = new HashSet<string>(StringComparer.Ordinal);
+            var allHaveCoverage = !hasTestFileChange;
+            foreach (var path in csPaths)
+            {
+                if (!_coverageStore.HasCoverageData(path))
                 {
-                    // Impact map bookkeeping is best effort; the run-level map still selects.
+                    allHaveCoverage = false;
+                }
+                else
+                {
+                    tier3Fqns.UnionWith(_coverageStore.GetTestsCoveringFile(path));
+                }
+
+                if (record)
+                {
+                    // Mark stale after reading: prevents the next run from using
+                    // this coverage until it has been refreshed by a new test run
+                    _coverageStore.MarkFileStaleAsync(path).GetAwaiter().GetResult();
                 }
             }
-        }
 
-        var tier3Fqns = new HashSet<string>(StringComparer.Ordinal);
-        var allHaveCoverage = !hasTestFileChange;
-        foreach (var path in csPaths)
-        {
-            if (!_coverageStore.HasCoverageData(path))
+            if (unmeasuredProjects.Count > 0)
             {
-                allHaveCoverage = false;
-            }
-            else
-            {
-                tier3Fqns.UnionWith(_coverageStore.GetTestsCoveringFile(path));
+                return tier2Result with
+                {
+                    Explanation = $"Coverage is incomplete for {string.Join(", ", unmeasuredProjects.Select(Path.GetFileName))}, so tests are selected by project.",
+                };
             }
 
-            if (record)
+            if (missingProjectFiles.Count > 0)
             {
-                // Mark stale after reading: prevents the next run from using
-                // this coverage until it has been refreshed by a new test run
-                _ = _coverageStore.MarkFileStaleAsync(path);
+                return tier2Result with
+                {
+                    Explanation = $"Coverage has no project-specific recording for {string.Join(", ", missingProjectFiles)}, so tests are selected by project.",
+                };
             }
-        }
 
-        if (tier3Result is not null)
-        {
-            return tier3Result;
-        }
+            if (hasNonCSharpChange)
+            {
+                return tier2Result with
+                {
+                    Explanation = "A non-C# file changed and coverage cannot determine its impact, so tests are selected by project.",
+                };
+            }
 
-        if (allHaveCoverage && tier3Fqns.Count > 0)
-        {
-            // File-level coverage narrowed the run — attach the FQN list
+            if (changed.Any(file => file.Content is null))
+            {
+                return tier2Result with
+                {
+                    Explanation = "A changed source file could not be read, so tests are selected by project.",
+                };
+            }
+
+            if (tier3Result is not null)
+            {
+                return tier3Result;
+            }
+
+            if (_coverageStore is IImpactMapStore)
+            {
+                return tier2Result with
+                {
+                    Explanation = abstained ?? "The impact map cannot safely narrow this change, so tests are selected by project.",
+                };
+            }
+
+            if (allHaveCoverage && tier3Fqns.Count > 0)
+            {
+                // File-level coverage narrowed the run — attach the FQN list
+                return tier2Result with
+                {
+                    AffectedTestFqns = [.. tier3Fqns],
+                    Explanation = "Tests whose coverage includes the changed files.",
+                };
+            }
+
             return tier2Result with
             {
-                AffectedTestFqns = [.. tier3Fqns],
-                Explanation = "Tests whose coverage includes the changed files.",
+                Explanation = abstained ?? "Coverage has not measured every changed file, so tests are selected by project.",
             };
         }
-
-        return tier2Result with
+        catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException)
         {
-            Explanation = abstained ?? "Coverage has not measured every changed file, so tests are selected by project.",
-        };
+            var error = $"Coverage selection failed: {ex.Message}. Restart the engine after checking coverage storage.";
+            DiagnosticLog.Instance?.Write("Coverage", error);
+            _reportCoverageError?.Invoke(error);
+            return tier2Result with { Explanation = $"{error} Tests are selected by project." };
+        }
+        finally
+        {
+            if (record)
+            {
+                _endCoverageUpdate?.Invoke();
+            }
+        }
     }
 
     public ImpactAnalysisResult AnalyzeFullRun()
@@ -404,6 +507,14 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         }
     }
 
+    public IReadOnlyList<(string Framework, string OutputPath)> GetMtpTargetOutputs(string projectPath)
+    {
+        lock (_graphLock)
+        {
+            return _graph?.GetMtpTargetOutputs(projectPath) ?? [];
+        }
+    }
+
     public TestProjectFacts? GetTestProjectFacts(string projectPath)
     {
         lock (_graphLock)
@@ -417,6 +528,14 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         lock (_graphLock)
         {
             return _graph?.IsMultiTargeted(projectPath) ?? false;
+        }
+    }
+
+    public int GetTargetFrameworkCount(string projectPath)
+    {
+        lock (_graphLock)
+        {
+            return _graph?.GetTargetFrameworkCount(projectPath) ?? 0;
         }
     }
 

@@ -2,17 +2,17 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Impact;
+using Piston.Engine.Services;
 
 namespace Piston.Engine.Coverage;
 
 /// <summary>
 /// Bridges Cobertura XML coverage reports into the <see cref="ICoverageStore"/>.
-/// Records the merged report, and uses run-level granularity for attribution: all tests
-/// in the run are attributed to every covered file/line in the Cobertura reports.
+/// Records the merged report and attributes each project's covered lines only to its own tests.
 /// </summary>
 internal sealed class CoverageProcessor(ICoberturaParser parser) : ICoverageProcessor
 {
-    public async Task ProcessCoverageAsync(
+    public async Task<CoverageProcessingResult> ProcessCoverageAsync(
         long runId,
         IReadOnlyList<string> coberturaXmlPaths,
         IReadOnlyList<string> testFqns,
@@ -21,16 +21,11 @@ internal sealed class CoverageProcessor(ICoberturaParser parser) : ICoverageProc
         string? sourceRoot = null,
         CoverageImpactOptions? impact = null)
     {
-        if (coberturaXmlPaths.Count == 0)
-        {
-            return;
-        }
-
         // Aggregate all file→line coverage from all Cobertura reports
         // Key: filePath, Value: set of line numbers with hits > 0
         var coveredLines = new Dictionary<string, HashSet<int>>(StringComparer.OrdinalIgnoreCase);
         var reportFiles = new Dictionary<string, FileCoverage>(StringComparer.OrdinalIgnoreCase);
-        var parsed = Parse(coberturaXmlPaths, sourceRoot);
+        var (parsed, result) = Parse(coberturaXmlPaths, sourceRoot);
         var parsedAny = parsed.Count > 0;
         foreach (var fileCoverage in parsed.Values.SelectMany(f => f))
         {
@@ -53,84 +48,148 @@ internal sealed class CoverageProcessor(ICoberturaParser parser) : ICoverageProc
             }
         }
 
+        var unstableFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (parsedAny)
         {
-            var files = reportFiles.Values
-                .Select(f =>
+            var files = new List<CoverageReportFile>();
+            foreach (var file in reportFiles.Values)
+            {
+                if (impact is not null && ModifiedSince(file.FilePath, impact.StartedUtc))
                 {
-                    var content = ImpactContent.TryRead(f.FilePath);
-                    return new CoverageReportFile(f, content is null ? null : ImpactContent.Hash(content), content);
-                })
-                .ToList();
-            await store.StoreReportAsync(runId, files, isFullRun).ConfigureAwait(false);
+                    _ = unstableFiles.Add(file.FilePath);
+                    continue;
+                }
+
+                var content = ImpactContent.TryRead(file.FilePath);
+                if (impact is not null && (content is null || ModifiedSince(file.FilePath, impact.StartedUtc)))
+                {
+                    _ = unstableFiles.Add(file.FilePath);
+                    continue;
+                }
+
+                files.Add(new CoverageReportFile(file, content is null ? null : ImpactContent.Hash(content), content));
+            }
+
+            if (unstableFiles.Count > 0)
+            {
+                result = new CoverageProcessingResult(result.Reports.ToDictionary(
+                    pair => pair.Key,
+                    pair => pair.Value with
+                    {
+                        SourceChanged = parsed.TryGetValue(pair.Key, out var report)
+                            && report.Any(file => unstableFiles.Contains(file.FilePath)),
+                    },
+                    StringComparer.Ordinal));
+                foreach (var file in unstableFiles)
+                {
+                    _ = coveredLines.Remove(file);
+                    DiagnosticLog.Instance?.Write("Coverage", $"Skipped {file}: source changed or could not be read during the run.");
+                }
+            }
+
+            var completeReports = result.Reports.Values.All(report =>
+                report.Error is null && report.FileCount > 0 && !report.SourceChanged);
+            await store.StoreReportAsync(runId, files, isFullRun && completeReports).ConfigureAwait(false);
         }
 
         if (impact is not null && store is IImpactMapStore impactMap)
         {
-            await WriteImpactAsync(runId, impact, parsed, impactMap).ConfigureAwait(false);
+            var unverifiedReports = await WriteImpactAsync(runId, impact, parsed, impactMap).ConfigureAwait(false);
+            result = MarkUnverified(result, unverifiedReports);
         }
 
         if (coveredLines.Count == 0 || testFqns.Count == 0)
         {
-            return;
+            return result;
         }
 
-        // Run granularity: every test in the run is credited with every covered line. All tests share one
-        // list so the store keeps the lines once rather than once per test.
-        IReadOnlyList<TestLineCoverage> entries =
-        [
-            .. coveredLines.SelectMany(file => file.Value.Select(line => new TestLineCoverage(file.Key, line, 1))),
-        ];
         var testCoverageMap = new Dictionary<string, IReadOnlyList<TestLineCoverage>>(StringComparer.Ordinal);
-        foreach (var testFqn in testFqns)
+        if (impact is null)
         {
-            testCoverageMap[testFqn] = entries;
+            IReadOnlyList<TestLineCoverage> entries =
+                [.. coveredLines.SelectMany(file => file.Value.Select(line => new TestLineCoverage(file.Key, line, 1)))];
+            foreach (var testFqn in testFqns)
+            {
+                testCoverageMap[testFqn] = entries;
+            }
+        }
+        else
+        {
+            foreach (var unit in impact.Units)
+            {
+                IReadOnlyList<TestLineCoverage> entries = unit.ReportPaths.Where(parsed.ContainsKey)
+                    .SelectMany(path => parsed[path])
+                    .Where(file => !unstableFiles.Contains(file.FilePath))
+                    .SelectMany(file => file.Lines.Where(line => line.HitCount > 0)
+                        .Select(line => new TestLineCoverage(file.FilePath, line.LineNumber, 1)))
+                    .Distinct()
+                    .ToList();
+                foreach (var testFqn in unit.TestFqns)
+                {
+                    testCoverageMap[testFqn] = testCoverageMap.TryGetValue(testFqn, out var earlier)
+                        ? [.. earlier.Concat(entries).Distinct()]
+                        : entries;
+                }
+            }
         }
 
         await store.StoreCoverageAsync(runId, testCoverageMap).ConfigureAwait(false);
+        return result;
     }
 
-    public async Task RecordImpactAsync(long runId, CoverageImpactOptions impact, IImpactMapStore store, string? sourceRoot = null)
+    public async Task<CoverageProcessingResult> RecordImpactAsync(
+        long runId, CoverageImpactOptions impact, IImpactMapStore store, string? sourceRoot = null)
     {
-        var parsed = Parse([.. impact.Units.SelectMany(u => u.ReportPaths).Distinct(StringComparer.Ordinal)], sourceRoot);
-        await WriteImpactAsync(runId, impact, parsed, store).ConfigureAwait(false);
+        var (parsed, result) = Parse([.. impact.Units.SelectMany(u => u.ReportPaths).Distinct(StringComparer.Ordinal)], sourceRoot);
+        var unverifiedReports = await WriteImpactAsync(runId, impact, parsed, store).ConfigureAwait(false);
+        return MarkUnverified(result, unverifiedReports);
     }
 
-    /// <summary>Parses each report, keeping only files under <paramref name="sourceRoot"/>; malformed reports are skipped.</summary>
-    private Dictionary<string, IReadOnlyList<FileCoverage>> Parse(IReadOnlyList<string> reportPaths, string? sourceRoot)
+    private static CoverageProcessingResult MarkUnverified(CoverageProcessingResult result, IReadOnlySet<string> reports) =>
+        reports.Count == 0 ? result : new CoverageProcessingResult(result.Reports.ToDictionary(
+            pair => pair.Key,
+            pair => reports.Contains(pair.Key) ? pair.Value with { SourceChanged = true } : pair.Value,
+            StringComparer.Ordinal));
+
+    private (Dictionary<string, IReadOnlyList<FileCoverage>> Parsed, CoverageProcessingResult Result) Parse(
+        IReadOnlyList<string> reportPaths, string? sourceRoot)
     {
-        var rootPrefix = sourceRoot is null ? null : Path.TrimEndingDirectorySeparator(Path.GetFullPath(sourceRoot)) + Path.DirectorySeparatorChar;
         var parsed = new Dictionary<string, IReadOnlyList<FileCoverage>>(StringComparer.Ordinal);
+        var results = new Dictionary<string, CoverageReportResult>(StringComparer.Ordinal);
         foreach (var xmlPath in reportPaths)
         {
-            CoberturaReport report;
             try
             {
-                report = parser.Parse(xmlPath);
+                var report = parser.Parse(xmlPath);
+                var files = report.Files.Where(f => f.Lines.Count > 0 && (sourceRoot is null
+                    || SourceFingerprinter.CoversPath(sourceRoot, f.FilePath))).ToList();
+                parsed[xmlPath] = files;
+                results[xmlPath] = new CoverageReportResult(files.Count, null);
             }
-            catch
+            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or System.Xml.XmlException
+                or InvalidOperationException or ArgumentException or NotSupportedException)
             {
-                // Malformed XML — skip this report
-                continue;
+                var error = $"Cannot read coverage report {xmlPath}: {ex.Message}";
+                results[xmlPath] = new CoverageReportResult(0, error);
+                DiagnosticLog.Instance?.Write("Coverage", error);
             }
-
-            parsed[xmlPath] = [.. report.Files.Where(f => rootPrefix is null
-                || Path.GetFullPath(f.FilePath).StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))];
         }
 
-        return parsed;
+        return (parsed, new CoverageProcessingResult(results));
     }
 
-    private static async Task WriteImpactAsync(
+    private static async Task<IReadOnlySet<string>> WriteImpactAsync(
         long runId,
         CoverageImpactOptions impact,
         Dictionary<string, IReadOnlyList<FileCoverage>> parsed,
         IImpactMapStore impactMap)
     {
         var contents = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        var unverifiedReports = new HashSet<string>(StringComparer.Ordinal);
         foreach (var unit in impact.Units)
         {
-            if (unit.TestFqns.Count == 0)
+            if (unit.TestFqns.Count == 0 || unit.ReportPaths.Count == 0
+                || unit.ReportPaths.Any(path => !parsed.TryGetValue(path, out var files) || files.Count == 0))
             {
                 continue;
             }
@@ -173,6 +232,7 @@ internal sealed class CoverageProcessor(ICoberturaParser parser) : ICoverageProc
             }
 
             var files = new List<ImpactFile>();
+            var sourceUnverified = false;
             foreach (var path in spansByFile.Keys.Concat(branchesByFile.Keys).Distinct(StringComparer.OrdinalIgnoreCase))
             {
                 if (!contents.TryGetValue(path, out var content))
@@ -180,6 +240,10 @@ internal sealed class CoverageProcessor(ICoberturaParser parser) : ICoverageProc
                     // A file edited after the build started may not be what ran; leave it unmapped so a
                     // change to it is not judged against the wrong snapshot.
                     contents[path] = content = ModifiedSince(path, impact.StartedUtc) ? null : ImpactContent.TryRead(path);
+                    if (content is not null && ModifiedSince(path, impact.StartedUtc))
+                    {
+                        contents[path] = content = null;
+                    }
                 }
 
                 if (content is not null)
@@ -190,11 +254,23 @@ internal sealed class CoverageProcessor(ICoberturaParser parser) : ICoverageProc
                         content,
                         branchesByFile.TryGetValue(path, out var branches) ? BranchLine.Merge(branches) : []));
                 }
+                else
+                {
+                    sourceUnverified = true;
+                }
+            }
+
+            if (sourceUnverified)
+            {
+                unverifiedReports.UnionWith(unit.ReportPaths);
+                continue;
             }
 
             await impactMap.RecordImpactAsync(new ImpactRecording(
                 unit.ProjectPath, impact.Granularity, unit.UnitKey, runId, unit.TestFqns, files, unit.Merge, unit.MethodsComplete)).ConfigureAwait(false);
         }
+
+        return unverifiedReports;
     }
 
     private static bool ModifiedSince(string path, DateTime utc)

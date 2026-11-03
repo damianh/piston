@@ -53,6 +53,7 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(DiffHunkDto))]
 [JsonSerializable(typeof(DiffLineDto))]
 [JsonSerializable(typeof(ProjectRunStatusDto))]
+[JsonSerializable(typeof(ProjectCoverageDto))]
 [JsonSerializable(typeof(TestRunDto))]
 [JsonSerializable(typeof(ImpactBackfillDto))]
 [JsonSerializable(typeof(RunningTestDto))]
@@ -131,6 +132,7 @@ namespace Piston.Protocol.JsonRpc;
 // STJ source generators cannot resolve interface-typed collection properties automatically.
 [JsonSerializable(typeof(List<TestSuiteDto>))]
 [JsonSerializable(typeof(List<TestRunProjectOutcomeDto>))]
+[JsonSerializable(typeof(List<ProjectCoverageDto>))]
 [JsonSerializable(typeof(List<TestResultDto>))]
 [JsonSerializable(typeof(List<TestAttachmentDto>))]
 [JsonSerializable(typeof(List<string>))]

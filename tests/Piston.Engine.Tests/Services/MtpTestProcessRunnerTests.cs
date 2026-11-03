@@ -99,4 +99,91 @@ public sealed class MtpTestProcessRunnerTests
 
         Assert.Equal(projectPath, result.ProjectPath);
     }
+
+    [Fact]
+    public async Task RunAsync_NoCoverageReportRemovesTheResultsDirectory()
+    {
+        var root = Directory.CreateTempSubdirectory("piston-mtp-no-report-").FullName;
+        try
+        {
+            var result = await MtpTestProcessRunner.RunAsync(
+                projectPath: Path.Combine(root, "Missing.csproj"),
+                appPath: null,
+                solutionDirectory: root,
+                filter: null,
+                onProgress: null,
+                ct: TestContext.Current.CancellationToken,
+                coverage: MtpCoverage.Collect);
+
+            var args = Assert.Single(result.Log!.Entries,
+                entry => entry.Message.StartsWith("Args: dotnet ", StringComparison.Ordinal)).Message;
+            const string marker = "--results-directory \"";
+            var start = args.IndexOf(marker, StringComparison.Ordinal);
+            Assert.True(start >= 0);
+            var directory = args[(start + marker.Length)..].Split('"')[0];
+            Assert.StartsWith(Path.GetTempPath(), directory, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(result.CoverageReportPaths);
+            Assert.Equal("The test run produced no Cobertura coverage report.", result.CoverageIssue);
+            Assert.False(Directory.Exists(directory));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunAsync_UnavailableMultiTargetCoverageStillRunsTheTests(bool missingExtension)
+    {
+        var coverage = missingExtension ? MtpCoverage.MultiTargetExtensionMissing : MtpCoverage.OutputUnverified;
+        var result = await RunOneBuiltTestAsync(coverage);
+
+        Assert.Null(result.RunnerError);
+        Assert.Equal(TestStatus.Passed, Assert.Single(result.Suites.SelectMany(suite => suite.Tests)).Status);
+        Assert.Empty(result.CoverageReportPaths);
+        Assert.Equal(missingExtension
+            ? "At least one target framework does not include Microsoft.Testing.Extensions.CodeCoverage; coverage was skipped so all targets can run."
+            : "Coverage was skipped because collector availability could not be verified for every target framework.",
+            result.CoverageIssue);
+        var args = Assert.Single(result.Log!.Entries,
+            entry => entry.Message.StartsWith("Args: dotnet ", StringComparison.Ordinal)).Message;
+        Assert.DoesNotContain("--coverage", args, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RunAsync_MissingSingleTargetExtensionRunsTheTestsAndReportsWhy()
+    {
+        var result = await RunOneBuiltTestAsync(MtpCoverage.ExtensionMissing);
+
+        Assert.Null(result.RunnerError);
+        Assert.Equal(TestStatus.Passed, Assert.Single(result.Suites.SelectMany(suite => suite.Tests)).Status);
+        Assert.Empty(result.CoverageReportPaths);
+        Assert.Equal("The test app does not include Microsoft.Testing.Extensions.CodeCoverage.", result.CoverageIssue);
+        Assert.Contains(result.Log!.Entries, entry => entry.Message == result.CoverageIssue);
+    }
+
+    private static Task<ProjectTestResult> RunOneBuiltTestAsync(MtpCoverage coverage)
+    {
+        var (root, project, filter) = BuiltTestFixture();
+        return MtpTestProcessRunner.RunAsync(project, appPath: null, root, filter, onProgress: null,
+            TestContext.Current.CancellationToken, coverage);
+    }
+
+    internal static (string Root, string Project, string Filter) BuiltTestFixture()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Piston.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        var root = directory?.FullName
+            ?? throw new DirectoryNotFoundException("Could not find Piston.slnx above the test output directory.");
+        var project = Path.Combine(root, "tests", "Piston.Engine.Tests", "Piston.Engine.Tests.csproj");
+        const string filter =
+            "FullyQualifiedName=Piston.Engine.Tests.Services.MtpTestExecutionStrategyTests.HasCoverageExtension_LooksForTheExtensionNextToTheTestApp";
+        return (root, project, filter);
+    }
 }

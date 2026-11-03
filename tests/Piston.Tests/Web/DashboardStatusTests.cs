@@ -78,6 +78,21 @@ public class DashboardStatusTests
     }
 
     [Fact]
+    public void MissingCoverageDoesNotTurnPassingTestsIntoADashboardFailure()
+    {
+        TestSuiteDto[] suites = [Suite("Gamma.Tests", Test("C.One", TestStatusDto.Passed))];
+        var snapshot = Snapshot(PistonPhaseDto.Watching, suites) with
+        {
+            CoverageEnabled = true,
+            HasCoverageData = false,
+            ProjectCoverage = [new ProjectCoverageDto("/repo/Gamma.Tests.csproj", "unavailable", "No collector.", "run-1")],
+        };
+
+        Assert.Equal("pass", DashboardStatus.Icon(snapshot, connected: true));
+        Assert.Equal("✔ 1 passed · Piston · Piston", DashboardStatus.Title(snapshot, connected: true));
+    }
+
+    [Fact]
     public void Announcement_StartAndFinish()
     {
         var watching = Snapshot(PistonPhaseDto.Watching, Suites);

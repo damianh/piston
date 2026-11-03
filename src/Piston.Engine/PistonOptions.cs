@@ -22,10 +22,10 @@ public sealed class PistonOptions
     public string? TestFilter { get; init; }
 
     /// <summary>
-    /// When true, enables code coverage collection during test runs via
-    /// <c>--collect "XPlat Code Coverage"</c> (coverlet). Default is false (opt-in).
+    /// When true, requests code coverage collection during test runs. A compatible collector
+    /// must be present in each test project. Default is true.
     /// </summary>
-    public bool CoverageEnabled { get; init; } = false;
+    public bool CoverageEnabled { get; init; } = true;
 
     /// <summary>
     /// When coverage is enabled, measures each test class (or test) separately while the engine is idle so a
