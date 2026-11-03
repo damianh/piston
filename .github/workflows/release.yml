@@ -42,19 +42,14 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: release-tooling
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
       - name: Select the tested source commit
         id: source
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          WORKFLOW_SHA: ${{ github.sha }}
-          PUBLISH_MANUAL: ${{ inputs.publish_to_nuget }}
-        run: |
-          if [ -z "$PUBLISH_MANUAL" ]; then
-            PUBLISH_MANUAL=false
-          fi
-          python3 release-tooling/.github/scripts/release_publish.py context \
-            --event-name "$EVENT_NAME" --ref "$GITHUB_REF" --workflow-sha "$WORKFLOW_SHA" \
-            --event-file "$GITHUB_EVENT_PATH" --repo "$GITHUB_REPOSITORY" --manual-publish "$PUBLISH_MANUAL"
+          RELEASE_MANUAL_PUBLISH: ${{ inputs.publish_to_nuget }}
+        run: dotnet run release-tooling/build.cs -- release-context
 
   test:
     needs: context
@@ -123,16 +118,12 @@ jobs:
         id: prepare
         env:
           GH_TOKEN: ${{ github.token }}
-          SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
+          RELEASE_SOURCE_DIR: ${{ github.workspace }}/source
+          RELEASE_SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
           RELEASE_KIND: ${{ needs.context.outputs.kind }}
-          PUBLISH: ${{ needs.context.outputs.publish }}
+          RELEASE_PUBLISH: ${{ needs.context.outputs.publish }}
         run: |
-          args=(--source-dir "$GITHUB_WORKSPACE/source" --source-sha "$SOURCE_SHA" \
-            --repo "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" --kind "$RELEASE_KIND")
-          if [ "$PUBLISH" != "true" ]; then
-            args+=(--preview)
-          fi
-          python3 release-tooling/.github/scripts/release_publish.py prepare "${args[@]}"
+          dotnet run release-tooling/build.cs -- release-prepare
           echo "artifact=piston-nuget-tool-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
       - name: Pack framework-dependent tool
         working-directory: source
@@ -151,14 +142,14 @@ jobs:
         env:
           VERSION: ${{ steps.prepare.outputs.version }}
         run: |
-          dotnet tool install Piston --version "$VERSION" --tool-path "$RUNNER_TEMP/piston-tool" \
+          dotnet tool install DamianH.Piston --version "$VERSION" --tool-path "$RUNNER_TEMP/piston-tool" \
             --source "$GITHUB_WORKSPACE/packages" --no-cache
-          tool="$RUNNER_TEMP/piston-tool/piston"
-          if cmp -s source/.github/scripts/smoke-tool.py release-tooling/.github/scripts/smoke-tool.py; then
-            python3 release-tooling/.github/scripts/smoke-tool.py "$tool" "$VERSION"
+          export SMOKE_TOOL="$RUNNER_TEMP/piston-tool/piston"
+          if cmp -s source/build.cs release-tooling/build.cs; then
+            SMOKE_VERSION="$VERSION" dotnet run release-tooling/build.cs -- smoke-tool
           else
-            python3 source/.github/scripts/smoke-tool.py "$tool"
-            python3 release-tooling/.github/scripts/smoke-tool.py "$tool" "$VERSION" --version-only
+            dotnet run source/build.cs -- smoke-tool
+            SMOKE_VERSION="$VERSION" SMOKE_VERSION_ONLY=true dotnet run release-tooling/build.cs -- smoke-tool
           fi
       - uses: actions/upload-artifact@v4
         with:
@@ -206,22 +197,19 @@ jobs:
       - name: Reconcile an earlier publication
         id: reconcile
         env:
-          VERSION: ${{ needs.package.outputs.version }}
-          SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
-          REUSED: ${{ needs.package.outputs.reused }}
-          ARTIFACT: ${{ needs.package.outputs.artifact }}
-        run: |
-          python3 release-tooling/.github/scripts/release_publish.py reconcile \
-            --package "packages/Piston.$VERSION.nupkg" --version "$VERSION" \
-            --source-sha "$SOURCE_SHA" --repo "$GITHUB_REPOSITORY" --reused "$REUSED" \
-            --artifact "$ARTIFACT" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT"
+          RELEASE_PACKAGE: ${{ github.workspace }}/packages/DamianH.Piston.${{ needs.package.outputs.version }}.nupkg
+          RELEASE_VERSION: ${{ needs.package.outputs.version }}
+          RELEASE_SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
+          RELEASE_REUSED: ${{ needs.package.outputs.reused }}
+          RELEASE_ARTIFACT: ${{ needs.package.outputs.artifact }}
+        run: dotnet run release-tooling/build.cs -- release-reconcile
       - name: Publish tool to NuGet.org
         if: steps.reconcile.outputs.push == 'true'
         env:
           VERSION: ${{ needs.package.outputs.version }}
           NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
-          dotnet nuget push "packages/Piston.$VERSION.nupkg" --source https://api.nuget.org/v3/index.json \
+          dotnet nuget push "packages/DamianH.Piston.$VERSION.nupkg" --source https://api.nuget.org/v3/index.json \
             --api-key "$NUGET_API_KEY"
 
   verify-public:
@@ -256,12 +244,10 @@ jobs:
         run: dotnet run build.cs -- smoke-public
       - name: Verify the public package matches the reserved source and artifact
         env:
-          VERSION: ${{ needs.package.outputs.version }}
-          SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
-        run: |
-          python3 release-tooling/.github/scripts/release_publish.py verify-package \
-            --package "packages/Piston.$VERSION.nupkg" --version "$VERSION" \
-            --source-sha "$SOURCE_SHA" --repo "$GITHUB_REPOSITORY"
+          RELEASE_PACKAGE: ${{ github.workspace }}/packages/DamianH.Piston.${{ needs.package.outputs.version }}.nupkg
+          RELEASE_VERSION: ${{ needs.package.outputs.version }}
+          RELEASE_SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
+        run: dotnet run release-tooling/build.cs -- release-verify-package
 
   github-release:
     needs: [context, package, publish, verify-public]
@@ -275,6 +261,9 @@ jobs:
         with:
           ref: ${{ github.sha }}
           path: release-tooling
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: "10.0.x"
       - uses: actions/download-artifact@v4
         with:
           name: ${{ needs.package.outputs.artifact }}
@@ -282,9 +271,7 @@ jobs:
       - name: Create or verify the stable GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.package.outputs.version }}
-          SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
-        run: |
-          python3 release-tooling/.github/scripts/release_publish.py github-release \
-            --package "packages/Piston.$VERSION.nupkg" --version "$VERSION" \
-            --source-sha "$SOURCE_SHA" --repo "$GITHUB_REPOSITORY"
+          RELEASE_PACKAGE: ${{ github.workspace }}/packages/DamianH.Piston.${{ needs.package.outputs.version }}.nupkg
+          RELEASE_VERSION: ${{ needs.package.outputs.version }}
+          RELEASE_SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
+        run: dotnet run release-tooling/build.cs -- release-github-release

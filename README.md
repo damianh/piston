@@ -13,7 +13,7 @@ Piston keeps .NET test results current while you work. It watches a solution, ru
 When the first package release is available on NuGet.org:
 
 ```sh
-dotnet tool install --global Piston
+dotnet tool install --global DamianH.Piston
 ```
 
 Piston is a framework-dependent .NET tool. Pin a specific release with `--version <version>`.
@@ -55,9 +55,11 @@ Coverage requires a collector for VSTest projects or `Microsoft.Testing.Extensio
 Stop Piston sessions and daemons before updating the installed tool. On Linux and macOS, a live update can remove files still needed by the running process; on Windows, loaded files can block the update. Close MCP clients, stop each daemon with `piston stop`, then update and restart:
 
 ```sh
-dotnet tool update --global Piston
+dotnet tool update --global DamianH.Piston
 ```
 
+If you installed an earlier local build as `Piston`, uninstall that package
+after stopping its processes, then install `DamianH.Piston` instead.
 See the [platform-specific upgrade details](docs/user-guide.md#upgrading).
 
 ## More information

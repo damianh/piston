@@ -11,7 +11,7 @@
     {
       "registryType": "nuget",
       "registryBaseUrl": "https://api.nuget.org/v3/index.json",
-      "identifier": "Piston",
+      "identifier": "DamianH.Piston",
       "version": "@VERSION@",
       "runtimeHint": "dnx",
       "transport": { "type": "stdio" },

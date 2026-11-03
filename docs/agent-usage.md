@@ -7,7 +7,7 @@ worktree's tests running continuously and answers the agent's MCP tool calls.
 ## 1. Install the tool
 
 ```sh
-dotnet tool install --global Piston
+dotnet tool install --global DamianH.Piston
 ```
 
 This requires an actual published NuGet release. Until one is available, or for
@@ -15,10 +15,10 @@ local development, pack with `dotnet pack src/Piston/Piston.csproj -c Release -o
 and install with `--version 0.0.0-local --source ./packages --no-cache`.
 To pick up a rebuilt local package, use a new version (`-p:Version=0.0.0-local.2`).
 **Disconnect all stdio MCP sessions and stop daemons before updating on every OS**,
-then run `dotnet tool update --global Piston` (for a local package, add
+then run `dotnet tool update --global DamianH.Piston` (for a local package, add
 `--version 0.0.0-local.2 --source ./packages`) and reconnect the clients.
 See the [upgrade behavior and publishing prerequisites](user-guide.md#upgrading).
-To uninstall, run `dotnet tool uninstall -g Piston`
+To uninstall, run `dotnet tool uninstall -g DamianH.Piston`
 and remove the `piston` entry from your MCP config, plus any `skills/piston` and
 `extensions/piston-dashboard` folders that `piston init` installed (section 3).
 
@@ -27,7 +27,7 @@ at that path instead of `piston`.
 
 Alternatively, after publication a client can acquire a pinned version with
 `dnx`. In the MCP entry below, replace `"command": "piston", "args": ["mcp"]`
-with `"command": "dnx", "args": ["Piston@<version>", "--", "mcp"]`, substituting
+with `"command": "dnx", "args": ["DamianH.Piston@<version>", "--", "mcp"]`, substituting
 an actual version. Retain the worktree working directory. The `mcp` subcommand is
 essential: the default Piston command starts/attaches to a daemon rather than
 serving stdio MCP. This needs the .NET 10 SDK and ASP.NET Core 10 runtime, just
