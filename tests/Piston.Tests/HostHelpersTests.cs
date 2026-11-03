@@ -328,16 +328,26 @@ public sealed class HostHelpersTests : IDisposable
         Assert.Empty(HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, new()).TestResourceRules);
     }
 
+    public static TheoryDataRow<string, string>[] MalformedTestResourceCases =>
+    [
+        new TheoryDataRow<string, string>("""{ "testResources": { "projects": "a" } }""", "expected an array").WithTestDisplayName("Object instead of array"),
+        new TheoryDataRow<string, string>("""{ "testResources": "port:5432" }""", "expected an array").WithTestDisplayName("String instead of array"),
+        new TheoryDataRow<string, string>("""{ "testResources": 42 }""", "expected an array").WithTestDisplayName("Number instead of array"),
+        new TheoryDataRow<string, string>("""{ "testResources": true }""", "expected an array").WithTestDisplayName("Boolean instead of array"),
+        new TheoryDataRow<string, string>("""{ "testResources": [ { "projects": "a", "exclusive": "port:5432" } ] }""", "testResources[0].exclusive")
+            .WithTestDisplayName("Exclusive string instead of array"),
+        new TheoryDataRow<string, string>("""{ "testResources": [ { "projects": "a", "exclusive": 5432 } ] }""", "testResources[0].exclusive")
+            .WithTestDisplayName("Exclusive number instead of array"),
+        new TheoryDataRow<string, string>("""{ "testResources": [ { "projects": "a", "exclusive": true } ] }""", "testResources[0].exclusive")
+            .WithTestDisplayName("Exclusive boolean instead of array"),
+        new TheoryDataRow<string, string>("""{ "testResources": [ { "projects": "a", "exclusive": { "port": 5432 } } ] }""", "testResources[0].exclusive")
+            .WithTestDisplayName("Exclusive object instead of array"),
+        new TheoryDataRow<string, string>("""{ "testResources": [ { "projects": "a", "exclusiv": ["port:1"] } ] }""", "unknown property 'exclusiv'")
+            .WithTestDisplayName("Unknown property"),
+    ];
+
     [Theory]
-    [InlineData("""{ "testResources": { "projects": "a" } }""", "expected an array")]
-    [InlineData("""{ "testResources": "port:5432" }""", "expected an array")]
-    [InlineData("""{ "testResources": 42 }""", "expected an array")]
-    [InlineData("""{ "testResources": true }""", "expected an array")]
-    [InlineData("""{ "testResources": [ { "projects": "a", "exclusive": "port:5432" } ] }""", "testResources[0].exclusive")]
-    [InlineData("""{ "testResources": [ { "projects": "a", "exclusive": 5432 } ] }""", "testResources[0].exclusive")]
-    [InlineData("""{ "testResources": [ { "projects": "a", "exclusive": true } ] }""", "testResources[0].exclusive")]
-    [InlineData("""{ "testResources": [ { "projects": "a", "exclusive": { "port": 5432 } } ] }""", "testResources[0].exclusive")]
-    [InlineData("""{ "testResources": [ { "projects": "a", "exclusiv": ["port:1"] } ] }""", "unknown property 'exclusiv'")]
+    [MemberData(nameof(MalformedTestResourceCases))]
     public void MalformedTestResourcesAreRejectedOnLoad(string json, string expected)
     {
         File.WriteAllText(Path.Combine(_root, ".piston.json"), json);
@@ -347,11 +357,20 @@ public sealed class HostHelpersTests : IDisposable
         Assert.Contains(expected, ex.Message, StringComparison.Ordinal);
     }
 
+    public static TheoryDataRow<string, string>[] InvalidTestResourceCases =>
+    [
+        new TheoryDataRow<string, string>("""{ "testResources": [ { "exclusive": ["port:1"] } ] }""", "testResources[0]' in .piston.json: 'projects'")
+            .WithTestDisplayName("Missing projects"),
+        new TheoryDataRow<string, string>("""{ "testResources": [ { "projects": "a", "exclusive": ["port:99999"] } ] }""", "testResources[0].exclusive")
+            .WithTestDisplayName("Port out of range"),
+        new TheoryDataRow<string, string>("""{ "testResources": [ { "projects": "a", "exclusive": ["db"] } ] }""", "testResources[0].exclusive")
+            .WithTestDisplayName("Malformed resource key"),
+        new TheoryDataRow<string, string>("""{ "testResources": [ { "projects": "a" }, { "projects": "b", "isolation": "machine" } ] }""", "testResources[1].isolation")
+            .WithTestDisplayName("Invalid isolation"),
+    ];
+
     [Theory]
-    [InlineData("""{ "testResources": [ { "exclusive": ["port:1"] } ] }""", "testResources[0]' in .piston.json: 'projects'")]
-    [InlineData("""{ "testResources": [ { "projects": "a", "exclusive": ["port:99999"] } ] }""", "testResources[0].exclusive")]
-    [InlineData("""{ "testResources": [ { "projects": "a", "exclusive": ["db"] } ] }""", "testResources[0].exclusive")]
-    [InlineData("""{ "testResources": [ { "projects": "a" }, { "projects": "b", "isolation": "machine" } ] }""", "testResources[1].isolation")]
+    [MemberData(nameof(InvalidTestResourceCases))]
     public void InvalidTestResourcesAreRejected(string json, string expected)
     {
         File.WriteAllText(Path.Combine(_root, ".piston.json"), json);

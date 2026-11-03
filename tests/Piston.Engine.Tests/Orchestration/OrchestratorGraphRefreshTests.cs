@@ -53,7 +53,9 @@ public sealed class OrchestratorGraphRefreshTests : IAsyncLifetime
     }
 
     private static void WriteProject(string path, bool isTest) => File.WriteAllText(path, $$"""
-        <Project Sdk="Microsoft.NET.Sdk">
+        <!-- These tests exercise graph refresh, not SDK evaluation; avoiding SDK imports keeps concurrent
+             fixture initialization deterministic while retaining real MSBuild project-graph evaluation. -->
+        <Project>
           <PropertyGroup>
             <TargetFramework>net10.0</TargetFramework>
             <IsTestProject>{{isTest.ToString().ToLowerInvariant()}}</IsTestProject>

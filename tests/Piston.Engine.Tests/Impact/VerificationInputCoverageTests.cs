@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Text.Json;
+using Microsoft.Build.Construction;
 using Piston.Engine.Impact;
 using Xunit;
 
@@ -61,6 +62,81 @@ public sealed class VerificationInputCoverageTests : IDisposable
         WriteProject("""<Import Project="InTree.targets" />""");
 
         Assert.Contains("External.targets", new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Fact]
+    public void UserLinkerArgumentImportOutsideSdkRemainsNotCovered()
+    {
+        File.WriteAllText(Path.Combine(_root, "User.targets"),
+            """<Project><ItemGroup><CustomLinkerArg Include="-Wl,--as-needed" /></ItemGroup></Project>""");
+        WriteProject("""<Import Project="../User.targets" />""");
+
+        Assert.Contains("User.targets", new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Fact]
+    public void UserSdkExtensionWithOnlyLinkerArgumentsRemainsNotCovered()
+    {
+        var targets = Path.Combine(_root, "User.After.targets");
+        File.WriteAllText(targets,
+            """<Project><ItemGroup><CustomLinkerArg Include="-Wl,--as-needed" /></ItemGroup></Project>""");
+        WriteProject($"""
+            <PropertyGroup>
+              <CustomAfterMicrosoftCommonTargets>{targets}</CustomAfterMicrosoftCommonTargets>
+            </PropertyGroup>
+            """);
+
+        Assert.Contains("User.After.targets", new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Fact]
+    public void NixLinkerItemGroupWithoutConditionIsTrusted()
+    {
+        var target = ProjectRootElement.Create();
+        _ = target.AddItemGroup().AddItem("CustomLinkerArg", "-Wl,--as-needed");
+
+        Assert.True(VerificationInputCoverage.HasOnlyUnconditionalLinkerArguments(target));
+    }
+
+    [Fact]
+    public void NixLinkerItemGroupWithConditionIsNotTrusted()
+    {
+        var target = ProjectRootElement.Create();
+        var group = target.AddItemGroup();
+        group.Condition = "Exists('/outside/enable-linker-flag')";
+        _ = group.AddItem("CustomLinkerArg", "-Wl,--as-needed");
+
+        Assert.False(VerificationInputCoverage.HasOnlyUnconditionalLinkerArguments(target));
+    }
+
+    [Fact]
+    public void NixLinkerItemWithConditionIsNotTrusted()
+    {
+        var target = ProjectRootElement.Create();
+        var item = target.AddItemGroup().AddItem("CustomLinkerArg", "-Wl,--as-needed");
+        item.Condition = "Exists('/outside/enable-linker-flag')";
+
+        Assert.False(VerificationInputCoverage.HasOnlyUnconditionalLinkerArguments(target));
+    }
+
+    [Fact]
+    public void NixLinkerItemWithPropertyFunctionIncludeIsNotTrusted()
+    {
+        var target = ProjectRootElement.Create();
+        _ = target.AddItemGroup().AddItem(
+            "CustomLinkerArg",
+            "$([System.IO.File]::ReadAllText('/outside/linker-flags.txt'))");
+
+        Assert.False(VerificationInputCoverage.HasOnlyUnconditionalLinkerArguments(target));
+    }
+
+    [Fact]
+    public void NixLinkerItemWithWildcardIncludeIsNotTrusted()
+    {
+        var target = ProjectRootElement.Create();
+        _ = target.AddItemGroup().AddItem("CustomLinkerArg", "-Wl,-rpath,/nix/store/*/lib");
+
+        Assert.False(VerificationInputCoverage.HasOnlyUnconditionalLinkerArguments(target));
     }
 
     [Fact]

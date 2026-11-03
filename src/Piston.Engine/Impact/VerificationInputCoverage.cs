@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Text.Json;
+using Microsoft.Build.Construction;
 using Microsoft.Build.Evaluation;
 using Piston.Engine.Services;
 
@@ -71,7 +72,12 @@ internal static class VerificationInputCoverage
             foreach (var import in project.Imports)
             {
                 var importedPath = import.ImportedProject.FullPath;
-                inputs.Add(importedPath);
+                var isTrustedSdkToolchainImport = IsTrustedSdkToolchainImport(import, sdkRoot);
+                if (!isTrustedSdkToolchainImport)
+                {
+                    inputs.Add(importedPath);
+                }
+
                 var isRestoredPackageImport = packageRootPath is not null
                     && packageDirectories.Any(packageDirectory => IsUnder(importedPath, packageDirectory))
                     && IsUnder(importedPath, packageRootPath)
@@ -82,7 +88,7 @@ internal static class VerificationInputCoverage
                             IsUnder(import.ImportingElement.ContainingProject.FullPath, packageDirectory)));
                 var isInstalledPackImport = IsInstalledPackInput(importedPath,
                     import.ImportingElement.ContainingProject.FullPath, sdkRoot, userDotnetRoot);
-                if (!isRestoredPackageImport && !isInstalledPackImport
+                if (!isTrustedSdkToolchainImport && !isRestoredPackageImport && !isInstalledPackImport
                     && !IsUnder(importedPath, sdkRoot) && !IsUnder(importedPath, manifestsRoot))
                 {
                     protectedInputs.Add(importedPath);
@@ -270,6 +276,53 @@ internal static class VerificationInputCoverage
 
         return null;
     }
+
+    private static bool IsTrustedSdkToolchainImport(ResolvedImport import, string sdkRoot)
+    {
+        var sdkTargets = Path.GetFullPath(Path.Combine(sdkRoot,
+            "Sdks", "Microsoft.NET.Sdk", "targets", "Microsoft.NET.Sdk.targets"));
+        var importingPath = Path.GetFullPath(import.ImportingElement.ContainingProject.FullPath);
+        var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!string.Equals(importingPath, sdkTargets, pathComparison))
+        {
+            return false;
+        }
+
+        var importedPath = Path.GetFullPath(import.ImportedProject.FullPath);
+        if (!IsUnder(sdkRoot, "/nix/store")
+            || !IsUnder(importedPath, "/nix/store")
+            || IsUnder(importedPath, sdkRoot)
+            || !Path.GetFileName(importedPath).EndsWith("-extra.targets", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return HasOnlyUnconditionalLinkerArguments(import.ImportedProject);
+    }
+
+    internal static bool HasOnlyUnconditionalLinkerArguments(ProjectRootElement importedProject)
+    {
+        // Nix injects its immutable toolchain rpath as CustomLinkerArg items at the SDK import tail.
+        // Trust only that narrow contribution, not arbitrary external imports or targets brought in by it.
+        var children = importedProject.Children.ToList();
+        return children.Count > 0 && children.All(child =>
+            child is ProjectItemGroupElement itemGroup
+            && string.IsNullOrWhiteSpace(itemGroup.Condition)
+            && itemGroup.Items.Count > 0
+            && itemGroup.Items.All(item =>
+                item.ItemType == "CustomLinkerArg"
+                && item.Metadata.Count == 0
+                && string.IsNullOrWhiteSpace(item.Condition)
+                && IsLiteralLinkerArgument(item.Include)));
+    }
+
+    private static bool IsLiteralLinkerArgument(string include) =>
+        !string.IsNullOrWhiteSpace(include)
+        && !include.Contains("$(", StringComparison.Ordinal)
+        && !include.Contains("@(", StringComparison.Ordinal)
+        && !include.Contains("%(", StringComparison.Ordinal)
+        && !include.Contains('*')
+        && !include.Contains('?');
 
     internal static bool IsInstalledPackInput(string inputPath, string declaringPath, string sdkRoot, string userDotnetRoot)
     {

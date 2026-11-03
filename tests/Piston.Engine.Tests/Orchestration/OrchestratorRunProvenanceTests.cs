@@ -49,6 +49,7 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     {
         await _orchestrator.StartAsync(SolutionPath);
         await WaitForAsync(() => _state.LastRun is { Trigger: TestRunTrigger.Startup });
+        await _orchestrator.AwaitPipelinesDrainedAsync(_ct);
     }
 
     private static async Task WaitForAsync(Func<bool> condition)

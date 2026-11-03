@@ -124,7 +124,7 @@ public sealed class ProtocolRouter(IEngine engine, NamedPipeListener? listener =
                     {
                         _ = _pipeSessions.TryRemove(sessionId, out _);
                     }
-                }, ct);
+                });
             }
         }
         finally
