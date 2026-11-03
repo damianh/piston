@@ -297,11 +297,17 @@ internal static class VerificationInputCoverage
             return false;
         }
 
+        return HasOnlyUnconditionalLinkerArguments(import.ImportedProject);
+    }
+
+    internal static bool HasOnlyUnconditionalLinkerArguments(ProjectRootElement importedProject)
+    {
         // Nix injects its immutable toolchain rpath as CustomLinkerArg items at the SDK import tail.
         // Trust only that narrow contribution, not arbitrary external imports or targets brought in by it.
-        var children = import.ImportedProject.Children.ToList();
+        var children = importedProject.Children.ToList();
         return children.Count > 0 && children.All(child =>
             child is ProjectItemGroupElement itemGroup
+            && string.IsNullOrWhiteSpace(itemGroup.Condition)
             && itemGroup.Items.Count > 0
             && itemGroup.Items.All(item =>
                 item.ItemType == "CustomLinkerArg"

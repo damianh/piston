@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Text.Json;
+using Microsoft.Build.Construction;
 using Piston.Engine.Impact;
 using Xunit;
 
@@ -86,6 +87,36 @@ public sealed class VerificationInputCoverageTests : IDisposable
             """);
 
         Assert.Contains("User.After.targets", new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Fact]
+    public void NixLinkerItemGroupWithoutConditionIsTrusted()
+    {
+        var target = ProjectRootElement.Create();
+        _ = target.AddItemGroup().AddItem("CustomLinkerArg", "-Wl,--as-needed");
+
+        Assert.True(VerificationInputCoverage.HasOnlyUnconditionalLinkerArguments(target));
+    }
+
+    [Fact]
+    public void NixLinkerItemGroupWithConditionIsNotTrusted()
+    {
+        var target = ProjectRootElement.Create();
+        var group = target.AddItemGroup();
+        group.Condition = "Exists('/outside/enable-linker-flag')";
+        _ = group.AddItem("CustomLinkerArg", "-Wl,--as-needed");
+
+        Assert.False(VerificationInputCoverage.HasOnlyUnconditionalLinkerArguments(target));
+    }
+
+    [Fact]
+    public void NixLinkerItemWithConditionIsNotTrusted()
+    {
+        var target = ProjectRootElement.Create();
+        var item = target.AddItemGroup().AddItem("CustomLinkerArg", "-Wl,--as-needed");
+        item.Condition = "Exists('/outside/enable-linker-flag')";
+
+        Assert.False(VerificationInputCoverage.HasOnlyUnconditionalLinkerArguments(target));
     }
 
     [Fact]
