@@ -45,6 +45,9 @@ internal static class MtpServerSession
     /// <summary>Set to <c>1</c> in a host that Piston keeps alive for further requests.</summary>
     internal const string WarmHostVariable = "PISTON_WARM_HOST";
 
+    /// <summary>Communicates the requested working directory to MTP test hosts relaunched by extensions.</summary>
+    internal const string DotnetTestWorkingDirectoryVariable = "DOTNET_CLI_TEST_COMMAND_WORKING_DIRECTORY";
+
     /// <summary>How a session ended.</summary>
     internal enum Outcome
     {
@@ -413,6 +416,9 @@ internal static class MtpServerSession
 
         // Piston may itself run inside a warm host (dogfooding): a cold host must not inherit the marker.
         _ = psi.Environment.Remove(WarmHostVariable);
+        // MTP's test-host controllers (including coverage) relaunch the test host. Preserve the same
+        // solution-relative working directory that the initial server process and dotnet test use.
+        psi.Environment[DotnetTestWorkingDirectoryVariable] = workingDirectory;
         return psi;
     }
 

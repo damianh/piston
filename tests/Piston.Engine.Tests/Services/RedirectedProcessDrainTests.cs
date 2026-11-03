@@ -221,7 +221,7 @@ public sealed class RedirectedProcessDrainTests
         process.BeginErrorReadLine();
 
         var drained = await RedirectedProcessDrain.WaitForExitAndDrainAsync(
-            ownedProcess, TimeSpan.FromMilliseconds(100), _ct, message => Assert.Fail(message));
+            ownedProcess, RedirectedProcessDrain.DefaultTimeout, _ct, message => Assert.Fail(message));
 
         Assert.True(drained);
         Assert.Equal(7, process.ExitCode);

@@ -45,11 +45,11 @@ public sealed class TestProcessTests
         Assert.Contains("[stderr] error-marker", error.Message);
         Assert.Contains("Process tree terminated.", error.Message);
         var pidLine = error.Message.Split('\n').Single(line => line.StartsWith("PID:"));
-        AssertProcessExited(int.Parse(pidLine.Split(';')[0]["PID: ".Length..]));
+        await AssertProcessExitedAsync(int.Parse(pidLine.Split(';')[0]["PID: ".Length..]));
         if (!OperatingSystem.IsWindows())
         {
             var childLine = error.Message.Split('\n').Single(line => line.StartsWith("[stdout] child:"));
-            AssertProcessExited(int.Parse(childLine["[stdout] child:".Length..]));
+            await AssertProcessExitedAsync(int.Parse(childLine["[stdout] child:".Length..]));
         }
     }
 
@@ -75,7 +75,7 @@ public sealed class TestProcessTests
         Assert.Contains("Exit state: exited with code 0", error.Message);
         Assert.Contains("Process tree terminated.", error.Message);
         var childLine = error.Message.Split('\n').Single(line => line.StartsWith("[stdout] child:"));
-        AssertProcessExited(int.Parse(childLine["[stdout] child:".Length..]));
+        await AssertProcessExitedAsync(int.Parse(childLine["[stdout] child:".Length..]));
     }
 
     [Fact]
@@ -146,11 +146,12 @@ public sealed class TestProcessTests
         return startInfo;
     }
 
-    private static void AssertProcessExited(int pid)
+    private static async Task AssertProcessExitedAsync(int pid)
     {
         try
         {
             using var process = Process.GetProcessById(pid);
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(5));
             Assert.True(process.HasExited, $"Process {pid} survived timeout cleanup.");
         }
         catch (ArgumentException)

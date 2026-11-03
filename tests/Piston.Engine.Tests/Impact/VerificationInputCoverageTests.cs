@@ -64,6 +64,31 @@ public sealed class VerificationInputCoverageTests : IDisposable
     }
 
     [Fact]
+    public void UserLinkerArgumentImportOutsideSdkRemainsNotCovered()
+    {
+        File.WriteAllText(Path.Combine(_root, "User.targets"),
+            """<Project><ItemGroup><CustomLinkerArg Include="-Wl,--as-needed" /></ItemGroup></Project>""");
+        WriteProject("""<Import Project="../User.targets" />""");
+
+        Assert.Contains("User.targets", new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Fact]
+    public void UserSdkExtensionWithOnlyLinkerArgumentsRemainsNotCovered()
+    {
+        var targets = Path.Combine(_root, "User.After.targets");
+        File.WriteAllText(targets,
+            """<Project><ItemGroup><CustomLinkerArg Include="-Wl,--as-needed" /></ItemGroup></Project>""");
+        WriteProject($"""
+            <PropertyGroup>
+              <CustomAfterMicrosoftCommonTargets>{targets}</CustomAfterMicrosoftCommonTargets>
+            </PropertyGroup>
+            """);
+
+        Assert.Contains("User.After.targets", new MsBuildSolutionGraph(_solution).VerificationCoverageIssue);
+    }
+
+    [Fact]
     public void LinkedCompileFileOutsideSolutionIsNotCovered()
     {
         File.WriteAllText(Path.Combine(_root, "Linked.cs"), "class Linked {}");

@@ -231,7 +231,15 @@ public sealed class WorktreeOwnershipTests : IDisposable
         // Models `status`/`stop` probing the lock at the instant a new owner starts.
         var solution = CreateSolution(CreateWorktree("wt"));
         var holder = WorktreeOwnership.Acquire(_directory, solution, "probe");
-        var release = Task.Delay(100, _ct).ContinueWith(_ => holder.Dispose(), TaskScheduler.Default);
+        var release = Task.Factory.StartNew(
+            () =>
+            {
+                Thread.Sleep(100);
+                holder.Dispose();
+            },
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
 
         using var owner = WorktreeOwnership.Acquire(_directory, solution, "mcp", TimeSpan.FromSeconds(5));
         await release;

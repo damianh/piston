@@ -288,6 +288,7 @@ public sealed class MtpServerSessionTests
         var psi = MtpServerSession.CreateStartInfo("/sln/bin/Tests.dll", "/sln", 1234, "--coverage --results-directory \"/tmp/r\"");
 
         Assert.EndsWith("--client-port 1234 --coverage --results-directory \"/tmp/r\"", psi.Arguments, StringComparison.Ordinal);
+        Assert.Equal("/sln", psi.Environment[MtpServerSession.DotnetTestWorkingDirectoryVariable]);
     }
 
     [Fact]
@@ -307,6 +308,7 @@ public sealed class MtpServerSessionTests
         var psi = MtpServerSession.CreateStartInfo(appPath, "/sln", 1234);
 
         Assert.Equal("/sln", psi.WorkingDirectory);
+        Assert.Equal("/sln", psi.Environment[MtpServerSession.DotnetTestWorkingDirectoryVariable]);
         Assert.Equal(fileName, psi.FileName);
         Assert.EndsWith("--server --client-host 127.0.0.1 --client-port 1234", psi.Arguments, StringComparison.Ordinal);
     }

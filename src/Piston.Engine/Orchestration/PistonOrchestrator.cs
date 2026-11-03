@@ -383,6 +383,17 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         return await waiter.Task.WaitAsync(ct).ConfigureAwait(false);
     }
 
+    internal Task AwaitPipelinesDrainedAsync(CancellationToken ct = default)
+    {
+        Task drained;
+        lock (_lifecycleLock)
+        {
+            drained = _activePipelines == 0 ? Task.CompletedTask : _pipelinesDrained!.Task;
+        }
+
+        return drained.WaitAsync(ct);
+    }
+
     /// <summary>
     /// Produces current full verification for the present source: reuses the newest qualifying
     /// terminal run, awaits an active full-scope run, or requests a forced full run. Retries a bounded
