@@ -2,9 +2,10 @@
   "name": "piston-dashboard-styles",
   "private": true,
   "scripts": {
-    "build:css": "tailwindcss -c tailwind.config.cjs -i Styles/tailwind.css -o wwwroot/css/tailwind.css --minify"
+    "build:css": "tailwindcss -i Styles/tailwind.css -o wwwroot/css/tailwind.css --minify"
   },
   "devDependencies": {
-    "tailwindcss": "3.4.17"
+    "@tailwindcss/cli": "^4.3.4",
+    "tailwindcss": "^4.3.4"
   }
 }

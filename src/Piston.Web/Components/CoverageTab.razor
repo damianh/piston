@@ -57,7 +57,7 @@
                 </div>
             }
             <div class="relative">
-                <select class="appearance-none bg-gray-800 border border-gray-700 rounded h-6 pl-2 pr-6 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
+                <select class="appearance-none bg-gray-800 border border-gray-700 rounded h-6 pl-2 pr-6 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-hidden focus:border-blue-500"
                         title="Group files by" aria-label="Group files by"
                         value="@View.CoverageGrouping" @onchange="ChangeGrouping">
                     <option value="@CoverageGrouping.Folder">Project tree</option>
@@ -70,7 +70,7 @@
                 </svg>
             </div>
             <input type="search" placeholder="Filter files" aria-label="Filter files"
-                   class="bg-gray-800 border border-gray-700 rounded h-6 px-2 text-gray-200 text-xs w-48 min-w-0 focus:outline-none focus:border-blue-500"
+                   class="bg-gray-800 border border-gray-700 rounded h-6 px-2 text-gray-200 text-xs w-48 min-w-0 focus:outline-hidden focus:border-blue-500"
                    value="@_filter" @oninput="e => _filter = e.Value?.ToString()" />
             @{
                 var dockLabel = View.CoverageDetailPosition == DetailPosition.Right ? "Dock source at bottom" : "Dock source on right";
@@ -146,7 +146,7 @@
                  title="Drag to resize · double-click to reset"
                  class="@(_isBottom
                      ? "h-px w-full cursor-row-resize before:-top-1 before:-bottom-1 before:inset-x-0"
-                     : "w-px h-full cursor-col-resize before:-left-1 before:-right-1 before:inset-y-0") relative z-10 shrink-0 bg-gray-800 transition-colors hover:bg-blue-500 focus-visible:bg-blue-500 focus:outline-none data-[dragging]:bg-blue-500 before:absolute before:content-['']"
+                     : "w-px h-full cursor-col-resize before:-left-1 before:-right-1 before:inset-y-0") relative z-10 shrink-0 bg-gray-800 transition-colors hover:bg-blue-500 focus-visible:bg-blue-500 focus:outline-hidden data-[dragging]:bg-blue-500 before:absolute before:content-['']"
                  @ondblclick="ResetSplit"
                  @onkeydown="HandleSplitterKeyDown"
                  @onkeydown:stopPropagation="true"></div>
@@ -540,7 +540,7 @@
                 var hint = active ? $"Sorted {order}. Click to reverse." : $"Sort {order}";
             }
             <button type="button"
-                    class="@classes flex items-center gap-1 rounded text-[10px] font-semibold hover:text-gray-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 @(active ? "text-gray-300" : "")"
+                    class="@classes flex items-center gap-1 rounded text-[10px] font-semibold hover:text-gray-200 focus:outline-hidden focus-visible:ring-1 focus-visible:ring-blue-500 @(active ? "text-gray-300" : "")"
                     title="@hint" aria-label="@($"{label}: {hint}")"
                     @onclick="() => View.SortCoverageBy(sort)">
                 @label

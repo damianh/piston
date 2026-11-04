@@ -8,7 +8,7 @@
     <div class="flex flex-wrap items-center gap-2 px-4 py-1.5 shrink-0 bg-gray-900 border-b border-gray-800 select-none">
         @ToolbarStart
         <div class="relative">
-            <select class="appearance-none bg-gray-800 border border-gray-700 rounded h-6 pl-2 pr-6 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
+            <select class="appearance-none bg-gray-800 border border-gray-700 rounded h-6 pl-2 pr-6 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-hidden focus:border-blue-500"
                     title="Compare against" aria-label="Compare against"
                     value="@View.ChangeBase" @onchange="ChangeBaseAsync" @onkeydown:stopPropagation="true">
                 <option value="@ChangeDiffModel.Working">Uncommitted changes</option>
@@ -27,7 +27,7 @@
                    placeholder="@(isRange ? "e.g. HEAD~3..HEAD" : "default branch")"
                    aria-label="@(isRange ? "Commit range" : "Branch or commit to compare against")"
                    title="@(isRange ? "A range (A..B) or a single commit" : "The branch or commit the changes are compared against; blank for the default branch")"
-                   class="bg-gray-800 border border-gray-700 rounded h-6 px-2 text-gray-200 text-xs font-mono w-40 min-w-0 focus:outline-none focus:border-blue-500"
+                   class="bg-gray-800 border border-gray-700 rounded h-6 px-2 text-gray-200 text-xs font-mono w-40 min-w-0 focus:outline-hidden focus:border-blue-500"
                    value="@View.ChangeBaseRef" @onchange="ChangeBaseRefAsync" @onkeydown:stopPropagation="true" />
         }
         <label class="flex items-center gap-1.5 text-gray-300 cursor-pointer" title="Show only files and hunks with lines no passing test proves">

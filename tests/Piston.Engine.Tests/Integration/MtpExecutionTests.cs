@@ -55,7 +55,7 @@ public sealed class MtpExecutionTests : IAsyncLifetime
                 <NoWarn>$(NoWarn);NU1507</NoWarn>
               </PropertyGroup>
               <ItemGroup>
-                <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
+                <PackageReference Include="xunit.v3.mtp-v2" Version="4.0.2" />
                 <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" />
               </ItemGroup>
               <ItemGroup>
@@ -580,7 +580,7 @@ public sealed class MtpExecutionTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task DotnetTestWithoutResultsSurfacesStdoutOnlyFailure()
+    public async Task DotnetTestFallbackParsesStdoutResults()
     {
         Assert.SkipUnless(_restored, "MTP fixture packages could not be restored.");
         Assert.True(_available, "The MTP fixture must restore and build.");
@@ -588,9 +588,9 @@ public sealed class MtpExecutionTests : IAsyncLifetime
             _testCsproj, appPath: null, _root, "FullyQualifiedName=MtpE2E.SampleTests.PassingTest",
             onProgress: null, _ct);
 
-        Assert.Empty(result.Suites);
-        Assert.Equal(5, result.Log!.ExitCode);
-        Assert.Contains("dotnet test exited with code 5", result.RunnerError, StringComparison.Ordinal);
+        Assert.Null(result.RunnerError);
+        Assert.Equal(0, result.Log!.ExitCode);
+        Assert.Equal(TestStatus.Passed, Assert.Single(result.Suites.SelectMany(s => s.Tests)).Status);
     }
 
     [Fact]
@@ -687,7 +687,7 @@ public sealed class MtpExecutionTests : IAsyncLifetime
                     <NoWarn>$(NoWarn);NU1507</NoWarn>
                   </PropertyGroup>
                   <ItemGroup>
-                    <PackageReference Include="xunit.v3.mtp-v2" Version="3.2.2" />
+                    <PackageReference Include="xunit.v3.mtp-v2" Version="4.0.2" />
                     <PackageReference Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" />
                     <ProjectReference Include="{{library}}" />
                     <Compile Include="{{tests}}" Link="Tests.cs" />

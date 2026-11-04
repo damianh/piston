@@ -83,7 +83,7 @@
                         <div class="flex-1"></div>
                         <label class="flex items-center gap-1 text-gray-400">Compare with
                             <span class="relative">
-                                <select class="appearance-none bg-gray-800 border border-gray-700 rounded pl-2 pr-6 py-0.5 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-none focus:border-blue-500"
+                                <select class="appearance-none bg-gray-800 border border-gray-700 rounded pl-2 pr-6 py-0.5 leading-4 text-gray-200 text-xs cursor-pointer hover:border-gray-600 focus:outline-hidden focus:border-blue-500"
                                         aria-label="Compare with run" value="@(_baselineId ?? "")" @onchange="ChangeBaselineAsync">
                                     <option value="">(none)</option>
                                     @foreach (var other in Earlier())

@@ -38,11 +38,11 @@ jobs:
       publish: ${{ steps.source.outputs.publish }}
     steps:
       - name: Check out trusted release tooling
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           path: release-tooling
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
       - name: Select the tested source commit
@@ -56,10 +56,10 @@ jobs:
     if: needs.context.outputs.kind == 'stable'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.context.outputs.source_sha }}
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
       - run: dotnet build Piston.slnx -c Release
@@ -76,10 +76,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.context.outputs.source_sha }}
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
       - run: dotnet run build.cs -- smoke-distribution
@@ -101,17 +101,17 @@ jobs:
       artifact: ${{ steps.prepare.outputs.artifact }}
     steps:
       - name: Check out trusted release tooling
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           path: release-tooling
       - name: Check out the tested source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.context.outputs.source_sha }}
           path: source
           fetch-depth: 0
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
       - name: Reserve or reuse the calendar version
@@ -151,7 +151,7 @@ jobs:
             dotnet run source/build.cs -- smoke-tool
             SMOKE_VERSION="$VERSION" SMOKE_VERSION_ONLY=true dotnet run release-tooling/build.cs -- smoke-tool
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.prepare.outputs.artifact }}
           path: packages/*.nupkg
@@ -171,14 +171,14 @@ jobs:
       id-token: write
     steps:
       - name: Check out trusted release tooling
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           path: release-tooling
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.package.outputs.artifact }}
           path: packages
@@ -190,7 +190,7 @@ jobs:
             echo "::error::Set NUGET_USER and configure the NuGet Trusted Publisher for release.yml and environment nuget."
             exit 1
           fi
-      - uses: NuGet/login@v1
+      - uses: NuGet/login@v1.2.0
         id: login
         with:
           user: ${{ vars.NUGET_USER }}
@@ -221,19 +221,19 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out trusted release tooling
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           path: release-tooling
       - name: Check out the tested source
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.context.outputs.source_sha }}
           path: source
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.package.outputs.artifact }}
           path: packages
@@ -257,14 +257,14 @@ jobs:
       contents: write
     steps:
       - name: Check out trusted release tooling
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.sha }}
           path: release-tooling
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: "10.0.x"
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.package.outputs.artifact }}
           path: packages
