@@ -19,138 +19,147 @@ using Piston.Protocol.Transports;
 
 // ── Shared arguments & options ─────────────────────────────────────────────────
 
-var solutionArg = new Argument<FileInfo?>(
-    name: "solution",
-    description: "Path to the .sln, .slnx, or .slnf file. " +
-                 "Defaults to .piston.json's solution, then a unique solution in the current directory.",
-    getDefaultValue: () => null);
+var rootSolutionArg = CreateSolutionArgument();
+var daemonSolutionArg = CreateSolutionArgument();
+var mcpSolutionArg = CreateSolutionArgument();
+var dashboardSolutionArg = CreateSolutionArgument();
+var stopSolutionArg = CreateSolutionArgument();
+var statusSolutionArg = CreateSolutionArgument();
+var coverageExportSolutionArg = CreateSolutionArgument();
 
-var pipeNameOpt = new Option<string?>(
-    name: "--pipe-name",
-    description: "Override the named pipe name (default: auto-generated from solution path).");
+var pipeNameOpt = new Option<string?>("--pipe-name")
+{
+    Description = "Override the named pipe name (default: auto-generated from solution path).",
+};
 
 // ── Daemon subcommand options ──────────────────────────────────────────────────
 
-var debounceOpt = new Option<int>(
-    name: "--debounce",
-    description: "File-change debounce interval in milliseconds.",
-    getDefaultValue: () => 0);
+var debounceOpt = new Option<int>("--debounce")
+{
+    Description = "File-change debounce interval in milliseconds.",
+    DefaultValueFactory = _ => 0,
+};
 
-var filterOpt = new Option<string?>(
-    name: "--filter",
-    description: "Substring or regex to filter test names on startup.",
-    getDefaultValue: () => null);
+var filterOpt = new Option<string?>("--filter")
+{
+    Description = "Substring or regex to filter test names on startup.",
+};
 
-var coverageOpt = new Option<bool>(
-    name: "--coverage",
-    description: "Enable code coverage collection (default: on), overriding .piston.json.");
+var coverageOpt = new Option<bool>("--coverage")
+{
+    Description = "Enable code coverage collection (default: on), overriding .piston.json.",
+};
 
-var noCoverageOpt = new Option<bool>(
-    name: "--no-coverage",
-    description: "Disable code coverage collection, overriding .piston.json.");
+var noCoverageOpt = new Option<bool>("--no-coverage")
+{
+    Description = "Disable code coverage collection, overriding .piston.json.",
+};
 
-var parallelismOpt = new Option<int>(
-    name: "--parallelism",
-    description: "Maximum number of concurrent dotnet test processes. 0 = auto.",
-    getDefaultValue: () => 0);
+var parallelismOpt = new Option<int>("--parallelism")
+{
+    Description = "Maximum number of concurrent dotnet test processes. 0 = auto.",
+    DefaultValueFactory = _ => 0,
+};
 
-var stdioOpt = new Option<bool>(
-    name: "--stdio",
-    description: "Use stdin/stdout for Piston JSON-RPC transport (not MCP).");
+var stdioOpt = new Option<bool>("--stdio")
+{
+    Description = "Use stdin/stdout for Piston JSON-RPC transport (not MCP).",
+};
 
-var noStdioOpt = new Option<bool>(
-    name: "--no-stdio",
-    description: "Use named-pipe transport, overriding the .piston.json stdio setting.");
+var noStdioOpt = new Option<bool>("--no-stdio")
+{
+    Description = "Use named-pipe transport, overriding the .piston.json stdio setting.",
+};
 
 var configDirectoryOpt = new Option<string?>("--config-directory")
 {
-    IsHidden = true,
+    Hidden = true,
 };
 
-var mcpPortOpt = new Option<int?>(
-    name: "--mcp-port",
-    description: $"Port for the MCP server (default: {DaemonHostOptions.DefaultMcpPort}, or mcpPort in .piston.json).");
+var mcpPortOpt = new Option<int?>("--mcp-port")
+{
+    Description = $"Port for the MCP server (default: {DaemonHostOptions.DefaultMcpPort}, or mcpPort in .piston.json).",
+};
 
-var webPortOpt = new Option<int>(
-    name: "--web-port",
-    description: "Port for the web UI and WebSocket server.",
-    getDefaultValue: () => 5199);
+var webPortOpt = new Option<int>("--web-port")
+{
+    Description = "Port for the web UI and WebSocket server.",
+    DefaultValueFactory = _ => 5199,
+};
 
-var dashboardOpt = new Option<bool>("--dashboard",
-    "Expose this MCP session's dashboard on an ephemeral loopback port.");
+var dashboardOpt = new Option<bool>("--dashboard")
+{
+    Description = "Expose this MCP session's dashboard on an ephemeral loopback port.",
+};
 
-var forceOpt = new Option<bool>(
-    name: "--force",
-    description: "Terminate a live owner that cannot be stopped over its pipe (SIGTERM, then kill after 10s).");
+var forceOpt = new Option<bool>("--force")
+{
+    Description = "Terminate a live owner that cannot be stopped over its pipe (SIGTERM, then kill after 10s).",
+};
 
-var allOpt = new Option<bool>(
-    name: "--all",
-    description: "List owned worktrees, running and queued work, and machine budget use.");
+var allOpt = new Option<bool>("--all")
+{
+    Description = "List owned worktrees, running and queued work, and machine budget use.",
+};
 
 // ── Root command (default: web UI with auto-start) ─────────────────────────────
 
-var rootCommand = new RootCommand("Piston — continuous test runner for .NET")
-{
-    solutionArg,
-    pipeNameOpt,
-    webPortOpt,
-};
+var rootCommand = new RootCommand("Piston — continuous test runner for .NET");
+rootCommand.Arguments.Add(rootSolutionArg);
+rootCommand.Options.Add(pipeNameOpt);
+rootCommand.Options.Add(webPortOpt);
 
-rootCommand.SetHandler(async ctx =>
+rootCommand.SetAction(async parseResult =>
 {
-    var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
-    var pipeName = ctx.ParseResult.GetValueForOption(pipeNameOpt);
-    var webPort = ctx.ParseResult.GetValueForOption(webPortOpt);
+    var solutionFile = parseResult.GetValue(rootSolutionArg);
+    var pipeName = parseResult.GetValue(pipeNameOpt);
+    var webPort = parseResult.GetValue(webPortOpt);
     await RunWebAsync(solutionFile, pipeName, webPort);
 });
 
 // ── daemon subcommand ──────────────────────────────────────────────────────────
 
-var daemonCmd = new Command("daemon", "Start the Piston daemon in the foreground.")
-{
-    solutionArg,
-    debounceOpt,
-    filterOpt,
-    coverageOpt,
-    noCoverageOpt,
-    parallelismOpt,
-    stdioOpt,
-    noStdioOpt,
-    pipeNameOpt,
-    mcpPortOpt,
-    webPortOpt,
-    configDirectoryOpt,
-};
+var daemonCmd = new Command("daemon", "Start the Piston daemon in the foreground.");
+daemonCmd.Arguments.Add(daemonSolutionArg);
+daemonCmd.Options.Add(debounceOpt);
+daemonCmd.Options.Add(filterOpt);
+daemonCmd.Options.Add(coverageOpt);
+daemonCmd.Options.Add(noCoverageOpt);
+daemonCmd.Options.Add(parallelismOpt);
+daemonCmd.Options.Add(stdioOpt);
+daemonCmd.Options.Add(noStdioOpt);
+daemonCmd.Options.Add(pipeNameOpt);
+daemonCmd.Options.Add(mcpPortOpt);
+daemonCmd.Options.Add(webPortOpt);
+daemonCmd.Options.Add(configDirectoryOpt);
 
-daemonCmd.SetHandler(async ctx =>
+daemonCmd.SetAction(async parseResult =>
 {
-    var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
-    var debounceMs = ctx.ParseResult.GetValueForOption(debounceOpt);
-    var filter = ctx.ParseResult.GetValueForOption(filterOpt);
-    var enableCoverage = ctx.ParseResult.GetValueForOption(coverageOpt);
-    var noCoverage = ctx.ParseResult.GetValueForOption(noCoverageOpt);
-    var parallelism = ctx.ParseResult.GetValueForOption(parallelismOpt);
-    var stdio = ctx.ParseResult.GetValueForOption(stdioOpt);
-    var noStdio = ctx.ParseResult.GetValueForOption(noStdioOpt);
-    var pipeName = ctx.ParseResult.GetValueForOption(pipeNameOpt);
-    var mcpPort = ctx.ParseResult.GetValueForOption(mcpPortOpt);
-    var webPort = ctx.ParseResult.GetValueForOption(webPortOpt);
-    var configDirectory = ctx.ParseResult.GetValueForOption(configDirectoryOpt);
+    var solutionFile = parseResult.GetValue(daemonSolutionArg);
+    var debounceMs = parseResult.GetValue(debounceOpt);
+    var filter = parseResult.GetValue(filterOpt);
+    var enableCoverage = parseResult.GetValue(coverageOpt);
+    var noCoverage = parseResult.GetValue(noCoverageOpt);
+    var parallelism = parseResult.GetValue(parallelismOpt);
+    var stdio = parseResult.GetValue(stdioOpt);
+    var noStdio = parseResult.GetValue(noStdioOpt);
+    var pipeName = parseResult.GetValue(pipeNameOpt);
+    var mcpPort = parseResult.GetValue(mcpPortOpt);
+    var webPort = parseResult.GetValue(webPortOpt);
+    var configDirectory = parseResult.GetValue(configDirectoryOpt);
 
-    var coverageSpecified = ctx.ParseResult.FindResultFor(coverageOpt) is { IsImplicit: false };
-    var noCoverageSpecified = ctx.ParseResult.FindResultFor(noCoverageOpt) is { IsImplicit: false };
+    var coverageSpecified = parseResult.GetResult(coverageOpt) is { Implicit: false };
+    var noCoverageSpecified = parseResult.GetResult(noCoverageOpt) is { Implicit: false };
     if (coverageSpecified && noCoverageSpecified)
     {
         Console.Error.WriteLine("error: --coverage and --no-coverage cannot be used together.");
-        ctx.ExitCode = 1;
-        return;
+        return 1;
     }
 
     if (stdio && noStdio)
     {
         Console.Error.WriteLine("error: --stdio and --no-stdio cannot be used together.");
-        ctx.ExitCode = 1;
-        return;
+        return 1;
     }
 
     // Resolve config before choosing the daemon transport.
@@ -164,8 +173,7 @@ daemonCmd.SetHandler(async ctx =>
         catch (InvalidOperationException ex)
         {
             Console.Error.WriteLine($"error: {ex.Message}");
-            ctx.ExitCode = 1;
-            return;
+            return 1;
         }
     }
     else if (noStdio)
@@ -183,62 +191,61 @@ daemonCmd.SetHandler(async ctx =>
         await RunDaemonAsync(solutionFile, debounceMs, filter, coverage, parallelism, pipeName, mcpPort, webPort,
             configDirectory);
     }
+    return 0;
 });
 
-rootCommand.AddCommand(daemonCmd);
+rootCommand.Subcommands.Add(daemonCmd);
 
 // ── mcp subcommand ─────────────────────────────────────────────────────────────
 
 var mcpCmd = new Command("mcp",
     "Serve the Piston MCP tools over stdio for one agent session (cwd = worktree). " +
-    "Runs an in-process engine (startup run, then runs on file changes) and exits with the session.")
-{
-    solutionArg,
-    debounceOpt,
-    filterOpt,
-    coverageOpt,
-    noCoverageOpt,
-    parallelismOpt,
-    configDirectoryOpt,
-    dashboardOpt,
-};
+    "Runs an in-process engine (startup run, then runs on file changes) and exits with the session.");
+mcpCmd.Arguments.Add(mcpSolutionArg);
+mcpCmd.Options.Add(debounceOpt);
+mcpCmd.Options.Add(filterOpt);
+mcpCmd.Options.Add(coverageOpt);
+mcpCmd.Options.Add(noCoverageOpt);
+mcpCmd.Options.Add(parallelismOpt);
+mcpCmd.Options.Add(configDirectoryOpt);
+mcpCmd.Options.Add(dashboardOpt);
 
-mcpCmd.SetHandler(async ctx =>
+mcpCmd.SetAction(async parseResult =>
 {
-    var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
-    var debounceMs = ctx.ParseResult.GetValueForOption(debounceOpt);
-    var filter = ctx.ParseResult.GetValueForOption(filterOpt);
-    var enableCoverage = ctx.ParseResult.GetValueForOption(coverageOpt);
-    var noCoverage = ctx.ParseResult.GetValueForOption(noCoverageOpt);
-    var parallelism = ctx.ParseResult.GetValueForOption(parallelismOpt);
-    var configDirectory = ctx.ParseResult.GetValueForOption(configDirectoryOpt);
-    var coverageSpecified = ctx.ParseResult.FindResultFor(coverageOpt) is { IsImplicit: false };
-    var noCoverageSpecified = ctx.ParseResult.FindResultFor(noCoverageOpt) is { IsImplicit: false };
+    var solutionFile = parseResult.GetValue(mcpSolutionArg);
+    var debounceMs = parseResult.GetValue(debounceOpt);
+    var filter = parseResult.GetValue(filterOpt);
+    var enableCoverage = parseResult.GetValue(coverageOpt);
+    var noCoverage = parseResult.GetValue(noCoverageOpt);
+    var parallelism = parseResult.GetValue(parallelismOpt);
+    var configDirectory = parseResult.GetValue(configDirectoryOpt);
+    var coverageSpecified = parseResult.GetResult(coverageOpt) is { Implicit: false };
+    var noCoverageSpecified = parseResult.GetResult(noCoverageOpt) is { Implicit: false };
     if (coverageSpecified && noCoverageSpecified)
     {
         Console.Error.WriteLine("error: --coverage and --no-coverage cannot be used together.");
-        ctx.ExitCode = 1;
-        return;
+        return 1;
     }
 
     bool? coverage = coverageSpecified ? enableCoverage : noCoverageSpecified ? !noCoverage : null;
-    ctx.ExitCode = await RunMcpAsync(solutionFile, debounceMs, filter, coverage, parallelism, configDirectory,
-        ctx.ParseResult.GetValueForOption(dashboardOpt));
+    return await RunMcpAsync(solutionFile, debounceMs, filter, coverage, parallelism, configDirectory,
+        parseResult.GetValue(dashboardOpt));
 });
 
-rootCommand.AddCommand(mcpCmd);
+rootCommand.Subcommands.Add(mcpCmd);
 
-var jsonOpt = new Option<bool>("--json", "Write machine-readable dashboard discovery state.");
-var dashboardCmd = new Command("dashboard", "Inspect the current worktree's dashboard without starting Piston.")
+var jsonOpt = new Option<bool>("--json")
 {
-    solutionArg,
-    jsonOpt,
+    Description = "Write machine-readable dashboard discovery state.",
 };
-dashboardCmd.SetHandler(ctx =>
+var dashboardCmd = new Command("dashboard", "Inspect the current worktree's dashboard without starting Piston.");
+dashboardCmd.Arguments.Add(dashboardSolutionArg);
+dashboardCmd.Options.Add(jsonOpt);
+dashboardCmd.SetAction(parseResult =>
 {
     var result = DashboardDiscovery.Inspect(
-        ctx.ParseResult.GetValueForArgument(solutionArg)?.FullName ?? Directory.GetCurrentDirectory());
-    if (ctx.ParseResult.GetValueForOption(jsonOpt))
+        parseResult.GetValue(dashboardSolutionArg)?.FullName ?? Directory.GetCurrentDirectory());
+    if (parseResult.GetValue(jsonOpt))
     {
         Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(result, DashboardJsonContext.Default.DashboardEndpoint));
     }
@@ -246,93 +253,96 @@ dashboardCmd.SetHandler(ctx =>
     {
         Console.WriteLine(result.Url ?? result.Message);
     }
-    ctx.ExitCode = result.State == "error" ? 1 : 0;
+    return result.State == "error" ? 1 : 0;
 });
-rootCommand.AddCommand(dashboardCmd);
+rootCommand.Subcommands.Add(dashboardCmd);
 
 // ── stop subcommand ────────────────────────────────────────────────────────────
 
-var stopCmd = new Command("stop", "Stop the running Piston daemon.")
-{
-    solutionArg,
-    pipeNameOpt,
-    forceOpt,
-};
+var stopCmd = new Command("stop", "Stop the running Piston daemon.");
+stopCmd.Arguments.Add(stopSolutionArg);
+stopCmd.Options.Add(pipeNameOpt);
+stopCmd.Options.Add(forceOpt);
 
-stopCmd.SetHandler(async ctx =>
+stopCmd.SetAction(async parseResult =>
 {
-    var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
-    var pipeName = ctx.ParseResult.GetValueForOption(pipeNameOpt);
-    var force = ctx.ParseResult.GetValueForOption(forceOpt);
-    var exitCode = await RunStopAsync(solutionFile, pipeName, force);
-    ctx.ExitCode = exitCode;
+    var solutionFile = parseResult.GetValue(stopSolutionArg);
+    var pipeName = parseResult.GetValue(pipeNameOpt);
+    var force = parseResult.GetValue(forceOpt);
+    return await RunStopAsync(solutionFile, pipeName, force);
 });
 
-rootCommand.AddCommand(stopCmd);
+rootCommand.Subcommands.Add(stopCmd);
 
 // ── status subcommand ──────────────────────────────────────────────────────────
 
-var statusCmd = new Command("status", "Show the status of the running Piston daemon.")
-{
-    solutionArg,
-    pipeNameOpt,
-    allOpt,
-};
+var statusCmd = new Command("status", "Show the status of the running Piston daemon.");
+statusCmd.Arguments.Add(statusSolutionArg);
+statusCmd.Options.Add(pipeNameOpt);
+statusCmd.Options.Add(allOpt);
 
-statusCmd.SetHandler(async ctx =>
+statusCmd.SetAction(async parseResult =>
 {
-    var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
-    var pipeName = ctx.ParseResult.GetValueForOption(pipeNameOpt);
-    var all = ctx.ParseResult.GetValueForOption(allOpt);
-    var exitCode = all ? await RunStatusAllAsync() : await RunStatusAsync(solutionFile, pipeName);
-    ctx.ExitCode = exitCode;
+    var solutionFile = parseResult.GetValue(statusSolutionArg);
+    var pipeName = parseResult.GetValue(pipeNameOpt);
+    var all = parseResult.GetValue(allOpt);
+    return all ? await RunStatusAllAsync() : await RunStatusAsync(solutionFile, pipeName);
 });
 
-rootCommand.AddCommand(statusCmd);
+rootCommand.Subcommands.Add(statusCmd);
 
 // ── coverage-export subcommand ────────────────────────────────────────────────
 
-var formatOpt = new Option<string>(
-    "--format",
-    getDefaultValue: () => "lcov",
-    description: "Report format: lcov or cobertura.");
+var formatOpt = new Option<string>("--format")
+{
+    DefaultValueFactory = _ => "lcov",
+    Description = "Report format: lcov or cobertura.",
+};
 
-var outputOpt = new Option<FileInfo?>(
-    ["--output", "-o"],
-    description: "File to write. Defaults to standard output.");
+var outputOpt = new Option<FileInfo?>("--output", "-o")
+{
+    Description = "File to write. Defaults to standard output.",
+};
 
 var coverageExportCmd = new Command(
     "coverage-export",
-    "Export the running daemon's coverage report as LCOV or Cobertura XML.")
-{
-    solutionArg,
-    pipeNameOpt,
-    formatOpt,
-    outputOpt,
-};
+    "Export the running daemon's coverage report as LCOV or Cobertura XML.");
+coverageExportCmd.Arguments.Add(coverageExportSolutionArg);
+coverageExportCmd.Options.Add(pipeNameOpt);
+coverageExportCmd.Options.Add(formatOpt);
+coverageExportCmd.Options.Add(outputOpt);
 
-coverageExportCmd.SetHandler(async ctx =>
+coverageExportCmd.SetAction(async parseResult =>
 {
-    var solutionFile = ctx.ParseResult.GetValueForArgument(solutionArg);
-    var pipeName = ctx.ParseResult.GetValueForOption(pipeNameOpt);
-    var format = ctx.ParseResult.GetValueForOption(formatOpt);
-    var output = ctx.ParseResult.GetValueForOption(outputOpt);
-    ctx.ExitCode = await RunCoverageExportAsync(solutionFile, pipeName, format, output);
+    var solutionFile = parseResult.GetValue(coverageExportSolutionArg);
+    var pipeName = parseResult.GetValue(pipeNameOpt);
+    var format = parseResult.GetValue(formatOpt);
+    var output = parseResult.GetValue(outputOpt);
+    return await RunCoverageExportAsync(solutionFile, pipeName, format, output);
 });
 
-rootCommand.AddCommand(coverageExportCmd);
+rootCommand.Subcommands.Add(coverageExportCmd);
 
 // ── init subcommand ───────────────────────────────────────────────────────────
 
-var initWriteOpt = new Option<bool>("--write",
-    "Write the assets. Without it, only report what would change; nothing is written.");
-var initScopeOpt = new Option<string>("--scope", () => "user",
-    "user: the harness's user configuration directory. repo: the current directory (the repository root).")
-    .FromAmong("user", "repo");
-var initForceOpt = new Option<bool>("--force",
-    "With --write, overwrite Piston's MCP entry and asset files when their content differs.");
-var initDashboardOpt = new Option<bool>("--dashboard",
-    "Start `piston mcp` with --dashboard so the session serves the dashboard (needed by the canvas).");
+var initWriteOpt = new Option<bool>("--write")
+{
+    Description = "Write the assets. Without it, only report what would change; nothing is written.",
+};
+var initScopeOpt = new Option<string>("--scope")
+{
+    DefaultValueFactory = _ => "user",
+    Description = "user: the harness's user configuration directory. repo: the current directory (the repository root).",
+};
+initScopeOpt.AcceptOnlyFromAmong("user", "repo");
+var initForceOpt = new Option<bool>("--force")
+{
+    Description = "With --write, overwrite Piston's MCP entry and asset files when their content differs.",
+};
+var initDashboardOpt = new Option<bool>("--dashboard")
+{
+    Description = "Start `piston mcp` with --dashboard so the session serves the dashboard (needed by the canvas).",
+};
 
 var initCmd = new Command("init",
     "Print or (with --write) install Piston's agent integration assets. Never changes configuration without --write.");
@@ -342,33 +352,44 @@ foreach (var (name, harness, description) in new[]
     ("claude", Harness.Claude, "Claude Code: the `piston` skill and, at repo scope, the .mcp.json server entry."),
 })
 {
-    var harnessCmd = new Command(name, description) { initWriteOpt, initScopeOpt, initForceOpt, initDashboardOpt };
-    harnessCmd.SetHandler(ctx =>
+    var harnessCmd = new Command(name, description);
+    harnessCmd.Options.Add(initWriteOpt);
+    harnessCmd.Options.Add(initScopeOpt);
+    harnessCmd.Options.Add(initForceOpt);
+    harnessCmd.Options.Add(initDashboardOpt);
+    harnessCmd.SetAction(parseResult =>
     {
         var options = new InitOptions(
             harness,
-            ctx.ParseResult.GetValueForOption(initScopeOpt) == "repo" ? InitScope.Repo : InitScope.User,
-            ctx.ParseResult.GetValueForOption(initWriteOpt),
-            ctx.ParseResult.GetValueForOption(initForceOpt),
-            ctx.ParseResult.GetValueForOption(initDashboardOpt));
+            parseResult.GetValue(initScopeOpt) == "repo" ? InitScope.Repo : InitScope.User,
+            parseResult.GetValue(initWriteOpt),
+            parseResult.GetValue(initForceOpt),
+            parseResult.GetValue(initDashboardOpt));
         try
         {
-            ctx.ExitCode = HarnessInit.Run(options, InitLocations.FromEnvironment(Directory.GetCurrentDirectory()), Console.Out);
+            return HarnessInit.Run(options, InitLocations.FromEnvironment(Directory.GetCurrentDirectory()), Console.Out);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             Console.Error.WriteLine($"error: {ex.Message}");
-            ctx.ExitCode = 1;
+            return 1;
         }
     });
-    initCmd.AddCommand(harnessCmd);
+    initCmd.Subcommands.Add(harnessCmd);
 }
 
-rootCommand.AddCommand(initCmd);
+rootCommand.Subcommands.Add(initCmd);
 
-return await rootCommand.InvokeAsync(args);
+return await rootCommand.Parse(args).InvokeAsync();
 
 // ── Web mode (default) — auto-starts daemon if needed, opens browser ──────────
+
+static Argument<FileInfo?> CreateSolutionArgument() => new("solution")
+{
+    Description = "Path to the .sln, .slnx, or .slnf file. " +
+                 "Defaults to .piston.json's solution, then a unique solution in the current directory.",
+    DefaultValueFactory = _ => null,
+};
 
 static async Task RunWebAsync(FileInfo? solutionArg, string? cliPipeName, int webPort)
 {

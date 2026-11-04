@@ -1,6 +1,5 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+@config "../tailwind.config.cjs";
 
 /*
  * GitHub Primer palette (as used by the GitHub Copilot app), as RGB channels.

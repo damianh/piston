@@ -42,9 +42,11 @@ public sealed class McpServerVersionTests
                 new StreamClientTransport(toServer.Writer.AsStream(), toClient.Reader.AsStream()),
                 cancellationToken: _ct);
 
-            var advertisedVersion = client.ServerInfo.Version;
+            var serverInfo = client.ServerInfo;
+            Assert.NotNull(serverInfo);
+            var advertisedVersion = serverInfo.Version;
             Assert.NotNull(advertisedVersion);
-            Assert.Equal("piston", client.ServerInfo.Name);
+            Assert.Equal("piston", serverInfo.Name);
             Assert.Equal(productVersion, advertisedVersion);
             Assert.DoesNotContain("+", advertisedVersion);
         }

@@ -254,9 +254,9 @@ async Task SmokeMcpAsync(string? command = null, string[]? arguments = null,
             StandardErrorLines = line => Append(stderr, line),
         });
         await using var client = await McpClient.CreateAsync(transport, cancellationToken: timeout.Token);
-        if (expectedServerVersion is not null && client.ServerInfo.Version != expectedServerVersion)
+        if (expectedServerVersion is not null && client.ServerInfo?.Version != expectedServerVersion)
         {
-            throw new SmokeTestException($"MCP server version is {client.ServerInfo.Version}, expected {expectedServerVersion}.");
+            throw new SmokeTestException($"MCP server version is {client.ServerInfo?.Version ?? "unknown"}, expected {expectedServerVersion}.");
         }
 
         _ = await client.ListToolsAsync(cancellationToken: timeout.Token);
@@ -419,7 +419,7 @@ async Task SmokeDistributionAsync()
             var baselineText = string.Join('\n', baseline.Content.OfType<TextContentBlock>().Select(c => c.Text));
             if (baseline.IsError == true || !baselineText.Contains("Verdict: TestsFailed", StringComparison.Ordinal)
                 || !baselineText.Contains("Tests: 12 (Passed: 4, Failed: 4, Skipped: 4)", StringComparison.Ordinal)
-                || client.ServerInfo.Version != oldVersion)
+                || client.ServerInfo?.Version != oldVersion)
             {
                 throw new SmokeTestException("Old MCP version failed before updating.");
             }
@@ -673,10 +673,10 @@ async Task SmokeToolAsync(string toolPath, string? expectedVersion, bool version
                 <IsPackable>false</IsPackable>
               </PropertyGroup>
               <ItemGroup>
-                <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+                <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.11.0" />
                 <PackageReference Include="xunit" Version="2.9.3" />
-                <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2" />
-                <PackageReference Include="coverlet.collector" Version="6.0.4" />
+                <PackageReference Include="xunit.runner.visualstudio" Version="4.0.1" />
+                <PackageReference Include="coverlet.collector" Version="10.1.0" />
               </ItemGroup>
             </Project>
 
@@ -774,9 +774,9 @@ async Task SmokeToolAsync(string toolPath, string? expectedVersion, bool version
         });
         await using (var client = await McpClient.CreateAsync(transport, cancellationToken: timeout.Token))
         {
-            if (expectedVersion is not null && client.ServerInfo.Version != expectedVersion)
+            if (expectedVersion is not null && client.ServerInfo?.Version != expectedVersion)
             {
-                throw new SmokeTestException($"MCP server version is {client.ServerInfo.Version}, expected {expectedVersion}.");
+                throw new SmokeTestException($"MCP server version is {client.ServerInfo?.Version ?? "unknown"}, expected {expectedVersion}.");
             }
 
             if (!versionOnly)
@@ -971,11 +971,13 @@ static void CheckPackageContents(string directory, string? expectedVersion = nul
         problems.Add("tool command must be piston with entry point Piston.dll");
     }
     using var reader = new StreamReader(server.Open());
-    var json = JsonNode.Parse(reader.ReadToEnd())!;
+    var serverJson = reader.ReadToEnd();
+    using var document = JsonDocument.Parse(serverJson);
+    var json = JsonNode.Parse(serverJson)!;
     const string schemaUrl = "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json";
     using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
     var schema = JsonSchema.FromText(http.GetStringAsync(schemaUrl).GetAwaiter().GetResult());
-    if (!schema.Evaluate(json).IsValid)
+    if (!schema.Evaluate(document.RootElement).IsValid)
     {
         problems.Add("server.json does not conform to the pinned MCP schema");
     }
