@@ -8,7 +8,7 @@
         <div class="text-gray-400 font-semibold">Run log</div>
         @if (_log is { Entries.Count: > 0 })
         {
-            <button type="button" class="text-gray-500 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none"
+            <button type="button" class="text-gray-500 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-hidden"
                     @onclick="() => CopyAsync(FormatLog(_log))">Copy</button>
         }
     </div>

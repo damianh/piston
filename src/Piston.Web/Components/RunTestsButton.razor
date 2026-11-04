@@ -4,7 +4,7 @@
 @* Starts a run of the selected node's tests. Keyed by the selection, so an error clears when it changes. *@
 <div class="flex flex-col items-end gap-1 shrink-0">
     <button type="button"
-            class="flex items-center gap-1.5 px-2 py-1 rounded bg-gray-800 text-gray-200 transition-colors hover:bg-gray-700 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-800"
+            class="flex items-center gap-1.5 px-2 py-1 rounded bg-gray-800 text-gray-200 transition-colors hover:bg-gray-700 focus:outline-hidden focus-visible:ring-1 focus-visible:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-800"
             disabled="@(!Enabled)"
             title="@Tooltip"
             @onclick="RunAsync">

@@ -23,7 +23,7 @@
     @if (Node.Children.Count > 0)
     {
         <button type="button"
-                class="shrink-0 text-gray-600 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none w-3 text-center text-xs select-none"
+                class="shrink-0 text-gray-600 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-hidden w-3 text-center text-xs select-none"
                 aria-label="@(Node.IsExpanded ? "Collapse" : "Expand") @Node.Label"
                 aria-expanded="@(Node.IsExpanded ? "true" : "false")"
                 @onclick="ToggleExpanded"

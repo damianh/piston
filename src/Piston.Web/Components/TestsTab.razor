@@ -67,7 +67,7 @@
              title="Drag to resize · double-click to reset"
              class="@(_isBottom
                  ? "h-px w-full cursor-row-resize before:-top-1 before:-bottom-1 before:inset-x-0"
-                 : "w-px h-full cursor-col-resize before:-left-1 before:-right-1 before:inset-y-0") relative z-10 shrink-0 bg-gray-800 transition-colors hover:bg-blue-500 focus-visible:bg-blue-500 focus:outline-none data-[dragging]:bg-blue-500 before:absolute before:content-['']"
+                 : "w-px h-full cursor-col-resize before:-left-1 before:-right-1 before:inset-y-0") relative z-10 shrink-0 bg-gray-800 transition-colors hover:bg-blue-500 focus-visible:bg-blue-500 focus:outline-hidden data-[dragging]:bg-blue-500 before:absolute before:content-['']"
              @ondblclick="ResetSplit"
              @onkeydown="HandleSplitterKeyDown"
              @onkeydown:stopPropagation="true"></div>
@@ -277,7 +277,7 @@
                 var hint = active ? $"Sorted {order}. Click to reverse." : $"Sort {order}";
             }
             <button type="button"
-                    class="@classes flex items-center gap-1 rounded text-[10px] font-semibold hover:text-gray-200 focus:outline-none focus-visible:ring-1 focus-visible:ring-blue-500 @(active ? "text-gray-300" : "")"
+                    class="@classes flex items-center gap-1 rounded text-[10px] font-semibold hover:text-gray-200 focus:outline-hidden focus-visible:ring-1 focus-visible:ring-blue-500 @(active ? "text-gray-300" : "")"
                     title="@hint" aria-label="@($"{label}: {hint}")"
                     @onclick="() => SortTestsBy(sort)">
                 @label

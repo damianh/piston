@@ -976,7 +976,9 @@ static void CheckPackageContents(string directory, string? expectedVersion = nul
     var json = JsonNode.Parse(serverJson)!;
     const string schemaUrl = "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json";
     using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(30) };
-    var schema = JsonSchema.FromText(http.GetStringAsync(schemaUrl).GetAwaiter().GetResult());
+    var schema = JsonSchema.FromText(
+        http.GetStringAsync(schemaUrl).GetAwaiter().GetResult(),
+        new BuildOptions { SchemaRegistry = new SchemaRegistry() });
     if (!schema.Evaluate(document.RootElement).IsValid)
     {
         problems.Add("server.json does not conform to the pinned MCP schema");

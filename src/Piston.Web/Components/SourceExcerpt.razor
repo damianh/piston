@@ -7,10 +7,10 @@
         <span class="text-gray-300 font-mono break-all flex-1 min-w-0" title="@FilePath">@DisplayPath:@Line</span>
         @if (_source?.Lines is { Count: > ContextLines * 2 + 1 })
         {
-            <button type="button" class="text-gray-500 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none shrink-0"
+            <button type="button" class="text-gray-500 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-hidden shrink-0"
                     @onclick="() => _wholeFile = !_wholeFile">@(_wholeFile ? "Show less" : "Whole file")</button>
         }
-        <a class="text-gray-500 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-none shrink-0"
+        <a class="text-gray-500 hover:text-gray-300 focus-visible:text-gray-300 focus:outline-hidden shrink-0"
            href="@EditorUrl" title="Open the file at this line in VS Code">Open in editor</a>
     </div>
     @if (_source is null)

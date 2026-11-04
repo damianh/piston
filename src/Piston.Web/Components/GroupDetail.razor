@@ -21,7 +21,7 @@
             <div class="text-gray-500 mt-1">
                 Project:
                 <button type="button"
-                        class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300 focus-visible:decoration-gray-300 focus:outline-none"
+                        class="text-gray-300 underline decoration-gray-600 underline-offset-2 hover:decoration-gray-300 focus-visible:decoration-gray-300 focus:outline-hidden"
                         title="Show project details and its run log"
                         @onclick="() => OnShowProject.InvokeAsync(Detail.Projects[0])">@Detail.DisplayProjects[0]</button>
             </div>
@@ -114,7 +114,7 @@
     private const int MaxListed = 10;
     private const int SlowestCount = 5;
     private const string RowClass =
-        "w-full flex items-center gap-2 px-1 py-0.5 rounded hover:bg-gray-800 focus:outline-none focus-visible:bg-gray-800";
+        "w-full flex items-center gap-2 px-1 py-0.5 rounded hover:bg-gray-800 focus:outline-hidden focus-visible:bg-gray-800";
 
     private static readonly TestStatusDto[] StatusOrder =
         [TestStatusDto.Failed, TestStatusDto.Running, TestStatusDto.Passed, TestStatusDto.Skipped, TestStatusDto.NotRun];
