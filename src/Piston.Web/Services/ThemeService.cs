@@ -32,12 +32,19 @@ public sealed class ThemeService(IJSRuntime js)
         }
 
         _loaded = true;
-        IsCanvas = await js.InvokeAsync<bool>("pistonTheme.isCanvas");
-        var saved = await js.InvokeAsync<string>("pistonTheme.get");
-        if (IsCanvas || (saved != Preference && Preferences.Contains(saved)))
+        try
         {
-            Preference = saved;
-            Changed?.Invoke();
+            IsCanvas = await js.InvokeAsync<bool>("pistonTheme.isCanvas");
+            var saved = await js.InvokeAsync<string>("pistonTheme.get");
+            if (IsCanvas || (saved != Preference && Preferences.Contains(saved)))
+            {
+                Preference = saved;
+                Changed?.Invoke();
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+            _loaded = false;
         }
     }
 
@@ -50,6 +57,12 @@ public sealed class ThemeService(IJSRuntime js)
 
         Preference = preference;
         Changed?.Invoke();
-        await js.InvokeVoidAsync("pistonTheme.set", preference);
+        try
+        {
+            await js.InvokeVoidAsync("pistonTheme.set", preference);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
     }
 }

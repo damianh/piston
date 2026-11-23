@@ -4,7 +4,7 @@ Piston keeps .NET test results current while you work. It watches a solution, ru
 
 ## Requirements
 
-- .NET 10 SDK and ASP.NET Core 10 runtime
+- .NET 11 SDK and ASP.NET Core 11 runtime
 - A `.sln`, `.slnx`, or `.slnf` solution, plus its required SDKs and test adapters
 - Supported test frameworks include xUnit v2/v3, NUnit, MSTest and TUnit
 
@@ -18,7 +18,7 @@ dotnet tool install --global DamianH.Piston
 
 Piston is a framework-dependent .NET tool. Pin a specific release with `--version <version>`.
 Releases use calendar versions such as `2026.1101.2`; use `--prerelease` to
-include automatically published `-dev` builds. See the [versioning guide](docs/maintainers.md#calendar-versions).
+include automatically published `-dev` builds.
 
 ## Get started
 
@@ -71,6 +71,5 @@ See the [platform-specific upgrade details](docs/user-guide.md#upgrading).
 
 - [User guide](docs/user-guide.md): commands, dashboard, MCP tools, coverage and configuration
 - [Agent setup](docs/agent-usage.md): Copilot, Claude Code and other MCP clients
-- [Maintainer publishing guide](docs/maintainers.md): NuGet Trusted Publishing setup
 - [Security policy](SECURITY.md)
 - [Architecture](ARCHITECTURE.md)

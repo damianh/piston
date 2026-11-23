@@ -30,7 +30,7 @@ Alternatively, after publication a client can acquire a pinned version with
 with `"command": "dnx", "args": ["DamianH.Piston@<version>", "--", "mcp"]`, substituting
 an actual version. Retain the worktree working directory. The `mcp` subcommand is
 essential: the default Piston command starts/attaches to a daemon rather than
-serving stdio MCP. This needs the .NET 10 SDK and ASP.NET Core 10 runtime, just
+serving stdio MCP. This needs the .NET 11 SDK and ASP.NET Core 11 runtime, just
 like an installed tool.
 
 ## 2. Configure the worktree (optional)

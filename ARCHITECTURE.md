@@ -8,8 +8,7 @@ people use the same engine through the web dashboard. It builds and tests in the
 watched checkout using standard `dotnet` commands, not shadow workspaces or IL
 rewriting.
 
-This document describes implemented behavior and its limits. Planned work is in
-[docs/ROADMAP.md](docs/ROADMAP.md).
+This document describes implemented behavior and its limits.
 
 ## Components
 
@@ -727,5 +726,4 @@ admission budget described above.
 
 Aspire is one possible integration-test example for the generic runner. There
 is no Aspire-specific lifecycle, service orchestration, or dedicated
-integration contract. Planned work is in
-[docs/ROADMAP.md](docs/ROADMAP.md).
+integration contract.

@@ -276,8 +276,17 @@
         // The splitter's container leaves the page with the Files view; it is attached again when the view returns.
         if (_splitterAttached)
         {
-            _splitterAttached = false;
-            await JS.InvokeVoidAsync("pistonSplitter.detach", _splitContainer);
+            try
+            {
+                await JS.InvokeVoidAsync("pistonSplitter.detach", _splitContainer);
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+            finally
+            {
+                _splitterAttached = false;
+            }
         }
 
         View.CoverageMode = mode;
@@ -336,14 +345,29 @@
 
         if (_coverageEnabled && _coverageError is null && FilesMode && !_splitterAttached)
         {
-            await JS.InvokeVoidAsync("pistonSplitter.attach", _splitContainer, _selfRef,
-                ViewState.MinSplitPercent, ViewState.MaxSplitPercent);
-            _splitterAttached = true;
+            try
+            {
+                await JS.InvokeVoidAsync("pistonSplitter.attach", _splitContainer, _selfRef,
+                    ViewState.MinSplitPercent, ViewState.MaxSplitPercent);
+                _splitterAttached = true;
+            }
+            catch (JSDisconnectedException)
+            {
+            }
         }
         else if ((!_coverageEnabled || _coverageError is not null || !FilesMode) && _splitterAttached)
         {
-            await JS.InvokeVoidAsync("pistonSplitter.detach", _splitContainer);
-            _splitterAttached = false;
+            try
+            {
+                await JS.InvokeVoidAsync("pistonSplitter.detach", _splitContainer);
+            }
+            catch (JSDisconnectedException)
+            {
+            }
+            finally
+            {
+                _splitterAttached = false;
+            }
         }
     }
 

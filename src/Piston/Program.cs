@@ -479,7 +479,7 @@ static async Task RunDaemonAsync(
 
     if (!HostHelpers.DotnetSdkAvailable())
     {
-        Console.Error.WriteLine("error: 'dotnet' SDK not found on PATH. Install .NET 10 SDK from https://dot.net");
+        Console.Error.WriteLine("error: 'dotnet' SDK not found on PATH. Install .NET 11 SDK from https://dot.net");
         Environment.Exit(1);
         return;
     }
@@ -562,7 +562,7 @@ static async Task RunDaemonStdioAsync(
 
     if (!HostHelpers.DotnetSdkAvailable())
     {
-        Console.Error.WriteLine("error: 'dotnet' SDK not found on PATH. Install .NET 10 SDK from https://dot.net");
+        Console.Error.WriteLine("error: 'dotnet' SDK not found on PATH. Install .NET 11 SDK from https://dot.net");
         Environment.Exit(1);
         return;
     }
@@ -706,7 +706,7 @@ static async Task<int> RunMcpAsync(
             McpStdioHost.OwnerHost);
         if (!HostHelpers.DotnetSdkAvailable())
         {
-            startupError = "'dotnet' SDK not found on PATH. Install .NET 10 SDK from https://dot.net.";
+            startupError = "'dotnet' SDK not found on PATH. Install .NET 11 SDK from https://dot.net.";
         }
     }
     catch (InvalidOperationException ex)
