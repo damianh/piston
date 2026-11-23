@@ -26,11 +26,11 @@ that MCP session, which performs the engine's normal startup run.
 2. Start the daemon **from the Release output**, as a detached async command so it outlives the turn:
 
    ```sh
-   dotnet src/Piston/bin/Release/net10.0/Piston.dll daemon Piston.slnx
+   dotnet src/Piston/bin/Release/net11.0/Piston.dll daemon Piston.slnx
    ```
 
    The daemon builds the watched solution in Debug, so its own builds never overwrite the Release binaries it runs from. Do not use `dotnet run` or a Debug build for the daemon.
-3. Confirm it is listening: `ss -ltnp | grep ':5199 '` (or `dotnet src/Piston/bin/Release/net10.0/Piston.dll status`).
+3. Confirm it is listening: `ss -ltnp | grep ':5199 '` (or `dotnet src/Piston/bin/Release/net11.0/Piston.dll status`).
 
 Use `daemon`, not bare `piston`/`Piston.dll` with no command: that form opens the system browser via `xdg-open`/`open`.
 
@@ -65,7 +65,7 @@ avoid stale assets. The browser fallback opens the changes view with
 
 ## Redeploy after a change
 
-1. Stop the daemon: `dotnet src/Piston/bin/Release/net10.0/Piston.dll stop` (exits 0 once the process has gone, freeing the ports). If that fails, find the PID with `ss -ltnp | grep ':5199 '` and `kill <pid>`.
+1. Stop the daemon: `dotnet src/Piston/bin/Release/net11.0/Piston.dll stop` (exits 0 once the process has gone, freeing the ports). If that fails, find the PID with `ss -ltnp | grep ':5199 '` and `kill <pid>`.
 2. If dashboard Tailwind classes changed: `cd src/Piston.Web && npm run build:css`.
 3. Rebuild Release, start the daemon again (detached), and reopen the native canvas.
    Reload the extension after changing its provider/assets. For browser fallback,

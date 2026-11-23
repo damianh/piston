@@ -44,7 +44,9 @@ jobs:
           path: release-tooling
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: |
+            10.0.x
+            11.0.x
       - name: Select the tested source commit
         id: source
         env:
@@ -61,7 +63,9 @@ jobs:
           ref: ${{ needs.context.outputs.source_sha }}
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: |
+            10.0.x
+            11.0.x
       - run: dotnet build Piston.slnx -c Release
       - run: dotnet test Piston.slnx -c Release --no-build
 
@@ -81,7 +85,9 @@ jobs:
           ref: ${{ needs.context.outputs.source_sha }}
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: |
+            10.0.x
+            11.0.x
       - run: dotnet run build.cs -- smoke-distribution
 
   package:
@@ -113,7 +119,9 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: |
+            10.0.x
+            11.0.x
       - name: Reserve or reuse the calendar version
         id: prepare
         env:
@@ -177,7 +185,9 @@ jobs:
           path: release-tooling
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: |
+            10.0.x
+            11.0.x
       - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.package.outputs.artifact }}
@@ -232,7 +242,9 @@ jobs:
           path: source
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: |
+            10.0.x
+            11.0.x
       - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.package.outputs.artifact }}
@@ -263,7 +275,9 @@ jobs:
           path: release-tooling
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: |
+            10.0.x
+            11.0.x
       - uses: actions/download-artifact@v8
         with:
           name: ${{ needs.package.outputs.artifact }}

@@ -7,12 +7,11 @@ Piston watches a .NET solution and selects affected tests by project and, with c
 **Structure:** the `Piston` .NET tool owns CLI commands, daemon hosting and the MCP
 tools. `Piston.Engine` is the MSBuild-loading and test-execution boundary,
 `Piston.Protocol` provides shared wire contracts and transports, and `Piston.Web`
-is the dashboard. See [ARCHITECTURE.md](../ARCHITECTURE.md) for details and
-[docs/ROADMAP.md](ROADMAP.md) for planned work.
+is the dashboard. See [ARCHITECTURE.md](../ARCHITECTURE.md) for details.
 
 ## Requirements
 
-- .NET 10 SDK
+- .NET 11 SDK and ASP.NET Core 11 runtime
 - A `.sln`, `.slnx`, or `.slnf` solution with compatible test projects (for example xUnit v2/v3, NUnit, MSTest or TUnit; [`samples/`](../samples/README.md) has one of each on Microsoft.Testing.Platform)
 - The SDK and test adapters/extensions required by the target solution; MTP projects need the appropriate `global.json` test-runner configuration
 
@@ -48,14 +47,14 @@ dotnet tool install DamianH.Piston --version 0.0.0-local --tool-path ./tools --s
 Use an actual solution path in the last command. On Windows, the executable is
 `.\tools\piston.exe`. Package ID is `DamianH.Piston`, command name is `piston`, and `0.0.0-local`
 is the local development package version; use the built/released version when
-it differs. The package is framework-dependent and requires the .NET 10 SDK
-and ASP.NET Core 10 runtime, plus the target solution's own SDK requirements.
+it differs. The package is framework-dependent and requires the .NET 11 SDK
+and ASP.NET Core 11 runtime, plus the target solution's own SDK requirements.
 It bundles the web dashboard and remains a normal .NET tool; MCP discovery does
 not replace its CLI or daemon.
 
 ### Run without permanent installation
 
-`dnx` (from the .NET 10 SDK) can acquire and run a specific published version:
+`dnx` (included in the .NET 11 SDK) can acquire and run a specific published version:
 
 ```sh
 dnx DamianH.Piston@<version> -- --help

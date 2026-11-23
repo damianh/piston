@@ -668,7 +668,7 @@ async Task SmokeToolAsync(string toolPath, string? expectedVersion, bool version
         await File.WriteAllTextAsync(Path.Combine(root, "Smoke.csproj"), """
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
                 <IsTestProject>true</IsTestProject>
                 <IsPackable>false</IsPackable>
               </PropertyGroup>
@@ -2532,7 +2532,7 @@ internal class ReleaseFixture : IDisposable
             foreach (var (name, content) in new[]
                      {
                          ($"{packageId}.nuspec", nuspec), (".mcp/server.json", server.ToJsonString()),
-                         ("tools/net10.0/any/Piston.dll", dll), (".signature.p7s", signature),
+                         ("tools/net11.0/any/Piston.dll", dll), (".signature.p7s", signature),
                      })
             {
                 using var stream = archive.CreateEntry(name).Open();

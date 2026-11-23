@@ -108,7 +108,7 @@ public sealed class MtpWarmHostPoolTests : IDisposable
             <Project Sdk="Microsoft.NET.Sdk">
               <PropertyGroup>
                 <OutputType>Exe</OutputType>
-                <TargetFramework>net10.0</TargetFramework>
+                <TargetFramework>net11.0</TargetFramework>
               </PropertyGroup>
               <ItemGroup>
                 <Reference Include="Piston.TestProcessHost">
@@ -129,7 +129,7 @@ public sealed class MtpWarmHostPoolTests : IDisposable
         var build = new BuildService(pool);
         var initial = await build.BuildAsync(solution, _ct);
         Assert.True(initial.Status == BuildStatus.Succeeded, string.Join(Environment.NewLine, initial.Errors));
-        var app = Path.Combine(projectDirectory, "bin", "Debug", "net10.0", "WarmApp.dll");
+        var app = Path.Combine(projectDirectory, "bin", "Debug", "net11.0", "WarmApp.dll");
         var first = await RunAsync(pool, MtpServerSession.RunMethod, app);
         Assert.Contains("original-build", string.Join(Environment.NewLine, first.Output), StringComparison.Ordinal);
 
