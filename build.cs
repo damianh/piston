@@ -1135,7 +1135,13 @@ internal sealed record ReleaseVersion
 
 internal sealed class ReleaseException(string message, Exception? inner = null) : Exception(message, inner);
 
-internal sealed record RetiredReservation(long RunId, string SourceSha, string PackageId, string Reason);
+internal sealed record RetiredStepEvidence(string Name, string Conclusion);
+
+internal sealed record RetiredAttemptEvidence(
+    int Attempt, string JobName, string JobConclusion, IReadOnlyList<RetiredStepEvidence> Steps);
+
+internal sealed record RetiredReservation(
+    long RunId, string SourceSha, string PackageId, string Reason, IReadOnlyList<RetiredAttemptEvidence> Attempts);
 
 internal sealed record Reservation(
     ReleaseVersion Version, long RunId, string SourceSha, bool HasVerifiedHistory, string? VerifiedThrough);
@@ -1158,7 +1164,32 @@ internal sealed partial class ReleaseTooling
                 RunId: 41339003060,
                 SourceSha: "ce5c63d4da00690f40141435e59db7e8122b972f",
                 PackageId: "Piston",
-                Reason: "NuGet trusted-publisher login failed before publication."),
+                Reason: "NuGet trusted-publisher login failed before publication.",
+                Attempts:
+                [
+                    new(1, "publish", "failure",
+                    [
+                        new("Run NuGet/login@v1", "failure"),
+                        new("Publish tool to NuGet.org", "skipped"),
+                    ]),
+                ]),
+            ["v2026.1103.1-dev"] = new(
+                RunId: 41672270028,
+                SourceSha: "4d5944815c11d282bdf70e9d55e338747726e2d8",
+                PackageId: "Piston",
+                Reason: "The first attempt failed NuGet trusted-publisher login and the retry failed packaging before publication.",
+                Attempts:
+                [
+                    new(1, "publish", "failure",
+                    [
+                        new("Run NuGet/login@v1", "failure"),
+                        new("Publish tool to NuGet.org", "skipped"),
+                    ]),
+                    new(2, "package", "failure",
+                    [
+                        new("Pack framework-dependent tool", "failure"),
+                    ]),
+                ]),
         };
 
     private HttpClient? _http;
@@ -1703,48 +1734,59 @@ internal sealed partial class ReleaseTooling
             throw new ReleaseException($"Retired reservation {tag} does not match its recorded identity.");
         }
 
+        if (retirement.Attempts.Count == 0
+            || retirement.Attempts.Select((attempt, index) => attempt.Attempt == index + 1).Any(valid => !valid))
+        {
+            throw new ReleaseException($"Retired reservation {tag} has invalid attempt expectations.");
+        }
+
         var run = await GitHubJsonAsync($"{RepoPath(repo)}/actions/runs/{record.RunId}");
         if (run is null
             || Integer(run, "id") != retirement.RunId
             || WorkflowPath(String(run, "path")) != ReleaseWorkflow
             || String(run, "event") != "workflow_run"
             || String(run, "head_sha") != retirement.SourceSha
-            || Integer(run, "run_attempt") != 1
+            || Integer(run, "run_attempt") != retirement.Attempts.Count
             || String(run, "status") != "completed"
             || String(run, "conclusion") != "failure")
         {
             throw new ReleaseException($"Retired reservation {tag} no longer has the expected failed run.");
         }
 
-        var result = await GitHubJsonAsync($"{RepoPath(repo)}/actions/runs/{record.RunId}/attempts/1/jobs?per_page=100");
-        var jobs = Array(result, "jobs");
-        if (jobs is null || Integer(result, "total_count") != jobs.Count || jobs.Any(j => j.ValueKind != JsonValueKind.Object))
+        foreach (var expected in retirement.Attempts)
         {
-            throw new ReleaseException($"Retired reservation {tag} has incomplete job evidence.");
-        }
+            var result = await GitHubJsonAsync(
+                $"{RepoPath(repo)}/actions/runs/{record.RunId}/attempts/{expected.Attempt}/jobs?per_page=100");
+            var jobs = Array(result, "jobs");
+            if (jobs is null || Integer(result, "total_count") != jobs.Count || jobs.Any(j => j.ValueKind != JsonValueKind.Object))
+            {
+                throw new ReleaseException($"Retired reservation {tag} has incomplete job evidence for attempt {expected.Attempt}.");
+            }
 
-        if (jobs.Where(j => String(j, "name") == "publish").ToList() is not [var job])
-        {
-            throw new ReleaseException($"Retired reservation {tag} has ambiguous publish-job evidence.");
-        }
+            if (jobs.Where(j => String(j, "name") == expected.JobName).ToList() is not [var job])
+            {
+                throw new ReleaseException($"Retired reservation {tag} has ambiguous {expected.JobName}-job evidence for attempt {expected.Attempt}.");
+            }
 
-        var steps = Array(job, "steps");
-        if (String(job, "status") != "completed"
-            || String(job, "conclusion") != "failure"
-            || steps is null
-            || steps.Any(s => s.ValueKind != JsonValueKind.Object))
-        {
-            throw new ReleaseException($"Retired reservation {tag} has invalid publish-job evidence.");
-        }
+            var steps = Array(job, "steps");
+            if (String(job, "status") != "completed"
+                || String(job, "conclusion") != expected.JobConclusion
+                || steps is null
+                || steps.Any(s => s.ValueKind != JsonValueKind.Object))
+            {
+                throw new ReleaseException($"Retired reservation {tag} has invalid {expected.JobName}-job evidence for attempt {expected.Attempt}.");
+            }
 
-        if (steps.Where(s => String(s, "name") == "Run NuGet/login@v1").ToList() is not [var login]
-            || String(login, "status") != "completed"
-            || String(login, "conclusion") != "failure"
-            || steps.Where(s => String(s, "name") == "Publish tool to NuGet.org").ToList() is not [var publish]
-            || String(publish, "status") != "completed"
-            || String(publish, "conclusion") != "skipped")
-        {
-            throw new ReleaseException($"Retired reservation {tag} does not prove publication was skipped.");
+            foreach (var expectedStep in expected.Steps)
+            {
+                if (steps.Where(s => String(s, "name") == expectedStep.Name).ToList() is not [var step]
+                    || String(step, "status") != "completed"
+                    || String(step, "conclusion") != expectedStep.Conclusion)
+                {
+                    throw new ReleaseException(
+                        $"Retired reservation {tag} has unexpected {expectedStep.Name} evidence for attempt {expected.Attempt}.");
+                }
+            }
         }
 
         if (await GitHubJsonAsync($"{RepoPath(repo)}/releases/tags/{Uri.EscapeDataString(tag)}", allowMissing: true) is not null)
@@ -2441,7 +2483,8 @@ internal class ReleaseFixture : IDisposable
 
     public static string ActionUrl(long runId) => $"{Api}/repos/{Repo}/actions/runs/{runId}";
 
-    public static string AttemptJobsUrl(long runId) => $"{Api}/repos/{Repo}/actions/runs/{runId}/attempts/1/jobs?per_page=100";
+    public static string AttemptJobsUrl(long runId, int attempt = 1) =>
+        $"{Api}/repos/{Repo}/actions/runs/{runId}/attempts/{attempt}/jobs?per_page=100";
 
     public static string ReleaseUrl(ReleaseVersion version) => $"{Api}/repos/{Repo}/releases/tags/{version.Tag}";
 
@@ -3307,12 +3350,22 @@ internal static partial class ReleaseTests
     {
         Case("only the known unpublished reservation is pinned for retirement", () =>
         {
-            Expect.Sequence(["v2026.1101.1-dev"], ReleaseTooling.DefaultRetiredReservations.Keys);
-            var retirement = ReleaseTooling.DefaultRetiredReservations["v2026.1101.1-dev"];
-            Expect.Equal(41339003060, retirement.RunId);
-            Expect.Equal("ce5c63d4da00690f40141435e59db7e8122b972f", retirement.SourceSha);
-            Expect.Equal("Piston", retirement.PackageId);
-            Expect.True(retirement.Reason.Length > 0, "a retirement needs a reason");
+            Expect.Sequence(["v2026.1101.1-dev", "v2026.1103.1-dev"], ReleaseTooling.DefaultRetiredReservations.Keys);
+            var first = ReleaseTooling.DefaultRetiredReservations["v2026.1101.1-dev"];
+            Expect.Equal(41339003060, first.RunId);
+            Expect.Equal("ce5c63d4da00690f40141435e59db7e8122b972f", first.SourceSha);
+            Expect.Equal("Piston", first.PackageId);
+            Expect.Equal(1, first.Attempts.Count);
+            Expect.True(first.Reason.Length > 0, "a retirement needs a reason");
+
+            var second = ReleaseTooling.DefaultRetiredReservations["v2026.1103.1-dev"];
+            Expect.Equal(41672270028, second.RunId);
+            Expect.Equal("4d5944815c11d282bdf70e9d55e338747726e2d8", second.SourceSha);
+            Expect.Equal("Piston", second.PackageId);
+            Expect.Sequence([1, 2], second.Attempts.Select(attempt => attempt.Attempt));
+            Expect.Equal("publish", second.Attempts[0].JobName);
+            Expect.Equal("package", second.Attempts[1].JobName);
+            Expect.True(second.Reason.Length > 0, "a retirement needs a reason");
         });
 
         var prior = new ReleaseVersion(Day, 1, true);
@@ -3327,14 +3380,16 @@ internal static partial class ReleaseTests
             ["conclusion"] = "failure",
         };
         JsonObject Step(string name, string conclusion) => new() { ["name"] = name, ["status"] = "completed", ["conclusion"] = conclusion };
-        JsonObject Job(string conclusion = "failure", JsonArray? steps = null) => new()
+        JsonObject Job(string name = "publish", string conclusion = "failure", JsonArray? steps = null) => new()
         {
-            ["name"] = "publish",
+            ["name"] = name,
             ["status"] = "completed",
             ["conclusion"] = conclusion,
             ["steps"] = steps ?? [Step("Run NuGet/login@v1", "failure"), Step("Publish tool to NuGet.org", "skipped")],
         };
         JsonObject Jobs(int total, params JsonObject[] jobs) => new() { ["total_count"] = total, ["jobs"] = new JsonArray([.. jobs]) };
+        RetiredAttemptEvidence[] loginFailureEvidence =
+            [new(1, "publish", "failure", [new("Run NuGet/login@v1", "failure"), new("Publish tool to NuGet.org", "skipped")])];
         void Evidence(GitFixture f)
         {
             f.Http.Json(ReleaseFixture.ActionUrl(41), FailedRun(f));
@@ -3347,7 +3402,8 @@ internal static partial class ReleaseTests
         void RetiredCase(string name, Func<GitFixture, Task> body) => GitCase(name, async f =>
         {
             await f.Tag(prior, 41);
-            f.Retired[prior.Tag] = new RetiredReservation(41, f.SourceSha, "Piston", "Unpublished after the NuGet login failure.");
+            f.Retired[prior.Tag] = new RetiredReservation(
+                41, f.SourceSha, "Piston", "Unpublished after the NuGet login failure.", loginFailureEvidence);
             Evidence(f);
             await body(f);
         });
@@ -3399,7 +3455,7 @@ internal static partial class ReleaseTests
                          ("wrong_tag", "v2026.1101.2-dev", 41L, f.SourceSha),
                      })
             {
-                f.Retired = new() { [tag] = new RetiredReservation(runId, sha, "Piston", "fixture") };
+                f.Retired = new() { [tag] = new RetiredReservation(runId, sha, "Piston", "fixture", loginFailureEvidence) };
                 await Rejects(f, label);
             }
         });
@@ -3425,7 +3481,7 @@ internal static partial class ReleaseTests
             foreach (var (label, jobs) in new[]
                      {
                          ("missing_job", Jobs(0)), ("partial_jobs", Jobs(2, Job())), ("duplicate_job", Jobs(2, Job(), Job())),
-                         ("job_succeeded", Jobs(1, Job("success"))),
+                         ("job_succeeded", Jobs(1, Job(conclusion: "success"))),
                          ("login_succeeded", Jobs(1, Job(steps: [Step("Run NuGet/login@v1", "success"), Step("Publish tool to NuGet.org", "skipped")]))),
                          ("publish_ran", Jobs(1, Job(steps: [Step("Run NuGet/login@v1", "failure"), Step("Publish tool to NuGet.org", "success")]))),
                          ("missing_steps", Jobs(1, Job(steps: []))),
@@ -3458,6 +3514,128 @@ internal static partial class ReleaseTests
             Evidence(f);
             f.Http.Json(ReleaseFixture.ReleaseUrl(prior), new JsonObject { ["tag_name"] = prior.Tag });
             await Rejects(f, "release_exists");
+        });
+
+        var retryDay = new DateOnly(2026, 11, 3);
+        var retryPrior = new ReleaseVersion(retryDay, 1, true);
+        RetiredAttemptEvidence[] retryEvidence =
+        [
+            new(1, "publish", "failure", [new("Run NuGet/login@v1", "failure"), new("Publish tool to NuGet.org", "skipped")]),
+            new(2, "package", "failure", [new("Pack framework-dependent tool", "failure")]),
+        ];
+        JsonObject RetryRun(GitFixture f, int runAttempt = 2) => new()
+        {
+            ["id"] = 52,
+            ["path"] = ".github/workflows/release.yml@refs/heads/main",
+            ["event"] = "workflow_run",
+            ["head_sha"] = f.SourceSha,
+            ["run_attempt"] = runAttempt,
+            ["status"] = "completed",
+            ["conclusion"] = "failure",
+        };
+        void RetryEvidence(GitFixture f)
+        {
+            f.Http.Json(ReleaseFixture.ActionUrl(52), RetryRun(f));
+            f.Http.Json(ReleaseFixture.AttemptJobsUrl(52, 1), Jobs(1, Job()));
+            f.Http.Json(ReleaseFixture.AttemptJobsUrl(52, 2),
+                Jobs(1, Job(name: "package", steps: [Step("Pack framework-dependent tool", "failure")])));
+            f.Http.Responses[ReleaseFixture.ReleaseUrl(retryPrior)] = 404;
+            f.Http.Responses[ReleaseFixture.PackageUrl(retryPrior, "Piston")] = 404;
+            f.Http.Responses[ReleaseFixture.PackageUrl(retryPrior)] = 404;
+        }
+
+        void RetryRetiredCase(string name, Func<GitFixture, Task> body) => GitCase(name, async f =>
+        {
+            await f.Tag(retryPrior, 52);
+            f.Retired[retryPrior.Tag] = new RetiredReservation(
+                52, f.SourceSha, "Piston", "The login failed before publication and the retry failed packaging.", retryEvidence);
+            RetryEvidence(f);
+            await body(f);
+        });
+
+        async Task RejectsRetry(GitFixture f, string? label = null)
+        {
+            await Expect.ThrowsAsync(() => f.PrepareAt(retryDay, runId: 53), label: label);
+            await ExpectTags(f, retryPrior.Tag);
+        }
+
+        RetryRetiredCase("prepare retires the exact two-attempt failure without changing its tag", async f =>
+        {
+            var original = await f.Git("--git-dir", f.Origin, "cat-file", "-p", $"refs/tags/{retryPrior.Tag}");
+            var (version, reused) = await f.PrepareAt(retryDay, runId: 53);
+            Expect.Equal("2026.1103.2-dev", version.Version);
+            Expect.Equal(false, reused);
+            Expect.Equal(original, await f.Git("--git-dir", f.Origin, "cat-file", "-p", $"refs/tags/{retryPrior.Tag}"));
+            Expect.Sequence(
+                [ReleaseFixture.ActionUrl(52), ReleaseFixture.AttemptJobsUrl(52, 1), ReleaseFixture.AttemptJobsUrl(52, 2),
+                 ReleaseFixture.ReleaseUrl(retryPrior), ReleaseFixture.PackageUrl(retryPrior, "Piston"),
+                 ReleaseFixture.PackageUrl(retryPrior)],
+                f.Http.Requests);
+        });
+
+        RetryRetiredCase("prepare continues after two-attempt retirement", async f =>
+        {
+            var (second, _) = await f.PrepareAt(retryDay, runId: 53);
+            f.Success(53);
+            f.PublicPackage(second, f.SourceSha);
+            var (third, reused) = await f.PrepareAt(retryDay, runId: 54);
+            Expect.Equal("2026.1103.3-dev", third.Version);
+            Expect.Equal(false, reused);
+            await ExpectTags(f, "v2026.1103.1-dev", "v2026.1103.2-dev", "v2026.1103.3-dev");
+        });
+
+        RetryRetiredCase("prepare never reuses the newly retired run", async f =>
+        {
+            await Expect.ThrowsAsync(() => f.PrepareAt(retryDay, runId: 52), "retired");
+            await ExpectTags(f, retryPrior.Tag);
+            Expect.Equal(0, f.Http.Requests.Count);
+        });
+
+        RetryRetiredCase("prepare rejects changed attempt and job evidence", async f =>
+        {
+            foreach (var (label, runAttempt) in new[] { ("missing_retry", 1), ("extra_retry", 3) })
+            {
+                RetryEvidence(f);
+                f.Http.Json(ReleaseFixture.ActionUrl(52), RetryRun(f, runAttempt));
+                await RejectsRetry(f, label);
+            }
+
+            foreach (var (label, jobs) in new[]
+                     {
+                         ("changed_login", Jobs(1, Job(steps: [Step("Run NuGet/login@v1", "success"), Step("Publish tool to NuGet.org", "skipped")]))),
+                         ("missing_package_job", Jobs(0)),
+                         ("changed_pack_job", Jobs(1, Job(name: "package", steps: [Step("Pack framework-dependent tool", "success")]))),
+                         ("duplicate_package_job", Jobs(2, Job(name: "package", steps: [Step("Pack framework-dependent tool", "failure")]),
+                             Job(name: "package", steps: [Step("Pack framework-dependent tool", "failure")]))),
+                     })
+            {
+                RetryEvidence(f);
+                f.Http.Json(ReleaseFixture.AttemptJobsUrl(52, label == "changed_login" ? 1 : 2), jobs);
+                await RejectsRetry(f, label);
+            }
+
+            RetryEvidence(f);
+            f.Http.Responses[ReleaseFixture.AttemptJobsUrl(52, 2)] = 404;
+            await RejectsRetry(f, "retry_jobs_missing");
+        });
+
+        RetryRetiredCase("prepare fails closed when two-attempt artifacts are present or unavailable", async f =>
+        {
+            foreach (var (label, url, response) in new (string, string, object)[]
+                     {
+                         ("release_unavailable", ReleaseFixture.ReleaseUrl(retryPrior), 403),
+                         ("release_present", ReleaseFixture.ReleaseUrl(retryPrior), Encoding.UTF8.GetBytes(
+                             new JsonObject { ["tag_name"] = retryPrior.Tag }.ToJsonString())),
+                         ("old_package_present", ReleaseFixture.PackageUrl(retryPrior, "Piston"), "published"u8.ToArray()),
+                         ("current_package_present", ReleaseFixture.PackageUrl(retryPrior), "published"u8.ToArray()),
+                         ("old_package_unavailable", ReleaseFixture.PackageUrl(retryPrior, "Piston"), 503),
+                         ("current_package_unavailable", ReleaseFixture.PackageUrl(retryPrior), new HttpRequestException("controlled outage")),
+                     })
+            {
+                RetryEvidence(f);
+                f.Http.Responses[url] = response;
+                await RejectsRetry(f, label);
+            }
         });
     }
 

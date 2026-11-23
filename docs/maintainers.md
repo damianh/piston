@@ -65,11 +65,14 @@ maintainer investigation.
 GitHub Actions permits at most 100 pending runs in the release concurrency
 queue; overflow is cancelled and must be rerun after capacity is available.
 
-The sole exception is the unpublished `Piston` reservation
-`v2026.1101.1-dev` from run `41339003060`. Release tooling retires it only
-after verifying its exact tag, failed run and absent package/release evidence;
-the tag and version remain reserved. **Do not rerun this retired workflow**:
-its original source and tooling still target the old package ID.
+The only retired reservations are the unpublished `Piston` versions
+`v2026.1101.1-dev` from run `41339003060` and `v2026.1103.1-dev` from run
+`41672270028`. Release tooling retires each only after verifying its exact tag,
+failed workflow evidence, and absent package/release artifacts; the tags and
+versions remain reserved. For `v2026.1103.1-dev`, attempt 1 failed at NuGet
+trusted-publisher login before the push, and attempt 2 failed while packing
+before publication. **Do not rerun either retired workflow**; their original
+sources and failed release conditions are not eligible for reuse.
 
 The first public release remains an acceptance gate until it actually succeeds;
 local-feed validation alone is not proof of publication.
