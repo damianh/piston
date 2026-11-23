@@ -69,7 +69,14 @@
         if (IsOpen && _focusPending)
         {
             _focusPending = false;
-            await JS.InvokeVoidAsync("pistonDialog.showModal", _modal);
+            try
+            {
+                await JS.InvokeVoidAsync("pistonDialog.showModal", _modal);
+            }
+            catch (JSDisconnectedException)
+            {
+                return;
+            }
             await _dialog.FocusAsync();
         }
     }

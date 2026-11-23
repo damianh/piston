@@ -59,6 +59,12 @@
     {
         _rows = TreeRow.Flatten(Nodes);
         var index = TreeRow.IndexOfSelected(_rows, SelectedKey, SelectedNodeKey, SelectedProject);
-        await JS.InvokeVoidAsync("pistonScroll.revealRow", _scroller, index, TreeRow.Height);
+        try
+        {
+            await JS.InvokeVoidAsync("pistonScroll.revealRow", _scroller, index, TreeRow.Height);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
     }
 }

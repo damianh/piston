@@ -353,7 +353,6 @@
         _viewState.SelectedTestKey = test.Key;
         _viewState.SelectedTestProject = ProjectOf(test);
         _selectedTest = test;
-        StateHasChanged();
     }
 
     /// <summary>Selects <paramref name="test"/>, expanding its ancestors and scrolling it into view.</summary>
@@ -381,7 +380,6 @@
         _selectedTest = null;
         _viewState.SelectedNodeKey = key;
         UpdateNodeDetail();
-        StateHasChanged();
     }
 
     private void TogglePin(string fqn)
@@ -389,7 +387,6 @@
         if (!_viewState.PinnedTestFqns.Remove(fqn))
             _viewState.PinnedTestFqns.Add(fqn);
         RebuildTree();
-        StateHasChanged();
     }
 
     private async Task Reset()
@@ -405,7 +402,6 @@
         _viewState.TreeExpanded = expanded;
         _viewState.NodeExpansion.Clear();
         SetExpandedRecursive(_treeNodes, expanded);
-        StateHasChanged();
     }
 
     private void RememberExpansion(TestNode node)
@@ -445,7 +441,6 @@
     {
         _viewState.Grouping = mode;
         RebuildTree();
-        StateHasChanged();
     }
 
     private void ToggleStatus(Action<ViewState> toggle)
@@ -547,8 +542,14 @@
             return;
 
         _selfRef = DotNetObjectReference.Create(this);
-        await JS.InvokeVoidAsync("pistonSplitter.attach", _splitContainer, _selfRef,
-            ViewState.MinSplitPercent, ViewState.MaxSplitPercent);
+        try
+        {
+            await JS.InvokeVoidAsync("pistonSplitter.attach", _splitContainer, _selfRef,
+                ViewState.MinSplitPercent, ViewState.MaxSplitPercent);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
     }
 
     [JSInvokable]

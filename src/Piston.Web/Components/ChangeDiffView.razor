@@ -267,7 +267,13 @@
         if (_scrollPending && _picked is { } picked)
         {
             _scrollPending = false;
-            await JS.InvokeVoidAsync("pistonScroll.revealElement", LineId(picked.Line));
+            try
+            {
+                await JS.InvokeVoidAsync("pistonScroll.revealElement", LineId(picked.Line));
+            }
+            catch (JSDisconnectedException)
+            {
+            }
         }
     }
 
@@ -287,15 +293,22 @@
         Capture(snapshot);
         if (changed)
         {
-            _ = InvokeAsync(LoadAsync);
+            _ = InvokeAsync(ReloadAfterStateChangeAsync);
         }
+    }
+
+    private async Task ReloadAfterStateChangeAsync()
+    {
+        var load = LoadAsync();
+        StateHasChanged();
+        await load;
+        StateHasChanged();
     }
 
     private async Task LoadAsync()
     {
         var version = ++_requestVersion;
         _loading = true;
-        StateHasChanged();
         var (@base, baseRef) = ChangeDiffModel.Request(View.ChangeBase, View.ChangeBaseRef);
         var (diff, error) = await Client.GetChangeDiffAsync(@base, baseRef);
         if (version != _requestVersion)
@@ -310,7 +323,6 @@
         {
             _diff = null;
             _unproven = [];
-            StateHasChanged();
             return;
         }
 
@@ -333,7 +345,6 @@
             await LoadCoveringTestsAsync(current.FilePath);
         }
 
-        StateHasChanged();
     }
 
     private bool HasLine(ChangeLineRef line) =>
