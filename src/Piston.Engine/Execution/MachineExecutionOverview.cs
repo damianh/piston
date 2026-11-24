@@ -3,17 +3,9 @@
 
 namespace Piston.Engine.Execution;
 
-/// <summary>A machine-wide read-only snapshot of worktree owners, running reservations and queued runs.</summary>
+/// <summary>A machine-wide read-only snapshot of worktree owners.</summary>
 public sealed record MachineExecutionOverview(
     DateTimeOffset CapturedAt,
-    ExecutionBudget? Budget,
     IReadOnlyList<OwnershipRecord> Owners,
-    IReadOnlyList<MachineExecutionEntry> Running,
-    IReadOnlyList<MachineExecutionEntry> Queue,
     string? Error,
-    bool CoordinationAvailable = true,
-    bool OwnersAvailable = true)
-{
-    public int? CpuSlotsInUse => CoordinationAvailable ? Running.Sum(entry => entry.CpuSlots) : null;
-    public long? MemoryMbInUse => CoordinationAvailable ? Running.Sum(entry => (long)(entry.MemoryMb ?? 0)) : null;
-}
+    bool OwnersAvailable = true);

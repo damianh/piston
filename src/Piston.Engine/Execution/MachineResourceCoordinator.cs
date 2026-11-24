@@ -11,7 +11,7 @@ namespace Piston.Engine.Execution;
 
 /// <summary>
 /// Machine-wide FIFO scheduling of test project runs over exclusive resources, coordinated through files
-/// in an <see cref="ExecutionCoordinationDirectory"/> like <see cref="MachineExecutionCoordinator"/>:
+/// in an <see cref="ExecutionCoordinationDirectory"/>:
 /// <list type="bullet">
 /// <item><c>resources.lock</c> serializes evaluation across processes (held only briefly).</item>
 /// <item>A waiting run holds an exclusively locked <c>resource-queue/*.ticket</c>, a running one a
@@ -20,9 +20,8 @@ namespace Piston.Engine.Execution;
 /// <item>Entries whose lock is not held belong to exited processes and are removed with their sidecars on
 /// every evaluation.</item>
 /// </list>
-/// A run starts when no running project holds any of its resources, it fits the machine's
-/// <c>containerSlots</c>, and no earlier queued run conflicts with it, so a run is never starved. Runs take
-/// all their resources at once, so they cannot deadlock.
+/// A run starts when no running project holds any of its resources and no earlier queued run conflicts
+/// with it, so a run is never starved. Runs take all their resources at once, so they cannot deadlock.
 /// </summary>
 internal sealed class MachineResourceCoordinator(
     ExecutionCoordinationDirectory directory,
@@ -42,7 +41,7 @@ internal sealed class MachineResourceCoordinator(
     public async Task<TestResourceLease> AcquireAsync(
         TestResourceNeeds needs, Action<TestResourceWait> onWaiting, CancellationToken ct)
     {
-        if (needs.IsEmpty)
+        if (needs.Keys.Count == 0)
         {
             return TestResourceLease.Uncoordinated(needs);
         }
@@ -70,9 +69,8 @@ internal sealed class MachineResourceCoordinator(
                 TestResourceWait status;
                 using (await AcquireLockAsync(ct).ConfigureAwait(false))
                 {
-                    var budget = ExecutionBudget.Load(directory.BudgetPath);
                     var (tickets, leases) = Scan();
-                    status = Evaluate(needs, sequence, ticket.Name, tickets, leases, budget, requestedAt);
+                    status = Evaluate(needs, sequence, ticket.Name, tickets, leases, requestedAt);
 
                     if (status.State == TestResourceWaitState.Acquired)
                     {
@@ -118,7 +116,7 @@ internal sealed class MachineResourceCoordinator(
 
     private static TestResourceWait Evaluate(
         TestResourceNeeds needs, long sequence, string name, IReadOnlyList<Entry> tickets, IReadOnlyList<Entry> leases,
-        ExecutionBudget budget, DateTimeOffset requestedAt)
+        DateTimeOffset requestedAt)
     {
         var keys = needs.Keys.ToHashSet(StringComparer.Ordinal);
         var blockers = new List<TestResourceBlocker>();
@@ -140,22 +138,6 @@ internal sealed class MachineResourceCoordinator(
             }
         }
 
-        var containersInUse = leases.Count(l => l.Info.UsesContainers);
-        if (needs.UsesContainers && budget.ContainerSlots is { } limit)
-        {
-            var earlierContainers = earlier.Where(t => t.Info.UsesContainers).ToList();
-            if (containersInUse + earlierContainers.Count >= limit)
-            {
-                blockers.AddRange(leases.Where(l => l.Info.UsesContainers)
-                    .Select(l => Blocker(TestResourceBlocker.ContainerSlots, TestResourceBlockerKind.Held, l)));
-                foreach (var ticket in earlierContainers)
-                {
-                    blockers.Add(Blocker(TestResourceBlocker.ContainerSlots, TestResourceBlockerKind.Queued, ticket));
-                    _ = ahead.Add(ticket.Name);
-                }
-            }
-        }
-
         var acquired = blockers.Count == 0;
         return new TestResourceWait(
             acquired ? TestResourceWaitState.Acquired : TestResourceWaitState.Waiting,
@@ -163,8 +145,6 @@ internal sealed class MachineResourceCoordinator(
             needs.UsesContainers,
             [.. blockers.OrderBy(b => b.Kind).ThenBy(b => b.Since).ThenBy(b => b.Resource, StringComparer.Ordinal)],
             ahead.Count,
-            containersInUse + (acquired && needs.UsesContainers ? 1 : 0),
-            budget.ContainerSlots,
             requestedAt,
             acquired ? DateTimeOffset.UtcNow : null);
     }

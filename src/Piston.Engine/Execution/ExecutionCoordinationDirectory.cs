@@ -4,10 +4,9 @@
 namespace Piston.Engine.Execution;
 
 /// <summary>
-/// Per-user directory shared by every Piston daemon of the user on this machine. It holds the
-/// machine budget (<c>budget.json</c>) and, under a format-versioned subdirectory, worktree owner
-/// locks, the admission queue and admitted leases, and the test resource queue and leases. It must be on a local filesystem: lock semantics
-/// on network filesystems are not relied upon.
+/// Per-user directory shared by every Piston daemon of the user on this machine. It holds worktree
+/// owner locks and the test resource queue and leases under a format-versioned subdirectory.
+/// It must be on a local filesystem: lock semantics on network filesystems are not relied upon.
 /// </summary>
 public sealed class ExecutionCoordinationDirectory
 {
@@ -30,17 +29,34 @@ public sealed class ExecutionCoordinationDirectory
 
     public string BaseDirectory { get; }
 
-    /// <summary>Optional machine budget. Absent means the default budget.</summary>
-    public string BudgetPath => Path.Combine(BaseDirectory, "budget.json");
+    internal string LegacyBudgetPath => Path.Combine(BaseDirectory, "budget.json");
 
     internal string StateDirectory { get; }
     internal string OwnersDirectory => Path.Combine(StateDirectory, "owners");
-    internal string QueueDirectory => Path.Combine(StateDirectory, "queue");
-    internal string LeasesDirectory => Path.Combine(StateDirectory, "leases");
-    internal string AdmissionLockPath => Path.Combine(StateDirectory, "admission.lock");
     internal string ResourceQueueDirectory => Path.Combine(StateDirectory, "resource-queue");
     internal string ResourceLeasesDirectory => Path.Combine(StateDirectory, "resource-leases");
     internal string ResourceLockPath => Path.Combine(StateDirectory, "resources.lock");
+
+    internal void RejectLegacyBudget()
+    {
+        try
+        {
+            _ = File.GetAttributes(LegacyBudgetPath);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            throw new ExecutionCoordinationException(
+                $"Cannot inspect obsolete machine budget '{LegacyBudgetPath}': {ex.Message}", ex);
+        }
+
+        throw new ExecutionCoordinationException(
+            $"Machine-wide execution budgets are no longer supported. Remove '{LegacyBudgetPath}' " +
+            "before starting Piston, and restart older Piston daemon and MCP processes.");
+    }
 
     internal static bool DirectoryExistsOrThrow(string path)
     {
@@ -109,7 +125,7 @@ public sealed class ExecutionCoordinationDirectory
         {
             foreach (var dir in new[]
             {
-                BaseDirectory, StateDirectory, OwnersDirectory, QueueDirectory, LeasesDirectory,
+                BaseDirectory, StateDirectory, OwnersDirectory,
                 ResourceQueueDirectory, ResourceLeasesDirectory,
             })
             {
@@ -146,7 +162,7 @@ public sealed class ExecutionCoordinationDirectory
             {
                 throw new ExecutionCoordinationException(
                     $"Exclusive file locks are not enforced in '{StateDirectory}', so worktree ownership and the " +
-                    "machine execution budget cannot be guaranteed. Unset DOTNET_SYSTEM_IO_DISABLEFILELOCKING " +
+                    "exclusive test resources cannot be guaranteed. Unset DOTNET_SYSTEM_IO_DISABLEFILELOCKING " +
                     $"(and the System.IO.DisableFileLocking switch) or set {EnvironmentVariable} to a local filesystem.");
             }
         }

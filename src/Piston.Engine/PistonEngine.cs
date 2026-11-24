@@ -22,7 +22,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     private readonly string _solutionDirectory;
     private readonly string _solutionPath;
     private readonly TestArtifactStore _artifactStore;
-    private readonly MachineExecutionCoordinator _executionCoordinator;
+    private readonly ExecutionCoordinationDirectory _coordinationDirectory;
     private readonly string? _ownerHost;
     private readonly string? _ownerDashboardUrl;
     private readonly bool _historyEnabled;
@@ -136,17 +136,13 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             : Math.Max(1, Environment.ProcessorCount / 2);
         _pool = new TestProcessPool(effectivePoolSize, options.ProcessRecycleAfter, strategy);
 
-        // Each admitted run reserves this daemon's test-process parallelism from the machine budget.
-        var coordinationDirectory = options.ExecutionCoordinationDirectory is { } configuredDirectory
+        _coordinationDirectory = options.ExecutionCoordinationDirectory is { } configuredDirectory
             ? new ExecutionCoordinationDirectory(configuredDirectory)
             : ExecutionCoordinationDirectory.ResolveDefault();
-        _executionCoordinator = new MachineExecutionCoordinator(
-            coordinationDirectory,
-            new ExecutionReservation(effectivePoolSize, options.ExecutionMemoryReservationMb));
 
-        // Test projects that share ports, container names or containers wait for each other machine-wide.
+        // Test projects with conflicting exclusive resources wait for each other machine-wide.
         var resourceGate = new MachineResourceCoordinator(
-            coordinationDirectory,
+            _coordinationDirectory,
             resourceResolver.Resolve,
             WorktreeIdentity.FromSolutionPath(_solutionPath).RootPath);
 
@@ -161,8 +157,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             _coverageStore,
             coverageProcessor,
             options.CoverageEnabled,
-            activitySink,
-            _executionCoordinator);
+            activitySink);
         _orchestrator.ArtifactStore = _artifactStore;
 
         var sdkVersions = new System.Collections.Concurrent.ConcurrentDictionary<string, Lazy<string?>>(StringComparer.Ordinal);
@@ -228,11 +223,10 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     public void PublishDashboardUrl(string? url) => _ownership?.PublishDashboardUrl(url);
 
     /// <summary>The machine-wide coordination directory used by this engine.</summary>
-    public ExecutionCoordinationDirectory ExecutionCoordinationDirectory => _executionCoordinator.Directory;
+    public ExecutionCoordinationDirectory ExecutionCoordinationDirectory => _coordinationDirectory;
 
     /// <summary>
-    /// Acquires exclusive ownership of the solution's worktree and validates the machine execution
-    /// budget, then starts watching and runs the initial build/test.
+    /// Acquires exclusive ownership of the solution's worktree, then starts watching and runs the initial build/test.
     /// </summary>
     /// <exception cref="ExecutionCoordinationException">
     /// Another live daemon owns the worktree, or machine-wide coordination is unavailable or misconfigured.
@@ -253,16 +247,15 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         }
 
         solutionPath = PathNormalizer.GetFullPath(solutionPath);
-        var budget = _executionCoordinator.Initialize();
+        _coordinationDirectory.RejectLegacyBudget();
+        _coordinationDirectory.EnsureReady();
         _ownership = WorktreeOwnership.Acquire(
-            _executionCoordinator.Directory, solutionPath, _ownerHost, dashboardUrl: _ownerDashboardUrl);
+            _coordinationDirectory, solutionPath, _ownerHost, dashboardUrl: _ownerDashboardUrl);
         // Only the owner may touch the worktree's .piston directory.
         _diagnosticLog.Open();
         _diagnosticLog.Write("Engine",
             $"Worktree ownership: {_ownership.Worktree.RootPath} (key {_ownership.Worktree.Key}); " +
-            $"execution directory: {_executionCoordinator.Directory.BaseDirectory}; " +
-            $"budget: {budget.CpuSlots} CPU slot(s), memory {budget.MemoryMb?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "not budgeted"} ({budget.Source}); " +
-            $"reservation: {_executionCoordinator.Reservation.CpuSlots} CPU slot(s), memory {_executionCoordinator.Reservation.MemoryMb?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "none"}");
+            $"execution directory: {_coordinationDirectory.BaseDirectory}");
 
         OpenHistory(solutionPath);
         OpenSavedResults(solutionPath);

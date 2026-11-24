@@ -17,23 +17,10 @@ public static class DtoMapper
 {
     public static MachineOverviewDto ToDto(this MachineExecutionOverview overview)
     {
-        var running = overview.Running
-            .Select(entry => entry.ToMachineEntryDto(overview.Owners))
-            .ToList();
-        var queue = overview.Queue
-            .Select(entry => entry.ToMachineEntryDto(overview.Owners))
-            .ToList();
         var worktrees = overview.Owners
             .Select(owner =>
             {
                 var info = owner.Owner;
-                var runningHere = info is not null && running.Any(entry => entry.ProcessId == info.ProcessId);
-                var queuedHere = info is not null ? queue.FirstOrDefault(entry => entry.ProcessId == info.ProcessId) : null;
-                var state = owner.Liveness == OwnershipLiveness.Stale ? "Stale"
-                    : info is null || !overview.CoordinationAvailable ? "Unknown"
-                    : runningHere ? "Running"
-                    : queuedHere is not null ? "Queued"
-                    : "Idle";
                 return new MachineWorktreeDto(
                     owner.Key,
                     owner.Liveness.ToString(),
@@ -43,31 +30,13 @@ public static class DtoMapper
                     info?.AcquiredAt,
                     info?.Host,
                     info?.DashboardUrl,
-                    info?.ProcessId == Environment.ProcessId,
-                    state,
-                    queuedHere?.QueuePosition);
+                    owner.Liveness == OwnershipLiveness.Live && info?.ProcessId == Environment.ProcessId);
             })
             .OrderBy(worktree => worktree.WorktreePath, StringComparer.Ordinal)
             .ToList();
-        var budget = overview.Budget is { } value
-            ? new MachineBudgetDto(
-                value.CpuSlots, value.MemoryMb, overview.CpuSlotsInUse, overview.MemoryMbInUse,
-                overview.CoordinationAvailable ? running.Count : null,
-                overview.CoordinationAvailable ? queue.Count : null, value.Source)
-            : null;
 
         return new MachineOverviewDto(
-            overview.CapturedAt, budget, worktrees, running, queue, overview.Error,
-            overview.CoordinationAvailable, overview.OwnersAvailable);
-    }
-
-    private static MachineExecutionEntryDto ToMachineEntryDto(
-        this MachineExecutionEntry entry, IReadOnlyList<OwnershipRecord> owners)
-    {
-        var worktree = owners.FirstOrDefault(owner => owner.Key == entry.WorktreeKey)?.Owner?.WorktreePath;
-        return new MachineExecutionEntryDto(
-            entry.Sequence, entry.RunId, entry.ProcessId, entry.CpuSlots, entry.MemoryMb,
-            entry.WorktreeKey, worktree, entry.QueuePosition);
+            overview.CapturedAt, worktrees, overview.Error, overview.OwnersAvailable);
     }
 
     public static ActivityEvent ToDto(this EngineActivityEvent activity)
@@ -372,7 +341,6 @@ public static class DtoMapper
             Failed: tests.Count(t => t.Status == TestStatus.Failed),
             Skipped: tests.Count(t => t.Status == TestStatus.Skipped),
             DuplicateTestCount: run.DuplicateTestIds.Count,
-            Admission: run.Admission?.ToDto(),
             Build: run.Build?.ToDto(),
             SelectionExplanation: run.Context?.SelectionExplanation,
             SelectionReasons: run.Context?.SelectionReasons?.ToDictionary(
@@ -418,8 +386,6 @@ public static class DtoMapper
             UsesContainers: wait.UsesContainers,
             BlockedBy: [.. wait.BlockedBy.Select(b => new TestResourceBlockerDto(b.Resource, b.Kind.ToString(), b.ProcessId, b.Worktree, b.Project, b.Since))],
             QueuedAhead: wait.QueuedAhead,
-            ContainerSlotsInUse: wait.ContainerSlotsInUse,
-            ContainerSlotBudget: wait.ContainerSlotBudget,
             WaitingSince: wait.WaitingSince,
             AcquiredAt: wait.AcquiredAt,
             WaitedMs: wait.Waited?.TotalMilliseconds);
@@ -803,22 +769,6 @@ public static class DtoMapper
     private static ChangedLineTotalsDto ToDto(this ChangedLineTotals totals) =>
         new(totals.ChangedLines, totals.CoveredByPassing, totals.CoveredOnlyByFailing, totals.Uncovered,
             totals.NonExecutable, totals.Unknown);
-
-    public static TestRunAdmissionDto ToDto(this TestRunAdmission admission) =>
-        new(
-            State: admission.State.ToString(),
-            ReservedCpuSlots: admission.ReservedCpuSlots,
-            ReservedMemoryMb: admission.ReservedMemoryMb,
-            BudgetCpuSlots: admission.BudgetCpuSlots,
-            BudgetMemoryMb: admission.BudgetMemoryMb,
-            BudgetSource: admission.BudgetSource,
-            QueuedAhead: admission.QueuedAhead,
-            QueueLength: admission.QueueLength,
-            OtherAdmittedRuns: admission.OtherAdmittedRuns,
-            CpuSlotsInUse: admission.CpuSlotsInUse,
-            MemoryMbInUse: admission.MemoryMbInUse,
-            QueuedAt: admission.QueuedAt,
-            AdmittedAt: admission.AdmittedAt);
 
     public static BuildResultDto ToDto(this BuildResult result) =>
         new(

@@ -156,24 +156,50 @@ public sealed class HostHelpersTests : IDisposable
     }
 
     [Theory]
-    [InlineData(0)]
-    [InlineData(-1)]
-    public void NonPositiveExecutionMemoryIsRejected(int memoryMb)
+    [InlineData("""{"execution":{"memoryMb":2048}}""")]
+    [InlineData("""{"Execution":{"MemoryMB":0}}""")]
+    [InlineData("""{"execution":{"memoryMb":"invalid"}}""")]
+    [InlineData("""{"execution":{"memoryMb":null}}""")]
+    [InlineData("""{"execution":{"memoryMb":{"unexpected":1}}}""")]
+    public void LegacyExecutionMemoryIsRejectedOnlyWhenStarting(string json)
     {
-        var config = new Piston.Hosting.Configuration.PistonConfig { Execution = new() { MemoryMb = memoryMb } };
+        var configPath = Path.Combine(_root, ".piston.json");
+        File.WriteAllText(configPath, json);
+        var solution = WriteSolution("App.slnx");
+        var (resolved, config) = HostHelpers.ResolveSolution(new FileInfo(solution), _root);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config));
+        var ex = Assert.Throws<InvalidOperationException>(() => HostHelpers.BuildOptions(resolved, 0, null, false, 0, config));
 
         Assert.Contains("execution.memoryMb", ex.Message);
+        Assert.Contains(configPath, ex.Message);
+        Assert.Contains("Remove", ex.Message);
+        Assert.Equal(json, File.ReadAllText(configPath));
     }
 
     [Fact]
-    public void ExecutionMemoryIsPassedToTheEngine()
+    public void RemovingLegacyExecutionMemoryAllowsStartupOptions()
     {
-        var configured = new Piston.Hosting.Configuration.PistonConfig { Execution = new() { MemoryMb = 2048 } };
+        var configPath = Path.Combine(_root, ".piston.json");
+        File.WriteAllText(configPath, """{"execution":{"memoryMb":2048}}""");
+        var solution = WriteSolution("App.slnx");
+        var config = HostHelpers.LoadConfig(_root);
+        _ = Assert.Throws<InvalidOperationException>(() => HostHelpers.BuildOptions(solution, 0, null, false, 0, config));
 
-        Assert.Equal(2048, HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, configured).ExecutionMemoryReservationMb);
-        Assert.Null(HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, new()).ExecutionMemoryReservationMb);
+        File.WriteAllText(configPath, "{}");
+        var recovered = HostHelpers.LoadConfig(_root);
+        Assert.Equal(solution, HostHelpers.BuildOptions(solution, 0, null, false, 0, recovered).SolutionPath);
+    }
+
+    [Fact]
+    public void InaccessibleConfigIsReportedInsteadOfTreatedAsMissing()
+    {
+        var configPath = Path.Combine(_root, ".piston.json");
+        _ = Directory.CreateDirectory(configPath);
+
+        var error = Assert.Throws<InvalidOperationException>(() => HostHelpers.LoadConfig(_root));
+
+        Assert.Contains(configPath, error.Message);
+        Assert.Contains("Could not load configuration", error.Message);
     }
 
     [Fact]

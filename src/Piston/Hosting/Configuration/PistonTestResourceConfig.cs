@@ -15,7 +15,7 @@ public sealed class PistonTestResourceConfig
     /// <summary>Exclusive resources: <c>port:5432</c>, <c>container:orders-db</c>, <c>resource:shared-queue</c>.</summary>
     public List<string>? Exclusive { get; set; }
 
-    /// <summary>Overrides whether the projects use containers (counted against the machine's <c>containerSlots</c>).</summary>
+    /// <summary>Overrides whether the projects use containers.</summary>
     public bool? Containers { get; set; }
 
     /// <summary>"repository" (one run per repository at a time) or "none".</summary>

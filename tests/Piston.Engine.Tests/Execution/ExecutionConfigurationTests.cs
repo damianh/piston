@@ -17,73 +17,11 @@ public sealed class ExecutionConfigurationTests : IDisposable
         try { Directory.Delete(_root, recursive: true); } catch { /* best effort */ }
     }
 
-    private string Budget(string json)
+    private string WriteFile(string json)
     {
         var path = Path.Combine(_root, "budget.json");
         File.WriteAllText(path, json);
         return path;
-    }
-
-    [Fact]
-    public void Budget_Missing_DefaultsToLogicalProcessors_WithoutMemoryBudget()
-    {
-        var budget = ExecutionBudget.Load(Path.Combine(_root, "missing.json"));
-        Assert.Equal(new ExecutionBudget(Environment.ProcessorCount, null, ExecutionBudget.DefaultSource), budget);
-    }
-
-    [Fact]
-    public void Budget_ParsesValues_CaseInsensitively()
-    {
-        var path = Budget("""{ "CpuSlots": 3, "memoryMB": 4096 }""");
-        Assert.Equal(new ExecutionBudget(3, 4096, path), ExecutionBudget.Load(path));
-    }
-
-    [Fact]
-    public void Budget_CpuOnly_LeavesMemoryUnbudgeted()
-    {
-        var path = Budget("""{ "cpuSlots": 2 }""");
-        Assert.Equal(new ExecutionBudget(2, null, path), ExecutionBudget.Load(path));
-    }
-
-    [Theory]
-    [InlineData("{}")]
-    [InlineData("""{ "memoryMb": 4096 }""")]
-    public void Budget_ExistingFileWithoutCpuSlots_IsExplicitError(string json)
-    {
-        var path = Budget(json);
-
-        var ex = Assert.Throws<ExecutionCoordinationException>(() => ExecutionBudget.Load(path));
-
-        Assert.Contains("'cpuSlots' is required", ex.Message, StringComparison.Ordinal);
-        Assert.Contains(path, ex.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Budget_InaccessiblePath_DoesNotUseDefault()
-    {
-        var ex = Assert.Throws<ExecutionCoordinationException>(() => ExecutionBudget.Load(_root));
-        _ = Assert.IsType<UnauthorizedAccessException>(ex.InnerException);
-    }
-
-    [Fact]
-    public void Budget_UnreadableFile_IsExplicitError()
-    {
-        if (OperatingSystem.IsWindows() || Environment.UserName == "root")
-        {
-            return;
-        }
-
-        var path = Budget("""{ "cpuSlots": 1 }""");
-        File.SetUnixFileMode(path, UnixFileMode.None);
-        try
-        {
-            var ex = Assert.Throws<ExecutionCoordinationException>(() => ExecutionBudget.Load(path));
-            _ = Assert.IsType<UnauthorizedAccessException>(ex.InnerException);
-        }
-        finally
-        {
-            File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
     }
 
     [Fact]
@@ -94,7 +32,7 @@ public sealed class ExecutionConfigurationTests : IDisposable
             return;
         }
 
-        var path = Budget("{}");
+        var path = WriteFile("{}");
         File.SetAttributes(path, FileAttributes.ReadOnly);
         try
         {
@@ -115,7 +53,7 @@ public sealed class ExecutionConfigurationTests : IDisposable
         }
 
         var dir = new ExecutionCoordinationDirectory(Path.Combine(_root, "coordination"));
-        var paths = new[] { dir.BaseDirectory, dir.StateDirectory, dir.OwnersDirectory, dir.QueueDirectory, dir.LeasesDirectory };
+        var paths = new[] { dir.BaseDirectory, dir.StateDirectory, dir.OwnersDirectory, dir.ResourceQueueDirectory, dir.ResourceLeasesDirectory };
         foreach (var path in paths)
         {
             _ = Directory.CreateDirectory(path);
@@ -129,52 +67,6 @@ public sealed class ExecutionConfigurationTests : IDisposable
             Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute, File.GetUnixFileMode(path));
         }
     }
-
-    [Theory]
-    [InlineData("""{ "cpuSlots": 0 }""", "cpuSlots")]
-    [InlineData("""{ "cpuSlots": -1 }""", "cpuSlots")]
-    [InlineData("""{ "cpuSlots": 1.5 }""", "cpuSlots")]
-    [InlineData("""{ "cpuSlots": "4" }""", "cpuSlots")]
-    [InlineData("""{ "memoryMb": 0 }""", "memoryMb")]
-    [InlineData("""{ "cpuSlots": 2, "maxRuns": 1 }""", "unknown property 'maxRuns'")]
-    [InlineData("""[ 1 ]""", "JSON object")]
-    [InlineData("""{ "cpuSlots": """, "budget")]
-    public void Budget_Invalid_IsExplicitError(string json, string expected)
-    {
-        var path = Budget(json);
-        var ex = Assert.Throws<ExecutionCoordinationException>(() => ExecutionBudget.Load(path));
-        Assert.Contains(expected, ex.Message, StringComparison.Ordinal);
-        Assert.Contains(path, ex.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Reservation_LargerThanCpuBudget_CanNeverBeAdmitted()
-    {
-        var ex = Assert.Throws<ExecutionCoordinationException>(
-            () => new ExecutionReservation(5, null).EnsureAdmissible(new ExecutionBudget(4, null, "test")));
-        Assert.Contains("never be admitted", ex.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Reservation_WithoutMemory_IsRejected_WhenBudgetLimitsMemory()
-    {
-        var ex = Assert.Throws<ExecutionCoordinationException>(
-            () => new ExecutionReservation(1, null).EnsureAdmissible(new ExecutionBudget(4, 1024, "test")));
-        Assert.Contains("execution.memoryMb", ex.Message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void Reservation_LargerThanMemoryBudget_IsRejected() => _ = Assert.Throws<ExecutionCoordinationException>(
-            () => new ExecutionReservation(1, 2048).EnsureAdmissible(new ExecutionBudget(4, 1024, "test")));
-
-    [Theory]
-    [InlineData(0)]
-    [InlineData(-3)]
-    public void Reservation_NonPositive_IsRejected(int memory) => _ = Assert.Throws<ExecutionCoordinationException>(
-            () => new ExecutionReservation(1, memory).EnsureAdmissible(new ExecutionBudget(4, null, "test")));
-
-    [Fact]
-    public void Reservation_WithMemory_IsAdmissible_WhenMemoryIsNotBudgeted() => new ExecutionReservation(4, 512).EnsureAdmissible(new ExecutionBudget(4, null, "test"));
 
     [Fact]
     public void Directory_RelativePath_IsRejected() => _ = Assert.Throws<ExecutionCoordinationException>(() => new ExecutionCoordinationDirectory("relative/dir"));
@@ -218,15 +110,15 @@ public sealed class ExecutionConfigurationTests : IDisposable
         dir.EnsureReady();
         dir.EnsureReady();
 
-        Assert.True(Directory.Exists(dir.QueueDirectory));
-        Assert.True(Directory.Exists(dir.LeasesDirectory));
+        Assert.True(Directory.Exists(dir.ResourceQueueDirectory));
+        Assert.True(Directory.Exists(dir.ResourceLeasesDirectory));
         Assert.True(Directory.Exists(dir.OwnersDirectory));
         Assert.Empty(Directory.GetFiles(dir.StateDirectory, "lock-probe-*"));
         if (!OperatingSystem.IsWindows())
         {
             var expected = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
             Assert.Equal(expected, File.GetUnixFileMode(dir.BaseDirectory));
-            Assert.Equal(expected, File.GetUnixFileMode(dir.QueueDirectory));
+            Assert.Equal(expected, File.GetUnixFileMode(dir.ResourceQueueDirectory));
         }
     }
 

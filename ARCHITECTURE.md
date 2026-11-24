@@ -90,8 +90,7 @@ counted in `filesOmitted`. `coverage/getCoveringTests` gives each test's latest
 it refuses paths that resolve (following symlinks) outside the solution
 directory, files over 1 MB and binary files.
 Clients receive state, test progress, build errors, and activity notifications.
-`machine/getOverview` reads machine-wide worktree owners, budget, live leases and
-queue tickets for the dashboard. The dashboard presents current test/build state,
+`machine/getOverview` reads machine-wide worktree owners for the dashboard. The dashboard presents current test/build state,
 run history and comparison, aggregate coverage with covering tests, a coverage-aware diff of the changes, activity,
 MCP call history and a Machine tab for the workspace overview.
 
@@ -176,10 +175,8 @@ solution directory except build outputs and directories such as `.git` and
 `.csproj`, `.props` or `.targets` refresh the solution graph; solution, `.props`
 and `.targets` changes trigger a full run.
 
-A new trigger cancels the preceding pipeline, and a semaphore serializes runs.
-Each run then waits for machine-wide admission (see
-[Worktree ownership and machine execution budget](#worktree-ownership-and-machine-execution-budget))
-before building.
+A new trigger cancels the preceding pipeline, and a semaphore serializes runs
+within that worktree. Independent worktrees can build and run tests concurrently.
 Build/test subprocesses are terminated on cancellation. This is not a guarantee
 that partial or previously displayed results reflect the newest source. Selective
 runs retain results from untouched suites, so consumers must distinguish current
@@ -364,13 +361,13 @@ last live snapshot: the slow test `Failed` with a timed-out message, other
 `Running` tests `NotRun`. The project's outcome is `TimedOut`, which makes the run
 `Incomplete`.
 
-## Worktree ownership and machine execution budget
+## Worktree ownership and test resources
 
 `src/Piston.Engine/Execution` coordinates daemon processes of one OS user through
 OS file locks in a per-user directory (`ExecutionCoordinationDirectory`):
 `$PISTON_EXECUTION_DIRECTORY` (absolute), or `Piston/execution` under
-LocalApplicationData. State lives in `v1/` (`owners/`, `queue/`, `leases/`,
-`admission.lock`); the operator-editable `budget.json` sits beside it. On Unix,
+LocalApplicationData. State lives in `v1/` (`owners/`, `resource-queue/`,
+`resource-leases/` and `resources.lock`). On Unix,
 .NET implements `FileShare.None` with `flock(LOCK_EX|LOCK_NB)` per open file
 description. On Windows it uses share modes. Either way the OS drops the lock
 when the process exits or is killed, which is how stale owners are recovered. No
@@ -379,15 +376,8 @@ directories, tightens existing Unix directories to mode 0700, and opens a probe 
 does not conflict (`DOTNET_SYSTEM_IO_DISABLEFILELOCKING`), it throws instead of
 continuing without enforcement.
 
-Update `budget.json` with atomic replacement: write complete JSON to a temporary
-file in the same directory, then rename it over the existing file without deleting
-the old file first. `ExecutionBudget.Load` retries JSON parse failures (including
-empty/partial writes) and I/O failures five times with 20 ms waits, adding at most
-100 ms of delay per load. Persistent failures remain explicit invalid-budget
-errors; schema errors and access denial fail immediately.
-
 **Ownership** is separate from the orchestrator's per-daemon run semaphore.
-`PistonEngine.StartAsync` validates the budget, then takes
+`PistonEngine.StartAsync` rejects an obsolete `budget.json`, then takes
 `WorktreeOwnership`. That is an exclusive lock on
 `owners/<sha256(canonical worktree)>.lock`, plus a JSON sidecar with PID, solution,
 worktree, acquisition time, host kind and (for daemons) local dashboard URL used in
@@ -405,47 +395,22 @@ disposing shared services and releasing ownership. Both `DisposeAsync` and synch
 Lock files are never deleted, so a deleted-and-recreated file can never let two
 holders coexist.
 
-**Admission** (`MachineExecutionCoordinator`, behind the internal
-`IExecutionAdmission`) runs inside `TriggerRunAsync`, after the per-daemon run lock
-and before the build. Each run's reservation is the daemon's effective
-`TestProcessPool` size in CPU slots plus optional `execution.memoryMb`. Under the
-global `admission.lock` the coordinator:
+There is no machine-wide run admission, CPU/memory reservation, or container
+capacity budget. The per-worktree `TestProcessPool` still bounds concurrent test
+processes, while the OS schedules builds and tests across worktrees. A newer
+trigger cancels its predecessor; disposal drains pipelines before releasing
+ownership. Concurrent worktrees can therefore increase CPU and memory pressure.
+Legacy `budget.json` and `.piston.json` `execution.memoryMb` settings cause an
+actionable startup error. The files are not changed automatically. Old daemon
+and MCP processes must be restarted: they continue enforcing their own budget
+and do not account for new-version runs.
 
-1. creates a ticket `queue/<seq>_<cpu>_<mem>_<pid>_<runId>.ticket`, held open
-   exclusively. `seq` is UTC ticks, made monotonic past the highest existing entry.
-2. on each 100 ms poll, re-reads and validates `budget.json`.
-3. deletes entries whose lock is no longer held (crashed processes).
-4. sums held leases and admits strictly FIFO: only the head ticket, and only if it
-   fits. Larger runs are never starved by smaller ones behind them.
-
-On admission it creates `leases/<…>.lease` and releases the ticket. Queue status
-changes are published as the active `TestRunRecord` with `Status = Queued` and a
-`TestRunAdmission`. The admitted status is kept on the record and mapped to
-`TestRunAdmissionDto`, MCP `get_test_run` JSON and `get_test_results` text.
-Windows entries are explicitly closed and deleted under the admission lock rather
-than marked delete-pending while held. This keeps sharing violations distinct from
-permission failures; access denial is an explicit coordination error, not a retry loop.
-
-The lease is disposed in the pipeline's `finally` (completion, cancellation, fault)
-before the run lock is released. Cancellation while queued removes the ticket.
-When a newer trigger supersedes a queued run, the replacement reuses its sequence
-and keeps its place. Stop/dispose does not. Admission errors (invalid budget,
-unrecognised held entries, IO) fault the run with an explicit reason. Only a missing
-budget file selects the default; unreadable files do not. Build/test cancellation
-waits for the killed runner to exit before the pipeline releases its lease.
-
-`MachineExecutionOverviewReader` takes `admission.lock` briefly and reads the
-same live ticket and lease names without cleaning up stale files. It reports CPU
-and memory use from held leases, FIFO queue positions, and owner-to-entry matches
-by PID. The dashboard polls `machine/getOverview` only while the Machine tab is
-open; a 500 ms lock timeout or invalid budget is returned as visible overview
-error text rather than silently inventing resource values. A failed coordination
-scan discards partial entries and marks availability false; usage and counts are
-unknown, and live owners are not labelled idle. `piston status --all`
-uses the same reader.
-Ownership scan availability is tracked separately: unreadable owner directories
-or locks produce a visible error and unknown ownership, not an empty-success list.
-Filesystem probes distinguish missing directories from access and I/O failures.
+`MachineExecutionOverviewReader` reads live and stale owners without examining
+legacy admission files or inferring whether an owner is running. The dashboard
+polls `machine/getOverview` while the Machine tab is open; `piston status --all`
+uses the same reader. Unreadable owner directories or locks produce a visible
+error and unknown ownership, not an empty-success list. Filesystem probes
+distinguish missing directories from access and I/O failures.
 
 **Test resources** (`MachineResourceCoordinator`, behind the internal
 `ITestResourceGate`) schedule test projects, not runs. `TestResourceInference`
@@ -462,16 +427,14 @@ target. `TestRunnerService` acquires a project's resources before its
 them before `OnProjectCompleted`; discovery is not gated.
 
 The coordinator uses `v1/resource-queue/*.ticket`, `v1/resource-leases/*.lease`
-and its own `resources.lock`, so admission's scan never sees resource entries.
-Entries are named `<seq>_<pid>_<guid>` and held open exclusively like admission
-entries. Because held files cannot be read by other processes, each has a
+and its own `resources.lock`. Entries are named `<seq>_<pid>_<guid>` and held
+open exclusively. Because held files cannot be read by other processes, each has a
 `<name>.json` sidecar (keys, containers, PID, worktree, project, times) written
 before the entry is created and deleted after it is closed, both under the lock;
 a held entry without a readable sidecar is ignored. On each 100 ms poll it deletes
 unheld entries and orphan sidecars, then grants the ticket when no lease shares a
-key, no earlier ticket shares a key, and, if it needs containers and
-`budget.json` sets `containerSlots`, container leases plus earlier container
-tickets are below the limit. Runs take all resources at once and conflicting
+key and no earlier ticket shares a key. Container projects without exclusive keys
+do not wait. Runs take all resources at once and conflicting
 tickets are ordered by sequence, so there is no deadlock and no starvation.
 Grants create the lease and release the ticket. Blockers (held or queued, with
 PID, worktree and project) are reported through `TestRunCallbacks.OnProjectWaiting`
@@ -482,11 +445,10 @@ port is a warning on `TestProjectResources`, not a failure.
 messages, output and log against port/container-name conflict signatures and
 records `SuspectedResourceConflict` on the `TestRunProjectOutcome`.
 
-Limits: budgets are admission reservations, not OS resource caps. Liveness
-means "process alive", so a hung daemon keeps its lease. Orphaned children of a
-crashed daemon are not counted. Coordination is per OS user and needs a local
-filesystem. Graph loading at startup is not admitted. CI runs the test suite on
-Linux and Windows, and the packed-tool samples smoke on macOS as well.
+Limits: a hung daemon can keep its resource lease; orphaned children of a crashed
+daemon are not coordinated. Coordination is per OS user and needs a local
+filesystem. CI runs the test suite on Linux and Windows, and the packed-tool
+samples smoke on macOS as well.
 
 ## Coverage and persistence
 
@@ -721,8 +683,8 @@ setup stalls, including restore/network or filesystem locking.
 Piston is a test runner that agents combine with independent code-intelligence
 tools; it is not a replacement IDE or a Roslyn service. Each worktree has one
 owning process (a `piston mcp` session or a daemon); there is no shared per-user
-hub. Machine-wide coordination is limited to the file-lock ownership and
-admission budget described above.
+hub. Machine-wide coordination is limited to worktree ownership and exclusive
+test resources described above.
 
 Aspire is one possible integration-test example for the generic runner. There
 is no Aspire-specific lifecycle, service orchestration, or dedicated

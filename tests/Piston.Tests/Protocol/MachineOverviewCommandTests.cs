@@ -25,8 +25,7 @@ public sealed class MachineOverviewCommandTests : IDisposable
     public async Task MachineGetOverview_UnavailableOwnersPreservesOwnershipError()
     {
         var overview = new MachineExecutionOverview(
-            DateTimeOffset.UtcNow, new ExecutionBudget(2, 1024, "/budget.json"),
-            [], [], [], "Could not read worktree ownership", OwnersAvailable: false);
+            DateTimeOffset.UtcNow, [], "Could not read worktree ownership", OwnersAvailable: false);
         var dispatcher = new EngineCommandDispatcher(new StubEngine());
         dispatcher.SetMachineOverviewProvider(_ => Task.FromResult(overview));
 
@@ -34,34 +33,30 @@ public sealed class MachineOverviewCommandTests : IDisposable
         var dto = response!.Deserialize<MachineOverviewDto>(JsonRpcSerializer.Options)!;
 
         Assert.False(dto.OwnersAvailable);
-        Assert.True(dto.CoordinationAvailable);
         Assert.Empty(dto.Worktrees);
         Assert.Equal("Could not read worktree ownership", dto.Error);
     }
 
     [Fact]
-    public async Task MachineGetOverview_UnavailableScanReturnsUnknownStateAndUsage()
+    public async Task MachineGetOverview_ReturnsOwnershipWithoutRunStateOrBudgets()
     {
         var owner = new OwnershipRecord(
             "worktree-key", OwnershipLiveness.Live,
             new ExecutionOwnerInfo(123, "/repo/App.slnx", "/repo", DateTimeOffset.UtcNow, "daemon"));
         var overview = new MachineExecutionOverview(
-            DateTimeOffset.UtcNow, new ExecutionBudget(2, 1024, "/budget.json"),
-            [owner], [], [], "Scan failed", CoordinationAvailable: false);
+            DateTimeOffset.UtcNow, [owner], null);
         var dispatcher = new EngineCommandDispatcher(new StubEngine());
         dispatcher.SetMachineOverviewProvider(_ => Task.FromResult(overview));
 
         var response = await dispatcher.HandleCommandAsync(ProtocolMethods.MachineGetOverview, null, _ct);
         var dto = response!.Deserialize<MachineOverviewDto>(JsonRpcSerializer.Options)!;
 
-        Assert.False(dto.CoordinationAvailable);
-        Assert.Equal("Unknown", Assert.Single(dto.Worktrees).State);
-        Assert.NotNull(dto.Budget);
-        Assert.Null(dto.Budget.CpuSlotsInUse);
-        Assert.Null(dto.Budget.MemoryMbInUse);
-        Assert.Null(dto.Budget.RunningCount);
-        Assert.Null(dto.Budget.QueuedCount);
-        Assert.Equal("Scan failed", dto.Error);
+        Assert.Equal("Live", Assert.Single(dto.Worktrees).Liveness);
+        var json = response!.ToJsonString();
+        Assert.DoesNotContain("\"budget\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"running\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"queue\"", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"state\"", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -84,14 +79,14 @@ public sealed class MachineOverviewCommandTests : IDisposable
         var worktreeDto = Assert.Single(dto.Worktrees);
         Assert.Equal(owner.Worktree.RootPath, worktreeDto.WorktreePath);
         Assert.True(worktreeDto.IsCurrent);
-        Assert.Equal("Idle", worktreeDto.State);
+        Assert.Equal("Live", worktreeDto.Liveness);
         Assert.Equal("http://localhost:5199", worktreeDto.DashboardUrl);
     }
 
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task MachineGetOverview_InvalidDashboardMetadataDoesNotHideOwnersOrUsage(bool stale)
+    public async Task MachineGetOverview_InvalidDashboardMetadataDoesNotHideOwners(bool stale)
     {
         var directory = new ExecutionCoordinationDirectory(Path.Combine(_root, "coordination"));
         directory.EnsureReady();
@@ -117,7 +112,6 @@ public sealed class MachineOverviewCommandTests : IDisposable
         var dto = response!.Deserialize<MachineOverviewDto>(JsonRpcSerializer.Options)!;
 
         Assert.True(dto.OwnersAvailable);
-        Assert.True(dto.CoordinationAvailable);
         Assert.Null(dto.Error);
         Assert.Equal(2, dto.Worktrees.Count);
         var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
@@ -126,8 +120,5 @@ public sealed class MachineOverviewCommandTests : IDisposable
         var invalidDto = Assert.Single(dto.Worktrees, w => pathComparer.Equals(w.WorktreePath, invalidRoot));
         Assert.Null(invalidDto.DashboardUrl);
         Assert.Equal(stale ? "Stale" : "Live", invalidDto.Liveness);
-        Assert.NotNull(dto.Budget);
-        _ = Assert.NotNull(dto.Budget.RunningCount);
-        _ = Assert.NotNull(dto.Budget.QueuedCount);
     }
 }

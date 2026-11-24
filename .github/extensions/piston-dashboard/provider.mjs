@@ -147,7 +147,7 @@ async function worktreeRoot(directory) {
     }
 }
 
-export async function startDaemon(cwd, solution, worktree, inspect = discover, check = probe, launch = spawn, logRoot = tmpdir()) {
+export async function startDaemon(cwd, solution, worktree, inspect = discover, check = probe, launch = spawn, logRoot = tmpdir(), platform = process.platform) {
     if (typeof solution !== "string" || !solution.trim() || solution.length > 4096 || solution.includes("\0")) {
         throw new Error("Enter a solution path.");
     }
@@ -172,8 +172,10 @@ export async function startDaemon(cwd, solution, worktree, inspect = discover, c
     let child;
     let failure;
     try {
+        // On Windows, detached means DETACHED_PROCESS: the daemon would have no console, so every console
+        // process it starts would open a visible window. Give it a hidden console instead; it still outlives the canvas.
         child = launch("piston", ["daemon", selected, "--no-stdio", "--config-directory", cwd], {
-            cwd, detached: true, stdio: ["ignore", log.fd, log.fd], windowsHide: true,
+            cwd, detached: platform !== "win32", stdio: ["ignore", log.fd, log.fd], windowsHide: true,
         });
         child.once("error", error => { failure = error.message; });
         child.once("exit", code => { failure = `Piston exited during startup (code ${code}).`; });

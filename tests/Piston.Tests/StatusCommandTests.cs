@@ -17,6 +17,62 @@ public sealed class StatusCommandTests
     private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
 
     [Theory]
+    [InlineData("status", 1, "No daemon running for this solution.")]
+    [InlineData("stop", 0, "No daemon running.")]
+    public async Task LegacyBudgets_DoNotPreventStatusOrStop(string command, int expectedExit, string expectedMessage)
+    {
+        var root = Directory.CreateTempSubdirectory("piston-legacy-status-").FullName;
+        try
+        {
+            var solution = Path.Combine(root, "App.slnx");
+            await File.WriteAllTextAsync(solution, "<Solution />", _ct);
+            await File.WriteAllTextAsync(Path.Combine(root, ".piston.json"),
+                """{ "execution": { "memoryMb": "invalid" } }""", _ct);
+            var coordination = Path.Combine(root, "coordination");
+            _ = Directory.CreateDirectory(coordination);
+            var budget = Path.Combine(coordination, "budget.json");
+            await File.WriteAllTextAsync(budget, """{ "cpuSlots": 1 }""", _ct);
+            var start = new ProcessStartInfo("dotnet")
+            {
+                WorkingDirectory = root,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Piston.dll"));
+            start.ArgumentList.Add(command);
+            start.ArgumentList.Add(solution);
+            start.Environment["PISTON_EXECUTION_DIRECTORY"] = coordination;
+
+            using var process = Process.Start(start) ?? throw new InvalidOperationException("Failed to start Piston.");
+            var stdout = process.StandardOutput.ReadToEndAsync(_ct);
+            var stderr = process.StandardError.ReadToEndAsync(_ct);
+            try
+            {
+                await process.WaitForExitAsync(_ct).WaitAsync(TimeSpan.FromSeconds(20), _ct);
+            }
+            finally
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync(CancellationToken.None);
+                }
+            }
+
+            var output = await stdout + await stderr;
+            Assert.Equal(expectedExit, process.ExitCode);
+            Assert.Contains(expectedMessage, output);
+            Assert.DoesNotContain("execution.memoryMb", output);
+            Assert.True(File.Exists(budget));
+        }
+        finally
+        {
+            await DeleteDirectoryWithRetryAsync(root);
+        }
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]

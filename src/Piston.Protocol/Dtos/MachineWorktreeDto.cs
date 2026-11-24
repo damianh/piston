@@ -12,6 +12,4 @@ public sealed record MachineWorktreeDto(
     DateTimeOffset? AcquiredAt,
     string? Host,
     string? DashboardUrl,
-    bool IsCurrent,
-    string State,
-    int? QueuePosition);
+    bool IsCurrent);

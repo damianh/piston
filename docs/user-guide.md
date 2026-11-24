@@ -148,7 +148,7 @@ piston coverage-export [<solution>] [--format lcov|cobertura] [-o <file>]
 piston init copilot|claude [--write] [--scope user|repo] [--force]
 ```
 
-`piston status --all` lists every live worktree owner (PID, `mcp` or `daemon`, solution, worktree and dashboard URL where available), stale ownership records, running reservations, FIFO queue order and CPU/memory use against the machine budget. The dashboard's **Machine** tab shows the same overview and links to local dashboards. `piston mcp` sessions have no dashboard URL. If a worktree's owner cannot be reached over the daemon pipe (for example a `piston mcp` process, or a daemon whose worktree was deleted), `piston stop` prints the owner's PID, solution and worktree and exits 1; `piston stop --force` sends SIGTERM and kills the process if it has not exited.
+`piston status --all` lists every live worktree owner (PID, `mcp` or `daemon`, solution, worktree and dashboard URL where available) and stale ownership records. The dashboard's **Machine** tab shows the same ownership overview and links to local dashboards. If a worktree's owner cannot be reached over the daemon pipe (for example a `piston mcp` process, or a daemon whose worktree was deleted), `piston stop` prints the owner's PID, solution and worktree and exits 1; `piston stop --force` sends SIGTERM and kills the process if it has not exited.
 
 `piston status` prints the daemon's PID, solution, phase, web and MCP URLs, and its latest and active run. `piston stop` asks the daemon to shut down, then waits for its process to exit. It exits 0 only once the process has exited, so the ports are free; with no daemon running it prints `No daemon running` and also exits 0. Startup failures exit with code 1 and an `error:` message: a worktree that already has a daemon, or an occupied `--mcp-port`/`--web-port`. Endpoints bind after worktree ownership is taken and before the startup run, so a port conflict starts no build or test run.
 
@@ -253,7 +253,7 @@ The **Runs** tab lists the runs kept in the [run history](#run-history-and-failu
 
 The **Timeline** tab tells the story of the daemon's session, newest first: each edit (the files that changed between runs), each run with its trigger, outcome and the tests it newly failed or fixed, and the MCP tool calls agents made in between. Identical consecutive calls collapse into one row; click a call for its parameters and result. **Agent calls** in the header shows or hides them. A run whose build failed lists its first 10 errors when you click *build failed*. Markers show when a solution was loaded and when the dashboard reconnected. The currently failing tests at the top link to the run and edit that introduced each failure; click a test to follow it through the timeline.
 
-The **Machine** tab shows owned worktrees, the current CPU/memory budget use, admitted runs and the strict FIFO queue. It refreshes while open, marks stale ownership records, and opens another daemon's local dashboard when its owner record has a dashboard URL.
+The **Machine** tab shows live and stale worktree owners. It refreshes while open and links to another owner's local dashboard when available; it does not infer whether an owner is running tests.
 
 Keyboard shortcuts (press `?` in the dashboard for the list): `R` runs the selection, `[` and `]` move to the previous or next failure, `1`–`4` show or hide failed, passed, skipped and not-run tests, `G` cycles the grouping, `E` expands or collapses all, and `S` sorts by duration (press again to reverse).
 
@@ -324,7 +324,6 @@ Every run, including startup and file-change runs, gets a record in the
 - a unique `runId` and a sequence number;
 - the trigger (`Startup`, `Forced`, `FileChange` or `Targeted`) and, for a file-change run, the `changedFiles` that triggered it;
 - the status: `Completed`, `Incomplete`, `BuildFailed`, `Cancelled` or `Faulted` (`Queued` or `Running` while active);
-- for runs that went through machine-wide admission, an `admission` object (see below);
 - the scope (`Full` or `Selective`), `isFiltered` and the effective filter;
 - the run context: solution, test projects, build targets, configuration, SDK, runtime and OS;
 - run-local `build` output (status, raw MSBuild errors/warnings including diagnostic IDs and locations, duration), or null if the build did not return. A targeted run that reused the last build reports status `Skipped`;
@@ -358,27 +357,20 @@ Limits:
 - The SDK version is recorded from `dotnet --version` run in the solution directory.
 - `context.workingDirectory` is the build/SDK-probe directory: the solution directory. `context.testWorkingDirectories` records each test target's actual directory: the solution directory for MTP, the project directory for VSTest. Builds and test processes start there, so the watched solution's `global.json` (SDK and test runner) applies, not the daemon's.
 
-### Worktree ownership and machine execution budget
+### Worktree ownership and execution
 
 Daemons for the same OS user coordinate through a per-user directory: `$PISTON_EXECUTION_DIRECTORY` if set (must be absolute), otherwise `Piston/execution` under the local application-data folder (`~/.local/share/Piston/execution` on Linux). It must be on a local filesystem. At startup the daemon creates or tightens its Unix coordination directories to mode 0700 and checks that file locks are enforced there. If they are not (for example `DOTNET_SYSTEM_IO_DISABLEFILELOCKING` is set), the daemon refuses to start.
 
 - **One owner per worktree.** A daemon takes an exclusive lock for its solution's worktree: the nearest ancestor that contains `.git`, after resolving symlinks, or the solution directory if there is none. A second daemon for any solution in the same worktree exits with an error that names the owner's PID, solution and start time. The OS releases the lock when the owner exits or crashes, so a stale owner never blocks a restart.
-- **Machine-wide budget.** Before building, each run (startup, forced or file-change) asks for admission. It reserves the daemon's test-process parallelism as CPU slots, plus `execution.memoryMb` if configured. Runs are admitted in strict FIFO order, only while the sum of admitted reservations fits the budget. The budget is read from `budget.json` in that directory on every admission check:
+- **Per-worktree execution.** A daemon serializes its own runs; a newer trigger cancels the preceding run. Independent worktrees may build and test concurrently, without a machine-wide CPU, memory or container capacity queue. `parallelism` and `--parallelism` still bound each worktree's concurrent test processes. Conflicting [test resources](#integration-test-resources) still wait for each other.
 
-  ```json
-  { "cpuSlots": 8, "memoryMb": 16384 }
-  ```
+Graceful engine disposal waits for cancelled pipelines to finish before releasing worktree ownership. Build/test cancellation waits for the killed runner to exit.
 
-  Without the file, the budget is the logical processor count with no memory limit. When the file exists, `cpuSlots` is required and `memoryMb` and `containerSlots` (see [Integration-test resources](#integration-test-resources)) are optional. An unreadable file is an error, not a default budget. Unknown properties, non-positive values, or a reservation that could never fit fail explicitly: at daemon startup, or as a `Faulted` run if the file changes while a run waits. If the budget limits memory, every daemon must set `execution.memoryMb`. MCP text also reports configured memory reservations when memory is unbudgeted, explicitly marked `unbudgeted`.
-
-  Update `budget.json` by writing the complete JSON to a temporary file in the same directory, then atomically renaming it over `budget.json` (without deleting the old file first). This is recommended over editing in place. Empty/partial JSON and I/O failures are retried up to five times at 20 ms intervals (100 ms total delay); persistent failures still report the existing invalid-budget error. Schema errors and access denial fail immediately.
-- **Visible queueing.** A waiting run is published as the active run with status `Queued` and an `admission` object: `state` (`Queued`/`Admitted`), `queuedAhead`, `queueLength`, `otherAdmittedRuns`, `cpuSlotsInUse`, `memoryMbInUse`, the reservation, the budget and its source, `queuedAt` and `admittedAt`. It appears in `get_test_run` (`active` or by ID), in the `Active Run:` line of `get_test_results`, and in `ActiveRun`/`LastRun` of the protocol state snapshot. A run superseded while queued ends `Cancelled` without starting, and its replacement keeps the queue position. Leases and tickets are released when a run ends, is cancelled or faults, or when the daemon exits or crashes.
-
-Graceful engine disposal waits for cancelled pipelines to finish and release their admission leases before releasing worktree ownership. Build/test cancellation waits for the killed runner to exit.
+**Migration:** Machine budgets have been removed. Before starting a new daemon or MCP process, remove `budget.json` from the coordination directory and remove `execution.memoryMb` from `.piston.json`; Piston reports the relevant path rather than silently ignoring either setting. `piston status` and `piston stop` remain available to find and stop old owners. Restart older daemon and MCP processes as well: old versions continue applying their own admission limits and do not account for runs started by the new version. The `admission` run field and machine budget, running and queue fields have been removed from the MCP and protocol responses.
 
 Test execution and discovery use a launcher that establishes a Unix process group or Windows job before starting the test command. The launcher uses Piston's runtime installation, but resolves the target command in the original Piston process's context, preserving SDK selection. On Windows, test commands remain windowless and inherit the redirected stdout/stderr handles. After the command exits, redirected stdout/stderr get a five-second drain grace period. If descendants keep those streams open, Piston terminates the owned tree, bounds termination cleanup to ten seconds, and records that output was cut off in the run or diagnostic log.
 
-Limits: this is admission control by reservation. Piston does not cap the actual CPU or memory of builds or test processes (no cgroup or job-object resource limits). A hung but live daemon keeps its lease. Child processes orphaned by a crashed daemon are no longer counted. Daemons of different OS users do not share a budget. Solution loading at startup is not admitted. Owner `.lock` files are left in place on purpose. CI runs the full engine suite, including the execution budget tests, on Linux and Windows. On macOS, the smoke job runs `WorktreeOwnershipTests`, plus the packed-tool daemon and MCP `verify` smoke tests on the samples.
+There is no OS-level CPU or memory cap; concurrent worktrees can increase machine resource pressure. Owner `.lock` files are left in place on purpose.
 
 ### Integration-test resources
 
@@ -386,7 +378,7 @@ Test projects that start containers or bind fixed ports collide when two worktre
 
 - **Inference.** A test project that directly references a container testing package (`Testcontainers`, `Testcontainers.*`, `DotNet.Testcontainers*`, `Aspire.Hosting.Testing`, `Docker.DotNet*`, `Ductus.FluentDocker*`, `Squadron.*`) uses containers. References across all target frameworks are combined, including framework-conditional references. By default it is isolated per repository: only one run of that project at a time across all worktrees of the repository (on this machine, for this user), because such tests often reuse fixed container names, volumes and ports. Projects without container packages run without coordination unless a rule declares resources.
 - **Exclusive resources.** A run holds all of its resources at once, and a project waits, before taking a test-process slot, while another run holds or is queued ahead for any of them. Waiting is first-in, first-out per resource, so nothing starves or deadlocks. Resources are released when the project's test process ends, when the run is cancelled, or when the daemon exits or crashes.
-- **Container slots.** `containerSlots` in `budget.json` caps how many container-using test projects run at once machine-wide (for example `{ "cpuSlots": 8, "containerSlots": 2 }`). Without it, container projects are limited only by their exclusive resources.
+- **Container projects.** There is no global container limit. Projects that use containers wait only for their inferred or declared exclusive resources.
 
 Declare or relax resources in `.piston.json` with `testResources`. Every rule whose `projects` glob matches a test project applies, in order:
 
@@ -404,7 +396,7 @@ Declare or relax resources in `.piston.json` with `testResources`. Every rule wh
 |---|---|
 | `projects` | Required. Glob matched, ignoring case, against the project path relative to the solution directory with `/` separators. `**` matches any number of directories, `*` and `?` stay within one. A pattern without `/` matches the file name in any directory. |
 | `exclusive` | Resources the project's run holds exclusively, shared with any other project (in any worktree) that declares the same key: `port:<1-65535>`, `container:<name>`, or `resource:<any name>`. |
-| `containers` | `true` or `false` overrides package inference: whether the project uses containers (and a container slot). |
+| `containers` | `true` or `false` overrides package inference: whether the project uses containers. |
 | `isolation` | `"repository"` (default for container projects) runs the project once at a time across the repository's worktrees; `"none"` drops that default when the project's own resources are declared or it is safe to run in parallel. |
 
 Configuration errors (unknown properties, an invalid key such as `port:70000`, an unknown isolation) fail daemon startup. Rules that match no test project are logged to the diagnostic log. Whole-solution runs, which pass the solution to the runner as one target, hold the union of all test projects' resources.
@@ -499,7 +491,6 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `mcpPort` | `int` | Port for the daemon's MCP server (default 5200). |
 | `testExecutionMode` | `string` | `"Auto"` and `"Process"` currently both route between MTP and VSTest. `"InProcess"` is not implemented and throws at startup. |
 | `testResources` | `array` | Exclusive resources of test projects and overrides of container inference. See [Integration-test resources](#integration-test-resources). |
-| `execution.memoryMb` | `int` | Memory in MiB each run reserves from the machine execution budget (see [Worktree ownership and machine execution budget](#worktree-ownership-and-machine-execution-budget)). Must be positive; required when the budget sets `memoryMb`. A reservation, not a cap. |
 
 ### Slow and hanging tests
 

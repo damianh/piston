@@ -262,8 +262,6 @@ public sealed partial class PistonOrchestrator
                         return;
                     }
 
-                    using var lease = await _admission.AdmitAsync($"backfill-{Guid.NewGuid():N}", _ => { }, null, ct)
-                        .ConfigureAwait(false);
                     using var stopChunk = CancellationTokenSource.CreateLinkedTokenSource(ct);
                     using var slots = new SemaphoreSlim(concurrency, concurrency);
                     using var resourceState = new SecondaryResourceState(_state);

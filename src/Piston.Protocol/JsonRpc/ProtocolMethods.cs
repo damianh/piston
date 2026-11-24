@@ -107,7 +107,7 @@ public static class ProtocolMethods
     /// <summary>Read the machine-wide user settings and the file they live in.</summary>
     public const string SettingsGet = "settings/get";
 
-    /// <summary>Read machine-wide worktree owners, execution reservations and budget use.</summary>
+    /// <summary>Read machine-wide worktree ownership.</summary>
     public const string MachineGetOverview = "machine/getOverview";
 
     /// <summary>Merge the non-null fields of a partial settings object into the machine-wide user settings; returns the result and the file path.</summary>

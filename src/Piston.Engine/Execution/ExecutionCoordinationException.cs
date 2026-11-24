@@ -5,7 +5,7 @@ namespace Piston.Engine.Execution;
 
 /// <summary>
 /// Machine-wide execution coordination is unavailable, misconfigured or cannot admit work.
-/// Piston reports this explicitly instead of running without ownership or budgeting.
+/// Piston reports this explicitly instead of running without ownership or resource coordination.
 /// </summary>
 public class ExecutionCoordinationException : Exception
 {

@@ -224,7 +224,9 @@ public sealed class TestRunnerService : ITestRunnerService
     }
 
     private static ProjectTestResult WithResources(ProjectTestResult result, TestResourceLease? lease) =>
-        lease is null || lease.Status is null ? result : result with { Resources = lease.Resources };
+        lease is null || (lease.Status is null && !lease.Needs.UsesContainers)
+            ? result
+            : result with { Resources = lease.Resources };
 
     private async Task<IDisposable> AcquireSlotAsync(CancellationToken ct)
     {

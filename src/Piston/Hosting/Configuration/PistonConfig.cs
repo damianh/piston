@@ -102,8 +102,7 @@ public sealed class PistonConfig
     /// </summary>
     public string? TestExecutionMode { get; set; }
 
-    /// <summary>Machine-wide execution admission settings for this daemon.</summary>
-    public PistonExecutionConfig? Execution { get; set; }
+    internal string? LegacyExecutionMemoryPath { get; set; }
 
     /// <summary>
     /// Overrides of the shared resources Piston infers for test projects, applied in order to the projects

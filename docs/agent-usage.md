@@ -284,9 +284,6 @@ source builds and all tests pass. Every other verdict is not a pass:
 | `NotFullScope` | A filter is active, or evaluated user build inputs are not fingerprinted. | Clear the filter, or report incomplete verification. |
 | `Faulted` | The engine or pipeline failed. | Report the fault and incomplete verification. |
 
-An `Admission:` line means the run waited for the machine execution budget (queue
-position and wait time). That is expected under load, not a failure.
-
 A `Test resources:` list reports test projects that waited for exclusive test
 resources (containers, fixed ports) held by runs in other worktrees, which is
 also expected, plus warnings and failures that look like port or container name

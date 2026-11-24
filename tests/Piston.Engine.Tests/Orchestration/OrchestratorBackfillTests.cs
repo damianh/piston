@@ -694,7 +694,7 @@ public sealed class OrchestratorBackfillTests : IDisposable
                 callbacks.OnProjectWaiting?.Invoke(Project, new TestResourceWait(
                     TestResourceWaitState.Waiting, ["port:5432"], false,
                     [new TestResourceBlocker("port:5432", TestResourceBlockerKind.Held, 42, "/other", "/other/A.Tests.csproj", DateTimeOffset.UtcNow)],
-                    0, 0, null, DateTimeOffset.UtcNow, null));
+                    0, DateTimeOffset.UtcNow, null));
             }
 
             if (filter is not null && BlockFiltered)
