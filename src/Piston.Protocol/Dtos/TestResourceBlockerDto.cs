@@ -5,7 +5,7 @@ namespace Piston.Protocol.Dtos;
 
 /// <summary>
 /// Another test project run, possibly in another worktree, that holds (<c>Held</c>) or is queued ahead for
-/// (<c>Queued</c>) a resource. <see cref="Resource"/> is a resource key or <c>containerSlots</c>.
+/// (<c>Queued</c>) a resource. <see cref="Resource"/> is a resource key.
 /// </summary>
 public sealed record TestResourceBlockerDto(
     string Resource,

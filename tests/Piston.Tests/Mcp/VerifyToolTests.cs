@@ -16,7 +16,7 @@ public sealed class VerifyToolTests
     private static readonly SourceFingerprint Source = new("piston-source-v2", new string('a', 64), 3);
 
     private static TestRunRecord Run(TestRunStatus status = TestRunStatus.Completed, BuildResult? build = null,
-        IReadOnlyList<TestResult>? tests = null, TestRunAdmission? admission = null) => new()
+        IReadOnlyList<TestResult>? tests = null) => new()
         {
             RunId = "run-7",
             EngineInstanceId = "engine",
@@ -28,7 +28,6 @@ public sealed class VerifyToolTests
             RequestedAt = DateTimeOffset.UnixEpoch,
             SourceAfter = Source,
             Build = build,
-            Admission = admission,
             Suites = tests is null ? [] : [new TestSuite("T", tests, DateTimeOffset.UnixEpoch, TimeSpan.Zero)],
         };
 
@@ -211,17 +210,6 @@ public sealed class VerifyToolTests
         Assert.Contains("exited with code 1", text);
         Assert.Contains("The real cause is here.", text);
         Assert.DoesNotContain(new string('x', VerificationReport.MaxBuildErrorLength), text);
-    }
-
-    [Fact]
-    public async Task QueuedAdmission_IsReported()
-    {
-        var admission = new TestRunAdmission(TestRunAdmissionState.Admitted, 2, null, 4, null, "default", 0, 0, 1, 2, 0,
-            DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddSeconds(3));
-        var text = await VerifyAsync(new(VerificationVerdict.Passed, null, VerificationSource.Forced, 1,
-            Run(admission: admission), Source));
-
-        Assert.Contains("Admission: Admitted; machine budget CPU slots 2+2/4 (default)", text);
     }
 
     [Fact]

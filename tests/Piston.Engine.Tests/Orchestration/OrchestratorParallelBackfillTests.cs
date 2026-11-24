@@ -20,7 +20,6 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
     private readonly PistonState _state = new();
     private readonly SqliteCoverageStore _store = new();
     private readonly StubFileWatcherService _watcher = new();
-    private readonly TrackingAdmission _admission = new();
     private readonly RecordingProcessor _processor = new();
     private readonly ParallelRunner _runner;
     private readonly ProvenanceImpactAnalyzer _analyzer;
@@ -47,7 +46,7 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
         _analyzer = new ProvenanceImpactAnalyzer([_projectA, _projectB, _projectC]);
         _orchestrator = new PistonOrchestrator(
             _watcher, new ProvenanceBuildService(), _runner, _analyzer,
-            _state, _store, _processor, true, NullActivityEventSink.Instance, _admission)
+            _state, _store, _processor, true, NullActivityEventSink.Instance)
         {
             BackfillGranularity = ImpactGranularity.Class,
             BackfillDelay = TimeSpan.Zero,
@@ -60,7 +59,6 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
     {
         _runner.ReleaseAll();
         _ = _runner.FinishCancellation.TrySetResult();
-        _ = _admission.AllowSecondBackfill.TrySetResult();
         _orchestrator.Dispose();
         _store.Dispose();
         try { Directory.Delete(_root, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
@@ -85,7 +83,6 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
         await StartAsync();
         await WaitForAsync(() => _runner.ActiveCount == 3 && _runner.Started.Count == 3);
         Assert.Equal(3, _runner.Started.Count);
-        Assert.Equal(1, _admission.ActiveBackfill);
         Assert.Empty(_processor.Recorded);
 
         _runner.BlockUnits = false;
@@ -104,7 +101,6 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
         Assert.All(progress, item => Assert.InRange(item.Completed, 0, item.Total));
         Assert.Contains(progress, item => item.Completed == 8 && item.Total == 8);
         Assert.Null(_state.ImpactBackfill);
-        Assert.Equal(0, _admission.ActiveBackfill);
     }
 
     [Fact]
@@ -136,7 +132,7 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
     }
 
     [Fact]
-    public async Task CancellationDrainsAllMeasurements_BeforeReleasingAdmission()
+    public async Task CancellationDrainsAllMeasurements_BeforeForegroundRun()
     {
         _runner.UnitCounts[_projectA] = 3;
         _runner.UnitCounts[_projectB] = 3;
@@ -150,7 +146,6 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
         var foreground = _orchestrator.RequestRunAsync();
         await WaitForAsync(() => _runner.CancelledCount == 3);
         Assert.False(foreground.IsCompleted);
-        Assert.Equal(1, _admission.ActiveBackfill);
         Assert.Equal(3, _runner.Started.Count);
 
         _runner.FinishCancellation.SetResult();
@@ -158,7 +153,6 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
         await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(15), _ct);
 
         Assert.Equal(TestRunStatus.Completed, result!.Status);
-        Assert.Equal(0, _admission.ActiveBackfill);
         Assert.Empty(_processor.Recorded);
         Assert.Empty(_state.ProjectResourceWaits);
     }
@@ -290,7 +284,7 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
         var running = units.Single(unit => unit.Project == _projectB);
         var now = DateTimeOffset.UtcNow;
         waiting.Callbacks.OnProjectWaiting!(_projectA, new TestResourceWait(
-            TestResourceWaitState.Waiting, ["port:5432"], false, [], 0, 0, null, now, null));
+            TestResourceWaitState.Waiting, ["port:5432"], false, [], 0, now, null));
         Assert.Equal(ProjectRunStatus.WaitingForResources, _state.ProjectStatuses[_projectA]);
 
         running.Release.SetResult();
@@ -330,27 +324,6 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
     }
 
     [Fact]
-    public async Task AdmissionIsReleasedBetweenChunks()
-    {
-        _runner.UnitCounts[_projectA] = 3;
-        _runner.UnitCounts[_projectB] = 2;
-        _orchestrator.BackfillConcurrency = 2;
-        _admission.BlockSecondBackfill = true;
-
-        await StartAsync();
-        await _admission.SecondBackfillStarted.Task.WaitAsync(TimeSpan.FromSeconds(15), _ct);
-        Assert.Equal(1, _admission.ReleasedBackfill);
-        Assert.Equal(0, _admission.ActiveBackfill);
-        Assert.Equal(4, _processor.Recorded.Count);
-        _admission.AllowSecondBackfill.SetResult();
-        await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(15), _ct);
-
-        Assert.Equal(2, _admission.AdmittedBackfill);
-        Assert.Equal(2, _admission.ReleasedBackfill);
-        Assert.Equal(5, _processor.Recorded.Count);
-    }
-
-    [Fact]
     public async Task FailedMeasurementsAreNotRetriedOnTheNextPass()
     {
         _runner.UnitCounts[_projectA] = 6;
@@ -359,7 +332,7 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
             "FullyQualifiedName~A.Tests.C01.",
         ]);
         await StartAsync();
-        await WaitForAsync(() => _admission.ReleasedBackfill > 0);
+        await WaitForAsync(() => _runner.Started.Count == 6 && _processor.Recorded.Count == 4);
         await _orchestrator.BackfillTask.WaitAsync(TimeSpan.FromSeconds(15), _ct);
         Assert.Equal(4, _processor.Recorded.Count);
 
@@ -408,7 +381,7 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
             Assert.True(DateTime.UtcNow < deadline,
                 $"Condition was not met. Run={_state.LastRun?.Status}/{_state.LastRun?.Freshness}; " +
                 $"backfill={_orchestrator.BackfillTask.Status}; started={_runner.Started.Count}; active={_runner.ActiveCount}; " +
-                $"admissions={_admission.AdmittedBackfill}; recorded={_processor.Recorded.Count}; " +
+                $"recorded={_processor.Recorded.Count}; " +
                 $"suites={string.Join(", ", _state.TestSuites.Select(suite => $"{suite.Name}/{suite.ProjectId}/{suite.Tests.Count}"))}");
             await Task.Delay(10, _ct);
         }
@@ -587,60 +560,4 @@ public sealed class OrchestratorParallelBackfillTests : IDisposable
                 .ToDictionary(path => path, _ => new CoverageReportResult(1, null), StringComparer.Ordinal));
     }
 
-    private sealed class TrackingAdmission : IExecutionAdmission
-    {
-        private int _admitted;
-        private int _released;
-        private int _active;
-        public bool BlockSecondBackfill { get; set; }
-        public TaskCompletionSource SecondBackfillStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource AllowSecondBackfill { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public int AdmittedBackfill => Volatile.Read(ref _admitted);
-        public int ReleasedBackfill => Volatile.Read(ref _released);
-        public int ActiveBackfill => Volatile.Read(ref _active);
-
-        public async Task<IExecutionLease> AdmitAsync(
-            string runId, Action<TestRunAdmission> onStatus, long? inheritedSequence, CancellationToken ct)
-        {
-            var backfill = runId.StartsWith("backfill-", StringComparison.Ordinal);
-            if (backfill)
-            {
-                var admission = Interlocked.Increment(ref _admitted);
-                if (admission == 2 && BlockSecondBackfill)
-                {
-                    SecondBackfillStarted.SetResult();
-                    await AllowSecondBackfill.Task.WaitAsync(ct);
-                }
-
-            }
-
-            ct.ThrowIfCancellationRequested();
-            if (backfill)
-            {
-                _ = Interlocked.Increment(ref _active);
-            }
-
-            return new Lease(() =>
-            {
-                if (backfill)
-                {
-                    _ = Interlocked.Decrement(ref _active);
-                    _ = Interlocked.Increment(ref _released);
-                }
-            });
-        }
-
-        private sealed class Lease(Action release) : IExecutionLease
-        {
-            private int _released;
-            public TestRunAdmission? Status => null;
-            public void Dispose()
-            {
-                if (Interlocked.Exchange(ref _released, 1) == 0)
-                {
-                    release();
-                }
-            }
-        }
-    }
 }

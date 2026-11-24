@@ -20,14 +20,14 @@ public sealed class TestResourceReportingTests
     private static readonly SourceFingerprint Source = new("piston-source-v2", new string('a', 64), 3);
 
     private static TestResourceWait Waiting(params TestResourceBlocker[] blockers) => new(
-        TestResourceWaitState.Waiting, ["port:5432", "project:repo/tests/Db.Tests.csproj"], true, blockers, 1, 2, 2, T0, null);
+        TestResourceWaitState.Waiting, ["port:5432", "project:repo/tests/Db.Tests.csproj"], true, blockers, 1, T0, null);
 
     private static TestResourceBlocker Held(string resource) =>
         new(resource, TestResourceBlockerKind.Held, 42, "/wt/other", "/wt/other/tests/Db.Tests.csproj", T0);
 
     private static TestProjectResources Acquired(TimeSpan waited, params string[] warnings) => new(
         new TestResourceNeeds("/w/tests/Db.Tests.csproj", ["port:5432"], true, ["references Testcontainers"]),
-        new TestResourceWait(TestResourceWaitState.Acquired, ["port:5432"], true, [], 0, 1, 2, T0, T0 + waited),
+        new TestResourceWait(TestResourceWaitState.Acquired, ["port:5432"], true, [], 0, T0, T0 + waited),
         warnings);
 
     private static TestRunRecord Run(params TestRunProjectOutcome[] projects) => new()
@@ -54,15 +54,13 @@ public sealed class TestResourceReportingTests
     {
         var wait = Waiting(
             Held("port:5432"),
-            new("project:repo/tests/Db.Tests.csproj", TestResourceBlockerKind.Queued, 7, "/wt/third", "/wt/third/tests/Db.Tests.csproj", T0),
-            Held(TestResourceBlocker.ContainerSlots));
+            new("project:repo/tests/Db.Tests.csproj", TestResourceBlockerKind.Queued, 7, "/wt/third", "/wt/third/tests/Db.Tests.csproj", T0));
 
         var text = TestTools.DescribeResourceWait("/w/tests/Db.Tests.csproj", wait, T0.AddSeconds(12));
 
         Assert.Equal(
             "Db.Tests waiting 12 s for test resources: port:5432 held by Db.Tests in /wt/other (pid 42); " +
-            "project:repo/tests/Db.Tests.csproj queued ahead for Db.Tests in /wt/third (pid 7); " +
-            "container slots (2/2 in use) held by Db.Tests in /wt/other (pid 42)",
+            "project:repo/tests/Db.Tests.csproj queued ahead for Db.Tests in /wt/third (pid 7)",
             text);
     }
 
@@ -79,7 +77,7 @@ public sealed class TestResourceReportingTests
 
         Assert.Equal(
             [
-                "Db.Tests waited 3 s for port:5432, a container slot",
+                "Db.Tests waited 3 s for port:5432",
                 "Db.Tests: port 5432 is in use outside Piston",
                 "Api.Tests: failed with 'address already in use'",
             ],
@@ -100,7 +98,7 @@ public sealed class TestResourceReportingTests
 
         Assert.Contains("Db.Tests waiting ", text);
         Assert.Contains("for test resources: port:5432 held by Db.Tests in /wt/other (pid 42)", text);
-        Assert.Contains("Test resources: Db.Tests waited 3 s for port:5432, a container slot", text);
+        Assert.Contains("Test resources: Db.Tests waited 3 s for port:5432", text);
     }
 
     [Fact]
@@ -122,7 +120,8 @@ public sealed class TestResourceReportingTests
         var wait = resources.GetProperty("wait");
         Assert.Equal("Acquired", wait.GetProperty("state").GetString());
         Assert.Equal(3000, wait.GetProperty("waitedMs").GetDouble());
-        Assert.Equal(2, wait.GetProperty("containerSlotBudget").GetInt32());
+        Assert.False(wait.TryGetProperty("containerSlotBudget", out _));
+        Assert.False(wait.TryGetProperty("containerSlotsInUse", out _));
         Assert.True(!projects[1].TryGetProperty("resources", out var none) || none.ValueKind == JsonValueKind.Null);
     }
 
@@ -138,7 +137,7 @@ public sealed class TestResourceReportingTests
         var text = await new TestTools(engine, NullMcpCallRecorder.Instance).VerifyAsync(600, ct: CancellationToken.None);
 
         Assert.Contains("Test resources (1):", text);
-        Assert.Contains("  - Db.Tests waited 5 s for port:5432, a container slot", text);
+        Assert.Contains("  - Db.Tests waited 5 s for port:5432", text);
     }
 
     [Fact]

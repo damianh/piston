@@ -68,7 +68,7 @@
             var now = DateTimeOffset.UtcNow;
             var first = waiting[0];
             var summary = first.Wait.BlockedBy.Count > 0
-                ? ResourceWaitText.Blocker(first.Wait.BlockedBy[0], first.Wait)
+                ? ResourceWaitText.Blocker(first.Wait.BlockedBy[0])
                 : "checking";
             <span class="flex items-center gap-1.5 min-w-0 text-amber-400"
                   data-testid="resource-wait"

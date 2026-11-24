@@ -101,7 +101,6 @@ public static class TestRunJson
             ["runnerError"] = run.RunnerError,
             ["retryLimit"] = run.RetryLimit,
             ["retriesSkippedReason"] = run.RetriesSkippedReason,
-            ["admission"] = Admission(run.Admission),
             ["summary"] = new JsonObject
             {
                 ["total"] = tests.Count,
@@ -164,25 +163,6 @@ public static class TestRunJson
             ["fileCount"] = fp.FileCount,
         };
 
-    private static JsonObject? Admission(TestRunAdmission? a) => a is null
-        ? null
-        : new JsonObject
-        {
-            ["state"] = a.State.ToString(),
-            ["reservedCpuSlots"] = a.ReservedCpuSlots,
-            ["reservedMemoryMb"] = a.ReservedMemoryMb,
-            ["budgetCpuSlots"] = a.BudgetCpuSlots,
-            ["budgetMemoryMb"] = a.BudgetMemoryMb,
-            ["budgetSource"] = a.BudgetSource,
-            ["queuedAhead"] = a.QueuedAhead,
-            ["queueLength"] = a.QueueLength,
-            ["otherAdmittedRuns"] = a.OtherAdmittedRuns,
-            ["cpuSlotsInUse"] = a.CpuSlotsInUse,
-            ["memoryMbInUse"] = a.MemoryMbInUse,
-            ["queuedAt"] = a.QueuedAt.ToString("O"),
-            ["admittedAt"] = a.AdmittedAt?.ToString("O"),
-        };
-
     private static JsonObject? Resources(TestProjectResources? r) => r is null
         ? null
         : new JsonObject
@@ -211,8 +191,6 @@ public static class TestRunJson
                 ["since"] = b.Since.ToString("O"),
             }).ToArray()),
             ["queuedAhead"] = w.QueuedAhead,
-            ["containerSlotsInUse"] = w.ContainerSlotsInUse,
-            ["containerSlotBudget"] = w.ContainerSlotBudget,
             ["waitingSince"] = w.WaitingSince.ToString("O"),
             ["acquiredAt"] = w.AcquiredAt?.ToString("O"),
             ["waitedMs"] = w.Waited is { } waited ? Math.Round(waited.TotalMilliseconds, 3) : null,

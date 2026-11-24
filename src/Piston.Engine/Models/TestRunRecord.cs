@@ -11,7 +11,7 @@ public sealed record TestRunRecord
 {
     public required string RunId { get; init; }
 
-    /// <summary>The solution being verified, recorded before admission or execution context is available.</summary>
+    /// <summary>The solution being verified, recorded before execution context is available.</summary>
     public string? SolutionPath { get; init; }
 
     /// <summary>Identifies the engine instance; <see cref="Sequence"/> is only ordered within one instance.</summary>
@@ -100,9 +100,6 @@ public sealed record TestRunRecord
     public string? RetriesSkippedReason { get; init; }
 
     public string? RunnerError { get; init; }
-
-    /// <summary>Machine-wide admission; null when the engine runs without machine coordination.</summary>
-    public TestRunAdmission? Admission { get; init; }
 
     public bool IsTerminal => Status is not (TestRunStatus.Queued or TestRunStatus.Running);
     public bool IsFiltered => Context?.EffectiveFilter is not null;

@@ -188,7 +188,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
     [McpServerTool(Name = GetTestRunTool), Description(
         "Get provenance and per-test results for exactly one test run as JSON (schema piston.test-run/v1): " +
         "run ID, status, full/selective scope, filters, freshness, source fingerprints captured before and after the run, " +
-        "build/runner context, machine-wide execution admission (queue position and CPU/memory reservations), " +
+        "build/runner context, " +
         "per-project exclusive test resources (keys, wait, warnings, suspected port/container conflicts), " +
         "and every test's project ID, fully-qualified name and status. " +
         "Pass a run ID, \"latest\" or empty for the most recent finished run, or \"active\" for the run in progress. " +
@@ -454,11 +454,6 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         var text = $"Run: {run.RunId} | Status: {run.Status} | Scope: {run.Scope?.ToString() ?? "Unknown"} | " +
                    $"Filtered: {(run.IsFiltered ? "yes" : "no")} | Freshness: {run.Freshness} | " +
                    $"Source: {source}";
-        if (run.Admission is { } admission)
-        {
-            text += " | " + DescribeAdmission(admission);
-        }
-
         if (includeCounts)
         {
             var tests = run.Tests.ToList();
@@ -498,13 +493,10 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
             ? "checking"
             : string.Join("; ", wait.BlockedBy.Select(b =>
             {
-                var resource = b.Resource == TestResourceBlocker.ContainerSlots
-                    ? $"container slots ({wait.ContainerSlotsInUse}/{wait.ContainerSlotBudget} in use)"
-                    : b.Resource;
                 var how = b.Kind == TestResourceBlockerKind.Held ? "held by" : "queued ahead for";
                 var who = b.Project is { } other ? Path.GetFileNameWithoutExtension(other) : "a test project";
                 var where = b.Worktree is { } worktree ? $" in {worktree}" : "";
-                return $"{resource} {how} {who}{where} (pid {b.ProcessId})";
+                return $"{b.Resource} {how} {who}{where} (pid {b.ProcessId})";
             }));
         return $"{Path.GetFileNameWithoutExtension(project)} waiting {Durations.Format(now - wait.WaitingSince)} for test resources: {blockers}";
     }
@@ -524,10 +516,6 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
                 if (resources.Wait?.Waited is { } waited && waited >= minimumWait)
                 {
                     var needed = resources.Needs.Keys.ToList();
-                    if (resources.Needs.UsesContainers && resources.Wait.ContainerSlotBudget is not null)
-                    {
-                        needed.Add("a container slot");
-                    }
                     notes.Add($"{name} waited {Durations.Format(waited)} for {(needed.Count > 0 ? string.Join(", ", needed) : "test resources")}");
                 }
 
@@ -540,19 +528,6 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
             }
         }
         return notes;
-    }
-
-    internal static string DescribeAdmission(TestRunAdmission a)
-    {
-        var memory = a.BudgetMemoryMb is { } budgetMb
-            ? $", memory {a.MemoryMbInUse}+{a.ReservedMemoryMb ?? 0}/{budgetMb} MiB"
-            : a.ReservedMemoryMb is { } reservedMb
-                ? $", memory {a.MemoryMbInUse}+{reservedMb} MiB (unbudgeted)"
-                : "";
-        var queue = a.State == TestRunAdmissionState.Queued
-            ? $"Queued ({a.QueuedAhead} ahead, {a.QueueLength} waiting)"
-            : "Admitted";
-        return $"Admission: {queue}; machine budget CPU slots {a.CpuSlotsInUse}+{a.ReservedCpuSlots}/{a.BudgetCpuSlots}{memory} ({a.BudgetSource})";
     }
 
     [McpServerTool(Name = SetTestFilterTool), Description("Set a test filter to narrow which tests are run. Pass empty string to clear.")]

@@ -41,7 +41,6 @@ public sealed record TestRunDto(
     int Failed,
     int Skipped,
     int DuplicateTestCount,
-    TestRunAdmissionDto? Admission = null,
     BuildResultDto? Build = null,
     string? SelectionExplanation = null,
     IReadOnlyDictionary<string, IReadOnlyList<TestSelectionReasonDto>>? SelectionReasons = null,

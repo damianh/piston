@@ -7,7 +7,7 @@ namespace Piston.Engine.Execution;
 
 /// <summary>
 /// Serializes test project runs that share exclusive resources (ports, container names, a project isolated
-/// per repository) or container slots, across all Piston daemons of the user on the machine.
+/// per repository), across all Piston daemons of the user on the machine.
 /// </summary>
 internal interface ITestResourceGate
 {
@@ -16,7 +16,7 @@ internal interface ITestResourceGate
 
     /// <summary>
     /// Waits until the run may hold <paramref name="needs"/>, reporting each change of its queue status
-    /// while it waits. Dispose the lease when the run ends. Needs that are empty return immediately.
+    /// while it waits. Dispose the lease when the run ends. Needs without exclusive keys return immediately.
     /// </summary>
     Task<TestResourceLease> AcquireAsync(
         TestResourceNeeds needs, Action<TestResourceWait> onWaiting, CancellationToken ct);

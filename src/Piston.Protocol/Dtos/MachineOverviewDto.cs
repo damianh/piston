@@ -5,10 +5,6 @@ namespace Piston.Protocol.Dtos;
 
 public sealed record MachineOverviewDto(
     DateTimeOffset CapturedAt,
-    MachineBudgetDto? Budget,
     IReadOnlyList<MachineWorktreeDto> Worktrees,
-    IReadOnlyList<MachineExecutionEntryDto> Running,
-    IReadOnlyList<MachineExecutionEntryDto> Queue,
     string? Error,
-    bool CoordinationAvailable = true,
     bool OwnersAvailable = true);

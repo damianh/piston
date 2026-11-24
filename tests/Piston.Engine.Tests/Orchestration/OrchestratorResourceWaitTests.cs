@@ -123,7 +123,7 @@ public sealed class OrchestratorResourceWaitTests
             var needs = new TestResourceNeeds("/w/a.csproj", ["port:5432"], false, ["declared"]);
             var blocker = new TestResourceBlocker("port:5432", TestResourceBlockerKind.Held, 42, "/other", "/other/a.csproj", since);
             callbacks.OnProjectWaiting?.Invoke(
-                "/w/a.csproj", new TestResourceWait(TestResourceWaitState.Waiting, needs.Keys, false, [blocker], 0, 0, null, since, null));
+                "/w/a.csproj", new TestResourceWait(TestResourceWaitState.Waiting, needs.Keys, false, [blocker], 0, since, null));
             await Task.Delay(50, ct);
             if (filter is not null && cancelRetry)
             {
@@ -149,7 +149,7 @@ public sealed class OrchestratorResourceWaitTests
                     result = result with
                     {
                         Resources = new TestProjectResources(needs,
-                            new TestResourceWait(TestResourceWaitState.Acquired, needs.Keys, false, [], 0, 0, null, since, DateTimeOffset.UtcNow),
+                            new TestResourceWait(TestResourceWaitState.Acquired, needs.Keys, false, [], 0, since, DateTimeOffset.UtcNow),
                             []),
                     };
                 }
