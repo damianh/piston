@@ -109,10 +109,12 @@ test("daemon startup validates the selected worktree, launches detached and chec
     await writeFile(path.join(worktree, "App.slnx"), "<Solution />");
     await writeFile(path.join(root, "other.slnx"), "<Solution />");
     const selected = await realpath(path.join(worktree, "App.slnx"));
+    let detached = true;
     const launch = (command, args, options) => {
         assert.equal(command, "piston");
         assert.deepEqual(args, ["daemon", selected, "--no-stdio", "--config-directory", worktree]);
-        assert.equal(options.detached, true);
+        assert.equal(options.detached, detached);
+        assert.equal(options.windowsHide, true);
         assert.equal(options.cwd, worktree);
         const child = new EventEmitter();
         child.pid = 42;
@@ -125,12 +127,16 @@ test("daemon startup validates the selected worktree, launches detached and chec
         async next => {
             assert.equal(next, state);
             if (checks++ === 0) throw new Error("Not ready yet.");
-        }, launch, root), state);
+        }, launch, root, "linux"), state);
     assert.equal(checks, 2);
+    // A detached Windows daemon has no console, so its child processes would open visible windows.
+    detached = false;
+    assert.equal(await startDaemon(worktree, "App.slnx", worktree, async () => state,
+        async () => {}, launch, root, "win32"), state);
     await assert.rejects(startDaemon(worktree, path.join(root, "other.slnx"), worktree,
         async () => state, async () => {}, launch, root), /inside this worktree/);
     await assert.rejects(startDaemon(worktree, "App.slnx", worktree,
-        async () => ({ ...state, processId: 43 }), async () => {}, launch, root), /Another Piston owner/);
+        async () => ({ ...state, processId: 43 }), async () => {}, launch, root, "win32"), /Another Piston owner/);
     await assert.rejects(startDaemon(worktree, "App.slnx", worktree,
         async () => ({ state: "disconnected" }), async () => {}, () => {
             const child = new EventEmitter();
