@@ -70,6 +70,30 @@ public sealed class DashboardDiscoveryTests : IDisposable
         Assert.Equal("disconnected", DashboardDiscovery.Inspect(a, _directory).State);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Discovery_WindowsPathForms_FindTheSameOwner(bool extendedOwner)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var solution = Solution("windows");
+        var extended = @"\\?\" + solution;
+        using var owner = WorktreeOwnership.Acquire(_directory, extendedOwner ? extended : solution, "daemon");
+        owner.PublishDashboardUrl("http://localhost:5199");
+
+        var ordinaryState = DashboardDiscovery.Inspect(Path.GetDirectoryName(solution)!, _directory);
+        var extendedState = DashboardDiscovery.Inspect(Path.GetDirectoryName(extended)!, _directory);
+        Assert.Equal("connected", ordinaryState.State);
+        Assert.Equal(ordinaryState, extendedState);
+        Assert.Equal(owner.Worktree.RootPath, extendedState.Worktree);
+        Assert.Equal(owner.Owner.ProcessId, extendedState.ProcessId);
+        Assert.Equal(owner.Owner.AcquiredAt, extendedState.AcquiredAt);
+    }
+
     [Fact]
     public void Disconnected_SuggestsConfiguredSolutionOrExplainsResolutionFailure()
     {

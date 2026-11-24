@@ -114,6 +114,25 @@ public sealed class HostHelpersTests : IDisposable
     }
 
     [Fact]
+    public void WindowsExtendedPaths_NormalizeExplicitConfiguredAndDiscoveredSolutions()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var path = WriteSolution("App.slnx");
+        var cwd = @"\\?\" + _root;
+        Assert.Equal(path, HostHelpers.ResolveSolutionPath(new FileInfo(@"\\?\" + path)));
+        Assert.Equal(path, HostHelpers.ResolveSolutionPath(null, cwd));
+        _ = Directory.CreateDirectory(Path.Combine(_root, "nested", "inner"));
+        WriteConfig(@"nested\inner\..\..\App.slnx");
+        Assert.Equal(path, HostHelpers.ResolveSolutionPath(null, cwd));
+        WriteConfig(@"\\?\" + path);
+        Assert.Equal(path, HostHelpers.ResolveSolutionPath(null, cwd));
+    }
+
+    [Fact]
     public void DiscoveryStillRejectsMissingOrAmbiguousSolutions()
     {
         Assert.Contains("No .sln", Assert.Throws<InvalidOperationException>(

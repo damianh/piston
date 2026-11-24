@@ -85,9 +85,9 @@ public sealed class WorktreeOwnershipTests : IDisposable
         Assert.Equal(WorktreeIdentity.CanonicalizePath(solution), WorktreeIdentity.CanonicalizePath(extended));
         Assert.Equal(WorktreeIdentity.FromSolutionPath(solution), WorktreeIdentity.FromSolutionPath(extended));
         Assert.Equal(WorktreeIdentity.FromSolutionPath(worktree), WorktreeIdentity.FromSolutionPath(@"\\?\" + worktree));
-        Assert.Equal(@"\\server\share\repo", WorktreeIdentity.NormalizeWindowsPath(@"\\?\UNC\server\share\repo"));
-        Assert.Equal(@"\\?\C:\repo\NUL", WorktreeIdentity.NormalizeWindowsPath(@"\\?\C:\repo\NUL"));
-        Assert.Equal(@"\\?\C:\repo\name.", WorktreeIdentity.NormalizeWindowsPath(@"\\?\C:\repo\name."));
+        Assert.Equal(@"\\server\share\repo", PathNormalizer.GetFullPath(@"\\?\UNC\server\share\repo"));
+        Assert.Equal(@"\\?\C:\repo\NUL", PathNormalizer.GetFullPath(@"\\?\C:\repo\NUL"));
+        Assert.Equal(@"\\?\C:\repo\name.", PathNormalizer.GetFullPath(@"\\?\C:\repo\name."));
 
         using var owner = WorktreeOwnership.Acquire(_directory, solution);
         _ = Assert.Throws<WorktreeOwnershipConflictException>(() =>
@@ -100,6 +100,36 @@ public sealed class WorktreeOwnershipTests : IDisposable
         var dir = Path.Combine(_root, "plain", "inner");
         var identity = WorktreeIdentity.FromSolutionPath(CreateSolution(dir));
         Assert.EndsWith("inner", identity.RootPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WindowsIdentityAndOwnership_MatchBothPathForms(bool longPath)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var worktreePath = Path.Combine(_root, "windows");
+        if (longPath)
+        {
+            while (worktreePath.Length <= 280)
+            {
+                worktreePath = Path.Combine(worktreePath, "nested-directory");
+            }
+        }
+        var worktree = CreateWorktree(worktreePath, gitFile: true);
+        var solution = CreateSolution(worktree);
+        var extended = @"\\?\" + solution;
+
+        Assert.Equal(WorktreeIdentity.FromSolutionPath(solution), WorktreeIdentity.FromSolutionPath(extended));
+        Assert.Equal(WorktreeIdentity.CanonicalizePath(solution), WorktreeIdentity.CanonicalizePath(extended));
+        using var owner = WorktreeOwnership.Acquire(_directory, extended);
+        var error = Assert.Throws<WorktreeOwnershipConflictException>(() =>
+            WorktreeOwnership.Acquire(_directory, solution, contentionRetry: TimeSpan.Zero));
+        Assert.Equal(owner.Worktree, error.Worktree);
     }
 
     [Fact]

@@ -57,13 +57,13 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         MsBuildLocatorGuard.EnsureRegistered();
 
         // Initialize diagnostic log early so all components can use it; the file is opened once ownership is held.
-        var solutionDir = Path.GetDirectoryName(options.SolutionPath)
+        _solutionPath = PathNormalizer.GetFullPath(options.SolutionPath);
+        var solutionDir = Path.GetDirectoryName(_solutionPath)
             ?? throw new ArgumentException("Cannot resolve solution directory.", nameof(options));
         _solutionDirectory = solutionDir;
-        _solutionPath = Path.GetFullPath(options.SolutionPath);
         _diagnosticLog = DiagnosticLog.Initialize(solutionDir);
         _artifactStore = new TestArtifactStore(solutionDir, message => _diagnosticLog.Write("Artifacts", message));
-        _diagnosticLog.Write("Engine", $"SolutionPath: {options.SolutionPath}");
+        _diagnosticLog.Write("Engine", $"SolutionPath: {_solutionPath}");
         _diagnosticLog.Write("Engine", $"TestExecutionMode: {options.TestExecutionMode}");
         _diagnosticLog.Write("Engine", $"CoverageEnabled: {options.CoverageEnabled}");
         _diagnosticLog.Write("Engine", $"ProcessPoolSize: {options.ProcessPoolSize}");
@@ -102,7 +102,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             _state.EndResultsUpdate);
 
         var resourceResolver = new TestResourceResolver(
-            new TestResourceInference(options.SolutionPath, options.TestResourceRules, impactAnalyzer.GetTestProjectFacts),
+            new TestResourceInference(_solutionPath, options.TestResourceRules, impactAnalyzer.GetTestProjectFacts),
             impactAnalyzer.GetAllTestProjectPaths,
             message => _diagnosticLog.Write("Resources", message));
         var vsTestStrategy = new ProcessTestExecutionStrategy(trxParser);
@@ -148,7 +148,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         var resourceGate = new MachineResourceCoordinator(
             coordinationDirectory,
             resourceResolver.Resolve,
-            WorktreeIdentity.FromSolutionPath(options.SolutionPath).RootPath);
+            WorktreeIdentity.FromSolutionPath(_solutionPath).RootPath);
 
         var testRunner = new TestRunnerService(strategy, _pool, resourceGate);
 
@@ -192,7 +192,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         {
             using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("dotnet", "--version")
             {
-                WorkingDirectory = workingDirectory,
+                WorkingDirectory = PathNormalizer.GetSdkWorkingDirectory(workingDirectory),
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,

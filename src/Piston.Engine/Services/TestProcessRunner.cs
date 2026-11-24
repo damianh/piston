@@ -4,6 +4,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Piston.Engine.Execution;
 using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
@@ -49,7 +50,7 @@ internal static partial class TestProcessRunner
     /// runner chosen by the project's own <c>global.json</c> apply rather than those of Piston's directory.
     /// </summary>
     internal static string? WorkingDirectoryFor(string projectPath) =>
-        Path.GetDirectoryName(Path.GetFullPath(projectPath)) is { Length: > 0 } dir && Directory.Exists(dir) ? dir : null;
+        Path.GetDirectoryName(PathNormalizer.GetFullPath(projectPath)) is { Length: > 0 } dir && Directory.Exists(dir) ? dir : null;
 
     /// <summary>The <c>--filter</c> argument for <paramref name="filter"/>, or empty when there is none.</summary>
     internal static string FilterArgument(string? filter) =>
