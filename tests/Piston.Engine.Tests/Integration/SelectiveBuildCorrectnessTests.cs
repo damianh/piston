@@ -166,15 +166,15 @@ public sealed class SelectiveBuildCorrectnessTests : IAsyncLifetime
             await RunAndWaitAsync(engine.State, () => engine.StartAsync(extended));
             Assert.Equal(solution, engine.State.SolutionPath);
             Assert.Equal(TestStatus.Passed, LibTestStatus(engine.State));
-            var initial = Assert.Single(engine.State.TestSuites.Where(s => s.Tests.Any(t =>
-                t.FullyQualifiedName.Contains("LibTests.V_matches", StringComparison.Ordinal))));
+            var initial = Assert.Single(engine.State.TestSuites, s => s.Tests.Any(t =>
+                t.FullyQualifiedName.Contains("LibTests.V_matches", StringComparison.Ordinal)));
             Assert.NotNull(initial.ProjectId);
             Assert.False(Path.IsPathRooted(initial.ProjectId));
 
             await RunAndWaitAsync(engine.State, () => File.WriteAllTextAsync(_libCode, LibSource(2), _ct));
             Assert.Equal(TestStatus.Failed, LibTestStatus(engine.State));
-            var updated = Assert.Single(engine.State.TestSuites.Where(s => s.Tests.Any(t =>
-                t.FullyQualifiedName.Contains("LibTests.V_matches", StringComparison.Ordinal))));
+            var updated = Assert.Single(engine.State.TestSuites, s => s.Tests.Any(t =>
+                t.FullyQualifiedName.Contains("LibTests.V_matches", StringComparison.Ordinal)));
             Assert.Equal(initial.ProjectId, updated.ProjectId);
         }
         finally
