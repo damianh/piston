@@ -20,7 +20,7 @@
     <PropertyGroup>
       <_McpMetadata>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)/Integration/server.json').Replace('@VERSION@', '$(PackageVersion)'))</_McpMetadata>
     </PropertyGroup>
-    <WriteLinesToFile File="$(IntermediateOutputPath)server.json" Lines="$(_McpMetadata)" Overwrite="true" Encoding="UTF-8" />
+    <WriteLinesToFile File="$(IntermediateOutputPath)server.json" Lines="$(_McpMetadata)" Overwrite="true" />
     <ItemGroup>
       <None Include="$(IntermediateOutputPath)server.json" Pack="true" PackagePath="/.mcp/" />
     </ItemGroup>
