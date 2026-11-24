@@ -44,7 +44,7 @@ internal static class HarnessInit
         {
             output.WriteLine();
             output.WriteLine("Piston does not edit ~/.claude.json. Register the server with Claude Code yourself:");
-            output.WriteLine($"  claude mcp add --scope user --transport stdio {ServerName} -- piston {string.Join(' ', McpArgs(options))}");
+            output.WriteLine($"  claude mcp add --scope user --transport stdio {ServerName} -- piston mcp");
         }
 
         output.WriteLine();
@@ -107,15 +107,13 @@ internal static class HarnessInit
 
     internal static JsonObject McpEntry(InitOptions options)
     {
-        var args = new JsonArray([.. McpArgs(options).Select(a => (JsonNode)JsonValue.Create(a))]);
+        var args = new JsonArray("mcp");
         // ~/.copilot/mcp-config.json uses Copilot's documented shape; a repository's .mcp.json is shared by Copilot
         // and Claude Code, which both accept the standard "stdio" type.
         return options is { Harness: Harness.Copilot, Scope: InitScope.User }
             ? new JsonObject { ["type"] = "local", ["command"] = "piston", ["args"] = args, ["tools"] = new JsonArray("*") }
             : new JsonObject { ["type"] = "stdio", ["command"] = "piston", ["args"] = args };
     }
-
-    private static string[] McpArgs(InitOptions options) => options.Dashboard ? ["mcp", "--dashboard"] : ["mcp"];
 
     private static string DisplayName(Harness harness) => harness == Harness.Copilot ? "GitHub Copilot" : "Claude Code";
 
@@ -160,10 +158,6 @@ internal static class HarnessInit
         if (options.Harness == Harness.Copilot)
         {
             output.WriteLine("Start a new Copilot session (or reload extensions) to load the skill and the Piston canvas.");
-            if (!options.Dashboard)
-            {
-                output.WriteLine("The canvas needs a dashboard: rerun with --dashboard, or set \"dashboard\": true in .piston.json.");
-            }
         }
         else
         {

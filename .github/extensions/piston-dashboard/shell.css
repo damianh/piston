@@ -8,6 +8,22 @@ body {
 main { max-width: 60ch; padding: 32px 24px; margin-inline: auto; overflow-wrap: anywhere; }
 h1 { margin: 0 0 16px; font-size: 20px; line-height: 28px; font-weight: var(--font-weight-semibold, 600); }
 p { margin: 0 0 16px; }
+label { display: block; font-weight: var(--font-weight-semibold, 600); margin-bottom: 6px; }
+input {
+    box-sizing: border-box;
+    width: 100%;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    border: 1px solid var(--border-color-default, GrayText);
+    border-radius: 6px;
+    background: var(--background-color-default, Canvas);
+    color: var(--text-color-default, CanvasText);
+    font: inherit;
+}
+input:focus-visible { outline: 2px solid var(--color-focus-outline, Highlight); outline-offset: 3px; }
+#solution-help { color: var(--text-color-muted, GrayText); }
+#start-form { margin-bottom: 16px; }
+#start-error { margin-top: 12px; color: var(--true-color-red, #cf222e); }
 button {
     padding: 8px 12px;
     border: 1px solid var(--border-color-default, GrayText);

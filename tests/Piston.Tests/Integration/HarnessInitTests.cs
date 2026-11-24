@@ -34,7 +34,7 @@ public sealed class HarnessInitTests : IDisposable
     public void WithoutWrite_WritesNothing(string harness, string scope)
     {
         var (exitCode, output) = Run(new(Enum.Parse<Harness>(harness), Enum.Parse<InitScope>(scope),
-            Write: false, Force: false, Dashboard: false));
+            Write: false, Force: false));
 
         Assert.Equal(0, exitCode);
         Assert.Contains("Dry run: nothing was written.", output, StringComparison.Ordinal);
@@ -50,7 +50,7 @@ public sealed class HarnessInitTests : IDisposable
         _ = Directory.CreateDirectory(_locations.CopilotHome);
         File.WriteAllText(config, """{ "mcpServers": { "other": { "type": "local", "command": "x" } }, "extra": 1 }""");
 
-        var (exitCode, _) = Run(new(Harness.Copilot, InitScope.User, Write: true, Force: false, Dashboard: false));
+        var (exitCode, _) = Run(new(Harness.Copilot, InitScope.User, Write: true, Force: false));
 
         Assert.Equal(0, exitCode);
         var root = JsonNode.Parse(File.ReadAllText(config))!;
@@ -71,7 +71,7 @@ public sealed class HarnessInitTests : IDisposable
     [Fact]
     public void Write_IsIdempotent()
     {
-        var options = new InitOptions(Harness.Copilot, InitScope.User, Write: true, Force: false, Dashboard: false);
+        var options = new InitOptions(Harness.Copilot, InitScope.User, Write: true, Force: false);
         _ = Run(options);
         var before = Snapshot(_locations.CopilotHome);
 
@@ -92,7 +92,7 @@ public sealed class HarnessInitTests : IDisposable
         File.WriteAllText(skill, "my edits");
         File.WriteAllText(config, """{ "mcpServers": { "piston": { "command": "/opt/piston" } } }""");
 
-        var (exitCode, output) = Run(new(Harness.Copilot, InitScope.User, Write: true, Force: false, Dashboard: false));
+        var (exitCode, output) = Run(new(Harness.Copilot, InitScope.User, Write: true, Force: false));
 
         Assert.Equal(1, exitCode);
         Assert.Contains("skipped", output, StringComparison.Ordinal);
@@ -100,7 +100,7 @@ public sealed class HarnessInitTests : IDisposable
         Assert.Equal("/opt/piston", (string?)JsonNode.Parse(File.ReadAllText(config))!["mcpServers"]!["piston"]!["command"]);
         Assert.True(File.Exists(Path.Combine(_locations.CopilotHome, "extensions", "piston-dashboard", "extension.mjs")));
 
-        (exitCode, output) = Run(new(Harness.Copilot, InitScope.User, Write: true, Force: true, Dashboard: false));
+        (exitCode, output) = Run(new(Harness.Copilot, InitScope.User, Write: true, Force: true));
 
         Assert.Equal(0, exitCode);
         Assert.Contains("overwritten", output, StringComparison.Ordinal);
@@ -118,7 +118,7 @@ public sealed class HarnessInitTests : IDisposable
         var config = Path.Combine(_locations.RepoDirectory, ".mcp.json");
         File.WriteAllText(config, content);
 
-        var (exitCode, output) = Run(new(Harness.Claude, InitScope.Repo, Write: true, Force: true, Dashboard: false));
+        var (exitCode, output) = Run(new(Harness.Claude, InitScope.Repo, Write: true, Force: true));
 
         Assert.Equal(1, exitCode);
         Assert.Contains("invalid", output, StringComparison.Ordinal);
@@ -126,12 +126,12 @@ public sealed class HarnessInitTests : IDisposable
     }
 
     [Fact]
-    public void Dashboard_AddsTheDashboardArgument()
+    public void McpEntry_UsesDefaultDashboard()
     {
-        _ = Run(new(Harness.Claude, InitScope.Repo, Write: true, Force: false, Dashboard: true));
+        _ = Run(new(Harness.Claude, InitScope.Repo, Write: true, Force: false));
 
         var piston = JsonNode.Parse(File.ReadAllText(Path.Combine(_locations.RepoDirectory, ".mcp.json")))!["mcpServers"]!["piston"]!;
-        Assert.Equal(["mcp", "--dashboard"], piston["args"]!.AsArray().Select(a => (string?)a));
+        Assert.Equal(["mcp"], piston["args"]!.AsArray().Select(a => (string?)a));
     }
 
     [Fact]
@@ -150,7 +150,7 @@ public sealed class HarnessInitTests : IDisposable
         var link = Path.Combine(_locations.CopilotHome, "mcp-config.json");
         _ = File.CreateSymbolicLink(link, real);
 
-        var (exitCode, _) = Run(new(Harness.Copilot, InitScope.User, Write: true, Force: false, Dashboard: false));
+        var (exitCode, _) = Run(new(Harness.Copilot, InitScope.User, Write: true, Force: false));
 
         Assert.Equal(0, exitCode);
         Assert.Equal(real, new FileInfo(link).LinkTarget);
@@ -161,7 +161,7 @@ public sealed class HarnessInitTests : IDisposable
     [Fact]
     public void ClaudeUser_WritesOnlyTheSkill_AndPrintsTheRegistrationCommand()
     {
-        var (exitCode, output) = Run(new(Harness.Claude, InitScope.User, Write: true, Force: false, Dashboard: false));
+        var (exitCode, output) = Run(new(Harness.Claude, InitScope.User, Write: true, Force: false));
 
         Assert.Equal(0, exitCode);
         Assert.Contains("claude mcp add --scope user --transport stdio piston -- piston mcp", output, StringComparison.Ordinal);
@@ -172,8 +172,8 @@ public sealed class HarnessInitTests : IDisposable
     [Fact]
     public void RepoScope_CopilotAndClaude_ShareOneMcpEntry()
     {
-        var (copilotExit, _) = Run(new(Harness.Copilot, InitScope.Repo, Write: true, Force: false, Dashboard: false));
-        var (claudeExit, claudeOutput) = Run(new(Harness.Claude, InitScope.Repo, Write: true, Force: false, Dashboard: false));
+        var (copilotExit, _) = Run(new(Harness.Copilot, InitScope.Repo, Write: true, Force: false));
+        var (claudeExit, claudeOutput) = Run(new(Harness.Claude, InitScope.Repo, Write: true, Force: false));
 
         Assert.Equal(0, copilotExit);
         Assert.Equal(0, claudeExit);

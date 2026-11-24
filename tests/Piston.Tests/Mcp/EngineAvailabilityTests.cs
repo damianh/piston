@@ -25,7 +25,7 @@ public sealed class EngineAvailabilityTests
     }
 
     [Fact]
-    public void OwnedElsewhere_NamesOwnerAndFallback()
+    public void OwnedElsewhere_NamesOwnerWithoutRequestingAnotherTestRun()
     {
         var gate = new EngineAvailability();
         gate.SetOwnedElsewhere(Worktree,
@@ -34,7 +34,7 @@ public sealed class EngineAvailabilityTests
         var ex = Assert.Throws<McpException>(gate.ThrowIfUnavailable);
         Assert.StartsWith("Piston owned by another process (PID 4242, daemon, solution '/work/wt/App.slnx'", ex.Message);
         Assert.Contains("/work/wt", ex.Message);
-        Assert.EndsWith("Use `dotnet test` instead.", ex.Message);
+        Assert.EndsWith("This MCP server started no engine and will not run tests here.", ex.Message);
     }
 
     [Fact]
@@ -43,7 +43,7 @@ public sealed class EngineAvailabilityTests
         var gate = new EngineAvailability();
         gate.SetOwnedElsewhere(Worktree, null);
         Assert.Contains("details unavailable", gate.Reason);
-        Assert.EndsWith(EngineAvailability.Fallback, gate.Reason);
+        Assert.DoesNotContain("dotnet test", gate.Reason);
     }
 
     [Fact]
@@ -56,7 +56,7 @@ public sealed class EngineAvailabilityTests
 
         var faulted = new EngineAvailability();
         faulted.SetFaulted("No solution found.");
-        Assert.Equal("Piston could not start: No solution found. Use `dotnet test` instead.", faulted.Reason);
+        Assert.Equal("Piston could not start: No solution found.", faulted.Reason);
     }
 
     [Fact]
@@ -130,6 +130,7 @@ public sealed class EngineAvailabilityTests
         var ex = await Assert.ThrowsAsync<McpException>(() =>
             tools.VerifyAsync(5, Path.Combine(Path.GetTempPath(), "wt-b"), CancellationToken.None));
         Assert.Contains("Solution mismatch", ex.Message);
+        Assert.DoesNotContain("dotnet test", ex.Message);
         Assert.Null(engine.LastVerifyTimeout);
 
         // The worktree directory or the solution itself both match.

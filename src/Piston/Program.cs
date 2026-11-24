@@ -89,7 +89,7 @@ var webPortOpt = new Option<int>("--web-port")
 
 var dashboardOpt = new Option<bool>("--dashboard")
 {
-    Description = "Expose this MCP session's dashboard on an ephemeral loopback port.",
+    Hidden = true,
 };
 
 var forceOpt = new Option<bool>("--force")
@@ -228,8 +228,7 @@ mcpCmd.SetAction(async parseResult =>
     }
 
     bool? coverage = coverageSpecified ? enableCoverage : noCoverageSpecified ? !noCoverage : null;
-    return await RunMcpAsync(solutionFile, debounceMs, filter, coverage, parallelism, configDirectory,
-        parseResult.GetValue(dashboardOpt));
+    return await RunMcpAsync(solutionFile, debounceMs, filter, coverage, parallelism, configDirectory);
 });
 
 rootCommand.Subcommands.Add(mcpCmd);
@@ -341,7 +340,7 @@ var initForceOpt = new Option<bool>("--force")
 };
 var initDashboardOpt = new Option<bool>("--dashboard")
 {
-    Description = "Start `piston mcp` with --dashboard so the session serves the dashboard (needed by the canvas).",
+    Hidden = true,
 };
 
 var initCmd = new Command("init",
@@ -363,8 +362,7 @@ foreach (var (name, harness, description) in new[]
             harness,
             parseResult.GetValue(initScopeOpt) == "repo" ? InitScope.Repo : InitScope.User,
             parseResult.GetValue(initWriteOpt),
-            parseResult.GetValue(initForceOpt),
-            parseResult.GetValue(initDashboardOpt));
+            parseResult.GetValue(initForceOpt));
         try
         {
             return HarnessInit.Run(options, InitLocations.FromEnvironment(Directory.GetCurrentDirectory()), Console.Out);
@@ -467,8 +465,7 @@ static async Task RunDaemonAsync(
     {
         (solutionPath, config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
         options = HostHelpers.BuildOptions(
-            solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config, "daemon",
-            $"http://localhost:{webPort}");
+            solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config, "daemon");
     }
     catch (InvalidOperationException ex)
     {
@@ -674,8 +671,7 @@ static async Task<int> RunMcpAsync(
     string? cliFilter,
     bool? cliCoverage,
     int cliParallelism,
-    string? configDirectory,
-    bool dashboard)
+    string? configDirectory)
 {
     // stdout carries MCP JSON-RPC only: anything written through Console.Out goes to stderr instead.
     var stdout = Console.OpenStandardOutput();
@@ -701,7 +697,10 @@ static async Task<int> RunMcpAsync(
     try
     {
         (solutionPath, var config) = HostHelpers.ResolveSolution(solutionArg, configurationDirectory: configDirectory);
-        dashboard |= config.Dashboard ?? false;
+        if (config.Dashboard is false)
+        {
+            Console.Error.WriteLine("[piston] The legacy 'dashboard: false' setting is ignored; the dashboard is always enabled.");
+        }
         options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config,
             McpStdioHost.OwnerHost);
         if (!HostHelpers.DotnetSdkAvailable())
@@ -721,7 +720,6 @@ static async Task<int> RunMcpAsync(
         StartupError = startupError,
         Input = stdin,
         Output = stdout,
-        Dashboard = dashboard,
     });
     return await host.RunAsync(cts.Token);
 }

@@ -4,4 +4,5 @@
 namespace Piston.Hosting;
 
 internal sealed record DashboardEndpoint(string State, string Message, string? Url = null,
-    string? Worktree = null, int? ProcessId = null, DateTimeOffset? AcquiredAt = null);
+    string? Worktree = null, int? ProcessId = null, DateTimeOffset? AcquiredAt = null,
+    string? Solution = null, string? SolutionError = null);

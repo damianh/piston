@@ -2,7 +2,7 @@
 // See LICENSE in the project root for license information.
 
 import { createCanvas, CanvasError, joinSession } from "@github/copilot-sdk/extension";
-import { createDashboardCanvas } from "./provider.mjs";
+import { createDashboardCanvas, normalizeWorkingDirectory } from "./provider.mjs";
 
 const provider = createDashboardCanvas();
 const emptyInput = { type: "object", properties: {}, additionalProperties: false };
@@ -34,7 +34,7 @@ const descriptions = {
 const workingDirectory = ctx => {
     const cwd = ctx.session?.workingDirectory;
     if (!cwd) throw new CanvasError("workspace_unavailable", "The runtime did not supply the active working directory.");
-    return cwd;
+    return normalizeWorkingDirectory(cwd);
 };
 
 await joinSession({

@@ -2,7 +2,22 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request } from "node:http";
 import { createHash } from "node:crypto";
-import { changesQuery, createDashboardCanvas, discover, loopbackEndpoint, openQuery, probe, rpc } from "./provider.mjs";
+import { EventEmitter } from "node:events";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { changesQuery, createDashboardCanvas, discover, discoverSolutions, loopbackEndpoint, normalizeWorkingDirectory, openQuery, probe, rpc, startDaemon } from "./provider.mjs";
+
+test("Windows worktree paths use ordinary spelling for CLI discovery", () => {
+    assert.equal(normalizeWorkingDirectory("\\\\?\\D:\\repo\\wt", "win32"), "D:\\repo\\wt");
+    assert.equal(normalizeWorkingDirectory("\\\\?\\UNC\\server\\share\\wt", "win32"), "\\\\server\\share\\wt");
+    for (const special of ["\\\\?\\D:\\repo\\dir.", "\\\\?\\D:\\repo\\NUL", "\\\\?\\Volume{abc}\\repo"]) {
+        assert.equal(normalizeWorkingDirectory(special, "win32"), special);
+    }
+    assert.equal(normalizeWorkingDirectory("\\\\?\\D:\\repo\\wt", "linux"), "\\\\?\\D:\\repo\\wt");
+});
 
 test("discovery preserves validated CLI error responses from exit code 1", async () => {
     const state = { state: "error", message: "The owner advertised an invalid dashboard endpoint." };
@@ -50,6 +65,116 @@ async function serve(t, handler, upgrade) {
 const connected = url => ({ state: "connected", message: "Dashboard available.", url,
     worktree: "/repo/current", processId: 123, acquiredAt: "2026-01-01T00:00:00+00:00" });
 
+test("solution discovery uses current tracked and untracked worktree files, excluding ignored and deleted files", async t => {
+    const root = await mkdtemp(path.join(tmpdir(), "piston-solutions-test-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const git = promisify(execFile);
+    await git("git", ["init", "-q"], { cwd: root });
+    await mkdir(path.join(root, "apps"));
+    await writeFile(path.join(root, ".gitignore"), "ignored/\n");
+    await writeFile(path.join(root, "Root.sln"), "");
+    await writeFile(path.join(root, "removed.slnx"), "");
+    await git("git", ["add", "Root.sln", "removed.slnx"], { cwd: root });
+    await rm(path.join(root, "removed.slnx"));
+    await writeFile(path.join(root, "apps", "Nested.SLNX"), "");
+    await writeFile(path.join(root, "apps", "Filter.slnf"), "");
+    await mkdir(path.join(root, "ignored"));
+    await writeFile(path.join(root, "ignored", "ignored.sln"), "");
+    assert.deepEqual(await discoverSolutions(root, root), [
+        path.join("apps", "Filter.slnf"), path.join("apps", "Nested.SLNX"), "Root.sln",
+    ]);
+    assert.deepEqual(await discoverSolutions(root, path.join(root, "apps")), [
+        "Filter.slnf", "Nested.SLNX", path.join("..", "Root.sln"),
+    ].sort((a, b) => a.localeCompare(b)));
+});
+
+test("solution discovery failures are visible in the canvas", async t => {
+    const root = await mkdtemp(path.join(tmpdir(), "piston-no-git-test-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const provider = createDashboardCanvas({
+        inspect: async () => ({ state: "disconnected", message: "No owner.", worktree: root }),
+    });
+    t.after(() => provider.dispose());
+    const panel = await provider.open("panel", root);
+    const response = await fetch(new URL("solutions", panel.url));
+    assert.equal(response.status, 500);
+    assert.match((await response.json()).error, /Could not discover solutions/);
+});
+
+test("daemon startup validates the selected worktree, launches detached and checks its owner", async t => {
+    const root = await mkdtemp(path.join(tmpdir(), "piston-canvas-test-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const worktree = path.join(root, "worktree");
+    await mkdir(worktree);
+    await writeFile(path.join(worktree, "App.slnx"), "<Solution />");
+    await writeFile(path.join(root, "other.slnx"), "<Solution />");
+    const selected = await realpath(path.join(worktree, "App.slnx"));
+    const launch = (command, args, options) => {
+        assert.equal(command, "piston");
+        assert.deepEqual(args, ["daemon", selected, "--no-stdio", "--config-directory", worktree]);
+        assert.equal(options.detached, true);
+        assert.equal(options.cwd, worktree);
+        const child = new EventEmitter();
+        child.pid = 42;
+        child.unref = () => {};
+        return child;
+    };
+    const state = { ...connected("http://127.0.0.1:1234/"), processId: 42, worktree };
+    let checks = 0;
+    assert.equal(await startDaemon(worktree, "App.slnx", worktree, async () => state,
+        async next => {
+            assert.equal(next, state);
+            if (checks++ === 0) throw new Error("Not ready yet.");
+        }, launch, root), state);
+    assert.equal(checks, 2);
+    await assert.rejects(startDaemon(worktree, path.join(root, "other.slnx"), worktree,
+        async () => state, async () => {}, launch, root), /inside this worktree/);
+    await assert.rejects(startDaemon(worktree, "App.slnx", worktree,
+        async () => ({ ...state, processId: 43 }), async () => {}, launch, root), /Another Piston owner/);
+    await assert.rejects(startDaemon(worktree, "App.slnx", worktree,
+        async () => ({ state: "disconnected" }), async () => {}, () => {
+            const child = new EventEmitter();
+            child.unref = () => {};
+            setImmediate(() => child.emit("error", new Error("Cannot launch Piston.")));
+            return child;
+        }, root), /Cannot launch Piston/);
+});
+
+test("daemon startup rejects solutions in a different canonical worktree", async t => {
+    const root = await mkdtemp(path.join(tmpdir(), "piston-canvas-identity-test-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const worktree = path.join(root, "repo");
+    const nestedWorktree = path.join(worktree, "nested");
+    const plainWorktree = path.join(root, "plain");
+    await mkdir(path.join(worktree, ".git"), { recursive: true });
+    await mkdir(path.join(worktree, "apps"), { recursive: true });
+    await mkdir(nestedWorktree, { recursive: true });
+    await writeFile(path.join(nestedWorktree, ".git"), "gitdir: ../.git/worktrees/nested\n");
+    await writeFile(path.join(worktree, "apps", "Valid.slnx"), "<Solution />");
+    await writeFile(path.join(nestedWorktree, "Other.slnx"), "<Solution />");
+    await mkdir(path.join(plainWorktree, "nested"), { recursive: true });
+    await writeFile(path.join(plainWorktree, "nested", "Other.slnx"), "<Solution />");
+
+    let launches = 0;
+    let processId;
+    const launch = () => {
+        launches++;
+        const child = new EventEmitter();
+        processId = child.pid = 40 + launches;
+        child.unref = () => {};
+        return child;
+    };
+    const inspect = async () => ({ ...connected("http://127.0.0.1:1234/"), processId, worktree });
+    await startDaemon(worktree, path.join("apps", "Valid.slnx"), worktree, inspect, async () => {}, launch, root);
+    assert.equal(launches, 1);
+
+    await assert.rejects(startDaemon(worktree, path.join("nested", "Other.slnx"), worktree,
+        inspect, async () => {}, launch, root), /canonical worktree/);
+    await assert.rejects(startDaemon(plainWorktree, path.join("nested", "Other.slnx"), plainWorktree,
+        inspect, async () => {}, launch, root), /canonical worktree/);
+    assert.equal(launches, 1);
+});
+
 test("open, refresh, re-open and close only inspect; actions require explicit invocation", async t => {
     let runs = 0;
     const directories = [];
@@ -62,7 +187,7 @@ test("open, refresh, re-open and close only inspect; actions require explicit in
     const first = await provider.open("panel", "/repo/current");
     const second = await provider.open("panel", "/repo/current");
     assert.equal(first.url, second.url);
-    assert.match(await (await fetch(first.url)).text(), /Opening this panel does not start Piston or run tests/);
+    assert.match(await (await fetch(first.url)).text(), /Starting Piston builds and runs tests immediately/);
     assert.equal((await provider.action("panel", "refresh", "/repo/current")).state, "connected");
     assert.equal(runs, 0);
     assert.deepEqual(await provider.action("panel", "run", "/repo/current"), { method: "engine/forceRun" });
@@ -73,6 +198,61 @@ test("open, refresh, re-open and close only inspect; actions require explicit in
     await provider.close("panel");
     assert.equal(runs, 2);
     await assert.rejects(fetch(first.url));
+});
+
+test("start requires an explicit same-origin POST and attaches to the started owner", async t => {
+    let state = { state: "disconnected", message: "No live Piston owner.", worktree: "/repo/current", solution: "/repo/current/App.slnx" };
+    const calls = [];
+    const provider = createDashboardCanvas({
+        inspect: async () => state,
+        check: async next => new URL(next.url),
+        start: async (cwd, solution, worktree) => {
+            calls.push({ cwd, solution, worktree });
+            state = connected("http://127.0.0.1:1234/");
+        },
+    });
+    t.after(() => provider.dispose());
+    const panel = await provider.open("panel", "/repo/current");
+    const origin = new URL(panel.url).origin;
+    assert.equal(calls.length, 0);
+    const endpoint = `${origin}/__piston/start`;
+    const body = JSON.stringify({ solution: "App.slnx" });
+    for (const headers of [
+        { "Content-Type": "application/json" },
+        { Origin: "https://evil.example", "Content-Type": "application/json" },
+        { Origin: origin, "Content-Type": "text/plain" },
+    ]) {
+        assert.equal((await fetch(endpoint, { method: "POST", headers, body })).status, 403);
+    }
+    const response = await fetch(endpoint, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).state, "connected");
+    assert.deepEqual(calls, [{ cwd: "/repo/current", solution: "App.slnx", worktree: "/repo/current" }]);
+    assert.equal((await fetch(endpoint, { method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body })).status, 400);
+    assert.equal(calls.length, 1);
+});
+
+test("start reports failures and never starts when a dashboard-disabled owner exists", async t => {
+    let state = { state: "disconnected", message: "No owner.", worktree: "/repo/current" };
+    let calls = 0;
+    const provider = createDashboardCanvas({
+        inspect: async () => state,
+        start: async () => { calls++; throw new Error("Port is occupied."); },
+    });
+    t.after(() => provider.dispose());
+    const panel = await provider.open("panel", "/repo/current");
+    const origin = new URL(panel.url).origin;
+    const post = () => fetch(`${origin}/__piston/start`, {
+        method: "POST", headers: { Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({ solution: "App.slnx" }),
+    });
+    const failure = await post();
+    assert.equal(failure.status, 400);
+    assert.match((await failure.json()).error, /Port is occupied/);
+    state = { state: "disabled", message: "Dashboard disabled." };
+    const disabled = await post();
+    assert.equal(disabled.status, 400);
+    assert.match((await disabled.json()).error, /has not published a dashboard/);
+    assert.equal(calls, 1);
 });
 
 test("disconnected opens, disabled sessions and engine restarts recover without changing the shell URL", async t => {
@@ -87,7 +267,10 @@ test("disconnected opens, disabled sessions and engine restarts recover without 
     assert.match(await (await fetch(panel.url)).text(), /Retry connection/);
     await assert.rejects(provider.action("panel", "run", "/repo/current"), /No live/);
     state = { state: "disabled", message: "Opt in with --dashboard." };
-    assert.equal((await provider.action("panel", "refresh", "/repo/current")).state, "disabled");
+    const disabled = await provider.action("panel", "refresh", "/repo/current");
+    assert.equal(disabled.state, "disabled");
+    assert.match(disabled.message, /upgrade Piston and restart/);
+    assert.doesNotMatch(disabled.message, /Opt in/);
     state = connected("http://127.0.0.1:1234/");
     const before = await provider.action("panel", "refresh", "/repo/current");
     state = { ...state, processId: 124 };
@@ -147,7 +330,7 @@ test("health probe requires matching worktree, PID and ownership generation", as
 });
 
 test("rehydration creates a new server and resolves state from the active worktree", async t => {
-    const make = () => createDashboardCanvas({ inspect: async () => ({ state: "disabled", message: "Enable --dashboard." }) });
+    const make = () => createDashboardCanvas({ inspect: async () => ({ state: "disabled", message: "Upgrade and restart the owner." }) });
     const old = make();
     const first = await old.open("panel", "/repo/current");
     await old.dispose();

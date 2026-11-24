@@ -17,7 +17,17 @@ internal static class DashboardDiscovery
             var record = WorktreeOwnership.FindLiveOwner(directory, identity, reportErrors: true);
             if (record is null)
             {
-                return new("disconnected", "No live Piston owner. Start a daemon or connect `piston mcp --dashboard`.", Worktree: identity.RootPath);
+                try
+                {
+                    var solution = Directory.Exists(path)
+                        ? HostHelpers.ResolveSolutionPath(null, workingDirectory: path)
+                        : HostHelpers.ResolveSolutionPath(new FileInfo(path));
+                    return new("disconnected", "No live Piston owner.", Worktree: identity.RootPath, Solution: solution);
+                }
+                catch (InvalidOperationException ex)
+                {
+                    return new("disconnected", "No live Piston owner.", Worktree: identity.RootPath, SolutionError: ex.Message);
+                }
             }
             if (record.Owner is not { } owner)
             {
@@ -25,7 +35,7 @@ internal static class DashboardDiscovery
             }
             if (owner.DashboardUrl is not { } url)
             {
-                return new("disabled", "This owner has no dashboard. For MCP, opt in with `--dashboard` or `\"dashboard\": true`; older owners may need upgrading.",
+                return new("disabled", "The current owner has not published a dashboard. If this persists, upgrade Piston and restart the owner.",
                     Worktree: identity.RootPath);
             }
             if (!IsLoopbackUrl(url))

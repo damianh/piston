@@ -1,14 +1,30 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { createServer, request } from "node:http";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, open, readFile, realpath, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 const execute = promisify(execFile);
 const assets = new Map(await Promise.all(["shell.html", "shell.js", "shell.css"].map(async name =>
     [name, await readFile(new URL(name, import.meta.url))])));
+
+export function normalizeWorkingDirectory(cwd, platform = process.platform) {
+    if (platform !== "win32") return cwd;
+    let ordinary;
+    if (/^\\\\\?\\UNC\\/i.test(cwd)) ordinary = `\\\\${cwd.slice(8)}`;
+    else if (/^\\\\\?\\[a-z]:\\/i.test(cwd)) ordinary = cwd.slice(4);
+    else return cwd;
+    const root = path.win32.parse(ordinary).root;
+    for (const segment of ordinary.slice(root.length).split("\\").filter(Boolean)) {
+        const name = segment.split(".")[0];
+        if (/[. ]$/.test(segment) || /^(con|prn|aux|nul|conin\$|conout\$|com[1-9]|lpt[1-9])$/i.test(name)) return cwd;
+    }
+    return ordinary;
+}
 
 export function loopbackEndpoint(value) {
     const url = new URL(value);
@@ -93,6 +109,103 @@ export async function probe(state) {
     return target;
 }
 
+export async function discoverSolutions(worktree, cwd, executeCommand = execute) {
+    const root = await realpath(worktree);
+    const base = await realpath(cwd);
+    const { stdout } = await executeCommand("git", [
+        "ls-files", "--cached", "--others", "--exclude-standard", "--full-name", "-z", "--",
+        ":(icase,glob)**/*.sln", ":(icase,glob)**/*.slnx", ":(icase,glob)**/*.slnf",
+    ], { cwd: root, timeout: 10000, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
+    const files = await Promise.all(stdout.split("\0").filter(Boolean).map(async name => {
+        const candidate = path.resolve(root, ...name.split("/"));
+        try {
+            const resolved = await realpath(candidate);
+            const relative = path.relative(root, resolved);
+            if (!relative || relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)
+                || !(await stat(resolved)).isFile()) return null;
+            return path.relative(base, candidate);
+        } catch (error) {
+            if (error.code === "ENOENT") return null;
+            throw error;
+        }
+    }));
+    return [...new Set(files.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+async function worktreeRoot(directory) {
+    let current = directory;
+    for (;;) {
+        try {
+            await stat(path.join(current, ".git"));
+            return current;
+        } catch (error) {
+            if (error.code !== "ENOENT") throw error;
+        }
+        const parent = path.dirname(current);
+        if (parent === current) return directory;
+        current = parent;
+    }
+}
+
+export async function startDaemon(cwd, solution, worktree, inspect = discover, check = probe, launch = spawn, logRoot = tmpdir()) {
+    if (typeof solution !== "string" || !solution.trim() || solution.length > 4096 || solution.includes("\0")) {
+        throw new Error("Enter a solution path.");
+    }
+    const root = await realpath(worktree);
+    const selected = await realpath(path.resolve(cwd, solution));
+    const relative = path.relative(root, selected);
+    if (!relative || relative.startsWith(`..${path.sep}`) || relative === ".." || path.isAbsolute(relative)
+        || ![".sln", ".slnx", ".slnf"].includes(path.extname(selected).toLowerCase())
+        || !(await stat(selected)).isFile()) {
+        throw new Error("Choose a .sln, .slnx, or .slnf file inside this worktree.");
+    }
+    const [canvasWorktree, solutionWorktree] = await Promise.all([
+        worktreeRoot(root),
+        worktreeRoot(path.dirname(selected)),
+    ]);
+    if (path.relative(canvasWorktree, solutionWorktree) || path.relative(solutionWorktree, canvasWorktree)) {
+        throw new Error("Choose a solution whose canonical worktree matches this canvas.");
+    }
+    const logDirectory = await mkdtemp(path.join(logRoot, "piston-canvas-"));
+    const logPath = path.join(logDirectory, "daemon.log");
+    const log = await open(logPath, "w");
+    let child;
+    let failure;
+    try {
+        child = launch("piston", ["daemon", selected, "--no-stdio", "--config-directory", cwd], {
+            cwd, detached: true, stdio: ["ignore", log.fd, log.fd], windowsHide: true,
+        });
+        child.once("error", error => { failure = error.message; });
+        child.once("exit", code => { failure = `Piston exited during startup (code ${code}).`; });
+    } finally {
+        await log.close();
+    }
+    child.unref();
+    const deadline = Date.now() + 30_000;
+    let probeError;
+    while (Date.now() < deadline) {
+        if (failure) {
+            const details = (await readFile(logPath, "utf8")).trim().slice(-4000);
+            throw new Error(`${failure}${details ? ` ${details}` : ""} Log: ${logPath}`);
+        }
+        const state = await inspect(cwd);
+        if (state.state === "connected") {
+            if (state.processId !== child.pid) {
+                throw new Error("Another Piston owner started first. Retry the connection.");
+            }
+            try {
+                await check(state);
+                return state;
+            } catch (error) {
+                probeError = error.message;
+            }
+        }
+        if (state.state === "error") throw new Error(state.message);
+        await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    throw new Error(`Piston did not become ready within 30 seconds; it may still be starting.${probeError ? ` ${probeError}` : ""} Log: ${logPath}`);
+}
+
 export function rpc(target, method, { timeout = 600_000, signal } = {}) {
     return new Promise((resolve, reject) => {
         if (signal?.aborted) { reject(new Error("The canvas was closed.")); return; }
@@ -124,9 +237,10 @@ export function rpc(target, method, { timeout = 600_000, signal } = {}) {
     });
 }
 
-export function createDashboardCanvas({ inspect = discover, check = probe, invoke = rpc } = {}) {
+export function createDashboardCanvas({ inspect = discover, check = probe, invoke = rpc, start = startDaemon } = {}) {
     const panels = new Map();
     const pending = new Map();
+    const starting = new Map();
 
     async function create(cwd) {
         let state = { state: "disconnected", message: "Inspecting the current worktree..." };
@@ -152,7 +266,13 @@ export function createDashboardCanvas({ inspect = discover, check = probe, invok
                         sockets.clear();
                     }
                     target = nextTarget;
-                    state = { ...next, identity };
+                    state = {
+                        ...next,
+                        message: next.state === "disabled"
+                            ? "The current owner has not published a dashboard. If this persists, upgrade Piston and restart the owner."
+                            : next.message,
+                        identity,
+                    };
                 } catch (error) {
                     target = undefined;
                     for (const socket of sockets) socket.destroy();
@@ -188,13 +308,52 @@ export function createDashboardCanvas({ inspect = discover, check = probe, invok
             socket.once("close", () => sockets.delete(socket));
         }
         async function handle(req, res) {
-            if (!allowed(req) || !["GET", "HEAD"].includes(req.method)) {
+            const path = req.url.split("?")[0];
+            const startRequest = path === "/__piston/start" && req.method === "POST";
+            if (!allowed(req) || (!["GET", "HEAD"].includes(req.method) && !startRequest)
+                || (startRequest && (req.headers.origin !== origin || req.headers["sec-fetch-site"] === "cross-site"
+                    || req.headers["content-type"] !== "application/json"))) {
                 res.writeHead(403); res.end("Cross-origin or unsupported request refused."); return;
             }
             res.setHeader("X-Content-Type-Options", "nosniff");
             res.setHeader("Referrer-Policy", "no-referrer");
             res.setHeader("Cache-Control", "no-store");
-            const path = req.url.split("?")[0];
+            if (path === "/__piston/solutions") {
+                try {
+                    const current = await refresh();
+                    if (!current.worktree) throw new Error("The current worktree is unavailable.");
+                    res.setHeader("Content-Type", "application/json");
+                    res.end(JSON.stringify({ solutions: await discoverSolutions(current.worktree, cwd) }));
+                } catch (error) {
+                    res.writeHead(500, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify({ error: `Could not discover solutions: ${error.message}` }));
+                }
+                return;
+            }
+            if (startRequest) {
+                try {
+                    let body = "";
+                    for await (const chunk of req) {
+                        body += chunk;
+                        if (body.length > 8192) throw new Error("Request is too large.");
+                    }
+                    const input = JSON.parse(body);
+                    if (!input || typeof input.solution !== "string") throw new Error("Enter a solution path.");
+                    const current = await refresh(true);
+                    if (current.state !== "disconnected") throw new Error(current.message);
+                    if (starting.has(cwd)) throw new Error("Piston is already starting for this worktree.");
+                    const operation = start(cwd, input.solution, current.worktree, inspect, check);
+                    starting.set(cwd, operation);
+                    try { await operation; }
+                    finally { starting.delete(cwd); }
+                    res.setHeader("Content-Type", "application/json");
+                    res.end(JSON.stringify(await refresh(true)));
+                } catch (error) {
+                    res.writeHead(400, { "Content-Type": "application/json" });
+                    res.end(JSON.stringify({ error: error.message }));
+                }
+                return;
+            }
             if (path === "/__piston/state") {
                 res.setHeader("Content-Type", "application/json");
                 res.end(JSON.stringify({ ...await refresh(), navigation })); return;

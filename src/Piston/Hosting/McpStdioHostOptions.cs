@@ -34,8 +34,6 @@ public sealed class McpStdioHostOptions
     /// <summary>On Unix, exit when the parent process (the agent) dies even if stdin stays open.</summary>
     public bool MonitorParentProcess { get; init; } = true;
 
-    public bool Dashboard { get; init; }
-
     /// <summary>Diagnostic log sink; must not write to stdout.</summary>
     public Action<string> Log { get; init; } = message => Console.Error.WriteLine(message);
 }

@@ -93,7 +93,7 @@ public sealed class PistonConfig
     /// </summary>
     public int? McpPort { get; set; }
 
-    /// <summary>Opt in to an ephemeral loopback dashboard for <c>piston mcp</c>.</summary>
+    /// <summary>Legacy setting; the MCP dashboard is always enabled.</summary>
     public bool? Dashboard { get; set; }
 
     /// <summary>

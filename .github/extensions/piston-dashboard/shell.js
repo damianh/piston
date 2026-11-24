@@ -2,13 +2,25 @@
 const frame = document.getElementById("dashboard");
 const connection = document.getElementById("connection");
 const status = document.getElementById("status");
+const dashboardDisabled = document.getElementById("dashboard-disabled");
 const retry = document.getElementById("retry");
+const startForm = document.getElementById("start-form");
+const solution = document.getElementById("solution");
+const solutions = document.getElementById("solutions");
+const solutionHelp = document.getElementById("solution-help");
+const solutionDiscovery = document.getElementById("solution-discovery");
+const start = document.getElementById("start");
+const startError = document.getElementById("start-error");
 const announcement = document.getElementById("announcement");
 let identity;
 let shownNavigation;
 let loading = false;
 let stopped = false;
 let timer;
+let starting = false;
+let suggested = false;
+let solutionsLoaded = false;
+let solutionsLoading = false;
 
 const attributes = ["data-color-mode", "data-dark-theme", "data-light-theme", "data-theme-source", "data-theme-tone", "data-visual-mode"];
 const tokens = ["--background-color-default", "--border-color-default", "--text-color-default",
@@ -36,13 +48,47 @@ function syncTheme() {
     frame.contentWindow.pistonTheme?.syncCanvas();
 }
 
-function disconnected(message) {
+function disconnected(message, state) {
     if (identity) announcement.textContent = "Piston disconnected.";
     identity = undefined;
     frame.hidden = true;
     frame.removeAttribute("src");
     connection.hidden = false;
-    if (status.textContent !== message) status.textContent = message;
+    const displayed = starting && state?.state === "disconnected" ? "Starting Piston..." : message;
+    if (status.textContent !== displayed) status.textContent = displayed;
+    dashboardDisabled.hidden = state?.state !== "disabled";
+    startForm.hidden = state?.state !== "disconnected";
+    if (state?.state === "disconnected" && !solutionsLoaded) void loadSolutions();
+    if (!suggested && state?.solution) {
+        solution.value = state.solution;
+        suggested = true;
+    }
+    solutionHelp.textContent = state?.solutionError || "Choose a solution or enter a path inside this worktree.";
+}
+
+async function loadSolutions() {
+    if (solutionsLoading || stopped) return;
+    solutionsLoading = true;
+    solutionDiscovery.textContent = "Looking for solutions...";
+    try {
+        const response = await fetch("solutions", { cache: "no-store", signal: AbortSignal.timeout(12000) });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Discovery failed (HTTP ${response.status}).`);
+        solutions.replaceChildren(...result.solutions.map(value => {
+            const option = document.createElement("option");
+            option.value = value;
+            return option;
+        }));
+        solutionsLoaded = true;
+        solutionDiscovery.textContent = result.solutions.length
+            ? `${result.solutions.length} worktree solution${result.solutions.length === 1 ? "" : "s"} found. Type to filter.`
+            : "No solutions found. You can enter a path manually.";
+    } catch (error) {
+        solutionsLoaded = true;
+        solutionDiscovery.textContent = `${error.message} Enter a path manually or retry the connection.`;
+    } finally {
+        solutionsLoading = false;
+    }
 }
 
 async function update() {
@@ -54,7 +100,7 @@ async function update() {
         if (!response.ok) throw new Error(`Connection inspection returned HTTP ${response.status}.`);
         const state = await response.json();
         if (state.state !== "connected") {
-            disconnected(state.message);
+            disconnected(state.message, state);
         } else if (identity !== state.identity || shownNavigation !== state.navigation?.seq) {
             const reconnected = identity !== state.identity;
             identity = state.identity;
@@ -76,7 +122,37 @@ async function update() {
 }
 
 frame.addEventListener("load", syncTheme);
-retry.addEventListener("click", () => { clearTimeout(timer); void update(); });
+retry.addEventListener("click", () => { solutionsLoaded = false; clearTimeout(timer); void update(); });
+solution.addEventListener("focus", () => { if (!solutionsLoading) void loadSolutions(); });
+solution.addEventListener("input", () => { suggested = true; });
+startForm.addEventListener("submit", async event => {
+    event.preventDefault();
+    if (starting) return;
+    starting = true;
+    start.disabled = true;
+    solution.disabled = true;
+    startError.hidden = true;
+    status.textContent = "Starting Piston...";
+    try {
+        const response = await fetch("start", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ solution: solution.value }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || `Startup failed (HTTP ${response.status}).`);
+        clearTimeout(timer);
+        await update();
+    } catch (error) {
+        status.textContent = "Piston could not start.";
+        startError.textContent = error.message;
+        startError.hidden = false;
+    } finally {
+        starting = false;
+        start.disabled = false;
+        solution.disabled = false;
+    }
+});
 const observer = new MutationObserver(syncTheme);
 observer.observe(document.documentElement, { attributes: true });
 observer.observe(document.body, { attributes: true });

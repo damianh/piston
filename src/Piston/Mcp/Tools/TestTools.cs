@@ -79,8 +79,8 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         "Only 'Verdict: Passed' counts as full verification. Other verdicts: TestsFailed, BuildFailed, Incomplete, " +
         "Stale, Cancelled, NotFullScope (a test filter is set), Faulted, TimedOut. " +
         "Prefer this over run_tests and over get_test_results, which may combine several runs. " +
-        "The Solution line names the solution verified. If the tool fails because Piston is owned by another process, " +
-        "the worktree was deleted, or Piston could not start, fall back to `dotnet test`.")]
+        "The Solution line names the solution verified. If Piston is unavailable, report the error; " +
+        "ask for explicit consent before running a different test command as a fallback.")]
     public async Task<string> VerifyAsync(
         [Description("Overall timeout in seconds (default 600). On timeout the run continues; call verify again.")] int timeoutSeconds = 600,
         [Description(ExpectedSolutionDescription)] string? expectedSolution = null,
@@ -398,7 +398,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         {
             throw new McpException(
                 $"Solution mismatch: this Piston serves '{actual ?? "(none)"}', not '{expectedSolution}'. " +
-                $"Use the Piston MCP server started in that worktree, or {EngineAvailability.Fallback}");
+                "Use the Piston MCP server started in the intended worktree.");
         }
 
         return actual ?? "(unknown)";

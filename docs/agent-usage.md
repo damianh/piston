@@ -47,9 +47,8 @@ more than one, add `.piston.json` to the worktree root:
 ```
 
 `solution` is resolved relative to the file. `piston mcp` ignores `mcpPort`,
-`webPort` and `stdio`. By default it opens no web ports. Opt in to the dashboard
-with `"dashboard": true` or `piston mcp --dashboard`; it binds an ephemeral
-`127.0.0.1` web port without changing the MCP stdio transport.
+`webPort` and `stdio`. Its dashboard always binds an ephemeral `127.0.0.1` web
+port without changing the MCP stdio transport.
 
 ## 3. Connect the agent
 
@@ -72,7 +71,6 @@ piston init claude --write --scope repo   # this repository: .mcp.json and .clau
 | `--write` | Write the files. Without it, `piston init` only prints. |
 | `--scope user` (default) | Copilot: `$COPILOT_HOME` (default `~/.copilot`): `mcp-config.json`, `skills/piston/` and `extensions/piston-dashboard/`. Claude Code: `$CLAUDE_CONFIG_DIR/skills/piston/` (default `~/.claude`). |
 | `--scope repo` | The current directory: `.mcp.json` (shared by Copilot and Claude Code), plus `.github/skills/piston/` and `.github/extensions/piston-dashboard/` for Copilot, or `.claude/skills/piston/` for Claude Code. Commit them to share the setup. |
-| `--dashboard` | Register `piston mcp --dashboard`, so each session serves the dashboard the canvas shows. |
 | `--force` | Replace a file or `piston` entry whose content differs from the bundled one. |
 
 `piston init` merges only the `piston` entry into `mcpServers` and keeps every other
@@ -142,8 +140,7 @@ directory, so start Claude Code from the worktree root.
 
 Any MCP client that can launch a stdio server works:
 
-- **Command.** `piston` with arguments `mcp` (add `--dashboard` for the web
-  dashboard).
+- **Command.** `piston` with arguments `mcp`.
 - **Working directory.** The worktree root, which is where the solution is resolved
   (section 2). Alternatively, pass the solution path: `piston mcp path/to/App.slnx`.
 - **One process per session.** Each agent session needs its own process. Do not
@@ -174,9 +171,9 @@ process:
 - **Worktree already owned.** If another Piston process owns this worktree (a
   second session, or a daemon you started), it still serves MCP but starts no
   engine. Every tool then returns `Piston owned by another process (PID …,
-  solution …) … Use `dotnet test` instead.`
+  solution …) … This MCP server started no engine and will not run tests here.`
 - **Startup failure.** If there is no solution or no SDK, every tool returns
-  `Piston could not start: … Use `dotnet test` instead.`
+  `Piston could not start: …`.
 
 `verify` and `get_test_run` replies name the solution (`Solution: …` /
 `"solutionPath"`), including queued runs and runs cancelled before execution.
@@ -188,7 +185,9 @@ run and disambiguate by project.
 (the solution path, its directory or the worktree root; a parent repository of
 a nested worktree does not match). If it does not match, they fail
 instead of verifying the wrong tree. Path matching resolves symbolic links and
-respects the filesystem's case sensitivity on macOS.
+respects the filesystem's case sensitivity on macOS. This guard does not select
+the server's solution; configure the server's solution path and restart it to
+change solutions.
 
 Inspect and clean up from any directory:
 
@@ -205,11 +204,14 @@ was deleted (`[worktree missing]`).
 
 ### HTTP daemon (humans and the dashboard)
 
-For the dashboard attached to an existing stdio session, use its `--dashboard`
-opt-in rather than starting a competing owner. This repository's native
+For the dashboard attached to an existing stdio session, use its existing
+dashboard rather than starting a competing owner. This repository's native
 `piston-dashboard` canvas discovers the active worktree and shows the existing
 web UI, including a disconnected state. `piston dashboard --json` inspects the
-owner without starting an engine or a run. See the [canvas setup](user-guide.md#copilot-canvas).
+owner without starting an engine or a run. In the disconnected panel, **Start
+Piston** starts a daemon and immediately builds and runs tests. A daemon owns the
+worktree, so a separate stdio MCP engine cannot use it; connect the agent to the
+daemon's HTTP MCP endpoint instead. See the [canvas setup](user-guide.md#copilot-canvas).
 
 To share one engine through HTTP between a human and an agent, run the HTTP
 daemon instead. MCP is always on, at port 5200 by default:
@@ -260,7 +262,7 @@ the file is missing.
 The nearest ancestor build/configuration files remain covered; SDK/workload
 installations, restored packages and their generated restore imports remain
 toolchain/cache exclusions. If coverage evaluation fails, `verify` reports
-`Faulted`. Use `dotnet test` explicitly for unsupported inputs; Piston does not
+`Faulted`. Report incomplete verification for unsupported inputs; Piston does not
 silently fall back. Edits after a verification reply require a new call.
 
 A file-watcher error (including buffer overflow) makes source monitoring
@@ -277,10 +279,10 @@ source builds and all tests pass. Every other verdict is not a pass:
 | `BuildFailed` | The full build of the current source failed; errors listed with ID/file/line. | Fix them; call `verify` again. |
 | `Incomplete` | A project crashed, produced no results, or results include duplicate IDs or `NotRun`/`Running` tests. | Inspect `get_test_run`; treat as failure. |
 | `Stale` | The source kept changing or runs kept being superseded; no current result after 2 retries. | Stop editing, then call `verify` again. |
-| `Cancelled` | Piston is shutting down. | Fall back to `dotnet test` explicitly. |
+| `Cancelled` | Piston is shutting down. | Report incomplete verification. |
 | `TimedOut` | No result within `timeoutSeconds`. The run may still be queued or running. | Call `verify` again (it awaits the active run) or raise the timeout. |
-| `NotFullScope` | A filter is active, or evaluated user build inputs are not fingerprinted. | Clear the filter, or use `dotnet test` explicitly for unsupported inputs. |
-| `Faulted` | The engine or pipeline failed. | Fall back to `dotnet test` explicitly and report it. |
+| `NotFullScope` | A filter is active, or evaluated user build inputs are not fingerprinted. | Clear the filter, or report incomplete verification. |
+| `Faulted` | The engine or pipeline failed. | Report the fault and incomplete verification. |
 
 An `Admission:` line means the run waited for the machine execution budget (queue
 position and wait time). That is expected under load, not a failure.
@@ -322,8 +324,9 @@ result, because it is flaky.
 
 A tool *error* (not a verdict) is also not a pass. Examples: ownership by another
 process, a deleted worktree, a startup failure, or a solution mismatch. On any of
-these, run `dotnet test` explicitly and say so. Do the same if the `piston` server
-is unavailable. Never report a Piston pass that you did not receive.
+these, or if the `piston` server is unavailable, report the error and stop.
+Ask for explicit consent before running `dotnet test` or another test command
+as a fallback. Never report a Piston pass that you did not receive.
 
 ## 5. Faster feedback while iterating
 
@@ -415,6 +418,8 @@ instructions (for example `.github/copilot-instructions.md`):
 ## Testing with Piston
 
 - The `piston` MCP server (`piston mcp`, one per session) tests this worktree.
+- Invoking `/piston` or providing a solution path alone does not request a test run.
+  Ask what the user wants. Starting the Piston engine itself runs tests.
 - To check whether the code builds and tests pass, call the `verify` tool instead of
   running `dotnet build` / `dotnet test`.
 - Only `Verdict: Passed` with `Counts as full verification: yes` counts as passing.
@@ -426,6 +431,6 @@ instructions (for example `.github/copilot-instructions.md`):
 - The `Solution:` line in the reply must be this worktree's solution.
 - If the `piston` MCP server is unavailable, a tool returns an error (for example
   "Piston owned by another process" or "could not start"), or `verify` returns
-  `Faulted`/`Cancelled`, run `dotnet test` explicitly and say that you fell back
-  to it.
+  `Faulted`/`Cancelled`, report the problem and incomplete verification. Ask for
+  explicit consent before running a different test command as a fallback.
 ```

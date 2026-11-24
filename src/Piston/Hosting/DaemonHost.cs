@@ -170,7 +170,6 @@ public sealed class DaemonHost(DaemonHostOptions options) : IAsyncDisposable
             throw new DaemonStartupException(
                 $"Could not start the web dashboard on {WebUrl}: {ex.Message} Choose a different --web-port.", ex);
         }
-        engine.PublishDashboardUrl(_dashboard.Url);
         _log($"[piston] Web server (WebSocket) listening on port: {options.WebPort}");
 
         if (options.McpPort is not null)
@@ -188,6 +187,8 @@ public sealed class DaemonHost(DaemonHostOptions options) : IAsyncDisposable
                 .ConfigureAwait(false);
             _log($"[piston] MCP server listening on port: {options.McpPort}");
         }
+
+        engine.PublishDashboardUrl(_dashboard.Url);
     }
 
     private static async Task StartEndpointAsync(
