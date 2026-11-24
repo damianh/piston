@@ -4,6 +4,7 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.RegularExpressions;
+using Piston.Engine.Execution;
 using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
@@ -45,11 +46,14 @@ internal static partial class TestProcessRunner
             ct);
 
     /// <summary>
-    /// Where <c>dotnet test</c> starts for <paramref name="projectPath"/>: its directory, so the SDK and test
-    /// runner chosen by the project's own <c>global.json</c> apply rather than those of Piston's directory.
+    /// Where <c>dotnet test</c> starts for <paramref name="projectPath"/>: its directory when process-startable,
+    /// otherwise a process-startable ancestor that preserves the SDK and test runner chosen by its
+    /// <c>global.json</c>.
     /// </summary>
     internal static string? WorkingDirectoryFor(string projectPath) =>
-        Path.GetDirectoryName(Path.GetFullPath(projectPath)) is { Length: > 0 } dir && Directory.Exists(dir) ? dir : null;
+        Path.GetDirectoryName(PathNormalizer.GetFullPath(projectPath)) is { Length: > 0 } dir && Directory.Exists(dir)
+            ? PathNormalizer.GetSdkWorkingDirectory(dir)
+            : null;
 
     /// <summary>The <c>--filter</c> argument for <paramref name="filter"/>, or empty when there is none.</summary>
     internal static string FilterArgument(string? filter) =>

@@ -4,6 +4,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using Piston.Engine.Execution;
 
 namespace Piston.Engine.Services;
 
@@ -25,7 +26,7 @@ internal static partial class SolutionFilterBuilder
     {
         try
         {
-            var fullPath = Path.GetFullPath(solutionPath);
+            var fullPath = PathNormalizer.GetFullPath(solutionPath);
             if (!File.Exists(fullPath))
             {
                 return null;
@@ -72,7 +73,8 @@ internal static partial class SolutionFilterBuilder
     /// </summary>
     public static string WriteTemporaryFilter(string underlyingSolutionPath, IEnumerable<string> projects)
     {
-        var solutionDir = Path.GetDirectoryName(underlyingSolutionPath)!;
+        underlyingSolutionPath = PathNormalizer.GetFullPath(underlyingSolutionPath);
+        var solutionDir = PathNormalizer.GetFullPath(Path.GetDirectoryName(underlyingSolutionPath)!);
         var dir = Directory.CreateTempSubdirectory("piston-build-").FullName;
         var filterPath = Path.Combine(dir, "selective.slnf");
 
@@ -85,7 +87,7 @@ internal static partial class SolutionFilterBuilder
             writer.WriteStartArray("projects");
             foreach (var project in projects)
             {
-                writer.WriteStringValue(Path.GetRelativePath(solutionDir, project));
+                writer.WriteStringValue(Path.GetRelativePath(solutionDir, PathNormalizer.GetFullPath(project)));
             }
 
             writer.WriteEndArray();
@@ -101,7 +103,7 @@ internal static partial class SolutionFilterBuilder
         using var doc = JsonDocument.Parse(File.ReadAllText(filterPath));
         var solution = doc.RootElement.GetProperty("solution");
         var slnRelative = NormalizeSeparators(solution.GetProperty("path").GetString()!);
-        var slnPath = Path.GetFullPath(Path.Combine(Path.GetDirectoryName(filterPath)!, slnRelative));
+        var slnPath = PathNormalizer.GetFullPath(Path.Combine(Path.GetDirectoryName(filterPath)!, slnRelative));
         if (!File.Exists(slnPath))
         {
             return null;
@@ -116,7 +118,7 @@ internal static partial class SolutionFilterBuilder
 
     private static HashSet<string> ToFullPathSet(string baseDir, IEnumerable<string> relativePaths) =>
         relativePaths
-            .Select(p => Path.GetFullPath(Path.Combine(baseDir, NormalizeSeparators(p))))
+            .Select(p => PathNormalizer.GetFullPath(Path.Combine(baseDir, NormalizeSeparators(p))))
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private static string NormalizeSeparators(string path) =>

@@ -140,6 +140,59 @@ public sealed class SelectiveBuildCorrectnessTests : IAsyncLifetime
             t => t.FullyQualifiedName.Contains("OtherTests.Passes") && t.Status == TestStatus.Passed);
     }
 
+    [Fact]
+    public async Task NamespaceDependentSolutionPath_UsesStableProjectIdsAfterTestFileEdit()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var solution = await WriteSolutionAsync("slnx");
+        await File.WriteAllTextAsync(
+            _libTestsCsproj,
+            (await File.ReadAllTextAsync(_libTestsCsproj, _ct))
+                .Replace("<ProjectReference Include=\"..\\Lib\\Lib.csproj\" />", string.Empty, StringComparison.Ordinal),
+            _ct);
+        await File.WriteAllTextAsync(
+            _otherTestsCsproj,
+            (await File.ReadAllTextAsync(_otherTestsCsproj, _ct))
+                .Replace("<ProjectReference Include=\"..\\Other\\Other.csproj\" />", string.Empty, StringComparison.Ordinal),
+            _ct);
+        var extended = @"\\?\" + Path.Combine(_root, "CON.slnx");
+        File.Move(solution, extended);
+        try
+        {
+            MsBuildLocatorGuard.EnsureRegistered();
+            var state = new PistonState();
+            var watcher = new StubFileWatcherService();
+            var analyzer = new ImpactAnalyzer(path => new MsBuildSolutionGraph(path));
+            using var orchestrator = new PistonOrchestrator(
+                watcher,
+                new StubBuildService(),
+                new ProjectResultRunner(),
+                analyzer,
+                state);
+
+            await RunAndWaitAsync(state, () => orchestrator.StartAsync(extended));
+            Assert.Equal(2, state.TestSuites.Count);
+
+            await RunAndWaitAsync(state, async () =>
+            {
+                await File.WriteAllTextAsync(_libTestCode, LibTestSource(2), _ct);
+                await TriggerChange(watcher, _libTestCode);
+            });
+
+            Assert.Equal(
+                ["Lib.Tests/Lib.Tests.csproj", "Other.Tests/Other.Tests.csproj"],
+                state.TestSuites.Select(s => s.ProjectId).Order(StringComparer.Ordinal).ToArray());
+        }
+        finally
+        {
+            File.Delete(extended);
+        }
+    }
+
     private async Task<string> WriteSolutionAsync(string format)
     {
         var slnx = Path.Combine(_root, "All.slnx");
@@ -257,6 +310,49 @@ public sealed class SelectiveBuildCorrectnessTests : IAsyncLifetime
 
     private static bool SamePath(string a, string b) =>
         string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+
+    private sealed class ProjectResultRunner : ITestRunnerService
+    {
+        public Task<TestRunResult> RunTestsAsync(
+            string solutionPath,
+            string? filter,
+            Action<IReadOnlyList<TestSuite>>? onProgress,
+            CancellationToken ct) =>
+            RunTestsAsync(solutionPath, null, filter, false, onProgress, null, ct);
+
+        public Task<TestRunResult> RunTestsAsync(
+            string solutionPath,
+            IReadOnlyList<string>? testProjectPaths,
+            string? filter,
+            bool collectCoverage,
+            Action<IReadOnlyList<TestSuite>>? onProgress,
+            CancellationToken ct) =>
+            RunTestsAsync(solutionPath, testProjectPaths, filter, collectCoverage, onProgress, null, ct);
+
+        public Task<TestRunResult> RunTestsAsync(
+            string solutionPath,
+            IReadOnlyList<string>? testProjectPaths,
+            string? filter,
+            bool collectCoverage,
+            Action<IReadOnlyList<TestSuite>>? onProgress,
+            Action<ProjectTestResult>? onProjectCompleted,
+            CancellationToken ct)
+        {
+            ct.ThrowIfCancellationRequested();
+            var projects = (testProjectPaths ?? []).Select(path =>
+            {
+                var suite = new TestSuite(path, [
+                    new TestResult("Sample.Test", "Test", TestStatus.Passed, TimeSpan.Zero, null, null, null, null)
+                ], DateTimeOffset.UtcNow, TimeSpan.Zero);
+                var project = new ProjectTestResult(path, [suite], null, [], false);
+                onProjectCompleted?.Invoke(project);
+                onProgress?.Invoke([suite]);
+                return project;
+            }).ToArray();
+            var suites = projects.SelectMany(project => project.Suites).ToArray();
+            return Task.FromResult(new TestRunResult(suites, null, []) { Projects = projects });
+        }
+    }
 
     private sealed class RecordingBuildService(IBuildService inner) : IBuildService
     {

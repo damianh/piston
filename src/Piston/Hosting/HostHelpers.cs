@@ -26,7 +26,7 @@ public static class HostHelpers
             return (path, LoadConfig(configurationDirectory ?? Path.GetDirectoryName(path)!));
         }
 
-        var cwd = Path.GetFullPath(workingDirectory ?? Directory.GetCurrentDirectory());
+        var cwd = PathNormalizer.GetFullPath(workingDirectory ?? Directory.GetCurrentDirectory());
         var config = LoadConfig(cwd);
         if (config.Solution is not null)
         {
@@ -38,7 +38,7 @@ public static class HostHelpers
 
             try
             {
-                var path = Path.GetFullPath(config.Solution, cwd);
+                var path = PathNormalizer.GetFullPath(config.Solution, cwd);
                 return (ValidateSolutionPath(path), config);
             }
             catch (Exception ex) when (ex is ArgumentException or NotSupportedException or InvalidOperationException)
@@ -62,11 +62,12 @@ public static class HostHelpers
                 $"Multiple solution files found in '{cwd}'. Pass the solution path explicitly:\n  " +
                 string.Join("\n  ", candidates.Select(Path.GetFileName))),
         };
-        return (discoveredPath, config);
+        return (ValidateSolutionPath(discoveredPath), config);
     }
 
     private static string ValidateSolutionPath(string path)
     {
+        path = PathNormalizer.GetFullPath(path);
         if (!File.Exists(path))
         {
             throw new InvalidOperationException($"Solution file not found: {path}");

@@ -30,6 +30,14 @@ piston
 
 Piston starts or attaches to the test daemon and opens the dashboard at <http://localhost:5199>. To choose a solution explicitly, run `piston path/to/solution.slnx`.
 
+On Windows, ordinary drive/UNC paths and their extended (`\\?\`) forms identify the same worktree.
+Piston normalizes paths before MSBuild evaluation and execution so relative project references work.
+Paths beyond the legacy 260-character limit remain supported by modern .NET/MSBuild; namespace-dependent
+names such as literal trailing dots or spaces retain their extended form.
+Windows cannot start a process in a working directory longer than 258 characters. For long build paths,
+Piston starts in a shorter ancestor with the same SDK selection; if that would skip a `global.json`,
+it reports the limitation and requires a shorter checkout path.
+
 To connect an MCP client, install Piston first, then run the matching setup command:
 
 ```sh

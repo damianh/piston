@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Text.Json;
 using Piston.Engine.Services;
 using Xunit;
 
@@ -104,6 +105,29 @@ public sealed class SolutionFilterBuilderTests : IDisposable
             _ = Assert.NotNull(result);
             Assert.Equal(slnx, result.Value.SolutionPath);
             Assert.Equal([P("B", "B.csproj")], result.Value.Projects);
+        }
+        finally
+        {
+            Directory.Delete(Path.GetDirectoryName(filter)!, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void WriteTemporaryFilter_NamespaceDependentSolutionName_UsesRelativeProjectPaths()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var solution = @"\\?\" + P("CON.slnx");
+        var project = P("Project", "Project.csproj");
+        var filter = SolutionFilterBuilder.WriteTemporaryFilter(solution, [project]);
+        try
+        {
+            using var json = JsonDocument.Parse(File.ReadAllText(filter));
+            var entry = json.RootElement.GetProperty("solution").GetProperty("projects")[0].GetString();
+            Assert.Equal(Path.Combine("Project", "Project.csproj"), entry);
         }
         finally
         {

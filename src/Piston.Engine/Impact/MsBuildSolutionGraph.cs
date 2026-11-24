@@ -4,6 +4,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Build.Evaluation;
 using Microsoft.Build.Graph;
+using Piston.Engine.Execution;
 using Piston.Engine.Services;
 
 namespace Piston.Engine.Impact;
@@ -32,6 +33,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
 
     public MsBuildSolutionGraph(string solutionPath)
     {
+        solutionPath = PathNormalizer.GetFullPath(solutionPath);
         // MsBuildLocatorGuard.EnsureRegistered() MUST have been called before this
         // constructor is executed (i.e. before this class's assembly is JIT-loaded).
         // The caller (PistonEngine or test setup) is responsible for doing so.
@@ -64,7 +66,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
 
         foreach (var node in graph.ProjectNodes)
         {
-            var projectPath = Path.GetFullPath(node.ProjectInstance.FullPath);
+            var projectPath = PathNormalizer.GetFullPath(node.ProjectInstance.FullPath);
             bool isNewProject;
             if (!_nodesByPath.TryGetValue(projectPath, out var nodes))
             {
@@ -103,7 +105,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
                 var targetPath = node.ProjectInstance.GetPropertyValue("TargetPath");
                 if (!string.IsNullOrEmpty(targetPath))
                 {
-                    _mtpOutputPaths[projectPath] = Path.GetFullPath(targetPath);
+                    _mtpOutputPaths[projectPath] = PathNormalizer.GetFullPath(targetPath);
                 }
             }
 
@@ -124,7 +126,8 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
             if (isNewProject)
             {
                 // Cache source files (.cs) for this project (excluding bin/obj)
-                var projectDir = Path.GetDirectoryName(projectPath) ?? string.Empty;
+                var projectDir = Path.GetDirectoryName(projectPath) is { } directory
+                    ? PathNormalizer.GetFullPath(directory) : string.Empty;
                 var sourceFiles = new List<string>();
                 if (Directory.Exists(projectDir))
                 {
@@ -132,7 +135,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
                     {
                         if (!IsInBinOrObj(csFile))
                         {
-                            sourceFiles.Add(Path.GetFullPath(csFile));
+                            sourceFiles.Add(PathNormalizer.GetFullPath(csFile));
                         }
                     }
                 }
@@ -170,7 +173,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
 
     public string? FindOwningProject(string filePath)
     {
-        var normalizedFile = Path.GetFullPath(filePath);
+        var normalizedFile = PathNormalizer.GetFullPath(filePath);
 
         foreach (var (dir, projPath) in _sortedProjectDirs)
         {
@@ -193,7 +196,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
 
     public IReadOnlyList<string> GetSourceFiles(string projectPath)
     {
-        var normalized = Path.GetFullPath(projectPath);
+        var normalized = PathNormalizer.GetFullPath(projectPath);
         return _sourceFilesByProject.TryGetValue(normalized, out var files) ? files : [];
     }
 
@@ -201,30 +204,30 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
 
     public bool IsTestProject(string projectPath)
     {
-        var normalized = Path.GetFullPath(projectPath);
+        var normalized = PathNormalizer.GetFullPath(projectPath);
         return _testProjects.Contains(normalized, StringComparer.OrdinalIgnoreCase);
     }
 
     public bool IsMtpProject(string projectPath)
     {
-        var normalized = Path.GetFullPath(projectPath);
+        var normalized = PathNormalizer.GetFullPath(projectPath);
         return _mtpProjects.ContainsKey(normalized);
     }
 
     public string? GetMtpOutputPath(string projectPath)
     {
-        var normalized = Path.GetFullPath(projectPath);
+        var normalized = PathNormalizer.GetFullPath(projectPath);
         return _mtpOutputPaths.TryGetValue(normalized, out var p) ? p : null;
     }
 
     public bool IsMultiTargeted(string projectPath) =>
-        _multiTargetedProjects.Contains(Path.GetFullPath(projectPath));
+        _multiTargetedProjects.Contains(PathNormalizer.GetFullPath(projectPath));
 
     public int GetTargetFrameworkCount(string projectPath) => GetTargetFrameworks(projectPath).Count;
 
     private IReadOnlyList<string> GetTargetFrameworks(string projectPath)
     {
-        if (!_nodesByPath.TryGetValue(Path.GetFullPath(projectPath), out var nodes))
+        if (!_nodesByPath.TryGetValue(PathNormalizer.GetFullPath(projectPath), out var nodes))
         {
             return [];
         }
@@ -241,7 +244,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
 
     public IReadOnlyList<(string Framework, string OutputPath)> GetMtpTargetOutputs(string projectPath)
     {
-        var normalized = Path.GetFullPath(projectPath);
+        var normalized = PathNormalizer.GetFullPath(projectPath);
         if (!_multiTargetedProjects.Contains(normalized))
         {
             return [];
@@ -261,7 +264,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
                     && string.Equals(node.ProjectInstance.GetPropertyValue("TargetFramework"), framework, StringComparison.OrdinalIgnoreCase))
                 .Select(node => node.ProjectInstance.GetPropertyValue("TargetPath"))
                 .Where(path => !string.IsNullOrEmpty(path))
-                .Select(Path.GetFullPath)
+                .Select(PathNormalizer.GetFullPath)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
             if (paths.Count != 1)
@@ -278,7 +281,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
     }
 
     public TestProjectFacts? GetTestProjectFacts(string projectPath) =>
-        _testProjectFacts.GetValueOrDefault(Path.GetFullPath(projectPath));
+        _testProjectFacts.GetValueOrDefault(PathNormalizer.GetFullPath(projectPath));
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -337,7 +340,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
     private HashSet<string> Collect(
         string projectPath, Func<ProjectGraphNode, IEnumerable<ProjectGraphNode>> edges)
     {
-        var start = Path.GetFullPath(projectPath);
+        var start = PathNormalizer.GetFullPath(projectPath);
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (!_nodesByPath.TryGetValue(start, out var startNodes))
         {
@@ -357,7 +360,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
                     continue;
                 }
 
-                var path = Path.GetFullPath(next.ProjectInstance.FullPath);
+                var path = PathNormalizer.GetFullPath(next.ProjectInstance.FullPath);
                 if (!string.Equals(path, start, StringComparison.OrdinalIgnoreCase))
                 {
                     _ = result.Add(path);

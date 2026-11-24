@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Diagnostics;
+using Piston.Engine.Execution;
 using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
@@ -46,12 +47,12 @@ public sealed class BuildService : IBuildService
         {
             // Absolute, since the build starts in the solution's directory: a relative path with a
             // directory (sub/My.slnx) would otherwise resolve against it a second time.
-            var fullSolutionPath = Path.GetFullPath(solutionPath);
+            var fullSolutionPath = PathNormalizer.GetFullPath(solutionPath);
             return await RunBuildAsync($"build \"{fullSolutionPath}\"", TestProcessRunner.WorkingDirectoryFor(fullSolutionPath), onProjectBuilt, ct).ConfigureAwait(false);
         }
 
         var targets = projectPaths
-            .Select(Path.GetFullPath)
+            .Select(PathNormalizer.GetFullPath)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
 
@@ -155,8 +156,8 @@ public sealed class BuildService : IBuildService
     }
 
     /// <param name="workingDirectory">
-    /// Where <c>dotnet build</c> starts: the target's directory, so the SDK chosen by its <c>global.json</c> applies
-    /// rather than the one for Piston's own directory.
+    /// Where <c>dotnet build</c> starts: the target's directory (or a process-startable ancestor selecting
+    /// the same <c>global.json</c>), rather than Piston's own directory.
     /// </param>
     private static async Task<BuildResult> RunBuildAsync(
         string args, string? workingDirectory, Action<string>? onProjectBuilt, CancellationToken ct)
@@ -166,7 +167,7 @@ public sealed class BuildService : IBuildService
 
         var psi = new ProcessStartInfo("dotnet", args)
         {
-            WorkingDirectory = workingDirectory ?? string.Empty,
+            WorkingDirectory = workingDirectory is null ? string.Empty : PathNormalizer.GetSdkWorkingDirectory(workingDirectory),
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
