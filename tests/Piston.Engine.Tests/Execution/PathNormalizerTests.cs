@@ -12,6 +12,8 @@ public sealed class PathNormalizerTests
     [InlineData(@"\\?\D:\Repo\src\..\..\App.slnx", @"D:\App.slnx")]
     [InlineData(@"\\?\UNC\server\share\Repo\src\..\App.slnx", @"\\server\share\Repo\App.slnx")]
     [InlineData(@"\\?\unc\server\share\Repo\.\App.slnx", @"\\server\share\Repo\App.slnx")]
+    [InlineData(@"\\?\UNC\aux\share\Repo\App.slnx", @"\\aux\share\Repo\App.slnx")]
+    [InlineData(@"\\?\UNC\server\CON\Repo\App.slnx", @"\\server\CON\Repo\App.slnx")]
     public void ExtendedPaths_ResolveDotSegmentsAndPreserveCase(string input, string expected)
     {
         if (!OperatingSystem.IsWindows())
@@ -27,6 +29,9 @@ public sealed class PathNormalizerTests
     [InlineData(@"\\?\D:\literal.\App.slnx")]
     [InlineData(@"\\?\D:\literal \App.slnx")]
     [InlineData(@"\\?\UNC\server\share\literal.\App.slnx")]
+    [InlineData(@"\\?\UNC\server.\share\App.slnx")]
+    [InlineData(@"\\?\UNC\server\share \App.slnx")]
+    [InlineData(@"\\?\UNC\server\share\CON\App.slnx")]
     [InlineData(@"\\?\D:\Repo\NUL.txt")]
     [InlineData(@"\\?\D:\Repo\COM1\App.slnx")]
     [InlineData(@"\\?\Volume{00000000-0000-0000-0000-000000000000}\App.slnx")]
@@ -94,5 +99,44 @@ public sealed class PathNormalizerTests
 
         const string path = @"\\?\D:\Repo\App.slnx";
         Assert.Equal(Path.GetFullPath(path), PathNormalizer.GetFullPath(path));
+    }
+
+    [Fact]
+    public void SdkWorkingDirectory_HandlesWindowsProcessBoundaryAndRenormalizesParent()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var temporary = Directory.CreateTempSubdirectory("piston-sdk-boundary-").FullName;
+        try
+        {
+            var parent = temporary;
+            while (parent.Length + 18 < 255)
+            {
+                parent = Path.Combine(parent, "nested-directory");
+            }
+            parent = Path.Combine(parent, new string('a', 255 - parent.Length - 1));
+            _ = Directory.CreateDirectory(parent);
+            File.WriteAllText(Path.Combine(parent, "global.json"), """{"sdk":{"version":"11.0.100"}}""");
+            var literal = @"\\?\" + Path.Combine(parent, "literal.");
+            _ = Directory.CreateDirectory(literal);
+
+            Assert.Equal(parent, PathNormalizer.GetSdkWorkingDirectory(literal));
+
+            var atLimit = Path.Combine(parent, "abc");
+            var belowLimit = Path.Combine(parent, "ab");
+            _ = Directory.CreateDirectory(atLimit);
+            _ = Directory.CreateDirectory(belowLimit);
+            Assert.Equal(259, atLimit.Length);
+            Assert.Equal(258, belowLimit.Length);
+            Assert.Equal(parent, PathNormalizer.GetSdkWorkingDirectory(atLimit));
+            Assert.Equal(belowLimit, PathNormalizer.GetSdkWorkingDirectory(belowLimit));
+        }
+        finally
+        {
+            Directory.Delete(temporary, recursive: true);
+        }
     }
 }

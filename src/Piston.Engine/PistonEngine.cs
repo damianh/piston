@@ -252,6 +252,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             throw new InvalidOperationException("The engine has already been started.");
         }
 
+        solutionPath = PathNormalizer.GetFullPath(solutionPath);
         var budget = _executionCoordinator.Initialize();
         _ownership = WorktreeOwnership.Acquire(
             _executionCoordinator.Directory, solutionPath, _ownerHost, dashboardUrl: _ownerDashboardUrl);

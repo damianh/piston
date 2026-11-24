@@ -30,7 +30,9 @@ public static class PathNormalizer
         }
 
         // Converting namespace-dependent names would address a different filesystem entry or device.
-        var literalNames = ordinary.Split('\\', '/').Any(RequiresExtendedNamespace);
+        var rootLength = Path.GetPathRoot(ordinary)!.Length;
+        var literalNames = ordinary[..rootLength].Split('\\', '/').Any(HasLiteralEnding)
+            || ordinary[rootLength..].Split('\\', '/').Any(RequiresExtendedNamespace);
         // Modern .NET/MSBuild accept ordinary long paths, which also resolve dot segments correctly.
         return Path.GetFullPath(literalNames ? path : ordinary);
     }
@@ -49,15 +51,15 @@ public static class PathNormalizer
 
         // CreateProcess rejects long working directories even with an extended prefix. Builds use
         // absolute targets, so an ancestor is safe provided it selects the same SDK configuration.
-        while (full.Length >= 260)
+        while (full.Length >= 259)
         {
             if (File.Exists(Path.Combine(full, "global.json")))
             {
                 throw new PathTooLongException(
                     $"Cannot start dotnet in '{path}' without changing SDK selection: '{full}' contains global.json. Use a shorter checkout path.");
             }
-            full = Path.GetDirectoryName(full)
-                ?? throw new PathTooLongException($"Cannot find a process working directory for '{path}'.");
+            full = PathNormalizer.GetFullPath(Path.GetDirectoryName(full)
+                ?? throw new PathTooLongException($"Cannot find a process working directory for '{path}'."));
         }
         return full;
     }
@@ -68,7 +70,7 @@ public static class PathNormalizer
         {
             return false;
         }
-        if (segment.EndsWith('.') || segment.EndsWith(' '))
+        if (HasLiteralEnding(segment))
         {
             return true;
         }
@@ -77,4 +79,6 @@ public static class PathNormalizer
             || (name.Length == 4 && (name.StartsWith("COM", StringComparison.Ordinal) || name.StartsWith("LPT", StringComparison.Ordinal))
                 && (name[3] is >= '1' and <= '9' or '\u00B9' or '\u00B2' or '\u00B3'));
     }
+
+    private static bool HasLiteralEnding(string segment) => segment.EndsWith('.') || segment.EndsWith(' ');
 }

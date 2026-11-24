@@ -140,6 +140,49 @@ public sealed class SelectiveBuildCorrectnessTests : IAsyncLifetime
             t => t.FullyQualifiedName.Contains("OtherTests.Passes") && t.Status == TestStatus.Passed);
     }
 
+    [Fact]
+    public async Task ExtendedSolutionPath_UsesStableProjectIdsAfterFileEdit()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var solution = await WriteSolutionAsync("slnx");
+        var extended = @"\\?\" + solution;
+        var coordination = Directory.CreateTempSubdirectory("piston-selective-coordination-").FullName;
+        try
+        {
+            await using var engine = new PistonEngine(new PistonOptions
+            {
+                SolutionPath = extended,
+                CoverageEnabled = false,
+                PersistResults = false,
+                HistoryEnabled = false,
+                ProcessPoolSize = 1,
+                ExecutionCoordinationDirectory = coordination,
+            });
+
+            await RunAndWaitAsync(engine.State, () => engine.StartAsync(extended));
+            Assert.Equal(solution, engine.State.SolutionPath);
+            Assert.Equal(TestStatus.Passed, LibTestStatus(engine.State));
+            var initial = Assert.Single(engine.State.TestSuites.Where(s => s.Tests.Any(t =>
+                t.FullyQualifiedName.Contains("LibTests.V_matches", StringComparison.Ordinal))));
+            Assert.NotNull(initial.ProjectId);
+            Assert.False(Path.IsPathRooted(initial.ProjectId));
+
+            await RunAndWaitAsync(engine.State, () => File.WriteAllTextAsync(_libCode, LibSource(2), _ct));
+            Assert.Equal(TestStatus.Failed, LibTestStatus(engine.State));
+            var updated = Assert.Single(engine.State.TestSuites.Where(s => s.Tests.Any(t =>
+                t.FullyQualifiedName.Contains("LibTests.V_matches", StringComparison.Ordinal))));
+            Assert.Equal(initial.ProjectId, updated.ProjectId);
+        }
+        finally
+        {
+            Directory.Delete(coordination, recursive: true);
+        }
+    }
+
     private async Task<string> WriteSolutionAsync(string format)
     {
         var slnx = Path.Combine(_root, "All.slnx");

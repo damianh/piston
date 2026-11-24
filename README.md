@@ -34,7 +34,7 @@ On Windows, ordinary drive/UNC paths and their extended (`\\?\`) forms identify 
 Piston normalizes paths before MSBuild evaluation and execution so relative project references work.
 Paths beyond the legacy 260-character limit remain supported by modern .NET/MSBuild; namespace-dependent
 names such as literal trailing dots or spaces retain their extended form.
-Windows cannot start a process in a working directory over 259 characters. For long build paths,
+Windows cannot start a process in a working directory longer than 258 characters. For long build paths,
 Piston starts in a shorter ancestor with the same SDK selection; if that would skip a `global.json`,
 it reports the limitation and requires a shorter checkout path.
 
