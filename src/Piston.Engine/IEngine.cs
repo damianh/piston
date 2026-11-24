@@ -36,6 +36,15 @@ public interface IEngine : IDisposable
     Task ResetAsync() => throw new NotSupportedException("Reset is not supported by this engine.");
 
     /// <summary>
+    /// Pauses automatic processing: file changes are queued instead of starting runs, the idle impact backfill
+    /// stops and the active run is cancelled. Requested runs, reset and verification still execute.
+    /// </summary>
+    void Pause() => throw new NotSupportedException("Pausing is not supported by this engine.");
+
+    /// <summary>Resumes automatic processing, running once for the files changed while paused.</summary>
+    void Resume() => throw new NotSupportedException("Pausing is not supported by this engine.");
+
+    /// <summary>
     /// Produces current full verification for the present source, reusing or awaiting qualifying runs
     /// before requesting a forced full run. See <see cref="Verification.VerificationPolicy"/>.
     /// </summary>

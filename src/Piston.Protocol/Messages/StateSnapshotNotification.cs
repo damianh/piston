@@ -39,5 +39,7 @@ public sealed record StateSnapshotNotification(
     string? RetryStatus = null,
     long TimelineRevision = 0,
     IReadOnlyList<ProjectCoverageDto>? ProjectCoverage = null,
-    string? CoverageError = null
+    string? CoverageError = null,
+    bool IsPaused = false,
+    int PausedChangeCount = 0
 );

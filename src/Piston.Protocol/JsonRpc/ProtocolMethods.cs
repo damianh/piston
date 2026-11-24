@@ -24,6 +24,12 @@ public static class ProtocolMethods
     public const string EngineClearResults = "engine/clearResults";
     public const string EngineReset = "engine/reset";
 
+    /// <summary>Pause automatic processing: file changes are queued and the active run is cancelled.</summary>
+    public const string EnginePause = "engine/pause";
+
+    /// <summary>Resume automatic processing, running once for the files changed while paused.</summary>
+    public const string EngineResume = "engine/resume";
+
     /// <summary>Start a run of selected tests; replies once the run is requested, without awaiting it.</summary>
     public const string EngineRunTests = "engine/runTests";
     public const string EngineRunFailed = "engine/runFailed";

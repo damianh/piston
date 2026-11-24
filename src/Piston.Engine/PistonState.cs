@@ -160,6 +160,12 @@ public sealed class PistonState
     /// <summary>What the current run's retries of its failed tests are doing, e.g. "Retrying 2 failed test(s): attempt 1 of 3"; null when not retrying.</summary>
     public string? RetryStatus { get; set; }
 
+    /// <summary>Whether automatic processing (file-change runs and the impact backfill) is paused.</summary>
+    public bool IsPaused { get; set; }
+
+    /// <summary>How many changed files are queued to run when processing resumes.</summary>
+    public int PausedChangeCount { get; set; }
+
     // ── Run provenance ───────────────────────────────────────────────────────
 
     /// <summary>Number of terminal runs retained in <see cref="RecentRuns"/> (in memory only).</summary>

@@ -203,6 +203,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     _stopping = _disposed;
                     _cts?.Cancel();
                     CancelBackfill();
+                    ClearPausedChanges();
                 }
 
                 // A pipeline holds the run lock until it finishes, so holding it here means no run
@@ -1062,6 +1063,12 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         _state.LastChangedFiles = batch.Changes.Select(e => e.FilePath).ToList();
         _activitySink.Emit(new FileChangesDetectedActivityEvent(
             _solutionPath, _state.LastChangedFiles));
+        if (TryQueuePausedChange(batch))
+        {
+            _state.NotifyChanged();
+            return;
+        }
+
         _ = TriggerRunAsync(_solutionPath, batch, TestRunTrigger.FileChange);
     }
 
@@ -1094,6 +1101,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             cts = new CancellationTokenSource();
             var oldCts = _cts;
             _cts = cts;
+            _activeRunChanges = batch?.Changes;
+            _activeRunTrigger = trigger;
             oldCts?.Cancel();
         }
         return RunTrackedAsync(solutionPath, batch, trigger, selection, cts);
@@ -1113,6 +1122,13 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 if (ReferenceEquals(_cts, cts))
                 {
                     _cts = null;
+                    _activeRunChanges = null;
+                    _activeRunTrigger = null;
+                }
+
+                if (ReferenceEquals(_pauseCancelledCts, cts))
+                {
+                    _pauseCancelledCts = null;
                 }
 
                 cts.Dispose();
@@ -1142,7 +1158,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         {
             return CompleteRun(run, TestRunStatus.Cancelled, _stopping
                 ? "Engine stopped before the run started."
-                : "Superseded by a newer run before it started.");
+                : PausedReason(newCts) ?? "Superseded by a newer run before it started.");
         }
 
         var solutionDir = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? solutionPath;
@@ -1163,7 +1179,13 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
         TestRunRecord Finish(TestRunStatus status, string? reason, bool computeAfter = true)
         {
+            if (status == TestRunStatus.Cancelled && PausedReason(newCts) is { } pausedReason)
+            {
+                reason = pausedReason;
+            }
+
             var finished = CompleteRun(run, status, reason, solutionDir, changeGenerationAtStart, computeAfter);
+            DropPausedChangesCoveredBy(finished, changeGenerationAtStart);
             lock (_runRecordsLock)
             {
                 ArtifactStore?.Prune(_state.RecentRuns, _state.TestSuites);
@@ -2103,7 +2125,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         }
         catch (OperationCanceledException)
         {
-            // Superseded by a newer run — reset phase cleanly
+            // Superseded by a newer run or paused — reset phase cleanly
             _state.Phase = PistonPhase.Watching;
             _state.NotifyChanged();
             return Finish(TestRunStatus.Cancelled, "Superseded by a newer run.");
