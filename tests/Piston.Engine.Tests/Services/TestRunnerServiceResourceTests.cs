@@ -131,9 +131,29 @@ public sealed class TestRunnerServiceResourceTests
 
     [Theory]
     [MemberData(nameof(Paths))]
+    public async Task UncoordinatedContainerRuns_RetainInferenceDetails(string path)
+    {
+        var gate = new FakeGate(_events) { Uncoordinated = true, ContainerOnly = true };
+        var (sut, targets, pool) = Create(path, gate);
+        using var poolScope = pool;
+
+        var result = await RunAsync(sut, path, targets, new TestRunCallbacks());
+
+        Assert.All(result.Projects, r =>
+        {
+            var resources = Assert.IsType<TestProjectResources>(r.Resources);
+            Assert.True(resources.Needs.UsesContainers);
+            Assert.Empty(resources.Needs.Keys);
+            Assert.Equal(["references Testcontainers"], resources.Needs.Reasons);
+            Assert.Null(resources.Wait);
+        });
+    }
+
+    [Theory]
+    [MemberData(nameof(Paths))]
     public async Task CoordinationFailure_CrashesTheProject_WithoutRunningIt(string path)
     {
-        var gate = new FakeGate(_events) { Failure = new ExecutionCoordinationException("budget.json is invalid") };
+        var gate = new FakeGate(_events) { Failure = new ExecutionCoordinationException("resource lock unavailable") };
         var (sut, targets, pool) = Create(path, gate);
         using var poolScope = pool;
         var completed = new ConcurrentQueue<ProjectTestResult>();
@@ -145,7 +165,7 @@ public sealed class TestRunnerServiceResourceTests
         Assert.All(result.Projects, r =>
         {
             Assert.True(r.Crashed);
-            Assert.Contains("budget.json is invalid", r.RunnerError, StringComparison.Ordinal);
+            Assert.Contains("resource lock unavailable", r.RunnerError, StringComparison.Ordinal);
         });
     }
 
@@ -218,6 +238,8 @@ public sealed class TestRunnerServiceResourceTests
 
         public bool Uncoordinated { get; init; }
 
+        public bool ContainerOnly { get; init; }
+
         public bool BlockUntilCancelled { get; init; }
 
         public Exception? Failure { get; init; }
@@ -228,7 +250,9 @@ public sealed class TestRunnerServiceResourceTests
         public TestResourceNeeds Resolve(string projectPath)
         {
             Resolved.Enqueue(projectPath);
-            return new TestResourceNeeds(projectPath, ["port:1"], false, ["declared"]);
+            return ContainerOnly
+                ? new TestResourceNeeds(projectPath, [], true, ["references Testcontainers"])
+                : new TestResourceNeeds(projectPath, ["port:1"], false, ["declared"]);
         }
 
         public async Task<TestResourceLease> AcquireAsync(
@@ -269,7 +293,7 @@ public sealed class TestRunnerServiceResourceTests
 
         private static TestResourceWait Status(
             TestResourceNeeds needs, TestResourceWaitState state, DateTimeOffset since, DateTimeOffset? acquiredAt) =>
-            new(state, needs.Keys, needs.UsesContainers, [], 0, 0, null, since, acquiredAt);
+            new(state, needs.Keys, needs.UsesContainers, [], 0, since, acquiredAt);
     }
 
     private sealed class RecordingStrategy(ConcurrentQueue<string> events) : ITestExecutionStrategy

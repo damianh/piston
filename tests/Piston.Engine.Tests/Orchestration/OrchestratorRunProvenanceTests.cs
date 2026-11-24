@@ -131,7 +131,7 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
                     Resources = new(TestResourceNeeds.None(Projects[0]),
                         new TestResourceWait(TestResourceWaitState.Acquired, [], false,
                             [new("database", TestResourceBlockerKind.Held, 1, null, null, DateTimeOffset.UtcNow)],
-                            0, 0, null, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow), []),
+                            0, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow), []),
                 },
             ],
         };

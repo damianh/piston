@@ -43,13 +43,11 @@ public sealed class PistonEngineTests : IDisposable
             disposing = engine.DisposeAsync().AsTask();
             Assert.False(disposing.IsCompleted);
             _ = Assert.Throws<WorktreeOwnershipConflictException>(() => WorktreeOwnership.Acquire(directory, solution));
-            _ = Assert.Single(Directory.GetFiles(directory.LeasesDirectory));
 
             buildService.Release();
             await starting.WaitAsync(TimeSpan.FromSeconds(30), _ct);
             await disposing.WaitAsync(TimeSpan.FromSeconds(30), _ct);
 
-            Assert.Empty(Directory.GetFiles(directory.LeasesDirectory));
             using var free = WorktreeOwnership.Acquire(directory, solution);
         }
         finally
@@ -57,6 +55,67 @@ public sealed class PistonEngineTests : IDisposable
             buildService.Release();
             await starting;
             await (disposing ?? engine.DisposeAsync().AsTask());
+        }
+    }
+
+    [Fact]
+    public async Task IndependentWorktrees_ReachBuildConcurrently_AndIgnoreLegacyAdmissionFiles()
+    {
+        var directory = new ExecutionCoordinationDirectory(Path.Combine(_root, "coordination"));
+        var legacyQueue = Path.Combine(directory.StateDirectory, "queue");
+        var legacyLeases = Path.Combine(directory.StateDirectory, "leases");
+        _ = Directory.CreateDirectory(legacyQueue);
+        _ = Directory.CreateDirectory(legacyLeases);
+        var oldTicket = Path.Combine(legacyQueue, "old.ticket");
+        var oldLease = Path.Combine(legacyLeases, "old.lease");
+        File.WriteAllText(oldTicket, "legacy ticket");
+        File.WriteAllText(oldLease, "legacy lease");
+        using var heldLease = ExclusiveFileLock.TryAcquire(oldLease, FileMode.Open);
+        Assert.NotNull(heldLease);
+
+        var gates = new List<GatedBuildService>();
+        var engines = new List<PistonEngine>();
+        try
+        {
+            for (var index = 0; index < 3; index++)
+            {
+                var worktree = Path.Combine(_root, $"worktree-{index}");
+                _ = Directory.CreateDirectory(Path.Combine(worktree, ".git"));
+                var solution = Path.Combine(worktree, "Test.slnx");
+                File.WriteAllText(solution, "<Solution />");
+                var gate = new GatedBuildService();
+                gates.Add(gate);
+                var engine = new PistonEngine(new PistonOptions
+                {
+                    SolutionPath = solution,
+                    ProcessPoolSize = Environment.ProcessorCount,
+                    CoverageEnabled = false,
+                    HistoryEnabled = false,
+                    PersistResults = false,
+                    ExecutionCoordinationDirectory = directory.BaseDirectory,
+                }, NullActivityEventSink.Instance, new EngineServiceOverrides(
+                    BuildService: gate,
+                    ImpactAnalyzer: new StubImpactAnalyzer([]),
+                    SdkVersionProvider: _ => null));
+                engines.Add(engine);
+                await engine.StartAsync(solution);
+            }
+
+            await Task.WhenAll(gates.Select(gate => gate.Started.Task)).WaitAsync(TimeSpan.FromSeconds(30), _ct);
+            Assert.All(engines, engine => Assert.NotNull(engine.Ownership));
+            Assert.Equal("legacy ticket", File.ReadAllText(oldTicket));
+            Assert.True(File.Exists(oldLease));
+        }
+        finally
+        {
+            foreach (var gate in gates)
+            {
+                gate.Release();
+            }
+            foreach (var engine in engines)
+            {
+                await engine.DisposeAsync();
+            }
         }
     }
 
@@ -246,26 +305,50 @@ public sealed class PistonEngineTests : IDisposable
     }
 
     [Theory]
-    [InlineData("{ \"cpuSlots\": 0 }", 1)]
-    [InlineData("{ \"cpuSlots\": 2 }", 3)]
-    public async Task StartAsync_FailsExplicitly_ForInvalidOrUnsatisfiableBudget_AndHoldsNoOwnership(string budget, int poolSize)
+    [InlineData("{ \"cpuSlots\": 0 }")]
+    [InlineData("{ \"cpuSlots\": 2, \"containerSlots\": 1 }")]
+    [InlineData("not json")]
+    public async Task StartAsync_RejectsLegacyBudget_WithoutModifyingItOrHoldingOwnership(string budget)
     {
         var coordination = new ExecutionCoordinationDirectory(Path.Combine(_root, "coordination"));
         coordination.EnsureReady();
-        File.WriteAllText(coordination.BudgetPath, budget);
+        File.WriteAllText(coordination.LegacyBudgetPath, budget);
         var solution = Path.Combine(_root, "Test.slnx");
+        File.WriteAllText(solution, "<Solution />");
+        var buildService = new GatedBuildService();
         using var engine = new PistonEngine(new PistonOptions
         {
             SolutionPath = solution,
-            ProcessPoolSize = poolSize,
+            CoverageEnabled = false,
+            HistoryEnabled = false,
+            PersistResults = false,
             ExecutionCoordinationDirectory = coordination.BaseDirectory,
-        });
+        }, NullActivityEventSink.Instance, new EngineServiceOverrides(
+            BuildService: buildService,
+            ImpactAnalyzer: new StubImpactAnalyzer([]),
+            SdkVersionProvider: _ => null));
 
         var ex = await Assert.ThrowsAsync<ExecutionCoordinationException>(() => engine.StartAsync(solution));
 
-        Assert.Contains(coordination.BudgetPath, ex.Message, StringComparison.Ordinal);
+        Assert.Contains(coordination.LegacyBudgetPath, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("Remove", ex.Message, StringComparison.Ordinal);
+        Assert.Equal(budget, File.ReadAllText(coordination.LegacyBudgetPath));
         Assert.Null(engine.Ownership);
-        using var free = WorktreeOwnership.Acquire(coordination, solution);
+        using (WorktreeOwnership.Acquire(coordination, solution))
+        {
+        }
+
+        File.Delete(coordination.LegacyBudgetPath);
+        try
+        {
+            await engine.StartAsync(solution);
+            await buildService.Started.Task.WaitAsync(TimeSpan.FromSeconds(30), _ct);
+            Assert.NotNull(engine.Ownership);
+        }
+        finally
+        {
+            buildService.Release();
+        }
     }
 
     public void Dispose() => Directory.Delete(_root, recursive: true);

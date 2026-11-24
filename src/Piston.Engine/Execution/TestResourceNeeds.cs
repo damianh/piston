@@ -6,7 +6,7 @@ namespace Piston.Engine.Execution;
 /// <summary>The shared resources a test project's run holds, as inferred and configured.</summary>
 /// <param name="ProjectPath">The test project.</param>
 /// <param name="Keys">Exclusive resource keys (see <see cref="TestResourceKey"/>), sorted and distinct.</param>
-/// <param name="UsesContainers">Whether the run counts against the machine's <c>containerSlots</c>.</param>
+/// <param name="UsesContainers">Whether the project uses containers.</param>
 /// <param name="Reasons">Why: the package references and <c>testResources</c> rules that applied.</param>
 public sealed record TestResourceNeeds(
     string ProjectPath,
@@ -14,7 +14,7 @@ public sealed record TestResourceNeeds(
     bool UsesContainers,
     IReadOnlyList<string> Reasons)
 {
-    /// <summary>True when the run needs no coordination with other test runs.</summary>
+    /// <summary>True when the run has no exclusive resources and does not use containers.</summary>
     public bool IsEmpty => Keys.Count == 0 && !UsesContainers;
 
     public static TestResourceNeeds None(string projectPath) => new(projectPath, [], false, []);

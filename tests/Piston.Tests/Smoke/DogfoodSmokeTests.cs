@@ -249,7 +249,7 @@ public sealed partial class DogfoodSmokeTests : IDisposable
         }
 
         info.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
-        // Keep machine-wide admission state separate from any daemons the developer is running.
+        // Keep ownership and resource coordination separate from the developer's daemons.
         info.Environment["PISTON_EXECUTION_DIRECTORY"] = Path.Combine(_root, "execution");
         return info;
     }

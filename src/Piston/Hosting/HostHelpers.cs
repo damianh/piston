@@ -85,11 +85,6 @@ public static class HostHelpers
     public static PistonConfig LoadConfig(string solutionDir)
     {
         var configPath = Path.Combine(solutionDir, ".piston.json");
-        if (!File.Exists(configPath))
-        {
-            return new PistonConfig();
-        }
-
         try
         {
             using var stream = File.OpenRead(configPath);
@@ -100,7 +95,16 @@ public static class HostHelpers
             ValidateTestResourcesShape(configuration.GetSection("testResources"));
             var config = new PistonConfig();
             configuration.Bind(config);
+            if (configuration.GetSection("execution").GetChildren()
+                .Any(child => child.Key.Equals("memoryMb", StringComparison.OrdinalIgnoreCase)))
+            {
+                config.LegacyExecutionMemoryPath = configPath;
+            }
             return config;
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return new PistonConfig();
         }
         catch (Exception ex) when (ex is IOException or FormatException or InvalidOperationException
                                   or System.Text.Json.JsonException or UnauthorizedAccessException)
@@ -159,11 +163,11 @@ public static class HostHelpers
                 $"Invalid 'retryFailures' in .piston.json: expected 0 to {PistonOptions.MaxRetryFailedTests}; got {retryFailures}.");
         }
 
-        var memoryReservationMb = config.Execution?.MemoryMb;
-        if (memoryReservationMb is <= 0)
+        if (config.LegacyExecutionMemoryPath is { } configPath)
         {
             throw new InvalidOperationException(
-                $"Invalid 'execution.memoryMb' in .piston.json: must be a positive number of MiB; got {memoryReservationMb}.");
+                $"'execution.memoryMb' in '{configPath}' is no longer supported. Remove that setting " +
+                "before starting Piston, and restart older Piston daemon and MCP processes.");
         }
 
         var testResourceRules = BuildTestResourceRules(config.TestResources);
@@ -184,7 +188,6 @@ public static class HostHelpers
             ProcessPoolSize = processPoolSize,
             ProcessRecycleAfter = processRecycleAfter,
             TestExecutionMode = testExecutionMode,
-            ExecutionMemoryReservationMb = memoryReservationMb,
             TestResourceRules = testResourceRules,
             OwnerHost = ownerHost,
             OwnerDashboardUrl = ownerDashboardUrl,

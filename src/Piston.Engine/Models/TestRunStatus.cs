@@ -7,8 +7,7 @@ namespace Piston.Engine.Models;
 public enum TestRunStatus
 {
     /// <summary>
-    /// Requested but not started: waiting for this daemon's previous run to finish, or (when
-    /// <see cref="TestRunRecord.Admission"/> is set) queued for machine-wide execution admission.
+    /// Requested but not started: waiting for this daemon's previous run to finish.
     /// </summary>
     Queued,
 

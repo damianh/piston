@@ -12,7 +12,7 @@ public sealed class ResourceWaitTextTests
     private static readonly DateTimeOffset T0 = DateTimeOffset.UnixEpoch;
 
     private static TestResourceWaitDto Wait(string state, params TestResourceBlockerDto[] blockers) =>
-        new(state, ["port:5432"], true, blockers, 0, 2, 2, T0, null, null);
+        new(state, ["port:5432"], true, blockers, 0, T0, null, null);
 
     [Fact]
     public void ByProjectId_KeepsOnlyWaitingProjects()
@@ -39,7 +39,7 @@ public sealed class ResourceWaitTextTests
         Assert.Equal(["Db.Tests"], ResourceWaitText.ByProjectId(waits, null).Keys);
         Assert.Equal(["tests/Db.Tests.csproj"], ResourceWaitText.ByProjectId(waits, @"C:\repo\Piston.slnx").Keys);
         Assert.StartsWith("Db.Tests waiting ", ResourceWaitText.Describe(project, wait, T0), StringComparison.Ordinal);
-        Assert.Contains("held by Db.Tests in", ResourceWaitText.Blocker(blocker, wait), StringComparison.Ordinal);
+        Assert.Contains("held by Db.Tests in", ResourceWaitText.Blocker(blocker), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -77,11 +77,11 @@ public sealed class ResourceWaitTextTests
     }
 
     [Fact]
-    public void Describe_ListsNeedsSlotsAndBlockers()
+    public void Describe_ListsNeedsAndBlockers()
     {
         var wait = Wait("Waiting",
             new("port:5432", "Held", 42, "/wt/other", "/wt/other/tests/Db.Tests.csproj", T0),
-            new("containerSlots", "Queued", 7, null, null, T0));
+            new("resource:queue", "Queued", 7, null, null, T0));
 
         var lines = ResourceWaitText.Describe("/w/tests/Db.Tests.csproj", wait, T0.AddSeconds(5)).Split(Environment.NewLine);
 
@@ -90,9 +90,8 @@ public sealed class ResourceWaitTextTests
         Assert.Equal(
             [
                 "Needs: port:5432",
-                "Container slots: 2/2 in use",
                 "Blocked: port:5432 held by Db.Tests in /wt/other (pid 42)",
-                "Blocked: container slots (2/2 in use) queued ahead for a test project (pid 7)",
+                "Blocked: resource:queue queued ahead for a test project (pid 7)",
             ],
             lines[1..]);
     }

@@ -68,6 +68,27 @@ public sealed class SavedResultsStoreTests : IDisposable
         Assert.Equivalent(Result, Assert.Single(reader.TryLoad()!.LastRun!.Tests), strict: true);
     }
 
+    [Fact]
+    public void Restores_results_with_legacy_admission_and_container_budget_fields()
+    {
+        using (var store = Open())
+        {
+            store.Schedule(Snapshot());
+        }
+
+        var json = JsonNode.Parse(File.ReadAllText(FilePath))!;
+        json["LastRun"]!["Admission"] = new JsonObject { ["State"] = "Admitted", ["ReservedCpuSlots"] = 4 };
+        var wait = json["LastRun"]!["Projects"]![0]!["Resources"]!["Wait"]!;
+        wait["ContainerSlotsInUse"] = 1;
+        wait["ContainerSlotBudget"] = 2;
+        File.WriteAllText(FilePath, json.ToJsonString());
+
+        using var reader = Open();
+        var restored = reader.TryLoad();
+        Assert.NotNull(restored);
+        Assert.Equivalent(Snapshot().LastRun!.Projects, restored.LastRun!.Projects, strict: true);
+    }
+
     [Theory]
     [InlineData("TestSuites", null)]
     [InlineData("TestSuites/0", null)]
@@ -315,7 +336,7 @@ public sealed class SavedResultsStoreTests : IDisposable
                         new TestResourceNeeds("App.Tests", ["database"], false, ["declared"]),
                         new TestResourceWait(TestResourceWaitState.Acquired, ["database"], false,
                             [new("database", TestResourceBlockerKind.Held, 1, null, null, DateTimeOffset.UnixEpoch)],
-                            0, 0, null, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch),
+                            0, DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch),
                         []),
                 },
             ],

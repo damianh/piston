@@ -47,13 +47,6 @@ internal static class VerificationReport
             $"Tests: {tests.Count} (Passed: {tests.Count(t => t.Status == TestStatus.Passed)}, " +
             $"Failed: {tests.Count(t => t.Status == TestStatus.Failed)}, Skipped: {tests.Count(t => t.Status == TestStatus.Skipped)})");
 
-        // Only mention admission when the run actually waited for machine-wide capacity.
-        if (run.Admission is { } admission
-            && (admission.State == TestRunAdmissionState.Queued || admission.AdmittedAt - admission.QueuedAt >= TimeSpan.FromSeconds(1)))
-        {
-            _ = sb.AppendLine(TestTools.DescribeAdmission(admission));
-        }
-
         AppendList(sb, "Test resources", TestTools.DescribeResourceNotes(run, TestTools.ResourceWaitWorthReporting), note => note);
 
         if (result.Verdict == VerificationVerdict.BuildFailed && run.Build is { } build)

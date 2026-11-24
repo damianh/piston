@@ -4,7 +4,7 @@
 namespace Piston.Engine.Models;
 
 /// <summary>Another test project run (possibly in another worktree) that a project is waiting for.</summary>
-/// <param name="Resource">The contended resource key, or <see cref="ContainerSlots"/>.</param>
+/// <param name="Resource">The contended resource key.</param>
 /// <param name="Kind">Whether the other run holds the resource or is ahead in the queue.</param>
 /// <param name="ProcessId">The Piston process of the other run.</param>
 /// <param name="Worktree">The other run's worktree root, when known.</param>
@@ -16,8 +16,4 @@ public sealed record TestResourceBlocker(
     int ProcessId,
     string? Worktree,
     string? Project,
-    DateTimeOffset Since)
-{
-    /// <summary>The <see cref="Resource"/> of blockers that occupy the machine's container slots.</summary>
-    public const string ContainerSlots = "containerSlots";
-}
+    DateTimeOffset Since);

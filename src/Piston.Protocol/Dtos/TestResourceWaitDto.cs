@@ -10,8 +10,6 @@ public sealed record TestResourceWaitDto(
     bool UsesContainers,
     IReadOnlyList<TestResourceBlockerDto> BlockedBy,
     int QueuedAhead,
-    int ContainerSlotsInUse,
-    int? ContainerSlotBudget,
     DateTimeOffset WaitingSince,
     DateTimeOffset? AcquiredAt,
     double? WaitedMs

@@ -42,8 +42,8 @@ Rules:
   is a guard, not a way to select the server's solution; configure the server
   with a solution path or `.piston.json` and restart it if necessary.
 - A `pre-existing` or `flaky` failure is still a failure.
-- `Admission:` and `Test resources:` lines describe waiting for shared machine
-  resources. They are expected under load, not failures.
+- `Test resources:` lines describe waiting for shared exclusive test resources.
+  They are expected under load, not failures.
 - Edits made after a `verify` reply need a new `verify` call.
 
 ## What is not verification

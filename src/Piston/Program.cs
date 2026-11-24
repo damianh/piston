@@ -99,7 +99,7 @@ var forceOpt = new Option<bool>("--force")
 
 var allOpt = new Option<bool>("--all")
 {
-    Description = "List owned worktrees, running and queued work, and machine budget use.",
+    Description = "List live and stale worktree ownership records.",
 };
 
 // ── Root command (default: web UI with auto-start) ─────────────────────────────

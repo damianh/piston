@@ -61,8 +61,6 @@ public sealed class MachineResourceCoordinatorTests : IDisposable
 
     private int Files(string directory) => Directory.GetFiles(directory).Length;
 
-    private void SetBudget(string json) => File.WriteAllText(_directory.BudgetPath, json);
-
     [Fact]
     public async Task EmptyNeeds_AreNotCoordinated()
     {
@@ -111,8 +109,6 @@ public sealed class MachineResourceCoordinatorTests : IDisposable
             var blocker = Assert.Single(wait.BlockedBy);
             Assert.Equal(("port:5432", TestResourceBlockerKind.Held), (blocker.Resource, blocker.Kind));
             Assert.Equal(("/wt/a", "/wt/a/Db.Tests.csproj", Environment.ProcessId), (blocker.Worktree, blocker.Project, blocker.ProcessId));
-            Assert.Equal(1, wait.ContainerSlotsInUse);
-            Assert.Null(wait.ContainerSlotBudget);
             _ = Assert.Single(log.All); // unchanged status is not republished
 
             holder.Dispose();
@@ -172,34 +168,32 @@ public sealed class MachineResourceCoordinatorTests : IDisposable
     }
 
     [Fact]
-    public async Task ContainerSlots_LimitConcurrentContainerRuns_ButNotOtherRuns()
+    public async Task ContainerProjects_WithDisjointKeys_RunConcurrently()
     {
-        SetBudget("""{ "cpuSlots": 4, "containerSlots": 1 }""");
-        var holder = await Coordinator().AcquireAsync(Needs("/wt/a/A.csproj", true, "project:r/A.csproj"), _ => { }, _ct);
-        try
-        {
-            Assert.Equal((1, 1), (holder.Status!.ContainerSlotsInUse, holder.Status.ContainerSlotBudget));
-            var log = new WaitLog();
-            var waiting = Coordinator().AcquireAsync(Needs("/wt/a/B.csproj", true, "project:r/B.csproj"), log.Add, _ct);
-            await WaitForAsync(() => log.Last is not null, "the container run did not wait for a slot");
+        using var holder = await Coordinator().AcquireAsync(Needs("/wt/a/A.csproj", true, "project:r/A.csproj"), _ => { }, _ct);
+        var log = new WaitLog();
 
-            var blocker = Assert.Single(log.Last!.BlockedBy);
-            Assert.Equal((TestResourceBlocker.ContainerSlots, TestResourceBlockerKind.Held), (blocker.Resource, blocker.Kind));
-            Assert.Equal((1, 1), (log.Last.ContainerSlotsInUse, log.Last.ContainerSlotBudget));
+        using var other = await Coordinator().AcquireAsync(Needs("/wt/a/B.csproj", true, "project:r/B.csproj"), log.Add, _ct)
+            .WaitAsync(Timeout, _ct);
 
-            using (var unrelated = await Coordinator().AcquireAsync(Needs("/wt/a/C.csproj", false, "port:9"), _ => { }, _ct).WaitAsync(Timeout, _ct))
-            {
-                Assert.Equal(TestResourceWaitState.Acquired, unrelated.Status!.State);
-            }
+        Assert.Equal(TestResourceWaitState.Acquired, other.Status!.State);
+        Assert.Empty(log.All);
+    }
 
-            holder.Dispose();
-            using var acquired = await waiting.WaitAsync(Timeout, _ct);
-            Assert.Equal(TestResourceWaitState.Acquired, acquired.Status!.State);
-        }
-        finally
-        {
-            holder.Dispose();
-        }
+    [Fact]
+    public async Task ContainerProject_WithoutExclusiveKeys_DoesNotCoordinate()
+    {
+        using var holder = await Coordinator().AcquireAsync(Needs("/wt/a/A.csproj", true, "project:r/A.csproj"), _ => { }, _ct);
+        var log = new WaitLog();
+
+        using var other = await Coordinator().AcquireAsync(Needs("/wt/a/B.csproj", true), log.Add, _ct)
+            .WaitAsync(Timeout, _ct);
+
+        Assert.True(other.Needs.UsesContainers);
+        Assert.Null(other.Status);
+        Assert.Empty(log.All);
+        Assert.Equal(2, Files(_directory.ResourceLeasesDirectory));
+        Assert.Equal(0, Files(_directory.ResourceQueueDirectory));
     }
 
     [Fact]
@@ -335,17 +329,4 @@ public sealed class MachineResourceCoordinatorTests : IDisposable
         }
     }
 
-    [Fact]
-    public void ContainerSlots_InBudget_MustBePositive()
-    {
-        SetBudget("""{ "cpuSlots": 4, "containerSlots": 2 }""");
-        Assert.Equal(2, ExecutionBudget.Load(_directory.BudgetPath).ContainerSlots);
-
-        SetBudget("""{ "cpuSlots": 4 }""");
-        Assert.Null(ExecutionBudget.Load(_directory.BudgetPath).ContainerSlots);
-
-        SetBudget("""{ "cpuSlots": 4, "containerSlots": 0 }""");
-        var ex = Assert.Throws<ExecutionCoordinationException>(() => ExecutionBudget.Load(_directory.BudgetPath));
-        Assert.Contains("containerSlots", ex.Message, StringComparison.Ordinal);
-    }
 }
