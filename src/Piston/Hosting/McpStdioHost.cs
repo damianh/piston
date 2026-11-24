@@ -126,9 +126,8 @@ public sealed class McpStdioHost(McpStdioHostOptions options)
             engine = new PistonEngine(engineOptions, activity);
             _log($"[piston] Starting engine for: {solutionPath}");
             var startingEngine = engine;
-            await engine.StartAsync(solutionPath, options.Dashboard
-                ? () => StartDashboardAsync(startingEngine, activity)
-                : null).ConfigureAwait(false);
+            await engine.StartAsync(solutionPath, () => StartDashboardAsync(startingEngine, activity))
+                .ConfigureAwait(false);
             return engine;
         }
         catch (WorktreeOwnershipConflictException ex)

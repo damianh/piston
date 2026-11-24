@@ -7,7 +7,11 @@ description: Verify .NET code with the Piston MCP server instead of running dotn
 
 The `piston` MCP server (`piston mcp`, one process per agent session) keeps this
 worktree's solution built and tested continuously. Use its tools instead of
-running `dotnet build` / `dotnet test` yourself.
+running `dotnet build` / `dotnet test` yourself. Starting a Piston MCP engine
+itself triggers a full build and test run and subsequent runs on changes.
+
+Invoking `/piston` alone does not specify an operation: ask what the user wants.
+Do not treat a solution path alone as a request to run tests.
 
 ## The verification contract
 
@@ -27,14 +31,16 @@ source builds and all tests pass. Every other verdict is not a pass:
 | `Incomplete` | Inspect `get_test_run`; treat it as a failure. |
 | `Stale` | Stop editing, then call `verify` again. |
 | `TimedOut` | Call `verify` again (it awaits the active run) or raise `timeoutSeconds`. |
-| `NotFullScope` | Clear any test filter, or run `dotnet test` explicitly for inputs Piston cannot fingerprint. |
-| `Cancelled` | Piston is shutting down: run `dotnet test` explicitly. |
-| `Faulted` | Run `dotnet test` explicitly and report the fault. |
+| `NotFullScope` | Clear any test filter; otherwise report that verification is incomplete. |
+| `Cancelled` | Report that Piston is shutting down and verification is incomplete. |
+| `Faulted` | Report the fault and that verification is incomplete. |
 
 Rules:
 
 - The `Solution:` line in the reply must be this worktree's solution. Pass
-  `expectedSolution` to `verify` when the worktree contains more than one.
+  `expectedSolution` to `verify` when the worktree contains more than one. This
+  is a guard, not a way to select the server's solution; configure the server
+  with a solution path or `.piston.json` and restart it if necessary.
 - A `pre-existing` or `flaky` failure is still a failure.
 - `Admission:` and `Test resources:` lines describe waiting for shared machine
   resources. They are expected under load, not failures.
@@ -62,12 +68,14 @@ the tests your change affects (from `files`, or git changes via `base` and
 
 If the `piston` MCP server is not connected, or a tool returns an error instead
 of a verdict (for example "Piston owned by another process", "could not start",
-a deleted worktree or a solution mismatch), run `dotnet test` explicitly and say
-that you fell back to it. Never report a Piston pass that you did not receive.
+a deleted worktree or a solution mismatch), report the error and stop. Do not
+run `dotnet test` or another test command as a fallback without the user's
+explicit consent. Never report a Piston pass that you did not receive.
 
 ## Dashboard
 
 If the `piston-dashboard` canvas is installed, opening it or its `refresh` action
-only inspects state; `run` and `run_failed` request tests. A `piston mcp`
-session serves the dashboard only when started with `--dashboard` (or
-`"dashboard": true` in `.piston.json`).
+only inspects state. Its Start Piston button starts a daemon and its startup run;
+`run` and `run_failed` request tests. A daemon owns the worktree and cannot share
+it with a separate stdio MCP engine. A `piston mcp`
+session serves the dashboard on an ephemeral loopback port.

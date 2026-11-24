@@ -25,7 +25,8 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
     /// </summary>
     public static string CanonicalizePath(string path)
     {
-        var resolved = Path.TrimEndingDirectorySeparator(ResolveLinks(Path.GetFullPath(path)));
+        var resolved = Path.TrimEndingDirectorySeparator(ResolveLinks(NormalizeWindowsPath(Path.GetFullPath(path))));
+        resolved = NormalizeWindowsPath(resolved);
         if (!OperatingSystem.IsMacOS())
         {
             return OperatingSystem.IsWindows() ? resolved.ToLowerInvariant() : resolved;
@@ -50,7 +51,7 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
 
     public static WorktreeIdentity FromSolutionPath(string solutionPath)
     {
-        var full = Path.GetFullPath(solutionPath);
+        var full = NormalizeWindowsPath(Path.GetFullPath(solutionPath));
         var resolvedPath = ResolveLinks(full);
         var resolved = Directory.Exists(resolvedPath) ? resolvedPath : Path.GetDirectoryName(resolvedPath) ?? resolvedPath;
 
@@ -72,13 +73,56 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
 
     private static string Normalize(string path)
     {
-        var trimmed = Path.TrimEndingDirectorySeparator(path);
+        var trimmed = NormalizeWindowsPath(Path.TrimEndingDirectorySeparator(path));
         if (OperatingSystem.IsMacOS())
         {
             return GetExistingPathSpelling(trimmed);
         }
 
         return OperatingSystem.IsWindows() ? trimmed.ToLowerInvariant() : trimmed;
+    }
+
+    internal static string NormalizeWindowsPath(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return path;
+        }
+
+        string ordinary;
+        if (path.StartsWith(@"\\?\UNC\", StringComparison.OrdinalIgnoreCase))
+        {
+            ordinary = @"\\" + path[8..];
+        }
+        else if (path.Length >= 7 && path.StartsWith(@"\\?\", StringComparison.Ordinal)
+            && char.IsAsciiLetter(path[4]) && path[5] == ':' && path[6] == '\\')
+        {
+            ordinary = path[4..];
+        }
+        else
+        {
+            return path;
+        }
+
+        foreach (var segment in ordinary[Path.GetPathRoot(ordinary)!.Length..].Split('\\', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var name = segment.Split('.')[0];
+            if (segment.EndsWith(' ') || segment.EndsWith('.')
+                || name.Equals("CON", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("PRN", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("AUX", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("NUL", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("CONIN$", StringComparison.OrdinalIgnoreCase)
+                || name.Equals("CONOUT$", StringComparison.OrdinalIgnoreCase)
+                || (name.Length == 4 && name[3] is >= '1' and <= '9'
+                    && (name.StartsWith("COM", StringComparison.OrdinalIgnoreCase)
+                        || name.StartsWith("LPT", StringComparison.OrdinalIgnoreCase))))
+            {
+                return path;
+            }
+        }
+
+        return ordinary;
     }
 
     internal static string GetExistingPathSpelling(string path)

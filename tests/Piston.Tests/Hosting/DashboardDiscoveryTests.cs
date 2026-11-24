@@ -71,6 +71,42 @@ public sealed class DashboardDiscoveryTests : IDisposable
     }
 
     [Fact]
+    public void Disconnected_SuggestsConfiguredSolutionOrExplainsResolutionFailure()
+    {
+        var root = Path.Combine(_root, "nested");
+        var nested = Directory.CreateDirectory(Path.Combine(root, "apps")).FullName;
+        var solution = Path.Combine(nested, "App.slnx");
+        File.WriteAllText(solution, "<Solution />");
+        File.WriteAllText(Path.Combine(root, ".piston.json"), """{ "solution": "apps/App.slnx" }""");
+
+        var configured = DashboardDiscovery.Inspect(root, _directory);
+        Assert.Equal("disconnected", configured.State);
+        Assert.Equal(solution, configured.Solution);
+        Assert.Null(configured.SolutionError);
+
+        File.WriteAllText(Path.Combine(root, ".piston.json"), """{ "solution": "missing.slnx" }""");
+        var missing = DashboardDiscovery.Inspect(root, _directory);
+        Assert.Equal("disconnected", missing.State);
+        Assert.Null(missing.Solution);
+        Assert.Contains("missing.slnx", missing.SolutionError);
+    }
+
+    [Fact]
+    public void Discovery_WindowsExtendedWorktree_FindsOrdinaryPathOwner()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var solution = Solution("extended");
+        using var owner = WorktreeOwnership.Acquire(_directory, solution, "mcp");
+        var endpoint = DashboardDiscovery.Inspect(@"\\?\" + Path.GetDirectoryName(solution)!, _directory);
+        Assert.Equal("disabled", endpoint.State);
+        Assert.Equal(owner.Worktree.RootPath, endpoint.Worktree);
+    }
+
+    [Fact]
     public void EndpointUpdates_AreAtomicAndPreserveOwnership()
     {
         var solution = Solution("updates");
@@ -106,7 +142,7 @@ public sealed class DashboardDiscoveryTests : IDisposable
         using var owner = WorktreeOwnership.Acquire(_directory, solution);
         var state = DashboardDiscovery.Inspect(solution, _directory);
         Assert.Equal("disabled", state.State);
-        Assert.Contains("older", state.Message);
+        Assert.Contains("restart", state.Message);
         Assert.Null(state.Url);
     }
 }

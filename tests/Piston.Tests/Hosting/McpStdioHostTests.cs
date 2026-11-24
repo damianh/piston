@@ -37,7 +37,6 @@ public sealed class McpStdioHostTests : IDisposable
             Input = _toServer.Reader.AsStream(),
             Output = _toClient.Writer.AsStream(),
             MonitorParentProcess = false,
-            Dashboard = options.Dashboard,
             Log = options.Log ?? (_ => { }),
         });
         return (host, host.RunAsync(ct));
@@ -46,17 +45,14 @@ public sealed class McpStdioHostTests : IDisposable
     private Task<McpClient> ConnectAsync() => McpClient.CreateAsync(
         new StreamClientTransport(_toServer.Writer.AsStream(), _toClient.Reader.AsStream()));
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Dashboard_IsOptInAndStopsWithTheSession(bool enabled)
+    [Fact]
+    public async Task Dashboard_StartsAndStopsWithTheSession()
     {
         var solution = CreateWorktree("dashboard");
         var directory = new ExecutionCoordinationDirectory(Path.Combine(_root, "dashboard-coordination"));
         var (_, run) = Start(new McpStdioHostOptions
         {
             SolutionPath = solution,
-            Dashboard = enabled,
             EngineOptions = new PistonOptions
             {
                 SolutionPath = solution,
@@ -66,8 +62,7 @@ public sealed class McpStdioHostTests : IDisposable
         }, _ct);
         var client = await ConnectAsync();
         var endpoint = DashboardDiscovery.Inspect(solution, directory);
-        Assert.Equal(enabled ? "connected" : "disabled", endpoint.State);
-        if (enabled)
+        Assert.Equal("connected", endpoint.State);
         {
             Assert.StartsWith("http://127.0.0.1:", endpoint.Url);
             using var http = new HttpClient();
@@ -107,11 +102,8 @@ public sealed class McpStdioHostTests : IDisposable
         await _toServer.Writer.CompleteAsync();
         Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(30), _ct));
         Assert.Empty(WorktreeOwnership.ListOwners(directory));
-        if (enabled)
-        {
-            using var http = new HttpClient();
-            _ = await Assert.ThrowsAsync<HttpRequestException>(() => http.GetAsync($"{endpoint.Url}/api/dashboard", _ct));
-        }
+        using var httpAfterShutdown = new HttpClient();
+        _ = await Assert.ThrowsAsync<HttpRequestException>(() => httpAfterShutdown.GetAsync($"{endpoint.Url}/api/dashboard", _ct));
     }
 
     private static async Task<(bool IsError, string Text)> CallAsync(
@@ -164,12 +156,13 @@ public sealed class McpStdioHostTests : IDisposable
         var client = await ConnectAsync();
 
         var tools = await client.ListToolsAsync(cancellationToken: _ct);
-        Assert.Contains(tools, t => t.Name == "verify");
+        var verify = Assert.Single(tools, t => t.Name == "verify");
+        Assert.Contains("explicit consent", verify.Description);
 
         var (isError, text) = await CallAsync(client, "verify");
         Assert.True(isError);
         Assert.Contains("Piston could not start: No solution found in '/nowhere'.", text);
-        Assert.Contains("dotnet test", text);
+        Assert.DoesNotContain("dotnet test", text);
 
         await client.DisposeAsync();
         await _toServer.Writer.CompleteAsync();
@@ -200,7 +193,7 @@ public sealed class McpStdioHostTests : IDisposable
             var (isError, text) = await CallAsync(client, tool, args);
             Assert.True(isError, tool);
             Assert.Contains($"Piston owned by another process (PID {Environment.ProcessId}, daemon", text);
-            Assert.Contains("Use `dotnet test` instead.", text);
+            Assert.DoesNotContain("dotnet test", text);
         }
 
         Assert.Equal(EngineAvailabilityState.OwnedElsewhere, host.Availability.State);

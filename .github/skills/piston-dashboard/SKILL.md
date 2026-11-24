@@ -14,11 +14,10 @@ Opening a dashboard is not permission to start an engine or tests. First run
 inspects its live owner's endpoint; it does not start Piston or open a browser.
 Never assume that port 5199 belongs to this worktree.
 
-For an already-running stdio MCP session, dashboard hosting is opt-in:
-`piston mcp --dashboard`, or `"dashboard": true` in `.piston.json` before the
-session starts. It binds an ephemeral `127.0.0.1` port. Do not start a competing
-daemon when MCP already owns the worktree. Changing the option requires restarting
-that MCP session, which performs the engine's normal startup run.
+A stdio MCP session serves its dashboard on an ephemeral `127.0.0.1` port.
+Do not start a competing daemon when MCP already owns the worktree. An older
+owner without a dashboard may need upgrading and restarting; restarting performs
+the engine's normal startup run.
 
 ## Start
 
@@ -50,8 +49,8 @@ flow if the installed tool is older).
    and `baseRef`. This shows Coverage › Changes: the diff with each added line
    coloured by its verdict. It only navigates; it never runs tests.
 
-The connection shell survives engine loss, displays instructions when hosting is
-disabled, and reconnects to a replacement owner of the same worktree. It follows
+The connection shell survives engine loss, displays recovery guidance when an
+owner has no published dashboard, and reconnects to a replacement owner of the same worktree. It follows
 the app's theme. Closing the canvas does not stop Piston. The `run` and
 `run_failed` actions explicitly request execution; do not invoke them merely to
 open or refresh the dashboard.

@@ -7,13 +7,11 @@ using Piston.Engine.Execution;
 namespace Piston.Mcp;
 
 /// <summary>
-/// Gate checked by every MCP tool. When the engine is unavailable, tools fail with an actionable message
-/// telling the agent to fall back to <c>dotnet test</c> instead of hanging or reporting stale results.
+/// Gate checked by every MCP tool. When the engine is unavailable, tools report the reason
+/// instead of hanging or reporting stale results.
 /// </summary>
 public sealed class EngineAvailability
 {
-    public const string Fallback = "Use `dotnet test` instead.";
-
     private readonly Lock _lock = new();
     private EngineAvailabilityState _state = EngineAvailabilityState.Available;
     private string? _reason;
@@ -48,15 +46,15 @@ public sealed class EngineAvailability
             : $"another process (PID {owner.ProcessId}, {owner.Host ?? "daemon"}, solution '{owner.SolutionPath}', since {owner.AcquiredAt:O})";
         Set(EngineAvailabilityState.OwnedElsewhere,
             $"Piston owned by {who} for worktree '{worktree.RootPath}'. " +
-            $"This MCP server started no engine and will not run tests here. {Fallback}");
+            "This MCP server started no engine and will not run tests here.");
     }
 
     public void SetWorktreeDeleted(string path) =>
         Set(EngineAvailabilityState.WorktreeDeleted,
-            $"Piston stopped: the worktree/solution '{path}' no longer exists. {Fallback}");
+            $"Piston stopped: the worktree/solution '{path}' no longer exists.");
 
     public void SetFaulted(string message) =>
-        Set(EngineAvailabilityState.Faulted, $"Piston could not start: {message} {Fallback}");
+        Set(EngineAvailabilityState.Faulted, $"Piston could not start: {message}");
 
     /// <summary>Marks the server as shutting down unless a more specific reason is already set.</summary>
     public void SetStopped()
@@ -66,7 +64,7 @@ public sealed class EngineAvailability
             if (_state == EngineAvailabilityState.Available)
             {
                 _state = EngineAvailabilityState.Stopped;
-                _reason = $"Piston is shutting down. {Fallback}";
+                _reason = "Piston is shutting down.";
             }
         }
     }

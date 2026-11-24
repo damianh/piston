@@ -3,4 +3,4 @@
 
 namespace Piston.Integration;
 
-internal sealed record InitOptions(Harness Harness, InitScope Scope, bool Write, bool Force, bool Dashboard);
+internal sealed record InitOptions(Harness Harness, InitScope Scope, bool Write, bool Force);

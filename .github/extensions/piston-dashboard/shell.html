@@ -11,7 +11,18 @@
     <main id="connection">
         <h1>Piston dashboard</h1>
         <p id="status" role="status" aria-live="polite">Inspecting the current worktree...</p>
-        <p>Opening this panel does not start Piston or run tests.</p>
+        <p id="dashboard-disabled" hidden>Restarting the existing Piston owner runs tests.</p>
+        <form id="start-form" hidden>
+            <label for="solution">Solution</label>
+            <input id="solution" name="solution" type="text" list="solutions" required autocomplete="off" aria-describedby="solution-help solution-discovery" placeholder="Search or enter a solution path">
+            <datalist id="solutions"></datalist>
+            <p id="solution-help">Choose a solution or enter a path inside this worktree.</p>
+            <p id="solution-discovery" role="status" aria-live="polite"></p>
+            <p>Starting Piston builds and runs tests immediately, then watches for changes.</p>
+            <p>The daemon owns this worktree; separate Piston stdio sessions cannot use it while it runs.</p>
+            <button id="start" type="submit">Start Piston</button>
+            <p id="start-error" role="alert" hidden></p>
+        </form>
         <button id="retry" type="button">Retry connection</button>
     </main>
     <iframe id="dashboard" title="Current worktree's Piston dashboard" hidden></iframe>

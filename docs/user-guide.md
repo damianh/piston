@@ -145,7 +145,7 @@ piston status [<solution>] [--all]
 piston coverage-export [<solution>] [--format lcov|cobertura] [-o <file>]
 
 # Print (or, with --write, install) the MCP entry, skill and canvas for an agent harness
-piston init copilot|claude [--write] [--scope user|repo] [--force] [--dashboard]
+piston init copilot|claude [--write] [--scope user|repo] [--force]
 ```
 
 `piston status --all` lists every live worktree owner (PID, `mcp` or `daemon`, solution, worktree and dashboard URL where available), stale ownership records, running reservations, FIFO queue order and CPU/memory use against the machine budget. The dashboard's **Machine** tab shows the same overview and links to local dashboards. `piston mcp` sessions have no dashboard URL. If a worktree's owner cannot be reached over the daemon pipe (for example a `piston mcp` process, or a daemon whose worktree was deleted), `piston stop` prints the owner's PID, solution and worktree and exits 1; `piston stop --force` sends SIGTERM and kills the process if it has not exited.
@@ -204,11 +204,9 @@ canvas support, ask the agent to open the **Piston** canvas (canvas ID
 the canvas-capable `piston` executable on PATH and the active session's working
 directory, not the extension source directory.
 
-The canvas attaches to an existing owner of that worktree. A daemon already
-serves the dashboard. For a stdio MCP session, opt in with `piston mcp --dashboard`
-(MCP args `["mcp", "--dashboard"]`) or `"dashboard": true` in `.piston.json`.
-This opens an OS-assigned `127.0.0.1` web port for that session; stdio remains
-the MCP transport, and default `piston mcp` sessions still open no web ports.
+The canvas attaches to an existing owner of that worktree. Daemon and stdio MCP
+sessions serve the dashboard. MCP sessions use an OS-assigned `127.0.0.1` web
+port; stdio remains the MCP transport.
 
 `piston dashboard --json` only inspects the current worktree's live owner and
 reports `connected`, `disconnected`, `disabled`, or `error`, including the
@@ -217,11 +215,17 @@ or runs tests. The extension also checks the endpoint's worktree, PID and
 ownership generation before attaching, rather than assuming port 5199.
 
 Opening/reloading/resuming the canvas never starts an engine or requests a run.
-Explicit engine startup still performs its normal startup run and starts
-watching. The panel shows a disconnected state and retries when the engine is
-absent, and follows a replacement owner of the same worktree. Closing the panel
-does not stop the owner. The existing dashboard follows the Copilot theme in
-the canvas; standalone browsers retain their saved/system theme preference.
+When no owner is running, choose a solution in the disconnected panel and select
+**Start Piston** to start a daemon. The solution field suggests tracked and
+untracked, non-ignored `.sln`, `.slnx`, and `.slnf` files in the current Git
+worktree; type to filter or enter a path manually. Retry the connection to refresh
+the list. This immediately builds and runs tests, then
+watches for changes. The daemon owns the worktree, so separate stdio Piston MCP
+sessions cannot use it while it runs; an agent can connect to its HTTP MCP endpoint
+instead. The panel retries when the engine is absent and follows a replacement
+owner of the same worktree. Closing the panel does not stop the owner. The existing
+dashboard follows the Copilot theme in the canvas; standalone browsers retain their
+saved/system theme preference.
 Agent-facing actions are `refresh` (inspect only), `run`, and `run_failed`;
 the latter reports an error when there are no failed tests.
 
@@ -277,7 +281,7 @@ The agent host starts one `piston mcp` process per session, with the working dir
 - exits when the session ends (stdin EOF, SIGTERM, or parent death on Unix), killing build/test processes and releasing worktree ownership;
 - exits if the worktree is deleted.
 
-If another Piston process already owns the worktree, or the engine cannot start, the server still answers. Every tool then returns an error that ends with ``Use `dotnet test` instead.``. To uninstall, run `dotnet tool uninstall -g DamianH.Piston` and remove the config entry.
+If another Piston process already owns the worktree, or the engine cannot start, the server still answers and every tool reports the reason. Ask for explicit consent before running a separate test command as a fallback. To uninstall, run `dotnet tool uninstall -g DamianH.Piston` and remove the config entry.
 
 The daemon always exposes an HTTP MCP endpoint backed by the running engine, on port 5200 unless `--mcp-port` (or `mcpPort` in `.piston.json`) says otherwise. Connect at `http://localhost:5200` (the root endpoint, not `/mcp`). The daemon retains current state. Runs launch `dotnet build` and fresh test processes, unless [warm test hosts](#warm-test-hosts) are enabled for MTP projects.
 
@@ -456,9 +460,10 @@ auto-starts a daemon. Invalid config files are reported
 as errors rather than silently ignored.
 Supplied CLI values override corresponding config values. Coverage defaults to
 on; `--coverage` or `--no-coverage` overrides `coverageEnabled`, and specifying
-both is an error. `--dashboard` enables the MCP dashboard but does not disable a
-config-enabled value. Also,
-non-positive debounce/parallelism values fall back to config/defaults. There is
+both is an error. The MCP dashboard is always enabled: the legacy `--dashboard`
+flag and `dashboard` config value no longer control it. A `false` config value
+produces a warning; remove the obsolete setting. Also, non-positive
+debounce/parallelism values fall back to config/defaults. There is
 no implemented `.piston/config.json` or user-global config hierarchy for daemon
 options; dashboard preferences live in the separate [user settings file](#user-settings).
 
@@ -490,7 +495,6 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `pipeName` | `string` | Override the named pipe name. |
 | `stdio` | `bool` | Use stdin/stdout JSON-RPC transport. |
 | `mcpPort` | `int` | Port for the daemon's MCP server (default 5200). |
-| `dashboard` | `bool` | Expose the stdio MCP session's dashboard on an ephemeral loopback port (default `false`, or enable with `piston mcp --dashboard`). Does not affect daemon hosting. |
 | `testExecutionMode` | `string` | `"Auto"` and `"Process"` currently both route between MTP and VSTest. `"InProcess"` is not implemented and throws at startup. |
 | `testResources` | `array` | Exclusive resources of test projects and overrides of container inference. See [Integration-test resources](#integration-test-resources). |
 | `execution.memoryMb` | `int` | Memory in MiB each run reserves from the machine execution budget (see [Worktree ownership and machine execution budget](#worktree-ownership-and-machine-execution-budget)). Must be positive; required when the budget sets `memoryMb`. A reservation, not a cap. |

@@ -72,6 +72,29 @@ public sealed class WorktreeOwnershipTests : IDisposable
     }
 
     [Fact]
+    public void Identity_WindowsExtendedPath_MatchesOrdinaryPathAndOwnership()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var worktree = CreateWorktree("extended", gitFile: true);
+        var solution = CreateSolution(worktree);
+        var extended = @"\\?\" + solution;
+        Assert.Equal(WorktreeIdentity.CanonicalizePath(solution), WorktreeIdentity.CanonicalizePath(extended));
+        Assert.Equal(WorktreeIdentity.FromSolutionPath(solution), WorktreeIdentity.FromSolutionPath(extended));
+        Assert.Equal(WorktreeIdentity.FromSolutionPath(worktree), WorktreeIdentity.FromSolutionPath(@"\\?\" + worktree));
+        Assert.Equal(@"\\server\share\repo", WorktreeIdentity.NormalizeWindowsPath(@"\\?\UNC\server\share\repo"));
+        Assert.Equal(@"\\?\C:\repo\NUL", WorktreeIdentity.NormalizeWindowsPath(@"\\?\C:\repo\NUL"));
+        Assert.Equal(@"\\?\C:\repo\name.", WorktreeIdentity.NormalizeWindowsPath(@"\\?\C:\repo\name."));
+
+        using var owner = WorktreeOwnership.Acquire(_directory, solution);
+        _ = Assert.Throws<WorktreeOwnershipConflictException>(() =>
+            WorktreeOwnership.Acquire(_directory, extended, contentionRetry: TimeSpan.Zero));
+    }
+
+    [Fact]
     public void Identity_WithoutGit_UsesSolutionDirectory()
     {
         var dir = Path.Combine(_root, "plain", "inner");
