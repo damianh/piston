@@ -14,6 +14,10 @@ public sealed record SessionFeedRow(SessionTimelineItem? Item, ActivityEvent? Ev
 /// <summary>Interleaves the session's edits and runs with the activity the timeline doesn't already show.</summary>
 public static class SessionFeed
 {
+    /// <summary>Returns activity at or after the current session's start time.</summary>
+    public static IReadOnlyList<ActivityEvent> ForSession(IEnumerable<ActivityEvent> events, DateTimeOffset startedAt) =>
+        events.Where(e => e.Timestamp >= startedAt).ToList();
+
     /// <summary>
     /// The feed, newest first. Of the activity log it keeps agent tool calls (when <paramref name="includeAgentCalls"/>)
     /// and the solution-loaded and reconnect markers; file changes, builds and test runs are the timeline's edits and

@@ -16,7 +16,7 @@
         <button class="px-2 py-0.5 rounded @(_showAgentCalls ? "bg-gray-800 ring-1 ring-inset ring-gray-700 text-gray-100 hover:ring-gray-500" : "text-gray-400 hover:text-gray-100 hover:bg-gray-800/50")"
                 title="@(_showAgentCalls ? "Hide" : "Show") the MCP tool calls made by agents" aria-pressed="@(_showAgentCalls ? "true" : "false")"
                 @onclick="() => _showAgentCalls = !_showAgentCalls">
-            Agent calls <span class="tabular-nums @(_showAgentCalls ? "text-gray-300" : "text-gray-400")">@_events.Count(SessionFeed.IsAgentCall)</span>
+            Agent calls <span class="tabular-nums @(_showAgentCalls ? "text-gray-300" : "text-gray-400")">@SessionEvents.Count(SessionFeed.IsAgentCall)</span>
         </button>
         @if (View.TracedTest is { } traced)
         {
@@ -39,7 +39,7 @@
         {
             @RenderFailing()
 
-            var rows = SessionFeed.Build(_timeline, _events, _showAgentCalls);
+            var rows = SessionFeed.Build(_timeline, SessionEvents, _showAgentCalls);
             <div class="py-1" role="list" aria-label="Edits, runs and agent calls, newest first">
                 @if (_snapshot?.ActiveRun is { } active)
                 {
@@ -92,6 +92,8 @@
     private int _refreshGeneration;
     private List<ActivityEvent> _events = [];
     private bool _showAgentCalls = true;
+    private IReadOnlyList<ActivityEvent> SessionEvents =>
+        _dto is { } dto ? SessionFeed.ForSession(_events, dto.StartedAt) : [];
 
     /// <summary>Opens a test, by project and result key, in the Tests tab.</summary>
     [Parameter] public EventCallback<TestReference> OnOpenTest { get; set; }
@@ -431,7 +433,9 @@
         var hasDetail = paramsSummary is { Length: > 0 } || resultSummary is { Length: > 0 };
         var expanded = hasDetail && _expanded.Contains(key);
         <div role="listitem" class="px-4 py-0.5">
-            <div class="flex items-center gap-2 @(hasDetail ? "cursor-pointer" : "")" @onclick="() => { if (hasDetail) Toggle(key); }">
+            <button type="button" class="flex w-full items-center gap-2 text-left focus:outline-hidden focus-visible:ring-1 focus-visible:ring-blue-500 @(hasDetail ? "cursor-pointer" : "")"
+                    aria-expanded="@(hasDetail ? (expanded ? "true" : "false") : null)" disabled="@(!hasDetail)"
+                    @onclick="() => Toggle(key)">
                 <span class="w-16 shrink-0 tabular-nums text-gray-500" title="@evt.Timestamp.ToLocalTime().ToString("u")">@FormatTime(evt.Timestamp)</span>
                 <span class="w-2 shrink-0 leading-4 @(succeeded ? "text-violet-400" : "text-red-400")" title="Agent tool call" aria-hidden="true">⚡</span>
                 <span class="shrink-0 font-mono text-gray-300">@Str(evt, "toolName")</span>
@@ -450,7 +454,7 @@
                     <span class="shrink-0 text-yellow-600 tabular-nums">@TestNode.FormatDuration(ms)</span>
                 }
                 <span class="w-3 shrink-0 text-gray-600" aria-hidden="true">@(hasDetail ? (expanded ? "▲" : "▼") : "")</span>
-            </div>
+            </button>
             @if (expanded)
             {
                 <div class="ml-[4.5rem] pl-4 pr-2 pb-1 font-mono text-gray-400 whitespace-pre-wrap max-h-64 overflow-y-auto">@(string.Join("\n", new[] { paramsSummary is { Length: > 0 } p ? "params: " + p : null, resultSummary is { Length: > 0 } r ? "result: " + r : null }.OfType<string>()))</div>

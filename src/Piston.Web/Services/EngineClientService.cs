@@ -72,6 +72,7 @@ public sealed class EngineClientService : IAsyncDisposable
     {
         var backoffMs = 500;
         const int MaxBackoffMs = 10_000;
+        var hasConnected = false;
 
         while (!ct.IsCancellationRequested)
         {
@@ -86,6 +87,14 @@ public sealed class EngineClientService : IAsyncDisposable
                 await _webSocket.ConnectAsync(new Uri(wsUrl), ct).ConfigureAwait(false);
                 IsConnecting = false;
                 backoffMs = 500;
+                if (hasConnected)
+                {
+                    var evt = ActivityEventFactory.Reconnect(null);
+                    AppendActivityEvent(evt);
+                    ActivityEventReceived?.Invoke(evt);
+                }
+
+                hasConnected = true;
                 ConnectionStateChanged?.Invoke();
 
                 _ = BackfillActivityLogAsync();

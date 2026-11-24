@@ -35,6 +35,22 @@ public sealed class SessionFeedTests
     };
 
     [Fact]
+    public void ForSession_DropsEventsFromEarlierSessionsAndKeepsEventsAtStart()
+    {
+        ActivityEvent[] events =
+        [
+            Call(9),
+            Call(10),
+            Other(ActivityEventTypes.Reconnect, 11),
+        ];
+
+        var currentSession = SessionFeed.ForSession(events, At(10));
+
+        Assert.Equal([10, 11], currentSession.Select(e => e.Timestamp.Minute));
+        Assert.Equal(1, currentSession.Count(SessionFeed.IsAgentCall));
+    }
+
+    [Fact]
     public void Build_InterleavesAgentCallsAndMarkersNewestFirstAndDropsEventsTheTimelineShows()
     {
         // r1 at 10, edit at 20 (r2's request), r2 at 20.
