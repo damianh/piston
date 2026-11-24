@@ -475,7 +475,7 @@ public static class DtoMapper
     /// </summary>
     private static (SessionTimelineEntryDto Entry, long Bytes) TrimToBudget(SessionTimelineEntryDto dto, long budget)
     {
-        var keep = Math.Max(Math.Max(dto.ChangedFiles.Count, dto.NewlyFailingTests.Count), Math.Max(dto.FixedTests.Count, dto.FailureClassifications.Count));
+        var keep = new[] { dto.ChangedFiles.Count, dto.NewlyFailingTests.Count, dto.FixedTests.Count, dto.FailureClassifications.Count, dto.BuildErrors?.Count ?? 0 }.Max();
         var bytes = SerializedSize(dto);
         while (bytes > budget && keep > 0)
         {
@@ -486,6 +486,7 @@ public static class DtoMapper
                 NewlyFailingTests = [.. dto.NewlyFailingTests.Take(keep)],
                 FixedTests = [.. dto.FixedTests.Take(keep)],
                 FailureClassifications = [.. dto.FailureClassifications.Take(keep)],
+                BuildErrors = dto.BuildErrors is null ? null : [.. dto.BuildErrors.Take(keep)],
             };
             bytes = SerializedSize(dto);
         }
@@ -526,7 +527,8 @@ public static class DtoMapper
         entry.FixedCount,
         [.. entry.FailureClassifications.Select(c => new FailureClassificationDto(c.Project, c.Test, c.Kind.ToString(), c.Evidence, c.ProjectId))],
         entry.InRunHistory,
-        entry.NoEarlierResults);
+        entry.NoEarlierResults,
+        entry.BuildErrors ?? []);
 
     public static TestSelectionReasonDto ToDto(this TestSelectionReason reason) =>
         new(reason.FilePath, reason.ChangedLines, reason.ExecutedLines, reason.Granularity, reason.ProjectPath, reason.Member,

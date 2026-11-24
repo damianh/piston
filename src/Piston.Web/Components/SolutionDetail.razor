@@ -7,11 +7,7 @@
     <HeaderBar ActiveTab="@_activeTab" OnTabSelected="SetTab" />
 
     <div class="flex-1 min-h-0 overflow-hidden">
-        @if (_activeTab == DashboardTab.Activity)
-        {
-            <ActivityTab />
-        }
-        else if (_activeTab == DashboardTab.Tests)
+        @if (_activeTab == DashboardTab.Tests)
         {
             <TestsTab KeyboardEvent="@KeyboardEvent" OnTraceTest="TraceTest" />
         }

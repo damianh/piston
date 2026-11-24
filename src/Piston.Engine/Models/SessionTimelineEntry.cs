@@ -20,6 +20,7 @@ namespace Piston.Engine.Models;
 /// <param name="FailureClassifications">How the run's failures relate to the run history, at most <see cref="MaxListItems"/>; empty when history is off.</param>
 /// <param name="InRunHistory">True when the run was kept in the persistent run history, so it can be opened there.</param>
 /// <param name="NoEarlierResults">The run had no earlier results to compare with, so its outcome changes are unknown rather than empty.</param>
+/// <param name="BuildErrors">The first <see cref="MaxBuildErrors"/> build errors, each truncated; <see cref="BuildErrorCount"/> is the total.</param>
 public sealed record SessionTimelineEntry(
     string RunId,
     long Sequence,
@@ -50,10 +51,14 @@ public sealed record SessionTimelineEntry(
     int FixedCount,
     IReadOnlyList<FailureClassification> FailureClassifications,
     bool InRunHistory,
-    bool NoEarlierResults = false)
+    bool NoEarlierResults = false,
+    IReadOnlyList<string>? BuildErrors = null)
 {
     /// <summary>Upper bound on each list an entry keeps, so one huge run cannot dominate memory.</summary>
     public const int MaxListItems = 200;
+
+    /// <summary>Upper bound on the build errors an entry keeps; the full list stays in the run's build result.</summary>
+    public const int MaxBuildErrors = 10;
 
     /// <summary>Summarises a terminal run.</summary>
     public static SessionTimelineEntry From(TestRunRecord run, bool inRunHistory)
@@ -89,6 +94,9 @@ public sealed record SessionTimelineEntry(
             run.FixedTests.Count,
             [.. run.FailureClassifications.Take(MaxListItems)],
             inRunHistory,
-            run.NoEarlierResults);
+            run.NoEarlierResults,
+            run.Build is { Errors.Count: > 0 } failed
+                ? [.. failed.Errors.Take(MaxBuildErrors).Select(e => RetentionLimits.TruncateHead(e, RetentionLimits.MaxActivityMessageLength)!)]
+                : []);
     }
 }

@@ -12,6 +12,12 @@
             <span class="text-gray-400 tabular-nums">@Plural(_timeline.Runs.Count(), "run") · @Plural(_timeline.Items.OfType<SessionTimelineEdit>().Count(), "edit")</span>
         }
         <div class="flex-1"></div>
+        @* Same raised/flat pattern as the toolbar status toggles. *@
+        <button class="px-2 py-0.5 rounded @(_showAgentCalls ? "bg-gray-800 ring-1 ring-inset ring-gray-700 text-gray-100 hover:ring-gray-500" : "text-gray-400 hover:text-gray-100 hover:bg-gray-800/50")"
+                title="@(_showAgentCalls ? "Hide" : "Show") the MCP tool calls made by agents" aria-pressed="@(_showAgentCalls ? "true" : "false")"
+                @onclick="() => _showAgentCalls = !_showAgentCalls">
+            Agent calls <span class="tabular-nums @(_showAgentCalls ? "text-gray-300" : "text-gray-400")">@_events.Count(SessionFeed.IsAgentCall)</span>
+        </button>
         @if (View.TracedTest is { } traced)
         {
             <span class="flex items-center gap-2 min-w-0">
@@ -33,7 +39,8 @@
         {
             @RenderFailing()
 
-            <div class="py-1" role="list" aria-label="Edits and runs, newest first">
+            var rows = SessionFeed.Build(_timeline, _events, _showAgentCalls);
+            <div class="py-1" role="list" aria-label="Edits, runs and agent calls, newest first">
                 @if (_snapshot?.ActiveRun is { } active)
                 {
                     <div role="listitem" class="flex items-center gap-2 px-4 py-1 text-gray-300">
@@ -47,16 +54,19 @@
                 {
                     <div class="text-gray-600 italic px-4 py-4">No runs have finished since the daemon started.</div>
                 }
-                @for (var i = _timeline.Items.Count - 1; i >= 0; i--)
+                @foreach (var row in rows)
                 {
-                    var item = _timeline.Items[i];
-                    if (item is SessionTimelineEdit edit)
+                    if (row.Item is SessionTimelineEdit edit)
                     {
                         @RenderEdit(edit)
                     }
-                    else if (item is SessionTimelineRun run)
+                    else if (row.Item is SessionTimelineRun run)
                     {
                         @RenderRun(run)
+                    }
+                    else if (row.Event is { } evt)
+                    {
+                        @RenderEvent(evt, row.RepeatCount)
                     }
                 }
             </div>
@@ -80,6 +90,8 @@
     private readonly HashSet<string> _expanded = new(StringComparer.Ordinal);
     private string? _scrollTo;
     private int _refreshGeneration;
+    private List<ActivityEvent> _events = [];
+    private bool _showAgentCalls = true;
 
     /// <summary>Opens a test, by project and result key, in the Tests tab.</summary>
     [Parameter] public EventCallback<TestReference> OnOpenTest { get; set; }
@@ -91,6 +103,9 @@
     {
         Client.StateChanged += OnStateChanged;
         Client.ConnectionStateChanged += OnConnectionStateChanged;
+        Client.ActivityEventReceived += OnActivityEvent;
+        Client.ActivityLogReset += OnActivityLogReset;
+        _events = [.. Client.ActivityLog];
         _snapshot = Client.CurrentSnapshot;
         _timelineRevision = _snapshot?.TimelineRevision ?? 0;
         _activeRun = (_snapshot?.ActiveRun?.RunId, _snapshot?.ActiveRun?.Status);
@@ -136,6 +151,16 @@
             // Failing tests only change when a run finishes, which refreshes the timeline anyway.
             _ = InvokeAsync(StateHasChanged);
         }
+    }
+
+    private void OnActivityEvent(ActivityEvent _) => ReloadEvents();
+
+    private void OnActivityLogReset() => ReloadEvents();
+
+    private void ReloadEvents()
+    {
+        _events = [.. Client.ActivityLog];
+        _ = InvokeAsync(StateHasChanged);
     }
 
     private void OnConnectionStateChanged()
@@ -319,7 +344,17 @@
                 }
                 @if (entry.BuildStatus == "Failed")
                 {
-                    <span class="text-red-400 shrink-0">build failed@(entry.BuildErrorCount > 0 ? $" ({Plural(entry.BuildErrorCount, "error")})" : "")</span>
+                    var label = "build failed" + (entry.BuildErrorCount > 0 ? $" ({Plural(entry.BuildErrorCount, "error")})" : "");
+                    if (entry.BuildErrors is { Count: > 0 })
+                    {
+                        var buildKey = "build:" + entry.RunId;
+                        <button class="text-red-400 shrink-0 hover:underline" aria-expanded="@(_expanded.Contains(buildKey) ? "true" : "false")"
+                                title="@(_expanded.Contains(buildKey) ? "Hide" : "Show") the build errors" @onclick="() => Toggle(buildKey)">@label @(_expanded.Contains(buildKey) ? "▲" : "▼")</button>
+                    }
+                    else
+                    {
+                        <span class="text-red-400 shrink-0">@label</span>
+                    }
                 }
                 @if (run.EditedDuringRun || entry.Freshness == "Stale")
                 {
@@ -355,10 +390,75 @@
                             @onclick="() => OnOpenRun.InvokeAsync(entry.RunId)">Runs ↗</button>
                 }
             </div>
+            @if (entry.BuildErrors is { Count: > 0 } errors && _expanded.Contains("build:" + entry.RunId))
+            {
+                <div class="ml-[4.5rem] pl-4 pr-2 py-1 font-mono text-gray-400 whitespace-pre-wrap max-h-64 overflow-y-auto" aria-label="Build errors">
+                    @foreach (var error in errors)
+                    {
+                        <div>@error</div>
+                    }
+                    @if (entry.BuildErrorCount > errors.Count)
+                    {
+                        <div class="text-gray-500 font-sans">+@(entry.BuildErrorCount - errors.Count) more not listed</div>
+                    }
+                </div>
+            }
             @RenderOutcomes(run, "New failures", "text-red-400", entry.NewlyFailingTests, entry.NewlyFailingCount, true)
             @RenderOutcomes(run, "Fixed", "text-green-500", entry.FixedTests, entry.FixedCount, false)
         </div>
     };
+
+    private RenderFragment RenderEvent(ActivityEvent evt, int repeatCount) => __builder =>
+    {
+        if (!SessionFeed.IsAgentCall(evt))
+        {
+            var marker = evt.Type == ActivityEventTypes.SolutionLoaded
+                ? $"Solution loaded — {FileName(Str(evt, "solutionPath") ?? evt.SolutionPath ?? "?")} ({Plural(evt.Data?["projectCount"]?.GetValue<int>() ?? 0, "project")})"
+                : "Reconnected to the daemon";
+            <div role="listitem" class="flex items-center gap-2 px-4 py-0.5 text-gray-500">
+                <span class="w-16 shrink-0 tabular-nums" title="@evt.Timestamp.ToLocalTime().ToString("u")">@FormatTime(evt.Timestamp)</span>
+                <span class="w-2 shrink-0" aria-hidden="true">·</span>
+                <span class="italic truncate">@marker</span>
+                <span class="flex-1 border-t border-gray-800"></span>
+            </div>
+            return;
+        }
+
+        var key = "agent:" + (evt.Id ?? evt.Timestamp.UtcTicks.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        var succeeded = evt.Data?["succeeded"]?.GetValue<bool>() ?? false;
+        var paramsSummary = Str(evt, "paramsSummary");
+        var resultSummary = Str(evt, "resultSummary");
+        var hasDetail = paramsSummary is { Length: > 0 } || resultSummary is { Length: > 0 };
+        var expanded = hasDetail && _expanded.Contains(key);
+        <div role="listitem" class="px-4 py-0.5">
+            <div class="flex items-center gap-2 @(hasDetail ? "cursor-pointer" : "")" @onclick="() => { if (hasDetail) Toggle(key); }">
+                <span class="w-16 shrink-0 tabular-nums text-gray-500" title="@evt.Timestamp.ToLocalTime().ToString("u")">@FormatTime(evt.Timestamp)</span>
+                <span class="w-2 shrink-0 leading-4 @(succeeded ? "text-violet-400" : "text-red-400")" title="Agent tool call" aria-hidden="true">⚡</span>
+                <span class="shrink-0 font-mono text-gray-300">@Str(evt, "toolName")</span>
+                @if (!succeeded)
+                {
+                    <span class="shrink-0 text-red-400">failed</span>
+                }
+                <span class="truncate font-mono text-gray-500">@paramsSummary</span>
+                <span class="flex-1"></span>
+                @if (repeatCount > 1)
+                {
+                    <span class="shrink-0 px-1.5 rounded bg-gray-800 text-gray-400 tabular-nums" title="@repeatCount identical consecutive calls">×@repeatCount</span>
+                }
+                @if (evt.Data?["durationMs"]?.GetValue<double>() is { } ms)
+                {
+                    <span class="shrink-0 text-yellow-600 tabular-nums">@TestNode.FormatDuration(ms)</span>
+                }
+                <span class="w-3 shrink-0 text-gray-600" aria-hidden="true">@(hasDetail ? (expanded ? "▲" : "▼") : "")</span>
+            </div>
+            @if (expanded)
+            {
+                <div class="ml-[4.5rem] pl-4 pr-2 pb-1 font-mono text-gray-400 whitespace-pre-wrap max-h-64 overflow-y-auto">@(string.Join("\n", new[] { paramsSummary is { Length: > 0 } p ? "params: " + p : null, resultSummary is { Length: > 0 } r ? "result: " + r : null }.OfType<string>()))</div>
+            }
+        </div>
+    };
+
+    private static string? Str(ActivityEvent evt, string key) => evt.Data?[key]?.GetValue<string>();
 
     private RenderFragment RenderOutcomes(SessionTimelineRun run, string title, string color, IReadOnlyList<TestOutcomeReferenceDto> tests, int count, bool classify) => __builder =>
     {
@@ -494,5 +594,7 @@
     {
         Client.StateChanged -= OnStateChanged;
         Client.ConnectionStateChanged -= OnConnectionStateChanged;
+        Client.ActivityEventReceived -= OnActivityEvent;
+        Client.ActivityLogReset -= OnActivityLogReset;
     }
 }
