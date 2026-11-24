@@ -970,8 +970,8 @@ static void CheckPackageContents(string directory, string? expectedVersion = nul
     {
         problems.Add("tool command must be piston with entry point Piston.dll");
     }
-    using var reader = new StreamReader(server.Open());
-    var serverJson = reader.ReadToEnd();
+    using var serverStream = server.Open();
+    var serverJson = PackCheck.ReadServerMetadata(serverStream);
     using var document = JsonDocument.Parse(serverJson);
     var json = JsonNode.Parse(serverJson)!;
     const string schemaUrl = "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json";
@@ -1036,6 +1036,22 @@ internal sealed record Counts(int Total, int Passed, int Failed, int Skipped);
 internal sealed class SmokeTestException(string message) : Exception(message);
 
 internal sealed class PackCheckException(string message) : Exception(message);
+
+internal static class PackCheck
+{
+    public static byte[] ReadServerMetadata(Stream stream)
+    {
+        using var buffer = new MemoryStream();
+        stream.CopyTo(buffer);
+        var content = buffer.ToArray();
+        if (content.AsSpan().StartsWith(Encoding.UTF8.Preamble))
+        {
+            throw new PackCheckException(".mcp/server.json must be UTF-8 without a BOM.");
+        }
+
+        return content;
+    }
+}
 
 partial class Program
 {
@@ -1188,6 +1204,20 @@ internal sealed partial class ReleaseTooling
                     new(2, "package", "failure",
                     [
                         new("Pack framework-dependent tool", "failure"),
+                    ]),
+                ]),
+            ["v2026.1123.1-dev"] = new(
+                RunId: 45249686321,
+                SourceSha: "bfee4382e6b7b39405cdbced4aacd5f50c31aedf",
+                PackageId: PackageId,
+                Reason: "NuGet rejected the MCP metadata before publication.",
+                Attempts:
+                [
+                    new(1, "publish", "failure",
+                    [
+                        new("Run NuGet/login@v1.2.0", "success"),
+                        new("Reconcile an earlier publication", "success"),
+                        new("Publish tool to NuGet.org", "failure"),
                     ]),
                 ]),
         };
@@ -3348,9 +3378,9 @@ internal static partial class ReleaseTests
 {
     private static void RegisterRetiredReservationTests()
     {
-        Case("only the known unpublished reservation is pinned for retirement", () =>
+        Case("only the known unpublished reservations are pinned for retirement", () =>
         {
-            Expect.Sequence(["v2026.1101.1-dev", "v2026.1103.1-dev"], ReleaseTooling.DefaultRetiredReservations.Keys);
+            Expect.Sequence(["v2026.1101.1-dev", "v2026.1103.1-dev", "v2026.1123.1-dev"], ReleaseTooling.DefaultRetiredReservations.Keys);
             var first = ReleaseTooling.DefaultRetiredReservations["v2026.1101.1-dev"];
             Expect.Equal(41339003060, first.RunId);
             Expect.Equal("ce5c63d4da00690f40141435e59db7e8122b972f", first.SourceSha);
@@ -3637,10 +3667,93 @@ internal static partial class ReleaseTests
                 await RejectsRetry(f, label);
             }
         });
+
+        var rejectedDay = new DateOnly(2026, 11, 23);
+        var rejectedPrior = new ReleaseVersion(rejectedDay, 1, true);
+        var rejectedRetirement = ReleaseTooling.DefaultRetiredReservations[rejectedPrior.Tag];
+        JsonObject RejectedRun(GitFixture f, int runAttempt = 1) => new()
+        {
+            ["id"] = 63,
+            ["path"] = ".github/workflows/release.yml@refs/heads/main",
+            ["event"] = "workflow_run",
+            ["head_sha"] = f.SourceSha,
+            ["run_attempt"] = runAttempt,
+            ["status"] = "completed",
+            ["conclusion"] = "failure",
+        };
+        JsonObject RejectedJob(string publish = "failure") => Job(steps:
+        [
+            Step("Run NuGet/login@v1.2.0", "success"),
+            Step("Reconcile an earlier publication", "success"),
+            Step("Publish tool to NuGet.org", publish),
+        ]);
+        void RejectedEvidence(GitFixture f)
+        {
+            f.Http.Json(ReleaseFixture.ActionUrl(63), RejectedRun(f));
+            f.Http.Json(ReleaseFixture.AttemptJobsUrl(63), Jobs(1, RejectedJob()));
+            f.Http.Responses[ReleaseFixture.ReleaseUrl(rejectedPrior)] = 404;
+            f.Http.Responses[ReleaseFixture.PackageUrl(rejectedPrior)] = 404;
+        }
+        void RejectedPublishCase(string name, Func<GitFixture, Task> body) => GitCase(name, async f =>
+        {
+            await f.Tag(rejectedPrior, 63);
+            f.Retired[rejectedPrior.Tag] = rejectedRetirement with { RunId = 63, SourceSha = f.SourceSha };
+            RejectedEvidence(f);
+            await body(f);
+        });
+
+        RejectedPublishCase("prepare retires the rejected package without changing its tag", async f =>
+        {
+            var original = await f.Git("--git-dir", f.Origin, "cat-file", "-p", $"refs/tags/{rejectedPrior.Tag}");
+            var (version, reused) = await f.PrepareAt(rejectedDay, runId: 64);
+            Expect.Equal("2026.1123.2-dev", version.Version);
+            Expect.Equal(false, reused);
+            Expect.Equal(original, await f.Git("--git-dir", f.Origin, "cat-file", "-p", $"refs/tags/{rejectedPrior.Tag}"));
+            Expect.Sequence(
+                [ReleaseFixture.ActionUrl(63), ReleaseFixture.AttemptJobsUrl(63), ReleaseFixture.ReleaseUrl(rejectedPrior),
+                 ReleaseFixture.PackageUrl(rejectedPrior), ReleaseFixture.PackageUrl(rejectedPrior)],
+                f.Http.Requests);
+        });
+
+        RejectedPublishCase("prepare rejects changed or published rejected-package evidence", async f =>
+        {
+            RejectedEvidence(f);
+            f.Http.Json(ReleaseFixture.ActionUrl(63), RejectedRun(f, runAttempt: 2));
+            await Expect.ThrowsAsync(() => f.PrepareAt(rejectedDay, runId: 64), label: "retried run");
+
+            RejectedEvidence(f);
+            f.Http.Json(ReleaseFixture.AttemptJobsUrl(63), Jobs(1, RejectedJob(publish: "success")));
+            await Expect.ThrowsAsync(() => f.PrepareAt(rejectedDay, runId: 64), label: "successful publish");
+
+            RejectedEvidence(f);
+            f.Http.Responses[ReleaseFixture.PackageUrl(rejectedPrior)] = "published"u8.ToArray();
+            await Expect.ThrowsAsync(() => f.PrepareAt(rejectedDay, runId: 64), label: "package exists");
+            await ExpectTags(f, rejectedPrior.Tag);
+        });
     }
 
     private static void RegisterPackageTests()
     {
+        Case("package check rejects a BOM in MCP metadata", () =>
+        {
+            var content = """{"name":"piston"}"""u8.ToArray();
+            using var valid = new MemoryStream(content);
+            Expect.Sequence(content, PackCheck.ReadServerMetadata(valid));
+
+            using var withBom = new MemoryStream([0xEF, 0xBB, 0xBF, .. content]);
+            try
+            {
+                _ = PackCheck.ReadServerMetadata(withBom);
+            }
+            catch (PackCheckException ex)
+            {
+                Expect.Contains("UTF-8 without a BOM", ex.Message);
+                return;
+            }
+
+            throw new InvalidOperationException("The package check accepted MCP metadata with a BOM.");
+        });
+
         var version = new ReleaseVersion(Day, 2, true);
         var sha = new string('c', 40);
         void PackageCase(string name, Func<ReleaseFixture, string, Task> body) => Case(name, async () =>
