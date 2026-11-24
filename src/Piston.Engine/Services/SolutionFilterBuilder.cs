@@ -74,7 +74,7 @@ internal static partial class SolutionFilterBuilder
     public static string WriteTemporaryFilter(string underlyingSolutionPath, IEnumerable<string> projects)
     {
         underlyingSolutionPath = PathNormalizer.GetFullPath(underlyingSolutionPath);
-        var solutionDir = Path.GetDirectoryName(underlyingSolutionPath)!;
+        var solutionDir = PathNormalizer.GetFullPath(Path.GetDirectoryName(underlyingSolutionPath)!);
         var dir = Directory.CreateTempSubdirectory("piston-build-").FullName;
         var filterPath = Path.Combine(dir, "selective.slnf");
 

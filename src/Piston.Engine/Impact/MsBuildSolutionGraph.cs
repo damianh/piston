@@ -126,7 +126,8 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
             if (isNewProject)
             {
                 // Cache source files (.cs) for this project (excluding bin/obj)
-                var projectDir = Path.GetDirectoryName(projectPath) ?? string.Empty;
+                var projectDir = Path.GetDirectoryName(projectPath) is { } directory
+                    ? PathNormalizer.GetFullPath(directory) : string.Empty;
                 var sourceFiles = new List<string>();
                 if (Directory.Exists(projectDir))
                 {

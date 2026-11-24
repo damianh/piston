@@ -163,6 +163,26 @@ public sealed class MsBuildSolutionGraphTests : IAsyncLifetime
     }
 
     [Fact]
+    public void FindOwningProject_NamespaceDependentProjectName_MatchesSiblingSource()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var dir = Directory.CreateDirectory(Path.Combine(_root, "Device")).FullName;
+        var project = @"\\?\" + Path.Combine(dir, "CON.csproj");
+        var source = Path.Combine(dir, "Code.cs");
+        File.WriteAllText(project, "<Project />");
+        File.WriteAllText(source, "public class Code {}");
+
+        var graph = new MsBuildSolutionGraph(project);
+
+        Assert.Contains(source, graph.GetSourceFiles(project));
+        Assert.Equal(project, graph.FindOwningProject(source));
+    }
+
+    [Fact]
     public void GetTransitiveDependents_ForLib_ReturnsAppAndAppTests()
     {
         var sut = new MsBuildSolutionGraph(_slnPath);
