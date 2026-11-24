@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { changesQuery, createDashboardCanvas, discover, discoverSolutions, loopbackEndpoint, normalizeWorkingDirectory, openQuery, probe, rpc, startDaemon } from "./provider.mjs";
@@ -108,9 +108,10 @@ test("daemon startup validates the selected worktree, launches detached and chec
     await mkdir(worktree);
     await writeFile(path.join(worktree, "App.slnx"), "<Solution />");
     await writeFile(path.join(root, "other.slnx"), "<Solution />");
+    const selected = await realpath(path.join(worktree, "App.slnx"));
     const launch = (command, args, options) => {
         assert.equal(command, "piston");
-        assert.deepEqual(args, ["daemon", path.join(worktree, "App.slnx"), "--no-stdio", "--config-directory", worktree]);
+        assert.deepEqual(args, ["daemon", selected, "--no-stdio", "--config-directory", worktree]);
         assert.equal(options.detached, true);
         assert.equal(options.cwd, worktree);
         const child = new EventEmitter();
