@@ -19,6 +19,28 @@ internal static class TestProjectNames
     {
         var normalizedDirectory = PathNormalizer.GetFullPath(solutionDirectory);
         var normalizedProjectPath = PathNormalizer.GetFullPath(projectPath, normalizedDirectory);
+        if (OperatingSystem.IsWindows()
+            && (IsExtendedPath(normalizedDirectory) || IsExtendedPath(normalizedProjectPath)))
+        {
+            normalizedDirectory = ToExtendedPath(normalizedDirectory);
+            normalizedProjectPath = ToExtendedPath(normalizedProjectPath);
+        }
+
         return Path.GetRelativePath(normalizedDirectory, normalizedProjectPath).Replace('\\', '/');
+    }
+
+    private static bool IsExtendedPath(string path) =>
+        path.StartsWith(@"\\?\", StringComparison.Ordinal);
+
+    private static string ToExtendedPath(string path)
+    {
+        if (IsExtendedPath(path))
+        {
+            return path;
+        }
+
+        return path.StartsWith(@"\\", StringComparison.Ordinal)
+            ? @"\\?\UNC\" + path[2..]
+            : @"\\?\" + path;
     }
 }
