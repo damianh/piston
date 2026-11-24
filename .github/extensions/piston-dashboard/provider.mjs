@@ -132,6 +132,21 @@ export async function discoverSolutions(worktree, cwd, executeCommand = execute)
     return [...new Set(files.filter(Boolean))].sort((a, b) => a.localeCompare(b));
 }
 
+async function worktreeRoot(directory) {
+    let current = directory;
+    for (;;) {
+        try {
+            await stat(path.join(current, ".git"));
+            return current;
+        } catch (error) {
+            if (error.code !== "ENOENT") throw error;
+        }
+        const parent = path.dirname(current);
+        if (parent === current) return directory;
+        current = parent;
+    }
+}
+
 export async function startDaemon(cwd, solution, worktree, inspect = discover, check = probe, launch = spawn, logRoot = tmpdir()) {
     if (typeof solution !== "string" || !solution.trim() || solution.length > 4096 || solution.includes("\0")) {
         throw new Error("Enter a solution path.");
@@ -143,6 +158,13 @@ export async function startDaemon(cwd, solution, worktree, inspect = discover, c
         || ![".sln", ".slnx", ".slnf"].includes(path.extname(selected).toLowerCase())
         || !(await stat(selected)).isFile()) {
         throw new Error("Choose a .sln, .slnx, or .slnf file inside this worktree.");
+    }
+    const [canvasWorktree, solutionWorktree] = await Promise.all([
+        worktreeRoot(root),
+        worktreeRoot(path.dirname(selected)),
+    ]);
+    if (path.relative(canvasWorktree, solutionWorktree) || path.relative(solutionWorktree, canvasWorktree)) {
+        throw new Error("Choose a solution whose canonical worktree matches this canvas.");
     }
     const logDirectory = await mkdtemp(path.join(logRoot, "piston-canvas-"));
     const logPath = path.join(logDirectory, "daemon.log");

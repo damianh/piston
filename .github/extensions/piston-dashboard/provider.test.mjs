@@ -139,6 +139,41 @@ test("daemon startup validates the selected worktree, launches detached and chec
         }, root), /Cannot launch Piston/);
 });
 
+test("daemon startup rejects solutions in a different canonical worktree", async t => {
+    const root = await mkdtemp(path.join(tmpdir(), "piston-canvas-identity-test-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const worktree = path.join(root, "repo");
+    const nestedWorktree = path.join(worktree, "nested");
+    const plainWorktree = path.join(root, "plain");
+    await mkdir(path.join(worktree, ".git"), { recursive: true });
+    await mkdir(path.join(worktree, "apps"), { recursive: true });
+    await mkdir(nestedWorktree, { recursive: true });
+    await writeFile(path.join(nestedWorktree, ".git"), "gitdir: ../.git/worktrees/nested\n");
+    await writeFile(path.join(worktree, "apps", "Valid.slnx"), "<Solution />");
+    await writeFile(path.join(nestedWorktree, "Other.slnx"), "<Solution />");
+    await mkdir(path.join(plainWorktree, "nested"), { recursive: true });
+    await writeFile(path.join(plainWorktree, "nested", "Other.slnx"), "<Solution />");
+
+    let launches = 0;
+    let processId;
+    const launch = () => {
+        launches++;
+        const child = new EventEmitter();
+        processId = child.pid = 40 + launches;
+        child.unref = () => {};
+        return child;
+    };
+    const inspect = async () => ({ ...connected("http://127.0.0.1:1234/"), processId, worktree });
+    await startDaemon(worktree, path.join("apps", "Valid.slnx"), worktree, inspect, async () => {}, launch, root);
+    assert.equal(launches, 1);
+
+    await assert.rejects(startDaemon(worktree, path.join("nested", "Other.slnx"), worktree,
+        inspect, async () => {}, launch, root), /canonical worktree/);
+    await assert.rejects(startDaemon(plainWorktree, path.join("nested", "Other.slnx"), plainWorktree,
+        inspect, async () => {}, launch, root), /canonical worktree/);
+    assert.equal(launches, 1);
+});
+
 test("open, refresh, re-open and close only inspect; actions require explicit invocation", async t => {
     let runs = 0;
     const directories = [];
