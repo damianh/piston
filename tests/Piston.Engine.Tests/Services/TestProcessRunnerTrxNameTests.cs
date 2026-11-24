@@ -33,6 +33,67 @@ public sealed class TestProcessRunnerTrxNameTests
     }
 
     [Fact]
+    public async Task WorkingDirectoryFor_LongProjectDirectoryIsStartableAndPreservesSdkSelection()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var temporary = Directory.CreateTempSubdirectory("piston-vstest-long-").FullName;
+        var sdkDirectory = temporary;
+        try
+        {
+            var sdkVersionResult = await TestProcess.RunDotnetResultAsync("--version", Environment.CurrentDirectory);
+            Assert.True(sdkVersionResult.ExitCode == 0, sdkVersionResult.Output);
+            var sdkVersion = sdkVersionResult.Output
+                .Split(Environment.NewLine)
+                .Single(line => line.StartsWith("[stdout] ", StringComparison.Ordinal))["[stdout] ".Length..];
+
+            while (sdkDirectory.Length < 220)
+            {
+                sdkDirectory = Path.Combine(sdkDirectory, "sdk-scope");
+                _ = Directory.CreateDirectory(sdkDirectory);
+            }
+
+            await File.WriteAllTextAsync(Path.Combine(sdkDirectory, "global.json"),
+                $$"""
+                {
+                  "sdk": {
+                    "version": "{{sdkVersion}}",
+                    "rollForward": "disable"
+                  },
+                  "test": {
+                    "runner": "VSTest"
+                  }
+                }
+                """, TestContext.Current.CancellationToken);
+
+            var projectDirectory = sdkDirectory;
+            while (projectDirectory.Length <= 280)
+            {
+                projectDirectory = Path.Combine(projectDirectory, "nested-directory");
+                _ = Directory.CreateDirectory(projectDirectory);
+            }
+
+            Assert.True(projectDirectory.Length > 260);
+            var projectPath = Path.Combine(projectDirectory, "LongPathTests.csproj");
+            var workingDirectory = TestProcessRunner.WorkingDirectoryFor(projectPath);
+            Assert.NotNull(workingDirectory);
+            Assert.True(workingDirectory.Length < 259);
+            Assert.False(Path.GetRelativePath(sdkDirectory, workingDirectory).StartsWith("..", StringComparison.Ordinal));
+
+            var selectedSdk = await TestProcess.RunDotnetResultAsync("--version", workingDirectory);
+            Assert.True(selectedSdk.ExitCode == 0, selectedSdk.Output);
+            Assert.Contains($"[stdout] {sdkVersion}", selectedSdk.Output, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(temporary, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task CoverageRequestedWithoutAReportRemovesTheVSTestResultsDirectory()
     {
         var root = Directory.CreateTempSubdirectory("piston-vstest-no-report-").FullName;
