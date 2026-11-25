@@ -36,7 +36,7 @@ public sealed class MtpServerSessionTests
         };
         start.ArgumentList.Add(typeof(TestProcessHost.Program).Assembly.Location);
         start.ArgumentList.Add("--hold-output");
-        using var process = new OwnedTestProcess(start);
+        using var process = new OwnedProcess(start);
         process.Start();
         process.Process.BeginOutputReadLine();
         process.Process.BeginErrorReadLine();

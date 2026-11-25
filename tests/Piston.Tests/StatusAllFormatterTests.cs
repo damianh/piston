@@ -10,6 +10,18 @@ namespace Piston.Tests;
 public sealed class StatusAllFormatterTests
 {
     [Fact]
+    public void Format_DoesNotClaimFailedStaleCleanupIsHarmless()
+    {
+        var overview = new MachineExecutionOverview(DateTimeOffset.UtcNow,
+            [new OwnershipRecord("stale", OwnershipLiveness.Stale, null)], null);
+
+        var output = StatusAllFormatter.Format(overview);
+
+        Assert.Contains("diagnostic record could not be pruned", output);
+        Assert.DoesNotContain("harmless", output);
+    }
+
+    [Fact]
     public void Format_UnavailableOwnersDoesNotReportNoWorktrees()
     {
         var overview = new MachineExecutionOverview(

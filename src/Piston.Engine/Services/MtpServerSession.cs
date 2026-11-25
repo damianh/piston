@@ -167,7 +167,7 @@ internal static class MtpServerSession
     /// time to exit, an unresponsive or unwanted one is killed, and a failed one is drained for its stderr.
     /// </summary>
     internal static async Task<Result> EndAsync(
-        OwnedTestProcess process, Outcome outcome, string? error, HostOutput output, Action<string, string>? log,
+        OwnedProcess process, Outcome outcome, string? error, HostOutput output, Action<string, string>? log,
         TimeSpan? exitTimeout = null, CancellationToken ct = default)
     {
         switch (outcome)
@@ -203,7 +203,7 @@ internal static class MtpServerSession
     /// A started host connected in server mode. The caller owns the process, the client and the listener,
     /// which stays open for the further connections of a host with a test host controller.
     /// </summary>
-    internal sealed record StartedHost(OwnedTestProcess Process, TcpClient Client, TcpListener Listener)
+    internal sealed record StartedHost(OwnedProcess Process, TcpClient Client, TcpListener Listener)
     {
         /// <summary>A link over the first connection that accepts later ones on <see cref="Listener"/>.</summary>
         public ServerLink CreateLink(Action<string, string>? log) =>
@@ -265,10 +265,10 @@ internal static class MtpServerSession
             log?.Invoke("MtpServer", environmentNote);
         }
 
-        OwnedTestProcess ownedProcess;
+        OwnedProcess ownedProcess;
         try
         {
-            ownedProcess = new OwnedTestProcess(psi);
+            ownedProcess = new OwnedProcess(psi);
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
@@ -866,7 +866,7 @@ internal static class MtpServerSession
     }
 
     internal static Task WaitForExitOrKillAsync(
-        OwnedTestProcess process, TimeSpan timeout, Action<string, string>? log, CancellationToken ct = default) =>
+        OwnedProcess process, TimeSpan timeout, Action<string, string>? log, CancellationToken ct = default) =>
         RedirectedProcessDrain.WaitForExitAndDrainAsync(
             process,
             RedirectedProcessDrain.DefaultTimeout,
@@ -874,7 +874,7 @@ internal static class MtpServerSession
             message => log?.Invoke("MtpServer", message),
             timeout);
 
-    internal static Task KillAndWaitAsync(OwnedTestProcess process, Action<string, string>? log) =>
+    internal static Task KillAndWaitAsync(OwnedProcess process, Action<string, string>? log) =>
         RedirectedProcessDrain.KillAndWaitAsync(
             process,
             CancellationToken.None,

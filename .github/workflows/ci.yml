@@ -58,9 +58,9 @@ jobs:
           dotnet-version: "10.0.x"
       - name: Pack and install the tool
         run: dotnet run build.cs -- install-tool
-      - name: Test macOS worktree identity
+      - name: Test macOS worktree identity and process cleanup
         if: runner.os == 'macOS'
-        run: dotnet test --project tests/Piston.Engine.Tests -c Release --filter-class Piston.Engine.Tests.Execution.WorktreeOwnershipTests
+        run: dotnet test --project tests/Piston.Engine.Tests -c Release --filter-class Piston.Engine.Tests.Execution.WorktreeOwnershipTests --filter-class Piston.Engine.Tests.Services.OwnedProcessLifetimeTests --filter-class Piston.Engine.Tests.Services.RedirectedProcessDrainTests
       - name: Run the samples through piston daemon
         # samples/Samples.slnx: MSTest, NUnit, xUnit v3 and TUnit on Microsoft.Testing.Platform, 3 tests each
         # (1 passing, 1 deliberately failing, 1 skipped). The startup run's counts must match exactly.

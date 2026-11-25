@@ -46,17 +46,35 @@ public sealed class MachineExecutionOverviewTests : IDisposable
     }
 
     [Fact]
-    public async Task ReadAsync_ReportsStaleOwners()
+    public async Task ReadAsync_PrunesStaleOwnersAndPreservesLiveOnes()
     {
         var owner = WorktreeOwnership.Acquire(_directory, CreateSolution("stale"));
         var infoPath = Path.Combine(_directory.OwnersDirectory, owner.Worktree.Key + ".json");
         var metadata = await File.ReadAllTextAsync(infoPath, _ct);
         owner.Dispose();
         await File.WriteAllTextAsync(infoPath, metadata, _ct);
+        using var live = WorktreeOwnership.Acquire(_directory, CreateSolution("live"));
 
         var overview = await MachineExecutionOverviewReader.ReadAsync(_directory, _ct);
 
-        Assert.Equal(OwnershipLiveness.Stale, Assert.Single(overview.Owners).Liveness);
+        Assert.Equal(live.Owner, Assert.Single(overview.Owners).Owner);
+        Assert.False(File.Exists(infoPath));
+        var refreshed = await MachineExecutionOverviewReader.ReadAsync(_directory, _ct);
+        Assert.Equal(live.Owner, Assert.Single(refreshed.Owners).Owner);
+    }
+
+    [Fact]
+    public async Task ReadAsync_PruneFailureReportsError()
+    {
+        var owner = WorktreeOwnership.Acquire(_directory, CreateSolution("blocked"));
+        var infoPath = Path.Combine(_directory.OwnersDirectory, owner.Worktree.Key + ".json");
+        owner.Dispose();
+        _ = Directory.CreateDirectory(infoPath);
+
+        var overview = await MachineExecutionOverviewReader.ReadAsync(_directory, _ct);
+
+        Assert.False(overview.OwnersAvailable);
+        Assert.Contains("Could not read worktree ownership", overview.Error);
     }
 
     [Theory]

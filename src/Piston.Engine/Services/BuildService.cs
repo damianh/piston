@@ -178,7 +178,13 @@ public sealed class BuildService : IBuildService
         psi.Environment["MSBUILDDISABLENODEREUSE"] = "1";
         _ = ChildProcessEnvironment.Prepare(psi);
 
-        using var process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        using var ownedProcess = new OwnedProcess(psi);
+        var process = ownedProcess.Process;
+        void ReportCleanupError(string message)
+        {
+            output.AddErrorLine(message);
+            DiagnosticLog.Instance?.Write("BuildService", message);
+        }
 
         process.OutputDataReceived += (_, e) =>
         {
@@ -190,18 +196,19 @@ public sealed class BuildService : IBuildService
         };
         process.ErrorDataReceived += (_, e) => output.AddErrorLine(e.Data);
 
-        _ = process.Start();
+        ownedProcess.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
         try
         {
-            await process.WaitForExitAsync(ct);
+            _ = await RedirectedProcessDrain.WaitForExitAndDrainAsync(
+                ownedProcess, RedirectedProcessDrain.DefaultTimeout, ct, ReportCleanupError).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
-            await ProcessTermination.KillAndWaitAsync(process,
-                message => DiagnosticLog.Instance?.Write("BuildService", message)).ConfigureAwait(false);
+            await RedirectedProcessDrain.KillAndWaitAsync(
+                ownedProcess, CancellationToken.None, ReportCleanupError).ConfigureAwait(false);
             sw.Stop();
             return output.ToCancelledResult(sw.Elapsed);
         }

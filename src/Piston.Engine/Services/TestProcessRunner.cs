@@ -177,7 +177,7 @@ internal static partial class TestProcessRunner
             // Collect stderr lines for error surfacing
             var stderrLines = new System.Collections.Concurrent.ConcurrentBag<string>();
 
-            using var ownedProcess = new OwnedTestProcess(psi);
+            using var ownedProcess = new OwnedProcess(psi);
             var process = ownedProcess.Process;
 
             process.OutputDataReceived += (_, e) =>

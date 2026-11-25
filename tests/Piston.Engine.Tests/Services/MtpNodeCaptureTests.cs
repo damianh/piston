@@ -175,7 +175,7 @@ public sealed partial class MtpNodeCaptureTests
             }
 
             _ = ChildProcessEnvironment.Prepare(startInfo);
-            using var ownedProcess = new OwnedTestProcess(startInfo);
+            using var ownedProcess = new OwnedProcess(startInfo);
             var process = ownedProcess.Process;
             process.OutputDataReceived += (_, args) =>
             {
@@ -310,7 +310,7 @@ public sealed partial class MtpNodeCaptureTests
 
             _ = ChildProcessEnvironment.Prepare(startInfo);
             startInfo.Environment["MSBUILDDISABLENODEREUSE"] = "1";
-            using var ownedProcess = new OwnedTestProcess(startInfo);
+            using var ownedProcess = new OwnedProcess(startInfo);
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeout.CancelAfter(TimeSpan.FromMinutes(2));
             ownedProcess.Start();
