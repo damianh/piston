@@ -107,6 +107,30 @@ public sealed class ImpactAnalyzerTests : IDisposable
     // ── Tests ──────────────────────────────────────────────────────────────────
 
     [Fact]
+    public async Task SourceScopeChanged_IsRaisedOnlyWhenTheScopeInputsChange()
+    {
+        var analyzer = new ImpactAnalyzer(_factory);
+        var raised = new List<SourceInputScope?>();
+        analyzer.SourceScopeChanged += raised.Add;
+        var solution = Path.Combine(_root, "App.slnx");
+        _graph.SourceScope = SourceInputScope.ForProjects(solution, [_libCsproj], []);
+        _graph.EvaluatedBeforeRestore = true;
+
+        await analyzer.InitializeAsync(solution, _ct);
+        _ = Assert.Single(raised);
+
+        _graph.SourceScope = SourceInputScope.ForProjects(solution, [_libCsproj], []);
+        Assert.True(analyzer.RefreshGraphIfEvaluatedBeforeRestore());
+        _ = Assert.Single(raised);
+
+        var widened = SourceInputScope.ForProjects(solution, [_libCsproj, _appCsproj], []);
+        _graph.SourceScope = widened;
+        Assert.True(analyzer.RefreshGraphIfEvaluatedBeforeRestore());
+        Assert.Equal(2, raised.Count);
+        Assert.Same(widened, analyzer.SourceScope);
+    }
+
+    [Fact]
     public async Task RestoredTestProjectListIsUnavailableUntilTheGraphIsComplete()
     {
         var analyzer = new ImpactAnalyzer(_factory);

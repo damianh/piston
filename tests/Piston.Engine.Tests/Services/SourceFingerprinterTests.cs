@@ -116,4 +116,71 @@ public sealed class SourceFingerprinterTests : IDisposable
         File.WriteAllText(Path.Combine(_parent, "global.json"), """{ "sdk": { "version": "10.0.200" } }""");
         Assert.NotEqual(withGlobalJson.Value, SourceFingerprinter.Compute(_root).Value);
     }
+
+    private SourceInputScope ProjectScope(params string[] declared) => SourceInputScope.ForProjects(
+        Path.Combine(_root, "App.slnx"),
+        [Path.Combine(_root, "src", "Lib", "Lib.csproj")],
+        declared.Select(relative => Path.Combine(_root, relative)));
+
+    [Fact]
+    public void ComputeProjectScope_HashesProjectInputsButNotOtherFilesOrGitIgnoredFiles()
+    {
+        GitTestRepository.Init(_root, "*.tmp");
+        Write("src/Lib/Lib.csproj", "<Project />");
+        Write("src/Lib/Code.cs", "class Lib { }");
+        Write("src/Lib/Declared.tmp", "declared");
+        Write("testdata/input.json", "{}");
+        var scope = ProjectScope("testdata/input.json", "src/Lib/Declared.tmp");
+
+        var before = SourceFingerprinter.Compute(scope);
+        Assert.Equal(SourceInputScope.ProjectsAlgorithm, before.Algorithm);
+
+        // Runtime files outside projects, and git-ignored files in them, are not inputs.
+        Write(".compat-storage/spool/entry.bin", "runtime");
+        Write("testdata/output.json", "{}");
+        Write("src/Lib/cache.tmp", "runtime");
+        Assert.Equal(before, SourceFingerprinter.Compute(scope));
+
+        foreach (var input in new[]
+                 {
+                     "src/Lib/Code.cs", "src/Lib/Declared.tmp", "testdata/input.json", "App.slnx",
+                     "src/Directory.Build.props", ".gitignore",
+                 })
+        {
+            var previous = SourceFingerprinter.Compute(scope);
+            Write(input, Guid.NewGuid().ToString());
+            Assert.NotEqual(previous.Value, SourceFingerprinter.Compute(scope).Value);
+        }
+    }
+
+    [Fact]
+    public void ProjectScope_CoversIgnoreRulesAndDirectoriesOnTheWayToProjects()
+    {
+        var scope = ProjectScope();
+
+        Assert.True(scope.Covers(Path.Combine(_root, ".gitignore")));
+        Assert.True(scope.Covers(Path.Combine(_root, "src", ".gitignore")));
+        Assert.True(scope.Covers(Path.Combine(_root, "src")));
+        Assert.False(scope.Covers(Path.Combine(_root, "testdata")));
+        Assert.False(scope.Covers(Path.Combine(_root, "testdata", ".gitignore")));
+    }
+
+    [Fact]
+    public void ComputeProjectScope_WithoutGit_HashesEveryProjectFile()
+    {
+        Write("src/Lib/Lib.csproj", "<Project />");
+        var scope = ProjectScope();
+        var before = SourceFingerprinter.Compute(scope);
+
+        Write("src/Lib/cache.tmp", "runtime");
+        Assert.NotEqual(before.Value, SourceFingerprinter.Compute(scope).Value);
+
+        Write("src/Lib/obj/project.assets.json", "{}");
+        Write("outside/file.txt", "runtime");
+        Assert.Equal(before.FileCount + 1, SourceFingerprinter.Compute(scope).FileCount);
+    }
+
+    [Fact]
+    public void ComputeDirectoryScope_IsTheDirectoryFingerprint() =>
+        Assert.Equal(SourceFingerprinter.Compute(_root), SourceFingerprinter.Compute(SourceInputScope.ForDirectory(_root)));
 }

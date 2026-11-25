@@ -9,7 +9,8 @@ using Piston.Engine.Models;
 namespace Piston.Engine.Services;
 
 /// <summary>
-/// Computes the deterministic <c>piston-source-v2</c> source-input fingerprint.
+/// Computes the deterministic <c>piston-source-v2</c> source-input fingerprint, and the
+/// <c>piston-source-v3</c> fingerprint over a project-scoped <see cref="SourceInputScope"/>.
 /// <para>
 /// Inputs: every file under the solution directory, excluding any path with a component named
 /// <c>bin</c>, <c>obj</c>, <c>TestResults</c>, <c>.git</c>, <c>.vs</c>, <c>.idea</c>, <c>.piston</c>
@@ -77,6 +78,7 @@ public static class SourceFingerprinter
 
         return false;
     }
+
     public static SourceFingerprint Compute(string rootDirectory)
     {
         var root = Path.GetFullPath(rootDirectory);
@@ -93,6 +95,131 @@ public static class SourceFingerprinter
             inputs.Add((relative, path));
         }
 
+        AddAncestorInputs(root, inputs);
+        return Digest(Algorithm, inputs);
+    }
+
+    /// <summary>
+    /// Fingerprints the inputs of <paramref name="scope"/>. A directory scope is <see cref="Compute(string)"/>;
+    /// a project scope (<c>piston-source-v3</c>) hashes, in the same format, the solution file, the files in
+    /// project directories git does not ignore (all of them when git is unavailable), the build-configuration
+    /// files on the way to them, the declared inputs that exist, and the nearest ancestor inputs.
+    /// </summary>
+    public static SourceFingerprint Compute(SourceInputScope scope)
+    {
+        if (!scope.IsProjectScoped)
+        {
+            return Compute(scope.Root);
+        }
+
+        var root = scope.Root;
+        var comparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+        var byPath = new Dictionary<string, string>(comparer);
+
+        void Add(string fullPath)
+        {
+            if (byPath.ContainsKey(fullPath) || !CoversPath(root, fullPath) || !File.Exists(fullPath))
+            {
+                return;
+            }
+
+            byPath.Add(fullPath, Path.GetRelativePath(root, fullPath).Replace(Path.DirectorySeparatorChar, '/'));
+        }
+
+        Add(scope.SolutionPath!);
+        foreach (var directory in scope.AnchorDirectories)
+        {
+            foreach (var name in SourceInputScope.AnchorFileNames)
+            {
+                Add(Path.Combine(directory, name));
+            }
+        }
+
+        foreach (var input in scope.DeclaredInputs)
+        {
+            Add(input);
+        }
+
+        var cones = scope.ProjectDirectories;
+        var relativeCones = cones
+            .Select(cone => Path.GetRelativePath(root, cone).Replace(Path.DirectorySeparatorChar, '/'))
+            .ToArray();
+        if (cones.Count > 0 && GitWorkTree.ListFiles(root, relativeCones) is { } listed)
+        {
+            foreach (var entry in listed)
+            {
+                var fullPath = Path.GetFullPath(Path.Combine(root, entry.TrimEnd('/')));
+                if (!scope.IsInProjectDirectory(fullPath))
+                {
+                    continue;
+                }
+
+                if (Directory.Exists(fullPath))
+                {
+                    // A submodule or nested repository: git does not list its files.
+                    foreach (var file in EnumerateFiles(fullPath))
+                    {
+                        Add(file);
+                    }
+                }
+                else
+                {
+                    Add(fullPath);
+                }
+            }
+        }
+        else
+        {
+            foreach (var cone in cones)
+            {
+                foreach (var file in EnumerateFiles(cone))
+                {
+                    Add(file);
+                }
+            }
+        }
+
+        var inputs = byPath.Select(pair => (Relative: pair.Value, Path: pair.Key)).ToList();
+        AddAncestorInputs(root, inputs);
+        return Digest(SourceInputScope.ProjectsAlgorithm, inputs);
+    }
+
+    /// <summary>Returns null when the inputs cannot be read consistently (e.g. a file vanished mid-scan).</summary>
+    public static SourceFingerprint? TryCompute(SourceInputScope scope)
+    {
+        try
+        {
+            return Compute(scope);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    private static IEnumerable<string> EnumerateFiles(string directory)
+    {
+        var pending = new Stack<string>();
+        pending.Push(directory);
+        while (pending.TryPop(out var current))
+        {
+            foreach (var file in Directory.EnumerateFiles(current))
+            {
+                yield return file;
+            }
+
+            foreach (var child in Directory.EnumerateDirectories(current))
+            {
+                if (!ExcludedComponents.Contains(Path.GetFileName(child)))
+                {
+                    pending.Push(child);
+                }
+            }
+        }
+    }
+
+    private static void AddAncestorInputs(string root, List<(string Relative, string Path)> inputs)
+    {
         foreach (var name in AncestorInputs)
         {
             if (File.Exists(Path.Combine(root, name)))
@@ -114,11 +241,14 @@ public static class SourceFingerprinter
                 break;
             }
         }
+    }
 
+    private static SourceFingerprint Digest(string algorithm, List<(string Relative, string Path)> inputs)
+    {
         inputs.Sort((a, b) => string.CompareOrdinal(a.Relative.Replace('/', '\0'), b.Relative.Replace('/', '\0')));
 
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        hash.AppendData(Encoding.UTF8.GetBytes(Algorithm));
+        hash.AppendData(Encoding.UTF8.GetBytes(algorithm));
         hash.AppendData([0]);
         Span<byte> length = stackalloc byte[sizeof(ulong)];
         foreach (var (relative, path) in inputs)
@@ -133,7 +263,7 @@ public static class SourceFingerprinter
             hash.AppendData(content);
         }
 
-        return new SourceFingerprint(Algorithm, Convert.ToHexStringLower(hash.GetHashAndReset()), inputs.Count);
+        return new SourceFingerprint(algorithm, Convert.ToHexStringLower(hash.GetHashAndReset()), inputs.Count);
     }
 
     /// <summary>Returns null when the inputs cannot be read consistently (e.g. a file vanished mid-scan).</summary>

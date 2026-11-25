@@ -118,6 +118,6 @@ public sealed partial class PistonOrchestrator
             }
         }
 
-        return SourceFingerprinter.TryCompute(solutionDir) is { } current && latest.SourceAfter == current ? latest : null;
+        return ComputeSource(solutionDir) is { } current && latest.SourceAfter == current ? latest : null;
     }
 }

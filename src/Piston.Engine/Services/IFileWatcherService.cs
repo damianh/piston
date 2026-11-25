@@ -15,4 +15,10 @@ public interface IFileWatcherService : IDisposable
     string? MonitoringError => null;
     void Start(string solutionDirectory);
     void Stop();
+
+    /// <summary>
+    /// Limits the watched inputs to <paramref name="scope"/> while it applies to the watched solution directory;
+    /// null watches every file there. Persists across <see cref="Start"/> and <see cref="Stop"/>.
+    /// </summary>
+    void UpdateScope(SourceInputScope? scope) { }
 }

@@ -575,11 +575,14 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             Explanation = "No watched file changed, so nothing would run.",
         };
 
-    // Mirror the watcher: changes under bin, obj and other excluded directories trigger nothing.
-    private List<string> WatchedFiles(IReadOnlyList<string> filePaths) =>
-        [.. filePaths
+    // Mirror the watcher: changes outside the source inputs (bin, obj, files outside projects) trigger nothing.
+    private List<string> WatchedFiles(IReadOnlyList<string> filePaths)
+    {
+        var scope = _orchestrator.SourceScopeFor(_solutionDirectory);
+        return [.. filePaths
             .Select(p => Path.GetFullPath(p, _solutionDirectory))
-            .Where(p => !File.Exists(p) || SourceFingerprinter.CoversPath(_solutionDirectory, p))];
+            .Where(p => !File.Exists(p) || scope.Covers(p))];
+    }
 
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 

@@ -30,6 +30,9 @@ internal interface ISolutionGraph
     TestProjectFacts? GetTestProjectFacts(string projectPath) => null;
     string? VerificationCoverageIssue => "Build-input coverage is unavailable.";
 
+    /// <summary>The project-scoped source inputs, or null when every file under the solution directory counts.</summary>
+    Services.SourceInputScope? SourceScope => null;
+
     /// <summary>
     /// Whether a project was evaluated before NuGet restore wrote its assets, so properties its packages set
     /// (e.g. <c>IsTestingPlatformApplication</c> from xUnit v3 or TUnit) are missing until the graph is reloaded.
