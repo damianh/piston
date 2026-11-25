@@ -30,10 +30,10 @@ piston --help
 ```
 
 Use `--version <version>` to pin a published version, or `--prerelease` for preview
-releases. Published versions use `YYYY.MDD.N`, with UTC year, numeric month and
-two-digit day, and a daily release counter; `-dev` identifies a development
-package. For example, `2026.101.1-dev` is a January 1 development version and
-`2026.1101.2` is a November 1 stable version. These are calendar versions,
+releases. Published versions use `YYYY.MDD.R`, with UTC year, numeric month and
+two-digit day, and the release workflow's run number; `-dev` identifies a
+development package. For example, `2026.101.57-dev` is a January 1 development
+version and `2026.1101.62` is a November 1 stable version. These are calendar versions,
 not compatibility guarantees. Publication is not implied by the examples:
 until the first release is published, build and install locally:
 
