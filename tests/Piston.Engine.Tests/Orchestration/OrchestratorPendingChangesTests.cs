@@ -112,6 +112,21 @@ public sealed class OrchestratorPendingChangesTests : IDisposable
     }
 
     [Fact]
+    public async Task ChangeToAFileDifferingOnlyInCase_ReplacesThePendingFileOnlyWhereCaseIsInsignificant()
+    {
+        await StartAsync();
+        var lower = Path.Combine(_root, "a.cs");
+        var release = await HoldNextTestExecutionAsync(() => _watcher.TriggerChange(Batch(FileA)));
+
+        _watcher.TriggerChange(Batch(lower));
+        release();
+        await _orchestrator.AwaitPipelinesDrainedAsync(_ct);
+
+        string[] expected = OperatingSystem.IsWindows() ? [lower] : [FileA, lower];
+        Assert.Equal(expected, _impact.AnalyzedFiles[^1].Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
     public async Task CompletedFullRun_CoversChangesOfTheRunItSuperseded()
     {
         await StartAsync();

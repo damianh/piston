@@ -348,13 +348,18 @@ affected-test tools take `files`, or, without `files`, git changes (`base`:
   reuses the latest run (`"reused": true`) when that run is `Completed` or
   `BuildFailed` on the present source, was not narrowed by a test filter, and
   either ran every test or is a file-change run that analysed every one of the
-  files. Otherwise it runs the plan and waits for it. If a newer edit supersedes
-  that run, it waits again, up to three runs.
+  files. Otherwise it runs the plan and waits for it, never superseding another
+  run. If a newer edit supersedes that run, or the source changed while it ran,
+  it waits again, up to three runs.
 
-The reply is the plan plus `reused` and `run`: the run's ID, status, trigger
-and counts, the failed tests with their messages (newly failing first, at most
-20), the `newlyFailing` and `fixed` counts, and the errors of a failed build.
-`run` is null when the changes affect no test. With git changes, pass the
+The reply is the plan plus `reused` and `run`: the run's ID, status, trigger,
+`freshness` and counts, the failed tests with their messages (newly failing
+first, at most 20), the `newlyFailing` and `fixed` counts, and the errors of a
+failed build. A `freshness` of `Stale` means the source changed while the run
+executed, so the results describe older code. `run` is null when the changes
+affect no test and no run of them can be reused. Reuse is decided before the
+plan's scope: once a run has measured an edited file, the plan for that file
+selects nothing, and the reply still carries that run. With git changes, pass the
 `files` you just edited to make reuse likely: a file-change run covers the
 files changed since the last completed run, not everything changed on the
 branch.

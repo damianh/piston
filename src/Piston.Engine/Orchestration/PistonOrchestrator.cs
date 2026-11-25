@@ -51,8 +51,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     // Changed files that no completed run has analysed yet, each with the generation of its latest change.
     // A superseded, failed or incomplete run leaves its files here for the next file-change run.
     private readonly Lock _pendingChangesLock = new();
-    private readonly Dictionary<string, (FileChangeEvent Change, long Generation)> _pendingChanges =
-        new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (FileChangeEvent Change, long Generation)> _pendingChanges = new(PathComparer);
+
+    // As the file watcher: paths differing only in case are one file on Windows and may be two elsewhere.
+    private static StringComparer PathComparer =>
+        OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
 
     // The last successful build whose run finished Current; guarded by _runLock.
     private BuildBaseline? _buildBaseline;
@@ -354,7 +357,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             .Where(s => projectIds.Contains(s.Key, StringComparer.Ordinal))
             .SelectMany(s => s.Tests);
         return TryTriggerRun(solutionPath, null, TestRunTrigger.Targeted,
-            new SelectedRun(paths, TestSelectionFilter.Build(selection.Tests, known)));
+            new SelectedRun(paths, TestSelectionFilter.Build(selection.Tests, known)), supersede: false);
     }
 
     /// <summary>
@@ -1144,16 +1147,17 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     /// <summary>The test projects and filter of a <see cref="TestRunTrigger.Targeted"/> run.</summary>
     private sealed record SelectedRun(IReadOnlyList<string> TestProjectPaths, string? Filter);
 
-    // Only a selected run is ever refused, so a run without a selection always starts.
+    // A superseding run is never refused, so it always starts.
     private Task<TestRunRecord> TriggerRunAsync(string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger) =>
-        TryTriggerRun(solutionPath, batch, trigger, selection: null)
+        TryTriggerRun(solutionPath, batch, trigger, selection: null, supersede: true)
         ?? throw new InvalidOperationException("A test run is already in progress.");
 
     /// <summary>
-    /// Starts a run, superseding the active one, unless it is a selected run and a run is active: then null.
+    /// Starts a run. With <paramref name="supersede"/> it replaces the active run; without, it returns null
+    /// when a run is active.
     /// </summary>
     private Task<TestRunRecord>? TryTriggerRun(
-        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, SelectedRun? selection)
+        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, SelectedRun? selection, bool supersede)
     {
         CancellationTokenSource cts;
         lock (_lifecycleLock)
@@ -1163,8 +1167,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 return Task.FromResult(CompleteRun(CreateRunRecord(trigger), TestRunStatus.Cancelled, "Engine is shutting down."));
             }
 
-            // Checked under the lock so a selected run cannot cancel a run that started meanwhile.
-            if (selection is not null && _activePipelines > 0)
+            // Checked under the lock so the run cannot cancel a run that started meanwhile.
+            if (!supersede && _activePipelines > 0)
             {
                 return null;
             }

@@ -352,8 +352,8 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
 
     [McpServerTool(Name = RunAffectedTestsTool), Description(
         "After editing code, get the result of the tests your change affects, as JSON: the plan of plan_affected_tests " +
-        "(schema piston.affected-plan/v1) plus reused and run (its ID, status, counts and failed tests, newly failing " +
-        "first; null when nothing is affected). Piston starts a run of the affected tests itself after every edit, so " +
+        "(schema piston.affected-plan/v1) plus reused and run (its ID, status, freshness, counts and failed tests, newly " +
+        "failing first; null when nothing is affected and no run is reused). Piston starts a run of the affected tests itself after every edit, so " +
         "this waits for a run in progress and reuses it (reused: true) when it tested these files on the present " +
         "source; otherwise it runs the plan. Pass the files you edited, or omit files to use git changes (see base): " +
         "e.g. base=branch covers what changed since the branch left main. A full-scope plan runs every test. " +
@@ -428,6 +428,8 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
             ["runId"] = run.RunId,
             ["status"] = run.Status.ToString(),
             ["statusReason"] = run.StatusReason,
+            ["freshness"] = run.Freshness.ToString(),
+            ["freshnessReason"] = run.FreshnessReason,
             ["trigger"] = run.Trigger.ToString(),
             ["passed"] = run.Tests.Count(t => t.Status == TestStatus.Passed),
             ["failed"] = failed.Count,

@@ -53,8 +53,14 @@ internal sealed class ProvenanceImpactAnalyzer(IReadOnlyList<string> testProject
     /// <summary>What <see cref="Preview"/> returns; by default the first test project, like <see cref="Analyze"/>.</summary>
     public ImpactAnalysisResult? PreviewResult { get; set; }
 
-    public ImpactAnalysisResult Preview(IReadOnlyList<FileChangeEvent> changes) =>
-        PreviewResult ?? new([TestProjects[0]], [TestProjects[0]], RequiresGraphRebuild: false, IsFullRun: false);
+    /// <summary>Called at the start of every <see cref="Preview"/>, e.g. to start a run just before one is requested.</summary>
+    public Action? OnPreview { get; set; }
+
+    public ImpactAnalysisResult Preview(IReadOnlyList<FileChangeEvent> changes)
+    {
+        OnPreview?.Invoke();
+        return PreviewResult ?? new([TestProjects[0]], [TestProjects[0]], RequiresGraphRebuild: false, IsFullRun: false);
+    }
 
     public ImpactAnalysisResult AnalyzeFullRun() =>
         new(TestProjects, TestProjects, RequiresGraphRebuild: false, IsFullRun: true);

@@ -148,6 +148,7 @@ public sealed class AffectedChangesTests : IDisposable
         var run = json["run"]!;
         Assert.Equal("run-3", (string?)run["runId"]);
         Assert.Equal("FileChange", (string?)run["trigger"]);
+        Assert.Equal("Unknown", (string?)run["freshness"]);
         Assert.Equal(2, (int)run["failed"]!);
         Assert.Equal(1, (int)run["newlyFailing"]!);
         var failed = run["failedTests"]!.AsArray();

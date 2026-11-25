@@ -632,11 +632,13 @@ current accumulated state without initiating a run.
 It waits for pending watcher changes and for every active pipeline, then reuses the
 engine's latest run when that run is `Completed` or `BuildFailed`, `Current`, bound to
 the present source fingerprint, not narrowed by the user's filter, and either full scope
-or a file-change run whose `ChangedFiles` include every requested file. Otherwise it
+or a file-change run whose `ChangedFiles` include every requested file (paths compare
+case-insensitively only on Windows). Reuse is decided before the plan's scope, because
+the plan for a file that a run has already measured selects nothing. Otherwise it
 starts the planned run: a forced full run for a full-scope plan, else a `Targeted` run.
-A targeted run never supersedes another run, so if one started meanwhile the operation
+Neither supersedes another run, so if one started meanwhile the operation
 waits again; it also waits again, for at most
-three runs, when its own run is cancelled by a newer change. The dashboard's
+three runs, when its own run is cancelled by a newer change or finishes `Stale`. The dashboard's
 `engine/runTests` still rejects a selected run while another run is active.
 
 The server sends `McpServiceRegistration.ServerInstructions` in its `initialize`
