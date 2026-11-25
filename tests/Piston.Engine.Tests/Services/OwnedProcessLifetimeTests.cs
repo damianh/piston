@@ -81,7 +81,24 @@ public sealed class OwnedProcessLifetimeTests
                     }
                 }
             }
-            Directory.Delete(root, recursive: true);
+            await DeleteDirectoryAsync(root);
+        }
+    }
+
+    // The killed build's dotnet process may still hold its working directory briefly while the job tears down.
+    private static async Task DeleteDirectoryAsync(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                Directory.Delete(path, recursive: true);
+                return;
+            }
+            catch (IOException) when (attempt < 50)
+            {
+                await Task.Delay(100, CancellationToken.None);
+            }
         }
     }
 

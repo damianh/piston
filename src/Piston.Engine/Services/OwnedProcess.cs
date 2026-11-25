@@ -23,7 +23,8 @@ internal sealed class OwnedProcess : IDisposable
     {
         var launcherHost = LauncherHostPath();
         var fileName = ResolveTargetPath(startInfo.FileName);
-        var ownershipName = $"piston-process-{Guid.NewGuid():N}";
+        // Short: on Unix .NET places the pipe at $TMPDIR/CoreFxPipe_<name>, and macOS limits socket paths to 104 bytes.
+        var ownershipName = $"pst-{Guid.NewGuid():N}";
         _job = OperatingSystem.IsWindows() ? CreateJob(ownershipName) : null;
         _ownerLifetime = OperatingSystem.IsWindows() ? null : new NamedPipeServerStream(
             ownershipName, PipeDirection.Out, 1, PipeTransmissionMode.Byte,
@@ -133,6 +134,12 @@ internal sealed class OwnedProcess : IDisposable
             try
             {
                 _ownerLifetime.WaitForConnectionAsync(timeout.Token).GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException ex)
+            {
+                Dispose();
+                // Not a caller cancellation: surface it as a startup failure callers already handle.
+                throw new InvalidOperationException("The process launcher did not connect to its owner-lifetime pipe.", ex);
             }
             catch
             {
