@@ -198,7 +198,9 @@ async Task<(string Line, string Status, Counts Counts, int Suites)> WaitForStart
             throw new SmokeTestException("The daemon exited before the startup run finished.");
         }
 
-        var (status, _) = await ReadAsync(tool, ["status", samples], handleExitCode: _ => true);
+        using var probeTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var (status, _) = await ReadAsync(tool, ["status", samples], handleExitCode: _ => true,
+            ct: probeTimeout.Token);
         var latest = MyRegex().Match(status);
         var active = Regex.IsMatch(status, @"^\s*Active\s*:", RegexOptions.Multiline);
         var fields = latest.Success ? latest.Groups[1].Value.Split('|').Select(f => f.Trim()).ToArray() : [];
@@ -230,17 +232,26 @@ async Task StopDaemonAsync(Process daemon)
         return;
     }
 
-    _ = await ReadAsync(tool, ["stop", samples], handleExitCode: _ => true);
     using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
     try
     {
+        LogSmokePhase("START: daemon shutdown");
+        _ = await ReadAsync(tool, ["stop", samples], handleExitCode: _ => true, ct: cts.Token);
         await daemon.WaitForExitAsync(cts.Token);
     }
-    catch (OperationCanceledException)
+    catch (OperationCanceledException) when (cts.IsCancellationRequested)
     {
-        daemon.Kill(entireProcessTree: true);
-        await daemon.WaitForExitAsync();
+        throw new SmokeTestException("Daemon shutdown timed out after 30s.");
     }
+    finally
+    {
+        if (!daemon.HasExited)
+        {
+            daemon.Kill(entireProcessTree: true);
+            await daemon.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
+    LogSmokePhase("DONE: daemon shutdown");
 }
 
 async Task SmokeMcpAsync(string? command = null, string[]? arguments = null,
@@ -250,6 +261,7 @@ async Task SmokeMcpAsync(string? command = null, string[]? arguments = null,
     using var timeout = new CancellationTokenSource(smokeTimeout);
     string text;
     bool isError;
+    var phase = "initialization";
     try
     {
         var transport = new StdioClientTransport(new StdioClientTransportOptions
@@ -259,23 +271,32 @@ async Task SmokeMcpAsync(string? command = null, string[]? arguments = null,
             Arguments = arguments ?? ["mcp", samples],
             EnvironmentVariables = environment,
             StandardErrorLines = line => Append(stderr, line),
+            ShutdownTimeout = TimeSpan.FromSeconds(10),
         });
+        LogSmokePhase($"START: MCP initialization ({command ?? tool})");
         await using var client = await McpClient.CreateAsync(transport, cancellationToken: timeout.Token);
         if (expectedServerVersion is not null && client.ServerInfo?.Version != expectedServerVersion)
         {
             throw new SmokeTestException($"MCP server version is {client.ServerInfo?.Version ?? "unknown"}, expected {expectedServerVersion}.");
         }
 
+        phase = "list tools";
+        LogSmokePhase("DONE: MCP initialization; START: list tools");
         _ = await client.ListToolsAsync(cancellationToken: timeout.Token);
+        phase = "verify";
+        LogSmokePhase("DONE: list tools; START: verify");
         var result = await client.CallToolAsync("verify", cancellationToken: timeout.Token);
+        phase = "shutdown";
+        LogSmokePhase("DONE: verify; START: MCP shutdown");
         text = string.Join('\n', result.Content.OfType<TextContentBlock>().Select(c => c.Text));
         isError = result.IsError == true;
     }
-    catch (Exception ex) when (ex is not SmokeTestException)
+    catch (Exception ex)
     {
         DumpDiagnostics("piston mcp stderr", stderr);
-        throw new SmokeTestException($"MCP smoke test failed: {ex.Message}");
+        throw new SmokeTestException($"MCP smoke test failed during {phase}: {ex.Message}");
     }
+    LogSmokePhase("DONE: MCP shutdown");
 
     Console.WriteLine(text);
     string[] required =
@@ -297,6 +318,8 @@ async Task SmokeMcpAsync(string? command = null, string[]? arguments = null,
 
     Console.WriteLine("MCP smoke test passed.");
 }
+
+static void LogSmokePhase(string message) => Console.WriteLine($"[{DateTime.UtcNow:O}] {message}");
 
 async Task SmokeDistributionAsync()
 {
@@ -322,20 +345,41 @@ async Task SmokeDistributionAsync()
         }
     }
 
+    async Task<(string Output, string Error)> ReadDistributionAsync(
+        string command, string[] arguments, TimeSpan limit, Func<int, bool>? handleExitCode = null)
+    {
+        using var timeout = new CancellationTokenSource(limit);
+        var elapsed = Stopwatch.StartNew();
+        var phase = $"{command} {string.Join(' ', arguments)}";
+        LogSmokePhase($"START: {phase} (timeout {limit.TotalSeconds:g}s)");
+        try
+        {
+            var result = await ReadAsync(command, arguments, configureEnvironment: Configure,
+                handleExitCode: handleExitCode, ct: timeout.Token);
+            LogSmokePhase($"DONE: {phase} ({elapsed.Elapsed.TotalSeconds:F1}s)");
+            return result;
+        }
+        catch (OperationCanceledException) when (timeout.IsCancellationRequested)
+        {
+            throw new SmokeTestException($"Distribution command timed out after {limit.TotalSeconds:g}s: {phase}");
+        }
+    }
+
     async Task ToolCommandAsync(string operation, string version)
     {
-        var (output, error) = await ReadAsync("dotnet",
+        var (output, error) = await ReadDistributionAsync("dotnet",
             ["tool", operation, PackageId, "--version", version, "--tool-path", Path.GetDirectoryName(tool)!,
-                    "--source", feed], configureEnvironment: Configure);
+                    "--source", feed], TimeSpan.FromMinutes(2));
         Console.WriteLine(output + error);
     }
 
     async Task ProbeUpdateAsync(string mode)
     {
         var exitCode = 0;
-        var (output, error) = await ReadAsync("dotnet",
+        LogSmokePhase($"START: live {mode} update");
+        var (output, error) = await ReadDistributionAsync("dotnet",
             ["tool", "update", PackageId, "--version", newVersion, "--tool-path", Path.GetDirectoryName(tool)!,
-                    "--source", feed], configureEnvironment: Configure, handleExitCode: code =>
+                    "--source", feed], TimeSpan.FromMinutes(2), handleExitCode: code =>
             {
                 exitCode = code;
                 return true;
@@ -353,7 +397,7 @@ async Task SmokeDistributionAsync()
 
     async Task CheckVersionAsync(string expectedVersion)
     {
-        var (version, error) = await ReadAsync(tool, ["--version"]);
+        var (version, error) = await ReadDistributionAsync(tool, ["--version"], TimeSpan.FromSeconds(30));
         if (!HasVersion(version, expectedVersion))
         {
             throw new SmokeTestException($"CLI is not {expectedVersion}: {version}{error}");
@@ -376,9 +420,9 @@ async Task SmokeDistributionAsync()
             CheckPackageContents(feed, version);
         }
 
-        var (help, helpError) = await ReadAsync("dotnet",
+        var (help, helpError) = await ReadDistributionAsync("dotnet",
             ["dnx", $"{PackageId}@{oldVersion}", "--source", feed, "--", "--help"],
-            configureEnvironment: Configure);
+            TimeSpan.FromMinutes(2));
         if (!help.Contains("mcp", StringComparison.Ordinal) || !help.Contains("daemon", StringComparison.Ordinal))
         {
             throw new SmokeTestException($"dnx did not forward --help: {help}{helpError}");
@@ -386,18 +430,18 @@ async Task SmokeDistributionAsync()
 
         foreach (var version in new[] { oldVersion, newVersion })
         {
-            var (actual, error) = await ReadAsync("dotnet",
+            var (actual, error) = await ReadDistributionAsync("dotnet",
                 ["dnx", $"{PackageId}@{version}", "--source", feed, "--", "--version"],
-                configureEnvironment: Configure);
+                TimeSpan.FromMinutes(2));
             if (!HasVersion(actual, version))
             {
                 throw new SmokeTestException($"dnx CLI is not {version}: {actual}{error}");
             }
         }
 
-        _ = await ReadAsync("dotnet",
+        _ = await ReadDistributionAsync("dotnet",
             ["dnx", $"{PackageId}@{oldVersion}", "--source", feed, "--", "trust", samples],
-            configureEnvironment: Configure);
+            TimeSpan.FromMinutes(2));
         fixtureTrusted = true;
         await SmokeMcpAsync("dotnet",
             ["dnx", $"{PackageId}@{oldVersion}", "--source", feed, "--", "mcp", samples], environment,
@@ -408,43 +452,67 @@ async Task SmokeDistributionAsync()
         await CheckVersionAsync(oldVersion);
         using (var timeout = new CancellationTokenSource(smokeTimeout))
         {
-            var transport = new StdioClientTransport(new StdioClientTransportOptions
-            {
-                Command = tool,
-                Arguments = ["mcp", samples],
-                EnvironmentVariables = environment,
-            });
-            await using var client = await McpClient.CreateAsync(transport, cancellationToken: timeout.Token);
-            _ = await client.ListToolsAsync(cancellationToken: timeout.Token);
-            var baseline = await client.CallToolAsync("verify", cancellationToken: timeout.Token);
-            var baselineText = string.Join('\n', baseline.Content.OfType<TextContentBlock>().Select(c => c.Text));
-            if (baseline.IsError == true || !baselineText.Contains("Verdict: TestsFailed", StringComparison.Ordinal)
-                || !baselineText.Contains("Tests: 12 (Passed: 4, Failed: 4, Skipped: 4)", StringComparison.Ordinal)
-                || client.ServerInfo?.Version != oldVersion)
-            {
-                throw new SmokeTestException("Old MCP version failed before updating.");
-            }
-
-            await ProbeUpdateAsync("mcp");
-            // Windows runs the tool from a per-version runtime copy, so a live session must survive the update.
-            // Elsewhere the old store is deleted under the process; record the outcome without failing.
+            var stderr = new StringBuilder();
+            var phase = "initialization";
             try
             {
-                var result = await client.CallToolAsync("run_tests", cancellationToken: timeout.Token);
-                var text = string.Join('\n', result.Content.OfType<TextContentBlock>().Select(c => c.Text));
-                if (OperatingSystem.IsWindows()
-                    && (result.IsError == true || !text.Contains("Passed: 4, Failed: 4", StringComparison.Ordinal)))
+                var transport = new StdioClientTransport(new StdioClientTransportOptions
                 {
-                    throw new SmokeTestException($"Live MCP session could not run tests after updating:\n{text}");
+                    Command = tool,
+                    Arguments = ["mcp", samples],
+                    EnvironmentVariables = environment,
+                    StandardErrorLines = line => Append(stderr, line),
+                    ShutdownTimeout = TimeSpan.FromSeconds(10),
+                });
+                LogSmokePhase("START: old MCP initialization");
+                await using var client = await McpClient.CreateAsync(transport, cancellationToken: timeout.Token);
+                phase = "list tools";
+                LogSmokePhase("DONE: old MCP initialization; START: list tools");
+                _ = await client.ListToolsAsync(cancellationToken: timeout.Token);
+                phase = "baseline verify";
+                LogSmokePhase("DONE: list tools; START: baseline verify");
+                var baseline = await client.CallToolAsync("verify", cancellationToken: timeout.Token);
+                LogSmokePhase("DONE: baseline verify");
+                var baselineText = string.Join('\n', baseline.Content.OfType<TextContentBlock>().Select(c => c.Text));
+                if (baseline.IsError == true || !baselineText.Contains("Verdict: TestsFailed", StringComparison.Ordinal)
+                    || !baselineText.Contains("Tests: 12 (Passed: 4, Failed: 4, Skipped: 4)", StringComparison.Ordinal)
+                    || client.ServerInfo?.Version != oldVersion)
+                {
+                    throw new SmokeTestException("Old MCP version failed before updating.");
                 }
 
-                Console.WriteLine($"Live MCP forced run after update: isError={result.IsError == true}\n{text}");
+                phase = "live update";
+                await ProbeUpdateAsync("mcp");
+                // Windows runs the tool from a per-version runtime copy, so a live session must survive the update.
+                // Elsewhere the old store is deleted under the process; record the outcome without failing.
+                phase = "forced run after update";
+                try
+                {
+                    LogSmokePhase("START: live MCP forced run after update");
+                    var result = await client.CallToolAsync("run_tests", cancellationToken: timeout.Token);
+                    var text = string.Join('\n', result.Content.OfType<TextContentBlock>().Select(c => c.Text));
+                    if (OperatingSystem.IsWindows()
+                        && (result.IsError == true || !text.Contains("Passed: 4, Failed: 4", StringComparison.Ordinal)))
+                    {
+                        throw new SmokeTestException($"Live MCP session could not run tests after updating:\n{text}");
+                    }
+
+                    Console.WriteLine($"Live MCP forced run after update: isError={result.IsError == true}\n{text}");
+                }
+                catch (Exception ex) when (ex is IOException or McpException && !OperatingSystem.IsWindows())
+                {
+                    Console.WriteLine($"OBSERVATION: live MCP could not run tests after update: {ex.Message}");
+                }
+                phase = "shutdown";
+                LogSmokePhase("DONE: live MCP forced run; START: old MCP shutdown");
             }
-            catch (Exception ex) when (ex is IOException or McpException && !OperatingSystem.IsWindows())
+            catch (Exception ex)
             {
-                Console.WriteLine($"OBSERVATION: live MCP could not run tests after update: {ex.Message}");
+                DumpDiagnostics("live piston mcp stderr", stderr);
+                throw new SmokeTestException($"Live MCP smoke test failed during {phase}: {ex.Message}");
             }
         }
+        LogSmokePhase("DONE: old MCP shutdown");
 
         await ToolCommandAsync("update", newVersion);
         await CheckVersionAsync(newVersion);
@@ -475,7 +543,7 @@ async Task SmokeDistributionAsync()
                 }
 
                 Console.WriteLine($"Live daemon dashboard after update: {response.StatusCode}");
-                var (status, _) = await ReadAsync(tool, ["status", samples]);
+                var (status, _) = await ReadDistributionAsync(tool, ["status", samples], TimeSpan.FromSeconds(30));
                 if (!status.Contains(oldVersion, StringComparison.Ordinal))
                 {
                     throw new SmokeTestException("Live daemon did not retain the old process version.");
@@ -498,9 +566,9 @@ async Task SmokeDistributionAsync()
         {
             if (fixtureTrusted)
             {
-                _ = await ReadAsync("dotnet",
+                _ = await ReadDistributionAsync("dotnet",
                     ["dnx", $"{PackageId}@{oldVersion}", "--source", feed, "--", "trust", samples, "--revoke"],
-                    configureEnvironment: Configure);
+                    TimeSpan.FromMinutes(2));
             }
         }
         finally

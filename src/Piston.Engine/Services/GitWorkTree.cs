@@ -62,7 +62,8 @@ internal static class GitWorkTree
         var psi = new ProcessStartInfo("git")
         {
             WorkingDirectory = root,
-            RedirectStandardInput = stdin is not null,
+            // Git for Windows blocks if it inherits stdin while the MCP host has a pending read on it.
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             StandardOutputEncoding = Encoding.UTF8,
@@ -95,8 +96,8 @@ internal static class GitWorkTree
             if (stdin is not null)
             {
                 process.StandardInput.Write(stdin);
-                process.StandardInput.Close();
             }
+            process.StandardInput.Close();
 
             if (!process.WaitForExit(Timeout))
             {

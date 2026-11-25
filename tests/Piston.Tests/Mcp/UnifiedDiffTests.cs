@@ -272,13 +272,19 @@ public sealed class UnifiedDiffTests : IDisposable
 
     private void Git(params string[] args)
     {
-        var psi = new System.Diagnostics.ProcessStartInfo("git") { WorkingDirectory = _root, RedirectStandardError = true };
+        var psi = new System.Diagnostics.ProcessStartInfo("git")
+        {
+            WorkingDirectory = _root,
+            RedirectStandardInput = true,
+            RedirectStandardError = true,
+        };
         foreach (var arg in args)
         {
             psi.ArgumentList.Add(arg);
         }
 
         using var process = System.Diagnostics.Process.Start(psi)!;
+        process.StandardInput.Close();
         var error = process.StandardError.ReadToEnd();
         process.WaitForExit();
         Assert.True(process.ExitCode == 0, error);

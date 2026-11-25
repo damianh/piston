@@ -13,10 +13,12 @@ internal static class GitTestRepository
         var psi = new ProcessStartInfo("git", ["init", "-q"])
         {
             WorkingDirectory = directory,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
         using var process = Process.Start(psi)!;
+        process.StandardInput.Close();
         _ = process.StandardOutput.ReadToEnd();
         var error = process.StandardError.ReadToEnd();
         if (!process.WaitForExit(TimeSpan.FromSeconds(30)) || process.ExitCode != 0)
