@@ -60,12 +60,14 @@
     <!--
       Piston.Web is published and its static files are copied to wwwroot (see BlazorWebUI.targets).
       This reference only orders the build; Private="false" stops its runtimeconfig and json
-      content from being copied into this project's output and the packed tool.
+      content from being copied into this project's output and the packed tool. Removing the RID keeps
+      the parallel RID-specific pack builds on one shared Piston.Web build instead of racing on its obj files.
     -->
     <ProjectReference Include="..\Piston.Web\Piston.Web.csproj"
                       ReferenceOutputAssembly="false"
                       Private="false"
-                      SkipGetTargetFrameworkProperties="true" />
+                      SkipGetTargetFrameworkProperties="true"
+                      GlobalPropertiesToRemove="RuntimeIdentifier;SelfContained" />
   </ItemGroup>
   <ItemGroup>
     <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">

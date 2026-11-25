@@ -70,6 +70,34 @@ public sealed class RuntimeStagingTests : IDisposable
     }
 
     [Fact]
+    public async Task Stage_ConcurrentStartsRepairAnIncompleteDestinationOnce()
+    {
+        var destination = Directory.CreateDirectory(Path.Combine(_runtimes, "1.0.0-abc")).FullName;
+        File.WriteAllText(Path.Combine(destination, "partial.dll"), "");
+
+        var results = await Task.WhenAll(Enumerable.Range(0, 8)
+            .Select(_ => Task.Run(() => RuntimeStaging.Stage(_source, destination), TestContext.Current.CancellationToken)));
+
+        Assert.All(results, result => Assert.Equal(destination, result));
+        Assert.Equal([destination], Directory.GetDirectories(_runtimes));
+        Assert.False(File.Exists(Path.Combine(destination, "partial.dll")));
+        Assert.True(File.Exists(Path.Combine(destination, "Piston.dll")));
+    }
+
+    [Fact]
+    public void Stage_ClaimsAnExistingRuntimeSoCleanupKeepsIt()
+    {
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Runtime copies are only used on Windows.");
+        var now = DateTime.UtcNow;
+        var runtime = StageAged("1.0.0-abc", now - TimeSpan.FromDays(30));
+
+        _ = RuntimeStaging.Stage(_source, runtime);
+        RuntimeStaging.Cleanup(_runtimes, "other", now);
+
+        Assert.True(File.Exists(Path.Combine(runtime, "Piston.dll")));
+    }
+
+    [Fact]
     public void Run_ReportsUsageAndMissingPayloads()
     {
         var error = new StringWriter();

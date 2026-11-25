@@ -15,6 +15,8 @@ internal static class RuntimeStaging
     internal const string LastUsed = ".last-used";
     private const string StagingSuffix = ".staging";
     private const string DeletingSuffix = ".deleting";
+    private const string LockFile = ".lock";
+    private static readonly TimeSpan LockTimeout = TimeSpan.FromSeconds(30);
 
     /// <summary>Runtimes unused for this long are removed when another runtime is staged.</summary>
     internal static readonly TimeSpan UnusedRetention = TimeSpan.FromDays(7);
@@ -44,17 +46,25 @@ internal static class RuntimeStaging
     }
 
     /// <summary>
-    /// Copies <paramref name="source"/> to <paramref name="destination"/> unless it is already complete.
-    /// The copy is made under a unique sibling name and renamed into place, so a concurrent start never
-    /// runs a partial copy and a destination with a marker is always complete.
+    /// Returns <paramref name="destination"/> as a complete copy of <paramref name="source"/>, marked as just
+    /// used. The copy is made under a unique sibling name and renamed into place, so a concurrent start never
+    /// runs a partial copy and a destination with a marker is always complete. Checking, marking, repairing and
+    /// publishing happen under the runtimes lock that <see cref="Cleanup"/> also takes, so cleanup never removes
+    /// a runtime a launcher has just been given.
     /// </summary>
     internal static string Stage(string source, string destination)
     {
         source = Path.GetFullPath(source);
         destination = Path.TrimEndingDirectorySeparator(Path.GetFullPath(destination));
-        if (IsComplete(destination))
+        var root = Path.GetDirectoryName(destination)
+            ?? throw new ArgumentException($"'{destination}' has no parent directory.", nameof(destination));
+        _ = Directory.CreateDirectory(root);
+        using (AcquireLock(root))
         {
-            return destination;
+            if (TryClaim(destination))
+            {
+                return destination;
+            }
         }
 
         if (!File.Exists(Path.Combine(source, "Piston.dll")))
@@ -62,31 +72,28 @@ internal static class RuntimeStaging
             throw new IOException($"'{source}' does not contain Piston.dll.");
         }
 
-        var root = Path.GetDirectoryName(destination)
-            ?? throw new ArgumentException($"'{destination}' has no parent directory.", nameof(destination));
-        _ = Directory.CreateDirectory(root);
         var staging = $"{destination}.{Guid.NewGuid():N}{StagingSuffix}";
         try
         {
             CopyDirectory(source, staging);
             File.WriteAllText(Path.Combine(staging, Marker), source);
-            for (var attempt = 0; ; attempt++)
+            using (AcquireLock(root))
             {
-                try
+                // A concurrent start may have staged the same build while this one copied.
+                if (TryClaim(destination))
                 {
-                    Directory.Move(staging, destination);
                     return destination;
                 }
-                catch (IOException) when (IsComplete(destination))
+
+                // Never completed (no marker), so nothing runs from it.
+                if (Directory.Exists(destination))
                 {
-                    // A concurrent start staged the same build first.
-                    return destination;
-                }
-                catch (IOException) when (attempt == 0 && Directory.Exists(destination))
-                {
-                    // Never completed (no marker), so nothing runs from it.
                     Directory.Delete(destination, recursive: true);
                 }
+
+                Directory.Move(staging, destination);
+                _ = TryClaim(destination);
+                return destination;
             }
         }
         finally
@@ -107,6 +114,7 @@ internal static class RuntimeStaging
             return;
         }
 
+        var removed = new List<string>();
         foreach (var directory in Directory.EnumerateDirectories(root))
         {
             var name = Path.GetFileName(directory);
@@ -117,33 +125,74 @@ internal static class RuntimeStaging
 
             if (name.EndsWith(DeletingSuffix, StringComparison.Ordinal))
             {
-                TryDelete(directory);
+                removed.Add(directory);
             }
             else if (name.EndsWith(StagingSuffix, StringComparison.Ordinal))
             {
                 if (utcNow - Directory.GetLastWriteTimeUtc(directory) > AbandonedStagingAge)
                 {
-                    TryDelete(directory);
+                    removed.Add(directory);
                 }
             }
-            else if (IsComplete(directory) && utcNow - LastUsedUtc(directory) > UnusedRetention)
+            else if (IsComplete(directory))
             {
-                var deleting = $"{directory}.{Guid.NewGuid():N}{DeletingSuffix}";
-                try
-                {
-                    Directory.Move(directory, deleting);
-                }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                // Rechecked under the lock: a launcher claims a runtime under the same lock before it starts.
+                using var held = AcquireLock(root);
+                if (utcNow - LastUsedUtc(directory) <= UnusedRetention)
                 {
                     continue;
                 }
 
-                TryDelete(deleting);
+                var deleting = $"{directory}.{Guid.NewGuid():N}{DeletingSuffix}";
+                try
+                {
+                    Directory.Move(directory, deleting);
+                    removed.Add(deleting);
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                }
             }
+        }
+
+        foreach (var directory in removed)
+        {
+            TryDelete(directory);
         }
     }
 
     private static bool IsComplete(string directory) => File.Exists(Path.Combine(directory, Marker));
+
+    /// <summary>Marks a complete runtime as just used; returns false when it is not complete.</summary>
+    private static bool TryClaim(string directory)
+    {
+        if (!IsComplete(directory))
+        {
+            return false;
+        }
+
+        File.WriteAllBytes(Path.Combine(directory, LastUsed), []);
+        File.SetLastWriteTimeUtc(Path.Combine(directory, LastUsed), DateTime.UtcNow);
+        return true;
+    }
+
+    /// <summary>Serializes staging and cleanup across processes; the OS releases it if a process dies.</summary>
+    private static FileStream AcquireLock(string root)
+    {
+        var path = Path.Combine(root, LockFile);
+        var deadline = DateTime.UtcNow + LockTimeout;
+        while (true)
+        {
+            try
+            {
+                return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException) when (DateTime.UtcNow < deadline)
+            {
+                Thread.Sleep(20);
+            }
+        }
+    }
 
     private static DateTime LastUsedUtc(string directory)
     {

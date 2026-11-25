@@ -1770,23 +1770,16 @@ internal sealed partial class ReleaseTooling
     public static void PackageIdentity(byte[] data, ReleaseVersion version, string sourceSha, string repo)
     {
         var entries = PackageEntries(data);
-        var nuspecs = entries.Keys.Where(name => name.EndsWith(".nuspec", StringComparison.Ordinal)).ToList();
-        if (nuspecs.Count != 1 || !entries.TryGetValue(".mcp/server.json", out var serverData))
+        if (!entries.TryGetValue(".mcp/server.json", out var serverData))
         {
             throw new ReleaseException("The package must contain one nuspec and MCP metadata.");
         }
 
-        var values = new Dictionary<string, XElement>(StringComparer.Ordinal);
+        var values = NuspecValues(entries);
         JsonElement server;
         JsonElement package;
         try
         {
-            var root = XDocument.Load(new MemoryStream(entries[nuspecs[0]])).Root!;
-            foreach (var element in root.Elements().First(e => e.Name.LocalName == "metadata").Elements())
-            {
-                values[element.Name.LocalName] = element;
-            }
-
             using var document = JsonDocument.Parse(new MemoryStream(serverData));
             server = document.RootElement.Clone();
             if (Property(server, "packages") is null)
@@ -1802,28 +1795,104 @@ internal sealed partial class ReleaseTooling
                 throw new ReleaseException("The MCP package metadata must be an object.");
             }
         }
-        catch (Exception ex) when (ex is XmlException or InvalidOperationException or JsonException)
+        catch (Exception ex) when (ex is InvalidOperationException or JsonException)
         {
             throw new ReleaseException("The package metadata is invalid.", ex);
         }
 
-        var repository = values.GetValueOrDefault("repository");
-        if (values.GetValueOrDefault("id") is not { } id
-            || Text(id) != PackageId
-            || values.GetValueOrDefault("version") is not { } packageVersion
-            || Text(packageVersion) != version.Version
-            || repository is null
-            || (string?)repository.Attribute("type") != "git"
-            || !string.Equals(((string?)repository.Attribute("url") ?? "").TrimEnd('/'), $"https://github.com/{repo}",
-                StringComparison.OrdinalIgnoreCase)
-            || ((string?)repository.Attribute("commit") ?? "").ToLowerInvariant() != sourceSha
+        if (!NuspecMatches(values, PackageId, version, sourceSha, repo)
             || String(server, "version") != version.Version
             || String(package, "version") != version.Version
-            || String(package, "identifier") != PackageId
-            || !entries.Keys.Any(name => name.EndsWith("/Piston.dll", StringComparison.Ordinal)))
+            || String(package, "identifier") != PackageId)
         {
             throw new ReleaseException($"Package {version.Version} does not match its tag, repository, or source commit.");
         }
+
+        // Releases before RID-specific packaging carry the executable themselves.
+        if (RuntimePackageIds(entries).Count == 0
+            && !entries.Keys.Any(name => name.EndsWith("/Piston.dll", StringComparison.Ordinal)))
+        {
+            throw new ReleaseException($"Package {version.Version} contains neither the tool nor its runtime-specific packages.");
+        }
+    }
+
+    /// <summary>The runtime-specific packages a pointer package's tool settings name; empty for a self-contained tool package.</summary>
+    public static List<string> RuntimePackageIds(byte[] data) => RuntimePackageIds(PackageEntries(data));
+
+    private static List<string> RuntimePackageIds(Dictionary<string, byte[]> entries)
+    {
+        var ids = new List<string?>();
+        foreach (var settings in entries.Where(e => e.Key.EndsWith("/DotnetToolSettings.xml", StringComparison.Ordinal)))
+        {
+            try
+            {
+                ids.AddRange(XDocument.Load(new MemoryStream(settings.Value)).Descendants("RuntimeIdentifierPackage")
+                    .Select(e => (string?)e.Attribute("Id")));
+            }
+            catch (XmlException ex)
+            {
+                throw new ReleaseException("The tool settings are invalid.", ex);
+            }
+        }
+
+        if (ids.Distinct(StringComparer.OrdinalIgnoreCase).Count() != ids.Count
+            || ids.Any(id => id is null
+                || !id.StartsWith(PackageId + ".", StringComparison.Ordinal)
+                || !PackageIdPattern().IsMatch(id.ToLowerInvariant())))
+        {
+            throw new ReleaseException("The tool settings must name only this tool's runtime-specific packages.");
+        }
+
+        return ids!;
+    }
+
+    public static void RuntimePackageIdentity(byte[] data, string packageId, ReleaseVersion version, string sourceSha, string repo)
+    {
+        var entries = PackageEntries(data);
+        if (!NuspecMatches(NuspecValues(entries), packageId, version, sourceSha, repo)
+            || !entries.Keys.Any(name => name.EndsWith("/Piston.dll", StringComparison.Ordinal)))
+        {
+            throw new ReleaseException($"Package {packageId} {version.Version} does not match its tag, repository, or source commit.");
+        }
+    }
+
+    private static Dictionary<string, XElement> NuspecValues(Dictionary<string, byte[]> entries)
+    {
+        if (entries.Keys.Where(name => name.EndsWith(".nuspec", StringComparison.Ordinal)).ToList() is not [var nuspec])
+        {
+            throw new ReleaseException("The package must contain one nuspec and MCP metadata.");
+        }
+
+        try
+        {
+            var values = new Dictionary<string, XElement>(StringComparer.Ordinal);
+            var root = XDocument.Load(new MemoryStream(entries[nuspec])).Root!;
+            foreach (var element in root.Elements().First(e => e.Name.LocalName == "metadata").Elements())
+            {
+                values[element.Name.LocalName] = element;
+            }
+
+            return values;
+        }
+        catch (Exception ex) when (ex is XmlException or InvalidOperationException)
+        {
+            throw new ReleaseException("The package metadata is invalid.", ex);
+        }
+    }
+
+    private static bool NuspecMatches(
+        Dictionary<string, XElement> values, string packageId, ReleaseVersion version, string sourceSha, string repo)
+    {
+        var repository = values.GetValueOrDefault("repository");
+        return values.GetValueOrDefault("id") is { } id
+            && Text(id) == packageId
+            && values.GetValueOrDefault("version") is { } packageVersion
+            && Text(packageVersion) == version.Version
+            && repository is not null
+            && (string?)repository.Attribute("type") == "git"
+            && string.Equals(((string?)repository.Attribute("url") ?? "").TrimEnd('/'), $"https://github.com/{repo}",
+                StringComparison.OrdinalIgnoreCase)
+            && ((string?)repository.Attribute("commit") ?? "").ToLowerInvariant() == sourceSha;
     }
 
     public static void ComparePackages(byte[] expected, byte[] actual)
@@ -2125,6 +2194,26 @@ internal sealed partial class ReleaseTooling
     {
         var local = await File.ReadAllBytesAsync(packagePath);
         PackageIdentity(local, version, sourceSha, repo);
+        var runtimes = await LocalRuntimePackagesAsync(packagePath, local, version, sourceSha, repo);
+
+        // The workflow pushes runtime packages with --skip-duplicate, so any already on NuGet must be
+        // this release's own earlier pushes, byte-identical to the tested artifacts.
+        foreach (var (id, runtime) in runtimes)
+        {
+            if (await PublicPackageAsync(version, allowMissing: true, id) is not { } published)
+            {
+                continue;
+            }
+
+            if (!retry)
+            {
+                throw new ReleaseException($"NuGet already contains {id} {version.Version}; refusing an unrelated duplicate.");
+            }
+
+            RuntimePackageIdentity(published, id, version, sourceSha, repo);
+            ComparePackages(runtime, published);
+        }
+
         if (await PublicPackageAsync(version, allowMissing: true) is not { } existing)
         {
             return true;
@@ -2137,6 +2226,9 @@ internal sealed partial class ReleaseTooling
 
         PackageIdentity(existing, version, sourceSha, repo);
         ComparePackages(local, existing);
+
+        // Runtime packages are pushed first, so a published pointer implies they were pushed too.
+        await VerifyPublicRuntimePackagesAsync(runtimes, version, sourceSha, repo);
         Console.WriteLine($"NuGet already contains the matching {version.Version} package; resuming verification.");
         return false;
     }
@@ -2145,10 +2237,45 @@ internal sealed partial class ReleaseTooling
     {
         var local = await File.ReadAllBytesAsync(packagePath);
         PackageIdentity(local, version, sourceSha, repo);
+        var runtimes = await LocalRuntimePackagesAsync(packagePath, local, version, sourceSha, repo);
         var published = await PublicPackageAsync(version)
             ?? throw new ReleaseException($"Public package {version.Version} is unavailable.");
         PackageIdentity(published, version, sourceSha, repo);
         ComparePackages(local, published);
+        await VerifyPublicRuntimePackagesAsync(runtimes, version, sourceSha, repo);
+    }
+
+    private static async Task<List<(string Id, byte[] Data)>> LocalRuntimePackagesAsync(
+        string packagePath, byte[] local, ReleaseVersion version, string sourceSha, string repo)
+    {
+        var directory = Path.GetDirectoryName(Path.GetFullPath(packagePath))!;
+        var runtimes = new List<(string, byte[])>();
+        foreach (var id in RuntimePackageIds(local))
+        {
+            var path = Path.Combine(directory, $"{id}.{version.Version}.nupkg");
+            if (!File.Exists(path))
+            {
+                throw new ReleaseException($"The runtime-specific package {Path.GetFileName(path)} is missing.");
+            }
+
+            var data = await File.ReadAllBytesAsync(path);
+            RuntimePackageIdentity(data, id, version, sourceSha, repo);
+            runtimes.Add((id, data));
+        }
+
+        return runtimes;
+    }
+
+    private async Task VerifyPublicRuntimePackagesAsync(
+        List<(string Id, byte[] Data)> runtimes, ReleaseVersion version, string sourceSha, string repo)
+    {
+        foreach (var (id, runtime) in runtimes)
+        {
+            var published = await PublicPackageAsync(version, allowMissing: false, id)
+                ?? throw new ReleaseException($"Public package {id} {version.Version} is unavailable.");
+            RuntimePackageIdentity(published, id, version, sourceSha, repo);
+            ComparePackages(runtime, published);
+        }
     }
 
     public async Task EnsureGitHubReleaseAsync(string packagePath, ReleaseVersion version, string sourceSha, string repo)
@@ -2679,7 +2806,8 @@ internal class ReleaseFixture : IDisposable
         string packageId = ReleaseTooling.PackageId,
         string identifier = ReleaseTooling.PackageId,
         string dll = "expected executable",
-        string signature = "signature")
+        string signature = "signature",
+        string[]? runtimes = null)
     {
         var number = version.Version;
         var nuspec = "<package xmlns=\"http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd\"><metadata>"
@@ -2691,14 +2819,35 @@ internal class ReleaseFixture : IDisposable
             ["version"] = mcpVersion ?? number,
             ["packages"] = new JsonArray(new JsonObject { ["identifier"] = identifier, ["version"] = mcpVersion ?? number }),
         };
+        var payload = runtimes is null
+            ? ("tools/net11.0/any/Piston.dll", dll)
+            : ("tools/net11.0/any/DotnetToolSettings.xml",
+                "<DotNetCliTool Version=\"2\"><Commands><Command Name=\"piston\" /></Commands><RuntimeIdentifierPackages>"
+                + string.Concat(runtimes.Select(id => $"<RuntimeIdentifierPackage RuntimeIdentifier=\"rid\" Id=\"{id}\" />"))
+                + "</RuntimeIdentifierPackages></DotNetCliTool>");
+        return Zip(($"{packageId}.nuspec", nuspec), (".mcp/server.json", server.ToJsonString()), payload,
+            (".signature.p7s", signature));
+    }
+
+    public const string RuntimeId = "DamianH.Piston.win-x64";
+
+    public static byte[] MakeRuntimePackage(
+        ReleaseVersion version, string sourceSha, string packageId = RuntimeId, string dll = "expected executable",
+        string signature = "signature")
+    {
+        var nuspec = "<package xmlns=\"http://schemas.microsoft.com/packaging/2013/05/nuspec.xsd\"><metadata>"
+            + $"<id>{packageId}</id><version>{version.Version}</version>"
+            + $"<repository type=\"git\" url=\"https://github.com/{Repo}\" commit=\"{sourceSha}\" />"
+            + "</metadata></package>";
+        return Zip(($"{packageId}.nuspec", nuspec), ("tools/net11.0/win-x64/Piston.dll", dll), (".signature.p7s", signature));
+    }
+
+    private static byte[] Zip(params (string Name, string Content)[] entries)
+    {
         using var buffer = new MemoryStream();
         using (var archive = new ZipArchive(buffer, ZipArchiveMode.Create, leaveOpen: true))
         {
-            foreach (var (name, content) in new[]
-                     {
-                         ($"{packageId}.nuspec", nuspec), (".mcp/server.json", server.ToJsonString()),
-                         ("tools/net11.0/any/Piston.dll", dll), (".signature.p7s", signature),
-                     })
+            foreach (var (name, content) in entries)
             {
                 using var stream = archive.CreateEntry(name).Open();
                 stream.Write(Encoding.UTF8.GetBytes(content));
@@ -2737,6 +2886,21 @@ internal class ReleaseFixture : IDisposable
         var path = Path.Combine(Root, $"DamianH.Piston.{version.Version}.nupkg");
         File.WriteAllBytes(path, MakePackage(version, sourceSha));
         return path;
+    }
+
+    // A RID-specific pointer package with its runtime package beside it, as the pack job produces.
+    public string LocalPointerPackage(ReleaseVersion version, string sourceSha)
+    {
+        var path = Path.Combine(Root, $"DamianH.Piston.{version.Version}.nupkg");
+        File.WriteAllBytes(path, MakePackage(version, sourceSha, runtimes: [RuntimeId]));
+        File.WriteAllBytes(Path.Combine(Root, $"{RuntimeId}.{version.Version}.nupkg"), MakeRuntimePackage(version, sourceSha));
+        return path;
+    }
+
+    public void PublicPointerPackage(ReleaseVersion version, string sourceSha, byte[]? runtime = null)
+    {
+        Http.Responses[PackageUrl(version)] = MakePackage(version, sourceSha, signature: "nuget", runtimes: [RuntimeId]);
+        Http.Responses[PackageUrl(version, RuntimeId)] = runtime ?? MakeRuntimePackage(version, sourceSha, signature: "nuget");
     }
 
     // Serves `gh release download` from the given bytes, like a patched asset download.
@@ -4030,6 +4194,56 @@ internal static partial class ReleaseTests
             {
                 f.Http.Responses[ReleaseFixture.PackageUrl(version)] = response;
                 await Expect.ThrowsAsync(() => f.Tooling().VerifyPublicPackageAsync(path, version, sha, Repo), label: label);
+            }
+        });
+
+        Case("pointer package requires its runtime packages to match the tested artifacts", async () =>
+        {
+            var runtimeUrl = ReleaseFixture.PackageUrl(version, ReleaseFixture.RuntimeId);
+            using var f = new ReleaseFixture();
+            var path = f.LocalPointerPackage(version, sha);
+
+            f.Http.Responses[runtimeUrl] = 404;
+            f.Http.Responses[ReleaseFixture.PackageUrl(version)] = 404;
+            Expect.Equal(true, await f.Tooling().ReconcileAsync(path, version, sha, Repo, false));
+
+            // An earlier attempt pushed the runtime package but not the pointer.
+            f.Http.Responses[runtimeUrl] = ReleaseFixture.MakeRuntimePackage(version, sha, signature: "nuget");
+            Expect.Equal(true, await f.Tooling().ReconcileAsync(path, version, sha, Repo, true));
+            await Expect.ThrowsAsync(() => f.Tooling().ReconcileAsync(path, version, sha, Repo, false), label: "unrelated duplicate");
+
+            f.PublicPointerPackage(version, sha);
+            Expect.Equal(false, await f.Tooling().ReconcileAsync(path, version, sha, Repo, true));
+            await f.Tooling().VerifyPublicPackageAsync(path, version, sha, Repo);
+
+            foreach (var (label, runtime) in new (string, object)[]
+                     {
+                         ("different_content", ReleaseFixture.MakeRuntimePackage(version, sha, dll: "different executable")),
+                         ("wrong_commit", ReleaseFixture.MakeRuntimePackage(version, new string('f', 40))),
+                         ("wrong_id", ReleaseFixture.MakeRuntimePackage(version, sha, packageId: "DamianH.Piston.linux-x64")),
+                     })
+            {
+                f.Http.Responses[runtimeUrl] = runtime;
+                await Expect.ThrowsAsync(() => f.Tooling().ReconcileAsync(path, version, sha, Repo, true), label: label);
+                await Expect.ThrowsAsync(() => f.Tooling().VerifyPublicPackageAsync(path, version, sha, Repo), label: label);
+            }
+
+            f.Http.Responses[runtimeUrl] = 404;
+            await Expect.ThrowsAsync(() => f.Tooling().VerifyPublicPackageAsync(path, version, sha, Repo), label: "missing runtime");
+
+            File.Delete(Path.Combine(f.Root, $"{ReleaseFixture.RuntimeId}.{version.Version}.nupkg"));
+            await Expect.ThrowsAsync(() => f.Tooling().ReconcileAsync(path, version, sha, Repo, true), label: "missing local runtime");
+        });
+
+        Case("package identity rejects a pointer naming foreign or no packages", () =>
+        {
+            ReleaseTooling.PackageIdentity(
+                ReleaseFixture.MakePackage(version, sha, runtimes: [ReleaseFixture.RuntimeId]), version, sha, Repo);
+            foreach (var (label, runtimes) in new[] { ("foreign", new[] { "Other.win-x64" }), ("empty", []) })
+            {
+                Expect.Throws(
+                    () => ReleaseTooling.PackageIdentity(ReleaseFixture.MakePackage(version, sha, runtimes: runtimes), version, sha, Repo),
+                    label: label);
             }
         });
 

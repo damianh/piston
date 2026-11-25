@@ -137,9 +137,9 @@ version and reconnect; an already-running process never switches versions.
 
 On Windows the package installs a `piston.cmd` launcher instead of `piston.exe`.
 On its first start for each package build, it copies the tool to
-`%LOCALAPPDATA%\Piston\runtimes\<version>-<hash>` and runs Piston from there with
-`dotnet`, so nothing in the .NET tool store stays in use. Runtime copies unused for
-7 days are deleted when another build is first started; copies still in use are kept.
+`%LOCALAPPDATA%\Piston\runtimes\<version>-<hash>`; every start then runs Piston from
+there with `dotnet`, so nothing in the .NET tool store stays in use. Runtime copies unused
+for 7 days are deleted when another build is first started; copies still in use are kept.
 Linux and macOS install the portable package and run from the tool store as before.
 
 Because the command is a batch file:

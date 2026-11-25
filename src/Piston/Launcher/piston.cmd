@@ -11,11 +11,10 @@ if not defined PISTON_RUNTIME_ID goto missing
 set "PISTON_RUNTIMES=%LOCALAPPDATA%"
 if not defined PISTON_RUNTIMES set "PISTON_RUNTIMES=%TEMP%"
 set "PISTON_RUNTIME=%PISTON_RUNTIMES%\Piston\runtimes\%PISTON_RUNTIME_ID%"
-if exist "%PISTON_RUNTIME%\.piston-runtime" goto run
+rem Stages the copy on first use and marks it used under the lock that cleanup takes, so it is never
+rem removed between this check and the hand-off below.
 dotnet "%~dp0Piston.dll" __stage-runtime "%~dp0." "%PISTON_RUNTIME%"
 if errorlevel 1 exit /b 1
-:run
-(type nul > "%PISTON_RUNTIME%\.last-used") 2>nul
 endlocal & "%PISTON_RUNTIME%\piston-run.cmd" %*
 :missing
 echo piston: "%~dp0piston.runtime-id" is missing; reinstall the tool. 1>&2
