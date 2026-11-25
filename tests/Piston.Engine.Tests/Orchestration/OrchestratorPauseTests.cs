@@ -124,6 +124,56 @@ public sealed class OrchestratorPauseTests
         _ = Assert.Single(state.TestSuites);
     }
 
+    [Fact]
+    public async Task FilteredRequestedRunWhilePaused_KeepsTheQueuedChanges()
+    {
+        var state = new PistonState();
+        var watcher = new RaisingFileWatcher();
+        await using var orchestrator = new PistonOrchestrator(
+            watcher, new StubBuildService(), new BlockingRunner(), new RecordingImpactAnalyzer(), state);
+        await orchestrator.StartAsync(Solution);
+        _ = await WaitForRunAsync(state, r => r.Trigger == TestRunTrigger.Startup);
+
+        orchestrator.Pause();
+        watcher.Raise("/fake/A.cs");
+        state.TestFilter = "FullyQualifiedName~Some";
+        var run = await orchestrator.RequestRunAsync().WaitAsync(Timeout, _ct);
+
+        Assert.Equal(TestRunStatus.Completed, run!.Status);
+        Assert.False(run.IsFullScope);
+        Assert.Equal(1, state.PausedChangeCount);
+    }
+
+    [Fact]
+    public async Task PausingAFileChangeRun_ThatSupersededTheResumedStartupRun_RerunsStartupOnResume()
+    {
+        var state = new PistonState();
+        var watcher = new RaisingFileWatcher();
+        var runner = new BlockingRunner();
+        runner.BlockNext();
+        await using var orchestrator = new PistonOrchestrator(
+            watcher, new StubBuildService(), runner, new RecordingImpactAnalyzer(), state);
+        await orchestrator.StartAsync(Solution);
+        await runner.Blocked.Task.WaitAsync(Timeout, _ct);
+        orchestrator.Pause();
+        _ = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Cancelled);
+
+        var blocked = runner.BlockNextRun();
+        orchestrator.Resume();
+        await blocked.WaitAsync(Timeout, _ct);
+
+        blocked = runner.BlockNextRun();
+        watcher.Raise("/fake/A.cs");
+        await blocked.WaitAsync(Timeout, _ct);
+        orchestrator.Pause();
+        _ = await WaitForRunAsync(state, r => r.Trigger == TestRunTrigger.FileChange && r.Status == TestRunStatus.Cancelled);
+
+        orchestrator.Resume();
+
+        var run = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Completed);
+        Assert.Equal(TestRunTrigger.Startup, run.Trigger);
+    }
+
     private static async Task<TestRunRecord> WaitForRunAsync(PistonState state, Func<TestRunRecord, bool> match)
     {
         using var timeout = new CancellationTokenSource(Timeout);
@@ -176,10 +226,19 @@ public sealed class OrchestratorPauseTests
     {
         private readonly StubTestRunnerService _inner = new(Projects, TimeSpan.Zero);
         private int _blockNext;
+        private TaskCompletionSource _nextBlocked = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource Blocked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public void BlockNext() => Volatile.Write(ref _blockNext, 1);
+
+        // Blocks the next test execution until cancelled; the returned task completes once it is blocked.
+        public Task BlockNextRun()
+        {
+            _nextBlocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            BlockNext();
+            return _nextBlocked.Task;
+        }
 
         public Task<TestRunResult> RunTestsAsync(
             string solutionPath, string? filter, Action<IReadOnlyList<TestSuite>>? onProgress, CancellationToken ct) =>
@@ -198,6 +257,7 @@ public sealed class OrchestratorPauseTests
             if (Interlocked.Exchange(ref _blockNext, 0) == 1)
             {
                 _ = Blocked.TrySetResult();
+                _ = _nextBlocked.TrySetResult();
                 await Task.Delay(System.Threading.Timeout.Infinite, ct);
             }
 

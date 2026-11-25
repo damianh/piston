@@ -1063,13 +1063,34 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         _state.LastChangedFiles = batch.Changes.Select(e => e.FilePath).ToList();
         _activitySink.Emit(new FileChangesDetectedActivityEvent(
             _solutionPath, _state.LastChangedFiles));
-        if (TryQueuePausedChange(batch))
+
+        // The pause check and the run registration are atomic, so a concurrent Pause() either sees this run or queues it.
+        CancellationTokenSource? cts = null;
+        var queued = false;
+        lock (_lifecycleLock)
         {
-            _state.NotifyChanged();
-            return;
+            if (!_disposed)
+            {
+                queued = TryQueuePausedChangeLocked(batch);
+                if (!queued)
+                {
+                    cts = RegisterRunLocked(batch, TestRunTrigger.FileChange);
+                }
+            }
         }
 
-        _ = TriggerRunAsync(_solutionPath, batch, TestRunTrigger.FileChange);
+        if (queued)
+        {
+            _state.NotifyChanged();
+        }
+        else if (cts is not null)
+        {
+            _ = RunTrackedAsync(_solutionPath, batch, TestRunTrigger.FileChange, null, cts);
+        }
+        else
+        {
+            _ = TriggerRunAsync(_solutionPath, batch, TestRunTrigger.FileChange);
+        }
     }
 
     /// <summary>The test projects and filter of a <see cref="TestRunTrigger.Targeted"/> run.</summary>
@@ -1092,20 +1113,28 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 throw new InvalidOperationException("A test run is already in progress.");
             }
 
-            if (_activePipelines++ == 0)
-            {
-                _pipelinesDrained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            }
-
-            CancelBackfill();
-            cts = new CancellationTokenSource();
-            var oldCts = _cts;
-            _cts = cts;
-            _activeRunChanges = batch?.Changes;
-            _activeRunTrigger = trigger;
-            oldCts?.Cancel();
+            cts = RegisterRunLocked(batch, trigger);
         }
         return RunTrackedAsync(solutionPath, batch, trigger, selection, cts);
+    }
+
+    // Makes a new run the active one, superseding the previous run. Caller holds _lifecycleLock and starts
+    // RunTrackedAsync with the returned token source outside the lock.
+    private CancellationTokenSource RegisterRunLocked(FileChangeBatch? batch, TestRunTrigger trigger)
+    {
+        if (_activePipelines++ == 0)
+        {
+            _pipelinesDrained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        CancelBackfill();
+        var cts = new CancellationTokenSource();
+        var oldCts = _cts;
+        _cts = cts;
+        _activeRunChanges = batch?.Changes;
+        _startupRunPending |= trigger == TestRunTrigger.Startup;
+        oldCts?.Cancel();
+        return cts;
     }
 
     private async Task<TestRunRecord> RunTrackedAsync(
@@ -1123,7 +1152,6 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 {
                     _cts = null;
                     _activeRunChanges = null;
-                    _activeRunTrigger = null;
                 }
 
                 if (ReferenceEquals(_pauseCancelledCts, cts))
