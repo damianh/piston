@@ -96,9 +96,9 @@ public sealed partial class PistonOrchestrator
             _paused = false;
             if (_pausedStartupRun)
             {
+                // Kept until DropPausedChangesCoveredBy sees a completed full-scope run, so a failed or filtered
+                // rerun is retried by the next resume.
                 rerunStartup = true;
-                _pausedStartupRun = false;
-                _pausedChanges.Clear();
             }
             else if (_pausedChanges.Count > 0)
             {

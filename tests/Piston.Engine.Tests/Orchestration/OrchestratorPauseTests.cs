@@ -125,6 +125,33 @@ public sealed class OrchestratorPauseTests
     }
 
     [Fact]
+    public async Task FilteredResumedStartupRun_IsRerunOnTheNextResume()
+    {
+        var state = new PistonState();
+        var runner = new BlockingRunner();
+        runner.BlockNext();
+        await using var orchestrator = new PistonOrchestrator(
+            new RaisingFileWatcher(), new StubBuildService(), runner, new RecordingImpactAnalyzer(), state);
+        await orchestrator.StartAsync(Solution);
+        await runner.Blocked.Task.WaitAsync(Timeout, _ct);
+        orchestrator.Pause();
+        _ = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Cancelled);
+
+        state.TestFilter = "FullyQualifiedName~Some";
+        orchestrator.Resume();
+        var filtered = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Completed);
+        Assert.Equal(TestRunTrigger.Startup, filtered.Trigger);
+        Assert.False(filtered.IsFullScope);
+
+        state.TestFilter = null;
+        orchestrator.Pause();
+        orchestrator.Resume();
+
+        var run = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Completed && r.IsFullScope);
+        Assert.Equal(TestRunTrigger.Startup, run.Trigger);
+    }
+
+    [Fact]
     public async Task FilteredRequestedRunWhilePaused_KeepsTheQueuedChanges()
     {
         var state = new PistonState();
