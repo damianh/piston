@@ -174,14 +174,6 @@ public sealed partial class PistonOrchestrator
         _state.NotifyChanged();
     }
 
-    // Caller holds _lifecycleLock.
-    private void ClearPausedChanges()
-    {
-        _pausedChanges.Clear();
-        _pausedStartupRun = false;
-        PublishPauseState();
-    }
-
     private string? PausedReason(CancellationTokenSource cts) =>
         ReferenceEquals(Volatile.Read(ref _pauseCancelledCts), cts) ? PausedCancelReason : null;
 

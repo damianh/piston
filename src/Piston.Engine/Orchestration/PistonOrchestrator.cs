@@ -203,7 +203,6 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     _stopping = _disposed;
                     _cts?.Cancel();
                     CancelBackfill();
-                    ClearPausedChanges();
                 }
 
                 // A pipeline holds the run lock until it finishes, so holding it here means no run

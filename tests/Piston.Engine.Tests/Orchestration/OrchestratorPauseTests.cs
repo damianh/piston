@@ -145,6 +145,26 @@ public sealed class OrchestratorPauseTests
     }
 
     [Fact]
+    public async Task FilteredResetWhilePaused_KeepsTheQueuedChanges()
+    {
+        var state = new PistonState();
+        var watcher = new RaisingFileWatcher();
+        await using var orchestrator = new PistonOrchestrator(
+            watcher, new StubBuildService(), new BlockingRunner(), new RecordingImpactAnalyzer(), state);
+        await orchestrator.StartAsync(Solution);
+        _ = await WaitForRunAsync(state, r => r.Trigger == TestRunTrigger.Startup);
+
+        orchestrator.Pause();
+        watcher.Raise("/fake/A.cs");
+        state.TestFilter = "FullyQualifiedName~Some";
+        await orchestrator.ResetAsync().WaitAsync(Timeout, _ct);
+
+        var run = await WaitForRunAsync(state, r => r.Trigger == TestRunTrigger.Forced && r.Status == TestRunStatus.Completed);
+        Assert.False(run.IsFullScope);
+        Assert.Equal(1, state.PausedChangeCount);
+    }
+
+    [Fact]
     public async Task PausingAFileChangeRun_ThatSupersededTheResumedStartupRun_RerunsStartupOnResume()
     {
         var state = new PistonState();
