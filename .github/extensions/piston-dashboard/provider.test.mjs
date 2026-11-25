@@ -6,9 +6,10 @@ import { EventEmitter } from "node:events";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { changesQuery, createDashboardCanvas, discover, discoverSolutions, loopbackEndpoint, normalizeWorkingDirectory, openQuery, probe, resolveExecutable, rpc, startDaemon } from "./provider.mjs";
+import { changesQuery, commandLine, createDashboardCanvas, discover, discoverSolutions, loopbackEndpoint, normalizeWorkingDirectory, openQuery, parentProcessId, probe, resolveExecutable, rpc, startDaemon } from "./provider.mjs";
 
 const passthroughResolver = command => command;
 
@@ -67,6 +68,103 @@ test("executable resolution skips worktree and relative PATH entries", async t =
     assert.throws(() => resolveExecutable("piston", worktree, {
         pathValue: [worktree, "relative-bin"].join(path.delimiter),
     }), /outside worktree/);
+});
+
+test("Windows batch launchers resolve only when allowed and run through cmd.exe with quoted arguments", async t => {
+    const root = await mkdtemp(path.join(tmpdir(), "piston-batch-test-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const bin = path.join(root, "bin");
+    const worktree = path.join(root, "worktree");
+    const plantedBin = path.join(worktree, "bin");
+    await mkdir(bin);
+    await mkdir(path.join(worktree, ".git"), { recursive: true });
+    await mkdir(plantedBin);
+    await writeFile(path.join(bin, "piston.cmd"), "@echo off");
+    if (process.platform === "win32") {
+        assert.equal(resolveExecutable("piston", worktree, { pathValue: bin, allowBatch: true }),
+            await realpath(path.join(bin, "piston.cmd")));
+        assert.throws(() => resolveExecutable("piston", worktree, { pathValue: bin }), /outside worktree/);
+    }
+
+    assert.deepEqual(commandLine("/usr/bin/piston", ["dashboard"], worktree, { platform: "linux" }),
+        { file: "/usr/bin/piston", args: ["dashboard"], options: {}, wrapped: false });
+    const wrapped = commandLine("C:\\tools\\piston.cmd", ["daemon", "C:\\a & b\\App.slnx", "C:\\a & b\\"], worktree, {
+        platform: "win32", comSpec: "C:\\Windows\\cmd.exe",
+        env: { Path: ["relative", plantedBin, bin].join(";"), OTHER: "kept" },
+    });
+    assert.equal(wrapped.file, "C:\\Windows\\cmd.exe");
+    assert.deepEqual(wrapped.args, ["/d", "/s", "/v:off", "/c",
+        '""C:\\tools\\piston.cmd" "daemon" "C:\\a & b\\App.slnx" "C:\\a & b\\\\""']);
+    assert.equal(wrapped.options.windowsVerbatimArguments, true);
+    assert.deepEqual(wrapped.options.env, {
+        OTHER: "kept", PATH: realpathSync.native(bin), NoDefaultCurrentDirectoryInExePath: "1",
+    });
+    for (const unsafe of ['a"b', "%PATH%", "a\nb"]) {
+        assert.throws(() => commandLine("C:\\tools\\piston.cmd", [unsafe], worktree, { platform: "win32" }), /cannot quote safely/);
+    }
+});
+
+test("a daemon started by a batch launcher is ours only if it is the launched cmd.exe's child", async t => {
+    const root = await mkdtemp(path.join(tmpdir(), "piston-batch-daemon-test-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const worktree = path.join(root, "worktree");
+    await mkdir(path.join(worktree, ".git"), { recursive: true });
+    await writeFile(path.join(worktree, "App.slnx"), "<Solution />");
+    let launched;
+    const launch = (file, args, options) => {
+        launched = { file, args, options };
+        const child = new EventEmitter();
+        child.pid = 7;
+        child.unref = () => {};
+        return child;
+    };
+    const batch = () => "C:\\tools\\piston.cmd";
+    const state = { ...connected("http://127.0.0.1:1234/"), processId: 42, worktree };
+    const parents = { 42: 7, 43: 8 };
+    const parentOf = async processId => parents[processId];
+    assert.equal(await startDaemon(worktree, "App.slnx", worktree, async () => state, async () => {},
+        launch, root, "win32", batch, parentOf), state);
+    assert.match(launched.file, /cmd\.exe$/i);
+    assert.equal(launched.options.windowsVerbatimArguments, true);
+    await assert.rejects(startDaemon(worktree, "App.slnx", worktree,
+        async () => ({ ...state, processId: 43 }), async () => {}, launch, root, "win32", batch, parentOf),
+        /Another Piston owner/);
+});
+
+test("batch discovery passes the worktree explicitly with cmd.exe launch options", async t => {
+    const worktree = await mkdtemp(path.join(tmpdir(), "piston-batch-discovery-test-"));
+    t.after(() => rm(worktree, { recursive: true, force: true }));
+    const state = { state: "error", message: "Dashboard discovery failed." };
+    let resolveOptions;
+    const result = await discover(worktree, async (file, args, options) => {
+        assert.match(file, /cmd\.exe$/i);
+        assert.equal(args.at(-1), `""C:\\tools\\piston.cmd" "dashboard" "${worktree}" "--json""`);
+        assert.equal(options.cwd, worktree);
+        assert.equal(options.windowsVerbatimArguments, true);
+        assert.equal(options.env.NoDefaultCurrentDirectoryInExePath, "1");
+        throw Object.assign(new Error("Command failed"), { code: 1, stdout: JSON.stringify(state) });
+    }, (command, cwd, options) => { resolveOptions = options; return "C:\\tools\\piston.cmd"; }, "win32");
+    assert.deepEqual(result, state);
+    assert.deepEqual(resolveOptions, { allowBatch: true });
+});
+
+test("parent process lookup queries CIM and tolerates exited processes", async () => {
+    const calls = [];
+    const run = stdout => async (file, args, options) => {
+        calls.push({ file, args, options });
+        return { stdout };
+    };
+    assert.equal(await parentProcessId(42, run("  7\r\n")), 7);
+    assert.match(calls[0].file, /powershell\.exe$/i);
+    assert.deepEqual(calls[0].args.slice(0, 3), ["-NoProfile", "-NonInteractive", "-Command"]);
+    assert.match(calls[0].args[3], /Win32_Process -Filter 'ProcessId=42'/);
+    assert.equal(calls[0].options.windowsHide, true);
+    assert.equal(await parentProcessId(42, run("")), undefined);
+    for (const invalid of [0, -1, 1.5, "42", undefined]) {
+        assert.equal(await parentProcessId(invalid, run("7")), undefined);
+    }
+    assert.equal(calls.length, 2);
+    await assert.rejects(parentProcessId(42, async () => { throw new Error("denied"); }), /denied/);
 });
 
 test("executable resolution excludes the entire worktree for nested session directories", async t => {
