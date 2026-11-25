@@ -220,6 +220,8 @@ jobs:
           NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
           # Push the runtime-specific packages before the pointer package that names them.
+          # Older source commits produce no runtime packages, so an unmatched glob must expand to nothing.
+          shopt -s nullglob
           for package in packages/DamianH.Piston.*."$VERSION".nupkg; do
             dotnet nuget push "$package" --source https://api.nuget.org/v3/index.json \
               --api-key "$NUGET_API_KEY" --skip-duplicate
