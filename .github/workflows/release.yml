@@ -98,7 +98,6 @@ jobs:
        (needs.test.result == 'success' && needs.distribution.result == 'success'))
     runs-on: ubuntu-latest
     permissions:
-      actions: read
       contents: write
     outputs:
       version: ${{ steps.prepare.outputs.version }}
@@ -122,10 +121,9 @@ jobs:
           dotnet-version: |
             10.0.x
             11.0.x
-      - name: Reserve or reuse the calendar version
+      - name: Tag or reuse the calendar version
         id: prepare
         env:
-          GH_TOKEN: ${{ github.token }}
           RELEASE_SOURCE_DIR: ${{ github.workspace }}/source
           RELEASE_SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
           RELEASE_KIND: ${{ needs.context.outputs.kind }}

@@ -99,7 +99,7 @@ Target("test-release", "Run the release tooling's self-tests.", ReleaseTests.Run
 foreach (var (command, description) in new[]
          {
              ("context", "Resolve the release workflow context (GITHUB_* and RELEASE_MANUAL_PUBLISH)."),
-             ("prepare", "Verify release history and reserve the next calendar version tag."),
+             ("prepare", "Tag the tested commit with this run's calendar version, or reuse the tag on a rerun."),
              ("reconcile", "Decide whether the reserved package still needs to be pushed to NuGet."),
              ("verify-package", "Verify the public NuGet package matches the release artifact."),
              ("github-release", "Create or verify the stable GitHub Release and its package asset."),
@@ -1237,38 +1237,39 @@ partial class Program
     private static partial Regex MyRegex();
 }
 // ── Release tooling ──────────────────────────────────────────────────────────────────────────────────────────────
-// Calendar versions are YYYY.MDD.N[-dev]; stable and dev releases share the daily counter N.
+// Calendar versions are YYYY.MDD.R[-dev], where R is the release workflow's run number. Run numbers are unique and
+// survive reruns, so allocating a version needs no knowledge of earlier releases.
 internal sealed record ReleaseVersion
 {
-    public const int MaxCounter = 65534;
+    public const int MaxRunNumber = 65534;
 
     private static readonly Regex CalendarPrefix = new(@"^v[0-9]{4,}\.", RegexOptions.CultureInvariant);
     private static readonly Regex CalendarTag =
         new(@"^v([1-9][0-9]{3})\.([1-9][0-9]{2,3})\.([1-9][0-9]*)(-dev)?\z", RegexOptions.CultureInvariant);
 
-    public ReleaseVersion(DateOnly day, int counter, bool dev)
+    public ReleaseVersion(DateOnly day, int runNumber, bool dev)
     {
         if (day.Year < 1000)
         {
             throw new ReleaseException("The release year must have four digits.");
         }
 
-        if (counter is < 1 or > MaxCounter)
+        if (runNumber is < 1 or > MaxRunNumber)
         {
-            throw new ReleaseException($"The daily release counter must be between 1 and {MaxCounter}.");
+            throw new ReleaseException($"The release run number must be between 1 and {MaxRunNumber}.");
         }
 
-        (Day, Counter, Dev) = (day, counter, dev);
+        (Day, RunNumber, Dev) = (day, runNumber, dev);
     }
 
     public DateOnly Day { get; }
 
-    public int Counter { get; }
+    public int RunNumber { get; }
 
     public bool Dev { get; }
 
     public string Version => string.Create(CultureInfo.InvariantCulture,
-        $"{Day.Year}.{(Day.Month * 100) + Day.Day}.{Counter}{(Dev ? "-dev" : "")}");
+        $"{Day.Year}.{(Day.Month * 100) + Day.Day}.{RunNumber}{(Dev ? "-dev" : "")}");
 
     public string Tag => $"v{Version}";
 
@@ -1285,14 +1286,14 @@ internal sealed record ReleaseVersion
         try
         {
             var monthDay = int.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
-            if (!int.TryParse(match.Groups[3].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var counter))
+            if (!int.TryParse(match.Groups[3].Value, NumberStyles.None, CultureInfo.InvariantCulture, out var runNumber))
             {
-                throw new ReleaseException($"The daily release counter must be between 1 and {MaxCounter}.");
+                throw new ReleaseException($"The release run number must be between 1 and {MaxRunNumber}.");
             }
 
             version = new ReleaseVersion(
                 new DateOnly(int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture), monthDay / 100, monthDay % 100),
-                counter,
+                runNumber,
                 match.Groups[4].Success);
         }
         catch (Exception ex) when (ex is ReleaseException or ArgumentOutOfRangeException)
@@ -1302,43 +1303,9 @@ internal sealed record ReleaseVersion
 
         return version.Tag == tag ? version : throw new ReleaseException($"Noncanonical calendar release tag: {tag}");
     }
-
-    public static ReleaseVersion Allocate(DateOnly day, IEnumerable<string> tags, bool dev)
-    {
-        var counters = new Dictionary<(DateOnly Day, int Counter), string>();
-        foreach (var tag in tags)
-        {
-            if (ParseTag(tag) is not { } version)
-            {
-                continue;
-            }
-
-            var key = (version.Day, version.Counter);
-            if (counters.TryGetValue(key, out var existing) && existing != tag)
-            {
-                throw new ReleaseException($"Calendar release counter is reused by {existing} and {tag}.");
-            }
-
-            counters[key] = tag;
-        }
-
-        var last = counters.Keys.Where(k => k.Day == day).Select(k => k.Counter).DefaultIfEmpty(0).Max();
-        return new ReleaseVersion(day, last + 1, dev);
-    }
 }
 
 internal sealed class ReleaseException(string message, Exception? inner = null) : Exception(message, inner);
-
-internal sealed record RetiredStepEvidence(string Name, string Conclusion);
-
-internal sealed record RetiredAttemptEvidence(
-    int Attempt, string JobName, string JobConclusion, IReadOnlyList<RetiredStepEvidence> Steps);
-
-internal sealed record RetiredReservation(
-    long RunId, string SourceSha, string PackageId, string Reason, IReadOnlyList<RetiredAttemptEvidence> Attempts);
-
-internal sealed record Reservation(
-    ReleaseVersion Version, long RunId, string SourceSha, bool HasVerifiedHistory, string? VerifiedThrough);
 
 internal sealed record ReleaseContext(string SourceSha, string Kind, bool Publish);
 
@@ -1350,55 +1317,6 @@ internal sealed partial class ReleaseTooling
 {
     public const string PackageId = "DamianH.Piston";
     public const string ReleaseWorkflow = ".github/workflows/release.yml";
-
-    public static readonly IReadOnlyDictionary<string, RetiredReservation> DefaultRetiredReservations =
-        new Dictionary<string, RetiredReservation>
-        {
-            ["v2026.1101.1-dev"] = new(
-                RunId: 41339003060,
-                SourceSha: "ce5c63d4da00690f40141435e59db7e8122b972f",
-                PackageId: "Piston",
-                Reason: "NuGet trusted-publisher login failed before publication.",
-                Attempts:
-                [
-                    new(1, "publish", "failure",
-                    [
-                        new("Run NuGet/login@v1", "failure"),
-                        new("Publish tool to NuGet.org", "skipped"),
-                    ]),
-                ]),
-            ["v2026.1103.1-dev"] = new(
-                RunId: 41672270028,
-                SourceSha: "4d5944815c11d282bdf70e9d55e338747726e2d8",
-                PackageId: "Piston",
-                Reason: "The first attempt failed NuGet trusted-publisher login and the retry failed packaging before publication.",
-                Attempts:
-                [
-                    new(1, "publish", "failure",
-                    [
-                        new("Run NuGet/login@v1", "failure"),
-                        new("Publish tool to NuGet.org", "skipped"),
-                    ]),
-                    new(2, "package", "failure",
-                    [
-                        new("Pack framework-dependent tool", "failure"),
-                    ]),
-                ]),
-            ["v2026.1123.1-dev"] = new(
-                RunId: 45249686321,
-                SourceSha: "bfee4382e6b7b39405cdbced4aacd5f50c31aedf",
-                PackageId: PackageId,
-                Reason: "NuGet rejected the MCP metadata before publication.",
-                Attempts:
-                [
-                    new(1, "publish", "failure",
-                    [
-                        new("Run NuGet/login@v1.2.0", "success"),
-                        new("Reconcile an earlier publication", "success"),
-                        new("Publish tool to NuGet.org", "failure"),
-                    ]),
-                ]),
-        };
 
     private HttpClient? _http;
 
@@ -1413,8 +1331,6 @@ internal sealed partial class ReleaseTooling
     public string GitHubApiUrl { get; init; } = "https://api.github.com";
 
     public string BaseDirectory { get; init; } = Directory.GetCurrentDirectory();
-
-    public IReadOnlyDictionary<string, RetiredReservation> RetiredReservations { get; init; } = DefaultRetiredReservations;
 
     private HttpClient Http => _http ??= new HttpClient(Handler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(30) };
 
@@ -1560,15 +1476,8 @@ internal sealed partial class ReleaseTooling
     private static string? String(JsonElement? element, string name) =>
         Property(element, name) is { ValueKind: JsonValueKind.String } value ? value.GetString() : null;
 
-    private static long? Integer(JsonElement? element, string name) =>
-        Property(element, name) is { ValueKind: JsonValueKind.Number } value && value.TryGetInt64(out var number)
-            ? number
-            : null;
-
     private static List<JsonElement>? Array(JsonElement? element, string name) =>
         Property(element, name) is { ValueKind: JsonValueKind.Array } value ? [.. value.EnumerateArray()] : null;
-
-    private static string? WorkflowPath(string? path) => path?.Split('@', 2)[0];
 
     // The element's own text before any child, like ElementTree's `text`.
     private static string Text(XElement element) =>
@@ -1660,112 +1569,6 @@ internal sealed partial class ReleaseTooling
         {
             throw new ReleaseException(message);
         }
-    }
-
-    public async Task<Reservation> ReadReservationAsync(string sourceDirectory, string tag, ReleaseVersion version)
-    {
-        var reference = $"refs/tags/{tag}";
-        if (await GitAsync(sourceDirectory, "cat-file", "-t", reference) != "tag")
-        {
-            throw new ReleaseException($"Calendar tag {tag} is not an annotated release reservation.");
-        }
-
-        var tagObject = await GitAsync(sourceDirectory, "cat-file", "-p", reference);
-        var separator = tagObject.IndexOf("\n\n", StringComparison.Ordinal);
-        if (separator < 0)
-        {
-            throw new ReleaseException($"Calendar tag {tag} has no reservation metadata.");
-        }
-
-        var fields = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var line in tagObject[..separator].Split('\n'))
-        {
-            if (line.IndexOf(' ', StringComparison.Ordinal) is var space and >= 0)
-            {
-                fields[line[..space]] = line[(space + 1)..];
-            }
-        }
-
-        if (fields.GetValueOrDefault("type") != "commit")
-        {
-            throw new ReleaseException($"Calendar tag {tag} must point directly to a commit.");
-        }
-
-        JsonElement metadata;
-        try
-        {
-            using var document = JsonDocument.Parse(tagObject[(separator + 2)..]);
-            metadata = document.RootElement.Clone();
-        }
-        catch (JsonException ex)
-        {
-            throw new ReleaseException($"Calendar tag {tag} has invalid reservation metadata.", ex);
-        }
-
-        if (metadata.ValueKind != JsonValueKind.Object
-            || Integer(metadata, "piston_release") != 1
-            || Integer(metadata, "run_id") is not ({ } runId and >= 1)
-            || String(metadata, "version") != version.Version
-            || String(metadata, "source_sha") is not { } recordedSha)
-        {
-            throw new ReleaseException($"Calendar tag {tag} has invalid reservation metadata.");
-        }
-
-        var sourceSha = CheckedSha(recordedSha);
-        if (fields.GetValueOrDefault("object", "").ToLowerInvariant() != sourceSha)
-        {
-            throw new ReleaseException($"Calendar tag {tag} does not point to its recorded source commit.");
-        }
-
-        var verified = Property(metadata, "verified_through");
-        if (verified is { ValueKind: not (JsonValueKind.Null or JsonValueKind.String) })
-        {
-            throw new ReleaseException($"Calendar tag {tag} has invalid verified-history metadata.");
-        }
-
-        return new Reservation(version, runId, sourceSha, verified is not null,
-            verified is { ValueKind: JsonValueKind.String } through ? through.GetString() : null);
-    }
-
-    private async Task<List<Reservation>> ReservationsAsync(string sourceDirectory, IReadOnlyList<string> tags)
-    {
-        var records = new List<Reservation>();
-        var counters = new Dictionary<(DateOnly, int), string>();
-        var runs = new Dictionary<long, string>();
-        foreach (var tag in tags)
-        {
-            if (ReleaseVersion.ParseTag(tag) is not { } version)
-            {
-                continue;
-            }
-
-            if (counters.TryGetValue((version.Day, version.Counter), out var existing))
-            {
-                throw new ReleaseException($"Calendar counter is reused by {existing} and {tag}.");
-            }
-
-            counters[(version.Day, version.Counter)] = tag;
-            var record = await ReadReservationAsync(sourceDirectory, tag, version);
-            if (runs.TryGetValue(record.RunId, out var reserved))
-            {
-                throw new ReleaseException($"Workflow run {record.RunId} reserved both {reserved} and {tag}.");
-            }
-
-            runs[record.RunId] = tag;
-            records.Add(record);
-        }
-
-        records.Sort((a, b) => (a.Version.Day, a.Version.Counter).CompareTo((b.Version.Day, b.Version.Counter)));
-        for (var index = 0; index < records.Count; index++)
-        {
-            var previousTag = index > 0 ? records[index - 1].Version.Tag : null;
-            if (records[index].HasVerifiedHistory && records[index].VerifiedThrough != previousTag)
-            {
-                throw new ReleaseException($"Calendar tag {records[index].Version.Tag} has an inconsistent release history.");
-            }
-        }
-
-        return records;
     }
 
     private Task<byte[]?> PublicPackageAsync(ReleaseVersion version, bool allowMissing = false, string packageId = PackageId)
@@ -1984,207 +1787,15 @@ internal sealed partial class ReleaseTooling
         }
     }
 
-    private async Task VerifyPublicReservationAsync(Reservation record, string repo)
-    {
-        var data = await PublicPackageAsync(record.Version)
-            ?? throw new ReleaseException($"Public package {record.Version.Version} is unavailable.");
-        PackageIdentity(data, record.Version, record.SourceSha, repo);
-        if (!record.Version.Dev)
-        {
-            var release = await GitHubReleaseAsync(repo, record.Version)
-                ?? throw new ReleaseException($"GitHub release {record.Version.Tag} is unavailable.");
-            var expectedName = $"{PackageId}.{record.Version.Version}.nupkg";
-            if (Assets(release, expectedName) is not [var asset] || String(asset, "state") != "uploaded")
-            {
-                throw new ReleaseException($"GitHub release {record.Version.Tag} is missing {expectedName}.");
-            }
-
-            ComparePackages(data, await DownloadGitHubAssetAsync(repo, record.Version, expectedName));
-        }
-    }
-
-    private async Task VerifyRetiredReservationAsync(Reservation record, RetiredReservation retirement, string repo)
-    {
-        var tag = record.Version.Tag;
-        if (record.RunId != retirement.RunId || record.SourceSha != retirement.SourceSha)
-        {
-            throw new ReleaseException($"Retired reservation {tag} does not match its recorded identity.");
-        }
-
-        if (retirement.Attempts.Count == 0
-            || retirement.Attempts.Select((attempt, index) => attempt.Attempt == index + 1).Any(valid => !valid))
-        {
-            throw new ReleaseException($"Retired reservation {tag} has invalid attempt expectations.");
-        }
-
-        var run = await GitHubJsonAsync($"{RepoPath(repo)}/actions/runs/{record.RunId}");
-        if (run is null
-            || Integer(run, "id") != retirement.RunId
-            || WorkflowPath(String(run, "path")) != ReleaseWorkflow
-            || String(run, "event") != "workflow_run"
-            || String(run, "head_sha") != retirement.SourceSha
-            || Integer(run, "run_attempt") != retirement.Attempts.Count
-            || String(run, "status") != "completed"
-            || String(run, "conclusion") != "failure")
-        {
-            throw new ReleaseException($"Retired reservation {tag} no longer has the expected failed run.");
-        }
-
-        foreach (var expected in retirement.Attempts)
-        {
-            var result = await GitHubJsonAsync(
-                $"{RepoPath(repo)}/actions/runs/{record.RunId}/attempts/{expected.Attempt}/jobs?per_page=100");
-            var jobs = Array(result, "jobs");
-            if (jobs is null || Integer(result, "total_count") != jobs.Count || jobs.Any(j => j.ValueKind != JsonValueKind.Object))
-            {
-                throw new ReleaseException($"Retired reservation {tag} has incomplete job evidence for attempt {expected.Attempt}.");
-            }
-
-            if (jobs.Where(j => String(j, "name") == expected.JobName).ToList() is not [var job])
-            {
-                throw new ReleaseException($"Retired reservation {tag} has ambiguous {expected.JobName}-job evidence for attempt {expected.Attempt}.");
-            }
-
-            var steps = Array(job, "steps");
-            if (String(job, "status") != "completed"
-                || String(job, "conclusion") != expected.JobConclusion
-                || steps is null
-                || steps.Any(s => s.ValueKind != JsonValueKind.Object))
-            {
-                throw new ReleaseException($"Retired reservation {tag} has invalid {expected.JobName}-job evidence for attempt {expected.Attempt}.");
-            }
-
-            foreach (var expectedStep in expected.Steps)
-            {
-                if (steps.Where(s => String(s, "name") == expectedStep.Name).ToList() is not [var step]
-                    || String(step, "status") != "completed"
-                    || String(step, "conclusion") != expectedStep.Conclusion)
-                {
-                    throw new ReleaseException(
-                        $"Retired reservation {tag} has unexpected {expectedStep.Name} evidence for attempt {expected.Attempt}.");
-                }
-            }
-        }
-
-        if (await GitHubJsonAsync($"{RepoPath(repo)}/releases/tags/{Uri.EscapeDataString(tag)}", allowMissing: true) is not null)
-        {
-            throw new ReleaseException($"Retired reservation {tag} unexpectedly has a GitHub release.");
-        }
-
-        foreach (var packageId in new[] { retirement.PackageId, PackageId })
-        {
-            if (await PublicPackageAsync(record.Version, allowMissing: true, packageId) is not null)
-            {
-                throw new ReleaseException($"Retired reservation {tag} unexpectedly has a {packageId} package.");
-            }
-        }
-
-        Console.WriteLine($"Verified retirement of {tag}: {retirement.Reason} Its version remains reserved.");
-    }
-
-    private async Task VerifyPreviousAsync(Reservation record, string repo)
-    {
-        if (RetiredReservations.TryGetValue(record.Version.Tag, out var retirement))
-        {
-            await VerifyRetiredReservationAsync(record, retirement, repo);
-            return;
-        }
-
-        var run = await GitHubJsonAsync($"{RepoPath(repo)}/actions/runs/{record.RunId}", allowMissing: true);
-        if (run is null)
-        {
-            var workflow = await GitHubJsonAsync($"{RepoPath(repo)}/actions/workflows/release.yml");
-            if (String(workflow, "path") != ReleaseWorkflow)
-            {
-                throw new ReleaseException("Cannot verify that the release workflow is accessible.");
-            }
-
-            Console.WriteLine($"Workflow run {record.RunId} is unavailable; verifying its public release.");
-            await VerifyPublicReservationAsync(record, repo);
-            return;
-        }
-
-        if (Integer(run, "id") != record.RunId
-            || WorkflowPath(String(run, "path") ?? "") != ReleaseWorkflow
-            || String(run, "status") != "completed"
-            || String(run, "conclusion") != "success")
-        {
-            throw new ReleaseException(
-                $"Release {record.Version.Tag} from workflow run {record.RunId} is incomplete. "
-                + "Resolve and rerun that workflow before publishing another version.");
-        }
-
-        var jobs = await WorkflowJobsAsync(record.RunId, repo);
-
-        foreach (var name in record.Version.Dev ? new[] { "publish" } : new[] { "publish", "github-release" })
-        {
-            var executions = jobs.Where(j => String(j, "name") == name).ToList();
-            var attempts = executions.Select(j => Integer(j, "run_attempt")).ToList();
-            if (executions.Count == 0 || attempts.Any(attempt => attempt is null or < 1))
-            {
-                throw new ReleaseException(
-                    $"Release {record.Version.Tag} from workflow run {record.RunId} has no unique successful {name} job.");
-            }
-
-            var latestAttempt = attempts.Max();
-            if (executions.Where((_, index) => attempts[index] == latestAttempt).ToList() is not [var job]
-                || String(job, "status") != "completed"
-                || String(job, "conclusion") != "success")
-            {
-                throw new ReleaseException(
-                    $"Release {record.Version.Tag} from workflow run {record.RunId} has no unique successful {name} job.");
-            }
-        }
-    }
-
-    private async Task<List<JsonElement>> WorkflowJobsAsync(long runId, string repo)
-    {
-        const int pageSize = 100;
-        var jobs = new List<JsonElement>();
-        long? totalCount = null;
-        for (var page = 1; ; page++)
-        {
-            var result = await GitHubJsonAsync(
-                $"{RepoPath(repo)}/actions/runs/{runId}/jobs?filter=all&per_page={pageSize}&page={page}");
-            var current = Array(result, "jobs");
-            var count = Integer(result, "total_count");
-            if (current is null
-                || count is null or < 0 or > int.MaxValue
-                || current.Count > pageSize
-                || current.Any(job => job.ValueKind != JsonValueKind.Object)
-                || (totalCount is { } expected && count != expected)
-                || jobs.Count + current.Count > count
-                || (current.Count == 0 && jobs.Count < count))
-            {
-                throw new ReleaseException($"Release from workflow run {runId} has incomplete job evidence.");
-            }
-
-            totalCount = count;
-            jobs.AddRange(current);
-            if (jobs.Count == count)
-            {
-                return jobs;
-            }
-        }
-    }
-
-    // A checkpoint records that preceding publications or retirements were verified before this tag.
-    private async Task VerifyHistoryAsync(IReadOnlyList<Reservation> records, string repo)
-    {
-        var start = Math.Max(0, records.ToList().FindLastIndex(r => r.HasVerifiedHistory));
-        foreach (var record in records.Skip(start))
-        {
-            await VerifyPreviousAsync(record, repo);
-        }
-    }
-
+    // Tags the tested commit with the run's version. A rerun finds its own tag and reuses that version, even after the
+    // UTC date changes. Earlier releases, successful or not, never block a new one.
     public async Task<(ReleaseVersion Version, bool Reused)> PrepareAsync(
-        string sourceDirectory, string repo, string sourceSha, long runId, bool dev, bool preview)
+        string sourceDirectory, string sourceSha, long runNumber, bool dev, bool preview)
     {
         sourceSha = CheckedSha(sourceSha);
-        if (runId < 1)
+        if (runNumber is < 1 or > ReleaseVersion.MaxRunNumber)
         {
-            throw new ReleaseException("The workflow run ID must be positive.");
+            throw new ReleaseException($"The workflow run number must be between 1 and {ReleaseVersion.MaxRunNumber}.");
         }
 
         if (await GitAsync(sourceDirectory, "cat-file", "-t", sourceSha) != "commit")
@@ -2193,77 +1804,42 @@ internal sealed partial class ReleaseTooling
         }
 
         await VerifySourceIdentityAsync(sourceDirectory, sourceSha);
-        await GitAsync(sourceDirectory, "fetch", "--tags", "--no-recurse-submodules", "origin");
-        var tags = (await GitAsync(sourceDirectory, "tag", "--list")).Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .Select(t => t.TrimEnd('\r')).ToList();
         if (preview)
         {
-            return (ReleaseVersion.Allocate(Today(), tags, dev), false);
+            return (new ReleaseVersion(Today(), (int)runNumber, dev), false);
         }
 
-        var records = await ReservationsAsync(sourceDirectory, tags);
-        if (records.FirstOrDefault(r => r.RunId == runId) is { } own)
+        await GitAsync(sourceDirectory, "fetch", "--tags", "--no-recurse-submodules", "origin");
+        var suffix = runNumber.ToString(CultureInfo.InvariantCulture);
+        var reserved = (await GitAsync(sourceDirectory, "tag", "--list", $"v*.{suffix}", $"v*.{suffix}-dev"))
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(tag => ReleaseVersion.ParseTag(tag.TrimEnd('\r')))
+            .OfType<ReleaseVersion>()
+            .Where(version => version.RunNumber == runNumber)
+            .ToList();
+        switch (reserved)
         {
-            if (RetiredReservations.ContainsKey(own.Version.Tag))
-            {
-                throw new ReleaseException($"Release {own.Version.Tag} is retired and cannot be retried.");
-            }
+            case []:
+                break;
+            case [var own]:
+                if (own.Dev != dev || await GitAsync(sourceDirectory, "rev-parse", $"refs/tags/{own.Tag}^{{commit}}") != sourceSha)
+                {
+                    throw new ReleaseException($"Workflow run #{runNumber} already tagged {own.Tag} for different inputs.");
+                }
 
-            if (own.SourceSha != sourceSha || own.Version.Dev != dev)
-            {
-                throw new ReleaseException($"Workflow run {runId} already reserved {own.Version.Tag} for different inputs.");
-            }
-
-            if (records[^1] != own)
-            {
+                return (own, true);
+            default:
                 throw new ReleaseException(
-                    $"A later release was reserved after {own.Version.Tag}; refusing an out-of-order retry.");
-            }
-
-            if (!own.HasVerifiedHistory)
-            {
-                await VerifyHistoryAsync(records[..^1], repo);
-            }
-
-            return (own.Version, true);
+                    $"Workflow run #{runNumber} has more than one release tag: {string.Join(", ", reserved.Select(v => v.Tag))}.");
         }
 
-        if (records.Count > 0)
-        {
-            EnsureClock(records[^1]);
-            await VerifyHistoryAsync(records, repo);
-        }
-
-        // Verification can cross midnight; allocate against the day the tag is created.
-        var today = Today();
-        if (records.Count > 0)
-        {
-            EnsureClock(records[^1]);
-        }
-
-        var version = ReleaseVersion.Allocate(today, tags, dev);
-        var metadata = new JsonObject
-        {
-            ["piston_release"] = 1,
-            ["run_id"] = runId,
-            ["source_sha"] = sourceSha,
-            ["version"] = version.Version,
-            ["verified_through"] = records.Count > 0 ? records[^1].Version.Tag : null,
-        }.ToJsonString();
+        var version = new ReleaseVersion(Today(), (int)runNumber, dev);
         await GitAsync(sourceDirectory,
             "-c", "user.name=github-actions[bot]",
             "-c", "user.email=41898282+github-actions[bot]@users.noreply.github.com",
-            "tag", "-a", version.Tag, sourceSha, "-m", metadata);
+            "tag", "-a", version.Tag, sourceSha, "-m", $"Release {PackageId} {version.Version}");
         await GitAsync(sourceDirectory, "push", "origin", $"refs/tags/{version.Tag}");
         return (version, false);
-
-        void EnsureClock(Reservation latest)
-        {
-            if (Today() < latest.Version.Day)
-            {
-                throw new ReleaseException($"UTC date precedes the latest release reservation {latest.Version.Tag}.");
-            }
-        }
     }
 
     private DateOnly Today() => DateOnly.FromDateTime(UtcNow().UtcDateTime);
@@ -2501,8 +2077,8 @@ internal sealed partial class ReleaseTooling
                         "stable" => false,
                         _ => throw new ReleaseException("RELEASE_KIND must be dev or stable."),
                     };
-                    var (version, reused) = await tooling.PrepareAsync(FullPath("RELEASE_SOURCE_DIR"), repo,
-                        Required("RELEASE_SOURCE_SHA"), Number("GITHUB_RUN_ID"), dev, preview: !Flag("RELEASE_PUBLISH"));
+                    var (version, reused) = await tooling.PrepareAsync(FullPath("RELEASE_SOURCE_DIR"),
+                        Required("RELEASE_SOURCE_SHA"), Number("GITHUB_RUN_NUMBER"), dev, preview: !Flag("RELEASE_PUBLISH"));
                     Write(("version", version.Version), ("tag", version.Tag), ("reused", Bool(reused)));
                     return;
                 }
@@ -2611,8 +2187,6 @@ internal static partial class ReleaseTests
         RegisterWorkflowTests();
         RegisterContextTests();
         RegisterReservationTests();
-        RegisterReservationHistoryTests();
-        RegisterRetiredReservationTests();
         RegisterPackageTests();
         var failures = 0;
         foreach (var (name, body) in Cases)
@@ -2640,7 +2214,7 @@ internal static partial class ReleaseTests
     {
         Case("version formats canonical tags", () =>
         {
-            foreach (var (day, counter, dev, version, tag) in new[]
+            foreach (var (day, runNumber, dev, version, tag) in new[]
                      {
                          (new DateOnly(2026, 1, 1), 1, true, "2026.101.1-dev", "v2026.101.1-dev"),
                          (new DateOnly(2024, 2, 29), 42, false, "2024.229.42", "v2024.229.42"),
@@ -2649,17 +2223,17 @@ internal static partial class ReleaseTests
                          (new DateOnly(2027, 1, 1), 1, false, "2027.101.1", "v2027.101.1"),
                      })
             {
-                var release = new ReleaseVersion(day, counter, dev);
+                var release = new ReleaseVersion(day, runNumber, dev);
                 Expect.Equal(version, release.Version);
                 Expect.Equal(tag, release.Tag);
             }
         });
 
-        Case("version rejects out-of-range counters", () =>
+        Case("version rejects out-of-range run numbers", () =>
         {
-            foreach (var counter in new[] { -1, 0, 65535 })
+            foreach (var runNumber in new[] { -1, 0, 65535 })
             {
-                Expect.Throws(() => _ = new ReleaseVersion(Day, counter, false), label: counter.ToString(CultureInfo.InvariantCulture));
+                Expect.Throws(() => _ = new ReleaseVersion(Day, runNumber, false), label: runNumber.ToString(CultureInfo.InvariantCulture));
             }
 
             Expect.Equal("2026.1101.1", new ReleaseVersion(Day, 1, false).Version);
@@ -2686,7 +2260,7 @@ internal static partial class ReleaseTests
 
         Case("parse canonical tags returns release version", () =>
         {
-            foreach (var (tag, day, counter, dev, version) in new[]
+            foreach (var (tag, day, runNumber, dev, version) in new[]
                      {
                          ("v2026.101.1", new DateOnly(2026, 1, 1), 1, false, "2026.101.1"),
                          ("v2024.229.42-dev", new DateOnly(2024, 2, 29), 42, true, "2024.229.42-dev"),
@@ -2697,7 +2271,7 @@ internal static partial class ReleaseTests
             {
                 var release = ReleaseVersion.ParseTag(tag) ?? throw new InvalidOperationException($"{tag} did not parse.");
                 Expect.Equal(day, release.Day, tag);
-                Expect.Equal(counter, release.Counter, tag);
+                Expect.Equal(runNumber, release.RunNumber, tag);
                 Expect.Equal(dev, release.Dev, tag);
                 Expect.Equal(version, release.Version, tag);
                 Expect.Equal(tag, release.Tag, tag);
@@ -2724,79 +2298,6 @@ internal static partial class ReleaseTests
             {
                 Expect.Throws(() => ReleaseVersion.ParseTag(tag), label: tag);
             }
-        });
-
-        Case("allocate starts at one without same-day tags", () =>
-        {
-            foreach (var (tags, dev, version) in new[]
-                     {
-                         (System.Array.Empty<string>(), false, "2026.1101.1"),
-                         (["v0.1.0", "nightly"], true, "2026.1101.1-dev"),
-                         (["v2026.1031.91", "v2026.1102.8-dev"], false, "2026.1101.1"),
-                     })
-            {
-                Expect.Equal(version, ReleaseVersion.Allocate(Day, tags, dev).Version);
-            }
-        });
-
-        Case("allocate shares counter across stable and dev", () =>
-        {
-            Expect.Equal("2026.1101.4",
-                ReleaseVersion.Allocate(Day, ["v2026.1101.1-dev", "v2026.1101.2", "v2026.1101.3-dev"], false).Version);
-            Expect.Equal("2026.1101.9-dev", ReleaseVersion.Allocate(Day, ["v2026.1101.8", "v2026.1101.6-dev"], true).Version);
-        });
-
-        Case("allocate uses numeric max, not lexical order", () =>
-        {
-            var release = ReleaseVersion.Allocate(Day, ["v2026.1101.9", "v2026.1101.10-dev", "v2026.1101.2", "v2026.1031.60000"], false);
-            Expect.Equal("2026.1101.11", release.Version);
-            Expect.Equal("v2026.1101.11", release.Tag);
-        });
-
-        Case("allocate increments adjacent counter boundaries", () =>
-        {
-            foreach (var (previous, version) in new[]
-                     {
-                         (1, "2026.1101.2-dev"), (9, "2026.1101.10-dev"), (10, "2026.1101.11-dev"),
-                         (65532, "2026.1101.65533-dev"), (65533, "2026.1101.65534-dev"),
-                     })
-            {
-                Expect.Equal(version, ReleaseVersion.Allocate(Day, [$"v2026.1101.{previous}"], true).Version);
-            }
-
-            Expect.Throws(() => ReleaseVersion.Allocate(Day, ["v2026.1101.65534-dev"], false));
-        });
-
-        Case("allocate resets across day and year", () =>
-        {
-            Expect.Equal("2026.1102.1", ReleaseVersion.Allocate(new(2026, 11, 2), ["v2026.1101.65534-dev"], false).Version);
-            Expect.Equal("2024.229.1", ReleaseVersion.Allocate(new(2024, 2, 29), ["v2024.228.65534"], false).Version);
-            Expect.Equal("2027.101.1", ReleaseVersion.Allocate(new(2027, 1, 1), ["v2026.1231.65534-dev"], false).Version);
-        });
-
-        Case("allocate rejects reused counter for stable and dev", () =>
-        {
-            Expect.Throws(() => ReleaseVersion.Allocate(Day, ["v2026.1101.7", "v2026.1101.7-dev"], true));
-            Expect.Throws(() => ReleaseVersion.Allocate(Day, ["v2026.1101.7-dev", "v2026.1101.7"], true));
-        });
-
-        Case("allocate rejects invalid calendar tags", () =>
-        {
-            foreach (var tag in new[] { "v2026.229.4", "v02026.1101.8", "v2026.1101.01", "v2026.1101.65535" })
-            {
-                Expect.Throws(() => ReleaseVersion.Allocate(Day, ["v2026.1101.1", tag], true), label: tag);
-            }
-        });
-
-        Case("allocate accepts a single-pass iterable", () =>
-        {
-            static IEnumerable<string> Once()
-            {
-                yield return "v2026.1101.2-dev";
-                yield return "v2026.1101.4";
-            }
-
-            Expect.Equal("2026.1101.5-dev", ReleaseVersion.Allocate(Day, Once(), true).Version);
         });
     }
 }
@@ -2838,12 +2339,10 @@ internal class ReleaseFixture : IDisposable
 {
     public const string Repo = "example/piston";
     public const string Api = "https://github.invalid";
-    public const string WorkflowUrl = $"{Api}/repos/{Repo}/actions/workflows/release.yml";
 
     public ReleaseFixture()
     {
         Root = Directory.CreateTempSubdirectory("piston-release-tests-").FullName;
-        Http.Json(WorkflowUrl, new JsonObject { ["path"] = ".github/workflows/release.yml" });
     }
 
     public string Root { get; }
@@ -2851,8 +2350,6 @@ internal class ReleaseFixture : IDisposable
     public FakeHttp Http { get; } = new();
 
     public DateTimeOffset Clock { get; set; } = new(2026, 11, 1, 23, 59, 0, TimeSpan.Zero);
-
-    public Dictionary<string, RetiredReservation> Retired { get; set; } = new(ReleaseTooling.DefaultRetiredReservations);
 
     // Returns null to run the real command.
     public Func<string, IReadOnlyList<string>, string?, Task<string?>>? Intercept { get; set; }
@@ -2864,19 +2361,10 @@ internal class ReleaseFixture : IDisposable
         GitHubToken = "fixture-token",
         GitHubApiUrl = Api,
         BaseDirectory = Root,
-        RetiredReservations = Retired,
         Run = async (file, arguments, cwd) =>
             (Intercept is { } intercept ? await intercept(file, arguments, cwd) : null)
             ?? await ReleaseTooling.RunProcessAsync(file, arguments, cwd),
     };
-
-    public static string ActionUrl(long runId) => $"{Api}/repos/{Repo}/actions/runs/{runId}";
-
-    public static string JobsUrl(long runId, int page = 1) =>
-        $"{Api}/repos/{Repo}/actions/runs/{runId}/jobs?filter=all&per_page=100&page={page}";
-
-    public static string AttemptJobsUrl(long runId, int attempt = 1) =>
-        $"{Api}/repos/{Repo}/actions/runs/{runId}/attempts/{attempt}/jobs?per_page=100";
 
     public static string ReleaseUrl(ReleaseVersion version) => $"{Api}/repos/{Repo}/releases/tags/{version.Tag}";
 
@@ -2957,47 +2445,8 @@ internal class ReleaseFixture : IDisposable
         return buffer.ToArray();
     }
 
-    public static JsonObject Job(string name, string conclusion = "success", string status = "completed", int attempt = 1) => new()
-    {
-        ["name"] = name,
-        ["status"] = status,
-        ["conclusion"] = conclusion,
-        ["run_attempt"] = attempt,
-    };
-
-    public static JsonObject Jobs(params JsonObject[] jobs) =>
-        new() { ["total_count"] = jobs.Length, ["jobs"] = new JsonArray([.. jobs]) };
-
-    public static JsonObject Jobs(int totalCount, params JsonObject[] jobs) =>
-        new() { ["total_count"] = totalCount, ["jobs"] = new JsonArray([.. jobs]) };
-
-    public void Success(long runId, bool stable = false)
-    {
-        Http.Json(ActionUrl(runId), new JsonObject
-        {
-            ["id"] = runId,
-            ["path"] = ".github/workflows/release.yml@refs/heads/main",
-            ["status"] = "completed",
-            ["conclusion"] = "success",
-        });
-        Http.Json(JobsUrl(runId), Jobs(Job("publish"), Job("github-release", stable ? "success" : "skipped")));
-    }
-
     public void PublicPackage(ReleaseVersion version, string sourceSha, string dll = "expected executable", string signature = "signature") =>
         Http.Responses[PackageUrl(version)] = MakePackage(version, sourceSha, dll: dll, signature: signature);
-
-    public void PublicRelease(ReleaseVersion version, JsonArray? assets = null, params (string Name, JsonNode? Value)[] changes) =>
-        Http.Json(ReleaseUrl(version), With(new JsonObject
-        {
-            ["tag_name"] = version.Tag,
-            ["draft"] = false,
-            ["prerelease"] = false,
-            ["assets"] = assets ?? new JsonArray(new JsonObject
-            {
-                ["name"] = $"DamianH.Piston.{version.Version}.nupkg",
-                ["state"] = "uploaded",
-            }),
-        }, changes));
 
     public string LocalPackage(ReleaseVersion version, string sourceSha)
     {
@@ -3021,19 +2470,6 @@ internal class ReleaseFixture : IDisposable
         Http.Responses[PackageUrl(version, RuntimeId)] = runtime ?? MakeRuntimePackage(version, sourceSha, signature: "nuget");
     }
 
-    // Serves `gh release download` from the given bytes, like a patched asset download.
-    public void DownloadAsset(byte[] data) => Intercept = (file, arguments, _) =>
-    {
-        if (file == "gh" && arguments is ["release", "download", ..])
-        {
-            var name = arguments[arguments.ToList().IndexOf("--pattern") + 1];
-            File.WriteAllBytes(Path.Combine(arguments[arguments.ToList().IndexOf("--dir") + 1], name), data);
-            return Task.FromResult<string?>("");
-        }
-
-        return Task.FromResult<string?>(null);
-    };
-
     public void Dispose()
     {
         foreach (var file in Directory.EnumerateFiles(Root, "*", SearchOption.AllDirectories))
@@ -3049,7 +2485,6 @@ internal sealed class GitFixture : ReleaseFixture
 {
     private GitFixture()
     {
-        Retired = [];
         Origin = Path.Combine(Root, "origin.git");
         Worktree = Directory.CreateDirectory(Path.Combine(Root, "worktree")).FullName;
     }
@@ -3099,36 +2534,18 @@ internal sealed class GitFixture : ReleaseFixture
     public async Task<List<string>> OriginTags() =>
         [.. (await Git("--git-dir", Origin, "tag", "--list")).Split('\n', StringSplitOptions.RemoveEmptyEntries)];
 
-    public async Task Tag(ReleaseVersion version, long runId, string? sourceSha = null, string? body = null, bool annotated = true)
+    public async Task Tag(ReleaseVersion version, string? sourceSha = null)
     {
-        sourceSha ??= SourceSha;
-        body ??= new JsonObject
-        {
-            ["piston_release"] = 1,
-            ["run_id"] = runId,
-            ["source_sha"] = sourceSha,
-            ["version"] = version.Version,
-        }.ToJsonString();
-        if (annotated)
-        {
-            await Git("-c", "user.name=Release Test", "-c", "user.email=release@example.invalid", "-c", "tag.gpgsign=false",
-                "tag", "-a", version.Tag, sourceSha, "-m", body);
-        }
-        else
-        {
-            await Git("tag", version.Tag, sourceSha);
-        }
-
+        await Git("-c", "user.name=Release Test", "-c", "user.email=release@example.invalid", "-c", "tag.gpgsign=false",
+            "tag", "-a", version.Tag, sourceSha ?? SourceSha, "-m", $"Release {version.Version}");
         await Git("push", "--quiet", "origin", $"refs/tags/{version.Tag}");
     }
 
-    public static string TagBody(string raw) => raw[(raw.IndexOf("\n\n", StringComparison.Ordinal) + 2)..];
-
     public Task<(ReleaseVersion Version, bool Reused)> PrepareAt(
-        DateOnly day, string? sourceSha = null, long runId = 100, bool dev = true, bool preview = false)
+        DateOnly day, string? sourceSha = null, long runNumber = 100, bool dev = true, bool preview = false)
     {
         Clock = new DateTimeOffset(day.Year, day.Month, day.Day, 23, 59, 0, TimeSpan.Zero);
-        return Tooling().PrepareAsync(Worktree, Repo, sourceSha ?? SourceSha, runId, dev, preview);
+        return Tooling().PrepareAsync(Worktree, sourceSha ?? SourceSha, runNumber, dev, preview);
     }
 }
 
@@ -3367,71 +2784,53 @@ internal static partial class ReleaseTests
         await body(fixture);
     });
 
-    private static JsonObject Run(long id, string status, string? conclusion, string path = ".github/workflows/release.yml") => new()
-    {
-        ["id"] = id,
-        ["path"] = path,
-        ["status"] = status,
-        ["conclusion"] = conclusion,
-    };
-
     private static async Task ExpectTags(GitFixture f, params string[] tags) => Expect.Sequence(tags, await f.OriginTags(), "origin tags");
 
     private static void RegisterReservationTests()
     {
-        GitCase("prepare pushes annotated reservation to local origin", async f =>
+        GitCase("prepare tags the run number with the UTC date", async f =>
         {
-            var (version, reused) = await f.PrepareAt(Day, runId: 41);
-            Expect.Equal("2026.1101.1-dev", version.Version);
-            Expect.Equal("v2026.1101.1-dev", version.Tag);
+            var (version, reused) = await f.PrepareAt(Day, runNumber: 41);
+            Expect.Equal("2026.1101.41-dev", version.Version);
             Expect.Equal(false, reused);
-            await ExpectTags(f, "v2026.1101.1-dev");
+            await ExpectTags(f, "v2026.1101.41-dev");
             Expect.Equal("tag", await f.Git("--git-dir", f.Origin, "cat-file", "-t", $"refs/tags/{version.Tag}"));
+            Expect.Equal(f.SourceSha, await f.Git("--git-dir", f.Origin, "rev-parse", $"{version.Tag}^{{}}"));
             var raw = await f.Git("--git-dir", f.Origin, "cat-file", "-p", $"refs/tags/{version.Tag}");
-            var headers = raw[..raw.IndexOf("\n\n", StringComparison.Ordinal)].Split('\n');
-            Expect.True(headers.Contains($"object {f.SourceSha}"), "tag object header");
-            Expect.True(headers.Contains("type commit"), "tag type header");
-            Expect.Equal(
-                $$"""{"piston_release":1,"run_id":41,"source_sha":"{{f.SourceSha}}","version":"2026.1101.1-dev","verified_through":null}""",
-                GitFixture.TagBody(raw));
+            Expect.True(raw.EndsWith("Release DamianH.Piston 2026.1101.41-dev", StringComparison.Ordinal), "tag message");
+            Expect.Equal(0, f.Http.Requests.Count);
         });
 
-        GitCase("prepare retry reuses reservation after UTC rollover", async f =>
+        GitCase("prepare retry reuses its tag after UTC rollover", async f =>
         {
-            var (first, reused) = await f.PrepareAt(Day, runId: 41);
+            var (first, reused) = await f.PrepareAt(Day, runNumber: 41, dev: false);
             Expect.Equal(false, reused);
             var original = await f.Git("rev-parse", $"refs/tags/{first.Tag}");
-            (var second, reused) = await f.PrepareAt(new(2026, 11, 2), runId: 41);
+            (var second, reused) = await f.PrepareAt(new(2026, 11, 2), runNumber: 41, dev: false);
             Expect.Equal(true, reused);
-            Expect.Equal("2026.1101.1-dev", second.Version);
+            Expect.Equal("2026.1101.41", second.Version);
             Expect.Equal(original, await f.Git("rev-parse", $"refs/tags/{second.Tag}"));
-            await ExpectTags(f, "v2026.1101.1-dev");
+            await ExpectTags(f, "v2026.1101.41");
         });
 
-        GitCase("prepare uses UTC date after prior release verification", async f =>
+        GitCase("prepare ignores earlier releases whatever their outcome", async f =>
         {
-            var prior = new ReleaseVersion(Day, 1, true);
-            await f.Tag(prior, 41);
-            f.Success(41);
-            var run = f.Http.Responses[ReleaseFixture.ActionUrl(41)];
-            f.Http.Responses[ReleaseFixture.ActionUrl(41)] = (Func<object>)(() =>
-            {
-                f.Clock = new DateTimeOffset(2026, 11, 2, 0, 0, 0, TimeSpan.Zero);
-                return run;
-            });
-            f.Clock = new DateTimeOffset(2026, 11, 1, 23, 59, 0, TimeSpan.Zero);
-            var (version, reused) = await f.Tooling().PrepareAsync(f.Worktree, Repo, f.SourceSha, 42, dev: false, preview: false);
+            await f.Tag(new ReleaseVersion(Day, 1, true));
+            await f.Tag(new ReleaseVersion(Day, 4, false));
+            await f.Git("tag", "v1.0.0", f.SourceSha);
+            await f.Git("push", "--quiet", "origin", "refs/tags/v1.0.0");
+            var (version, reused) = await f.PrepareAt(Day, runNumber: 42);
             Expect.Equal(false, reused);
-            Expect.Equal("2026.1102.1", version.Version);
-            await ExpectTags(f, "v2026.1101.1-dev", "v2026.1102.1");
+            Expect.Equal("2026.1101.42-dev", version.Version);
+            await ExpectTags(f, "v1.0.0", "v2026.1101.1-dev", "v2026.1101.4", "v2026.1101.42-dev");
         });
 
-        GitCase("prepare reserves earlier commit after main advances", async f =>
+        GitCase("prepare tags earlier commit after main advances", async f =>
         {
             var tested = f.SourceSha;
             var latest = await f.Commit("Newer main commit");
             await f.Git("push", "--quiet", "origin", "main");
-            var (version, reused) = await f.PrepareAt(Day, sourceSha: tested, runId: 42);
+            var (version, reused) = await f.PrepareAt(Day, sourceSha: tested, runNumber: 42);
             Expect.Equal(false, reused);
             Expect.Equal(latest, await f.Git("--git-dir", f.Origin, "rev-parse", "refs/heads/main"));
             Expect.Equal(tested, await f.Git("--git-dir", f.Origin, "rev-parse", $"{version.Tag}^{{}}"));
@@ -3439,30 +2838,41 @@ internal static partial class ReleaseTests
 
         GitCase("prepare rejects retry with changed inputs", async f =>
         {
-            await f.PrepareAt(Day, runId: 41);
+            await f.PrepareAt(Day, runNumber: 41);
             var newSha = await f.Commit("Different source");
-            await Expect.ThrowsAsync(() => f.PrepareAt(new(2026, 11, 2), sourceSha: newSha, runId: 41), label: "changed source");
-            await Expect.ThrowsAsync(() => f.PrepareAt(new(2026, 11, 2), runId: 41, dev: false), label: "changed kind");
-            await ExpectTags(f, "v2026.1101.1-dev");
+            await Expect.ThrowsAsync(() => f.PrepareAt(new(2026, 11, 2), sourceSha: newSha, runNumber: 41), label: "changed source");
+            await Expect.ThrowsAsync(() => f.PrepareAt(new(2026, 11, 2), runNumber: 41, dev: false), label: "changed kind");
+            await ExpectTags(f, "v2026.1101.41-dev");
         });
 
-        GitCase("prepare rejects out-of-order retry", async f =>
+        GitCase("prepare rejects several tags for one run number", async f =>
         {
-            await f.Tag(new ReleaseVersion(Day, 1, true), 41);
-            await f.Tag(new ReleaseVersion(Day, 2, false), 42);
-            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 41));
-            await ExpectTags(f, "v2026.1101.1-dev", "v2026.1101.2");
+            await f.Tag(new ReleaseVersion(new(2026, 10, 31), 41, true));
+            await f.Tag(new ReleaseVersion(Day, 41, true));
+            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runNumber: 41), "more than one");
+            await ExpectTags(f, "v2026.1031.41-dev", "v2026.1101.41-dev");
+        });
+
+        GitCase("prepare rejects run numbers outside the version range", async f =>
+        {
+            foreach (var runNumber in new long[] { 0, ReleaseVersion.MaxRunNumber + 1 })
+            {
+                await Expect.ThrowsAsync(() => f.PrepareAt(Day, runNumber: runNumber), "run number",
+                    runNumber.ToString(CultureInfo.InvariantCulture));
+            }
+
+            await ExpectTags(f);
         });
 
         GitCase("prepare preview does not create a tag", async f =>
         {
-            var (version, reused) = await f.PrepareAt(Day, runId: 41, dev: false, preview: true);
-            Expect.Equal("2026.1101.1", version.Version);
+            var (version, reused) = await f.PrepareAt(Day, runNumber: 41, dev: false, preview: true);
+            Expect.Equal("2026.1101.41", version.Version);
             Expect.Equal(false, reused);
             await ExpectTags(f);
         });
 
-        GitCase("prepare rejects stale or inconsistent source before reserving", async f =>
+        GitCase("prepare rejects stale or inconsistent source before tagging", async f =>
         {
             foreach (var (label, packageId, identifier) in new[]
                      {
@@ -3471,14 +2881,13 @@ internal static partial class ReleaseTests
             {
                 await f.WriteSourceIdentity(packageId, identifier);
                 var sha = await f.Commit(label);
-                await Expect.ThrowsAsync(() => f.PrepareAt(Day, sourceSha: sha, runId: 41), "package identity", label);
+                await Expect.ThrowsAsync(() => f.PrepareAt(Day, sourceSha: sha, runNumber: 41), "package identity", label);
                 await ExpectTags(f);
                 Expect.Equal("", await f.Git("tag", "--list"), label);
-                Expect.Equal(0, f.Http.Requests.Count, label);
             }
         });
 
-        GitCase("prepare rejects missing or invalid source metadata before reserving", async f =>
+        GitCase("prepare rejects missing or invalid source metadata before tagging", async f =>
         {
             foreach (var (label, path, content) in new[]
                      {
@@ -3503,342 +2912,9 @@ internal static partial class ReleaseTests
 
                 await f.Git("add", "-A");
                 var sha = await f.Commit(label);
-                await Expect.ThrowsAsync(() => f.PrepareAt(Day, sourceSha: sha, runId: 41), "package identity", label);
+                await Expect.ThrowsAsync(() => f.PrepareAt(Day, sourceSha: sha, runNumber: 41), "package identity", label);
                 await ExpectTags(f);
                 Expect.Equal("", await f.Git("tag", "--list"), label);
-                Expect.Equal(0, f.Http.Requests.Count, label);
-            }
-        });
-
-        GitCase("prepare blocks incomplete or failed previous run", async f =>
-        {
-            await f.Tag(new ReleaseVersion(Day, 1, true), 41);
-            foreach (var (label, run) in new[]
-                     {
-                         ("in_progress", Run(41, "in_progress", null)), ("failed", Run(41, "completed", "failure")),
-                         ("cancelled", Run(41, "completed", "cancelled")),
-                         ("wrong_workflow", Run(41, "completed", "success", ".github/workflows/ci.yml")),
-                         ("wrong_run_id", Run(99, "completed", "success")),
-                     })
-            {
-                f.Http.Json(ReleaseFixture.ActionUrl(41), run);
-                await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42), label: label);
-                await ExpectTags(f, "v2026.1101.1-dev");
-            }
-        });
-
-        GitCase("prepare blocks failed previous run after UTC rollover", async f =>
-        {
-            await f.Tag(new ReleaseVersion(Day, 1, true), 41);
-            f.Http.Json(ReleaseFixture.ActionUrl(41), Run(41, "completed", "failure"));
-            await Expect.ThrowsAsync(() => f.PrepareAt(new(2026, 11, 2), runId: 42));
-            await ExpectTags(f, "v2026.1101.1-dev");
-        });
-
-        GitCase("prepare fails closed when GitHub status is unavailable", async f =>
-        {
-            await f.Tag(new ReleaseVersion(Day, 1, true), 41);
-            foreach (var response in new object[] { 503, new HttpRequestException("controlled outage") })
-            {
-                f.Http.Responses[ReleaseFixture.ActionUrl(41)] = response;
-                await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42), label: response.ToString());
-                await ExpectTags(f, "v2026.1101.1-dev");
-            }
-        });
-
-        GitCase("prepare rejects clock before latest reservation", async f =>
-        {
-            await f.Tag(new ReleaseVersion(new(2026, 11, 2), 1, true), 41);
-            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42));
-            await ExpectTags(f, "v2026.1102.1-dev");
-        });
-
-        GitCase("prepare accepts successful dev publish without waiting for NuGet", async f =>
-        {
-            var prior = new ReleaseVersion(Day, 1, true);
-            await f.Tag(prior, 41);
-            f.Success(41);
-            f.Http.Responses[ReleaseFixture.PackageUrl(prior)] = 503;
-            var (version, reused) = await f.PrepareAt(Day, runId: 42, dev: false);
-            Expect.Equal(false, reused);
-            Expect.Equal("2026.1101.2", version.Version);
-            await ExpectTags(f, "v2026.1101.1-dev", "v2026.1101.2");
-            Expect.Sequence([ReleaseFixture.ActionUrl(41), ReleaseFixture.JobsUrl(41)], f.Http.Requests);
-        });
-
-        GitCase("prepare accepts successful partial rerun evidence across paginated attempts", async f =>
-        {
-            var prior = new ReleaseVersion(Day, 1, false);
-            await f.Tag(prior, 41);
-            f.Success(41, stable: true);
-            var firstPage = new[] { ReleaseFixture.Job("publish", attempt: 1) }
-                .Concat(Enumerable.Range(1, 99).Select(index => ReleaseFixture.Job($"other-{index}")))
-                .ToArray();
-            f.Http.Json(ReleaseFixture.JobsUrl(41), ReleaseFixture.Jobs(101, firstPage));
-            f.Http.Json(ReleaseFixture.JobsUrl(41, page: 2), ReleaseFixture.Jobs(
-                101, ReleaseFixture.Job("github-release", attempt: 2)));
-
-            var (version, reused) = await f.PrepareAt(Day, runId: 42, dev: true);
-            Expect.Equal(false, reused);
-            Expect.Equal("2026.1101.2-dev", version.Version);
-            Expect.Sequence(
-                [ReleaseFixture.ActionUrl(41), ReleaseFixture.JobsUrl(41), ReleaseFixture.JobsUrl(41, page: 2)],
-                f.Http.Requests);
-            await ExpectTags(f, prior.Tag, "v2026.1101.2-dev");
-        });
-
-        GitCase("prepare shares stable and dev counters without waiting for NuGet", async f =>
-        {
-            var prior = new ReleaseVersion(Day, 4, false);
-            await f.Tag(prior, 41);
-            f.Success(41, stable: true);
-            f.Http.Responses[ReleaseFixture.PackageUrl(prior)] = 404;
-            var (version, reused) = await f.PrepareAt(Day, runId: 42, dev: true);
-            Expect.Equal(false, reused);
-            Expect.Equal("2026.1101.5-dev", version.Version);
-            await ExpectTags(f, "v2026.1101.4", "v2026.1101.5-dev");
-            Expect.Sequence([ReleaseFixture.ActionUrl(41), ReleaseFixture.JobsUrl(41)], f.Http.Requests);
-        });
-
-        GitCase("prepare blocks incomplete publish job evidence", async f =>
-        {
-            var prior = new ReleaseVersion(Day, 1, true);
-            await f.Tag(prior, 41);
-            f.Success(41);
-            foreach (var (label, jobs) in new[]
-                     {
-                         ("missing", ReleaseFixture.Jobs()),
-                         ("skipped", ReleaseFixture.Jobs(ReleaseFixture.Job("publish", "skipped"))),
-                         ("failed", ReleaseFixture.Jobs(ReleaseFixture.Job("publish", "failure"))),
-                         ("latest_failed", ReleaseFixture.Jobs(
-                             ReleaseFixture.Job("publish", attempt: 1),
-                             ReleaseFixture.Job("publish", "failure", attempt: 2))),
-                         ("in_progress", ReleaseFixture.Jobs(ReleaseFixture.Job("publish", status: "in_progress"))),
-                         ("duplicate", ReleaseFixture.Jobs(ReleaseFixture.Job("publish"), ReleaseFixture.Job("publish"))),
-                         ("truncated", new JsonObject
-                         {
-                             ["total_count"] = 2,
-                             ["jobs"] = new JsonArray(ReleaseFixture.Job("publish")),
-                         }),
-                     })
-            {
-                f.Http.Json(ReleaseFixture.JobsUrl(41), jobs);
-                if (label == "truncated")
-                {
-                    f.Http.Json(ReleaseFixture.JobsUrl(41, page: 2), ReleaseFixture.Jobs(2));
-                }
-
-                await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42), label: label);
-                await ExpectTags(f, prior.Tag);
-            }
-
-            f.Http.Responses[ReleaseFixture.JobsUrl(41)] = 503;
-            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42), label: "jobs_unavailable");
-            await ExpectTags(f, prior.Tag);
-        });
-
-        GitCase("prepare blocks a stable run without a successful GitHub release job", async f =>
-        {
-            var prior = new ReleaseVersion(Day, 1, false);
-            await f.Tag(prior, 41);
-            f.Success(41);
-            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42));
-            await ExpectTags(f, prior.Tag);
-        });
-
-        GitCase("prepare accepts verified expired stable run", async f =>
-        {
-            var prior = new ReleaseVersion(Day, 2, false);
-            await f.Tag(prior, 41);
-            f.Http.Responses[ReleaseFixture.ActionUrl(41)] = 404;
-            f.PublicPackage(prior, f.SourceSha);
-            f.PublicRelease(prior);
-            f.DownloadAsset(ReleaseFixture.MakePackage(prior, f.SourceSha));
-            var (version, reused) = await f.PrepareAt(new(2026, 11, 2), runId: 42);
-            Expect.Equal(false, reused);
-            Expect.Equal("2026.1102.1-dev", version.Version);
-            await ExpectTags(f, "v2026.1101.2", "v2026.1102.1-dev");
-        });
-
-        GitCase("prepare blocks expired run without complete public evidence", async f =>
-        {
-            var prior = new ReleaseVersion(Day, 1, false);
-            await f.Tag(prior, 41);
-            f.Http.Responses[ReleaseFixture.ActionUrl(41)] = 404;
-            foreach (var label in new[] { "missing_package", "missing_release", "missing_asset" })
-            {
-                f.PublicPackage(prior, f.SourceSha);
-                f.PublicRelease(prior);
-                switch (label)
-                {
-                    case "missing_package": f.Http.Responses[ReleaseFixture.PackageUrl(prior)] = 404; break;
-                    case "missing_release": f.Http.Responses[ReleaseFixture.ReleaseUrl(prior)] = 404; break;
-                    default: f.PublicRelease(prior, assets: []); break;
-                }
-
-                await Expect.ThrowsAsync(() => f.PrepareAt(new(2026, 11, 2), runId: 42), label: label);
-                await ExpectTags(f, "v2026.1101.1");
-            }
-        });
-
-        GitCase("prepare blocks expired run when workflow API is inaccessible", async f =>
-        {
-            var prior = new ReleaseVersion(Day, 1, true);
-            await f.Tag(prior, 41);
-            f.Http.Responses[ReleaseFixture.ActionUrl(41)] = 404;
-            f.Http.Responses[ReleaseFixture.WorkflowUrl] = 503;
-            f.PublicPackage(prior, f.SourceSha);
-            await Expect.ThrowsAsync(() => f.PrepareAt(new(2026, 11, 2), runId: 42));
-            await ExpectTags(f, "v2026.1101.1-dev");
-            Expect.True(!f.Http.Requests.Contains(ReleaseFixture.PackageUrl(prior)), "package should not be requested");
-        });
-
-        GitCase("prepare blocks expired stable run with mismatched release asset", async f =>
-        {
-            var prior = new ReleaseVersion(Day, 1, false);
-            await f.Tag(prior, 41);
-            f.Http.Responses[ReleaseFixture.ActionUrl(41)] = 404;
-            f.PublicPackage(prior, f.SourceSha);
-            f.PublicRelease(prior);
-            f.DownloadAsset(ReleaseFixture.MakePackage(prior, f.SourceSha, dll: "different executable"));
-            await Expect.ThrowsAsync(() => f.PrepareAt(new(2026, 11, 2), runId: 42));
-            await ExpectTags(f, "v2026.1101.1");
-        });
-
-        GitCase("prepare blocks missing or mismatched public evidence for an expired run", async f =>
-        {
-            var prior = new ReleaseVersion(Day, 1, false);
-            await f.Tag(prior, 41);
-            f.Http.Responses[ReleaseFixture.ActionUrl(41)] = 404;
-            foreach (var label in new[] { "missing_package", "wrong_commit", "missing_release", "missing_asset", "nuget_error" })
-            {
-                f.PublicPackage(prior, f.SourceSha);
-                f.PublicRelease(prior);
-                switch (label)
-                {
-                    case "missing_package": f.Http.Responses[ReleaseFixture.PackageUrl(prior)] = 404; break;
-                    case "wrong_commit": f.PublicPackage(prior, new string('f', 40)); break;
-                    case "missing_release": f.Http.Responses[ReleaseFixture.ReleaseUrl(prior)] = 404; break;
-                    case "missing_asset": f.PublicRelease(prior, assets: []); break;
-                    default: f.Http.Responses[ReleaseFixture.PackageUrl(prior)] = 503; break;
-                }
-
-                await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42), label: label);
-                await ExpectTags(f, "v2026.1101.1");
-            }
-        });
-    }
-}
-
-internal static partial class ReleaseTests
-{
-    private static void RegisterReservationHistoryTests()
-    {
-        GitCase("prepare blocks unresolved older reservation", async f =>
-        {
-            await f.Tag(new ReleaseVersion(Day, 1, true), 40);
-            await f.Tag(new ReleaseVersion(Day, 2, true), 41);
-            f.Http.Json(ReleaseFixture.ActionUrl(40), Run(40, "completed", "failure"));
-            f.Success(41);
-            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42));
-            await ExpectTags(f, "v2026.1101.1-dev", "v2026.1101.2-dev");
-        });
-
-        GitCase("prepare retry blocks unresolved older reservation", async f =>
-        {
-            await f.Tag(new ReleaseVersion(Day, 1, true), 40);
-            await f.Tag(new ReleaseVersion(Day, 2, true), 41);
-            f.Http.Json(ReleaseFixture.ActionUrl(40), Run(40, "completed", "failure"));
-            await Expect.ThrowsAsync(() => f.PrepareAt(new(2026, 11, 2), runId: 41));
-            await ExpectTags(f, "v2026.1101.1-dev", "v2026.1101.2-dev");
-        });
-
-        GitCase("verified history checkpoint avoids rechecking older publications", async f =>
-        {
-            var (first, _) = await f.PrepareAt(Day, runId: 40);
-            f.Success(40);
-            var (second, _) = await f.PrepareAt(Day, runId: 41, dev: false);
-            var body = GitFixture.TagBody(await f.Git("cat-file", "-p", $"refs/tags/{second.Tag}"));
-            Expect.Contains($"\"verified_through\":\"{first.Tag}\"", body);
-
-            f.Success(41, stable: true);
-            f.Http.Responses.Remove(ReleaseFixture.ActionUrl(40));
-            f.Http.Responses.Remove(ReleaseFixture.JobsUrl(40));
-            f.Http.Requests.Clear();
-            var (third, reused) = await f.PrepareAt(Day, runId: 42);
-            Expect.Equal(false, reused);
-            Expect.Equal("2026.1101.3-dev", third.Version);
-            Expect.True(!f.Http.Requests.Contains(ReleaseFixture.ActionUrl(40)), "older run should not be checked");
-            Expect.Sequence([ReleaseFixture.ActionUrl(41), ReleaseFixture.JobsUrl(41)], f.Http.Requests);
-        });
-
-        GitCase("retry reuses a checkpoint after earlier publication was verified", async f =>
-        {
-            var (first, _) = await f.PrepareAt(Day, runId: 40);
-            f.Success(40);
-            var (second, _) = await f.PrepareAt(Day, runId: 41);
-            f.Http.Requests.Clear();
-            var (retry, reused) = await f.PrepareAt(new(2026, 11, 2), runId: 41);
-            Expect.Equal(true, reused);
-            Expect.Equal(second, retry);
-            Expect.Equal(0, f.Http.Requests.Count);
-        });
-
-        GitCase("prepare rejects a broken verified history checkpoint", async f =>
-        {
-            await f.Tag(new ReleaseVersion(Day, 1, true), 40);
-            var version = new ReleaseVersion(Day, 2, false);
-            await f.Tag(version, 41, body: new JsonObject
-            {
-                ["piston_release"] = 1,
-                ["run_id"] = 41,
-                ["source_sha"] = f.SourceSha,
-                ["version"] = version.Version,
-                ["verified_through"] = "v2026.1031.1",
-            }.ToJsonString());
-            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42));
-            await ExpectTags(f, "v2026.1101.1-dev", "v2026.1101.2");
-        });
-
-        GitCase("prepare rejects duplicate counter", async f =>
-        {
-            await f.Tag(new ReleaseVersion(Day, 1, false), 40);
-            await f.Tag(new ReleaseVersion(Day, 1, true), 41);
-            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42));
-            await ExpectTags(f, "v2026.1101.1", "v2026.1101.1-dev");
-        });
-
-        GitCase("prepare rejects duplicate run reservations", async f =>
-        {
-            await f.Tag(new ReleaseVersion(Day, 1, true), 40);
-            await f.Tag(new ReleaseVersion(Day, 2, true), 40);
-            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42));
-            await ExpectTags(f, "v2026.1101.1-dev", "v2026.1101.2-dev");
-        });
-
-        GitCase("prepare rejects lightweight calendar tag", async f =>
-        {
-            await f.Tag(new ReleaseVersion(Day, 1, true), 40, annotated: false);
-            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42));
-            await ExpectTags(f, "v2026.1101.1-dev");
-        });
-
-        GitCase("read reservation rejects invalid metadata", async f =>
-        {
-            var sha = f.SourceSha;
-            var cases = new[]
-            {
-                ("invalid_json", "not-json"),
-                ("wrong_marker", $$"""{"piston_release": 0, "run_id": 40, "source_sha": "{{sha}}", "version": "2026.1101.2-dev"}"""),
-                ("wrong_version", $$"""{"piston_release": 1, "run_id": 40, "source_sha": "{{sha}}", "version": "2026.1101.1-dev"}"""),
-                ("wrong_source", $$"""{"piston_release": 1, "run_id": 40, "source_sha": "{{new string('f', 40)}}", "version": "2026.1101.4-dev"}"""),
-                ("invalid_run", $$"""{"piston_release": 1, "run_id": "40", "source_sha": "{{sha}}", "version": "2026.1101.5-dev"}"""),
-            };
-            for (var index = 0; index < cases.Length; index++)
-            {
-                var version = new ReleaseVersion(Day, index + 1, true);
-                await f.Tag(version, 40, body: cases[index].Item2);
-                await Expect.ThrowsAsync(() => f.Tooling().ReadReservationAsync(f.Worktree, version.Tag, version), label: cases[index].Item1);
             }
         });
 
@@ -3854,373 +2930,19 @@ internal static partial class ReleaseTests
                 var result = await ReleaseTooling.RunProcessAsync(file, arguments, cwd);
                 var tag = arguments[arguments.ToList().IndexOf("-a") + 1];
                 await f.Git("--git-dir", f.Origin, "-c", "user.name=Other Publisher", "-c", "user.email=other@example.invalid",
-                    "-c", "tag.gpgsign=false", "tag", "-a", tag, f.SourceSha, "-m", "competing reservation");
+                    "-c", "tag.gpgsign=false", "tag", "-a", tag, f.SourceSha, "-m", "competing tag");
                 return result;
             };
-            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 41));
-            await ExpectTags(f, "v2026.1101.1-dev");
-            var raw = await f.Git("--git-dir", f.Origin, "cat-file", "-p", "refs/tags/v2026.1101.1-dev");
-            Expect.True(raw.EndsWith("competing reservation", StringComparison.Ordinal), "the competing reservation must survive");
+            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runNumber: 41));
+            await ExpectTags(f, "v2026.1101.41-dev");
+            var raw = await f.Git("--git-dir", f.Origin, "cat-file", "-p", "refs/tags/v2026.1101.41-dev");
+            Expect.True(raw.EndsWith("competing tag", StringComparison.Ordinal), "the competing tag must survive");
         });
     }
 }
 
 internal static partial class ReleaseTests
 {
-    private static void RegisterRetiredReservationTests()
-    {
-        Case("only the known unpublished reservations are pinned for retirement", () =>
-        {
-            Expect.Sequence(["v2026.1101.1-dev", "v2026.1103.1-dev", "v2026.1123.1-dev"], ReleaseTooling.DefaultRetiredReservations.Keys);
-            var first = ReleaseTooling.DefaultRetiredReservations["v2026.1101.1-dev"];
-            Expect.Equal(41339003060, first.RunId);
-            Expect.Equal("ce5c63d4da00690f40141435e59db7e8122b972f", first.SourceSha);
-            Expect.Equal("Piston", first.PackageId);
-            Expect.Equal(1, first.Attempts.Count);
-            Expect.True(first.Reason.Length > 0, "a retirement needs a reason");
-
-            var second = ReleaseTooling.DefaultRetiredReservations["v2026.1103.1-dev"];
-            Expect.Equal(41672270028, second.RunId);
-            Expect.Equal("4d5944815c11d282bdf70e9d55e338747726e2d8", second.SourceSha);
-            Expect.Equal("Piston", second.PackageId);
-            Expect.Sequence([1, 2], second.Attempts.Select(attempt => attempt.Attempt));
-            Expect.Equal("publish", second.Attempts[0].JobName);
-            Expect.Equal("package", second.Attempts[1].JobName);
-            Expect.True(second.Reason.Length > 0, "a retirement needs a reason");
-        });
-
-        var prior = new ReleaseVersion(Day, 1, true);
-        JsonObject FailedRun(GitFixture f) => new()
-        {
-            ["id"] = 41,
-            ["path"] = ".github/workflows/release.yml@refs/heads/main",
-            ["event"] = "workflow_run",
-            ["head_sha"] = f.SourceSha,
-            ["run_attempt"] = 1,
-            ["status"] = "completed",
-            ["conclusion"] = "failure",
-        };
-        JsonObject Step(string name, string conclusion) => new() { ["name"] = name, ["status"] = "completed", ["conclusion"] = conclusion };
-        JsonObject Job(string name = "publish", string conclusion = "failure", JsonArray? steps = null) => new()
-        {
-            ["name"] = name,
-            ["status"] = "completed",
-            ["conclusion"] = conclusion,
-            ["steps"] = steps ?? [Step("Run NuGet/login@v1", "failure"), Step("Publish tool to NuGet.org", "skipped")],
-        };
-        JsonObject Jobs(int total, params JsonObject[] jobs) => new() { ["total_count"] = total, ["jobs"] = new JsonArray([.. jobs]) };
-        RetiredAttemptEvidence[] loginFailureEvidence =
-            [new(1, "publish", "failure", [new("Run NuGet/login@v1", "failure"), new("Publish tool to NuGet.org", "skipped")])];
-        void Evidence(GitFixture f)
-        {
-            f.Http.Json(ReleaseFixture.ActionUrl(41), FailedRun(f));
-            f.Http.Json(ReleaseFixture.AttemptJobsUrl(41), Jobs(1, Job()));
-            f.Http.Responses[ReleaseFixture.ReleaseUrl(prior)] = 404;
-            f.Http.Responses[ReleaseFixture.PackageUrl(prior, "Piston")] = 404;
-            f.Http.Responses[ReleaseFixture.PackageUrl(prior)] = 404;
-        }
-
-        void RetiredCase(string name, Func<GitFixture, Task> body) => GitCase(name, async f =>
-        {
-            await f.Tag(prior, 41);
-            f.Retired[prior.Tag] = new RetiredReservation(
-                41, f.SourceSha, "Piston", "Unpublished after the NuGet login failure.", loginFailureEvidence);
-            Evidence(f);
-            await body(f);
-        });
-
-        async Task Rejects(GitFixture f, string? label = null)
-        {
-            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42), label: label);
-            await ExpectTags(f, prior.Tag);
-        }
-
-        RetiredCase("prepare retires verified failure without changing or reusing its tag", async f =>
-        {
-            var original = await f.Git("--git-dir", f.Origin, "cat-file", "-p", $"refs/tags/{prior.Tag}");
-            var (version, reused) = await f.PrepareAt(Day, runId: 42);
-            Expect.Equal("2026.1101.2-dev", version.Version);
-            Expect.Equal(false, reused);
-            Expect.Equal(original, await f.Git("--git-dir", f.Origin, "cat-file", "-p", $"refs/tags/{prior.Tag}"));
-            var body = GitFixture.TagBody(await f.Git("--git-dir", f.Origin, "cat-file", "-p", $"refs/tags/{version.Tag}"));
-            Expect.Contains($"\"verified_through\":\"{prior.Tag}\"", body);
-            Expect.Sequence(
-                [ReleaseFixture.ActionUrl(41), ReleaseFixture.AttemptJobsUrl(41), ReleaseFixture.ReleaseUrl(prior),
-                 ReleaseFixture.PackageUrl(prior, "Piston"), ReleaseFixture.PackageUrl(prior)],
-                f.Http.Requests);
-        });
-
-        RetiredCase("prepare continues history after verified retirement", async f =>
-        {
-            await f.PrepareAt(Day, runId: 42);
-            f.Success(42);
-            var (version, reused) = await f.PrepareAt(Day, runId: 43);
-            Expect.Equal("2026.1101.3-dev", version.Version);
-            Expect.Equal(false, reused);
-            await ExpectTags(f, "v2026.1101.1-dev", "v2026.1101.2-dev", "v2026.1101.3-dev");
-        });
-
-        RetiredCase("prepare never reuses the retired run", async f =>
-        {
-            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 41), "retired");
-            await ExpectTags(f, prior.Tag);
-            Expect.Equal(0, f.Http.Requests.Count);
-        });
-
-        RetiredCase("prepare rejects unmatched retirement fingerprints", async f =>
-        {
-            foreach (var (label, tag, runId, sha) in new[]
-                     {
-                         ("wrong_run", prior.Tag, 99L, f.SourceSha), ("wrong_commit", prior.Tag, 41L, new string('f', 40)),
-                         ("wrong_tag", "v2026.1101.2-dev", 41L, f.SourceSha),
-                     })
-            {
-                f.Retired = new() { [tag] = new RetiredReservation(runId, sha, "Piston", "fixture", loginFailureEvidence) };
-                await Rejects(f, label);
-            }
-        });
-
-        RetiredCase("prepare rejects changed retired workflow runs", async f =>
-        {
-            foreach (var (label, changes) in new (string, (string, JsonNode?)[])[]
-                     {
-                         ("wrong_run_id", [("id", 99)]), ("wrong_workflow", [("path", ".github/workflows/ci.yml")]),
-                         ("wrong_event", [("event", "workflow_dispatch")]), ("wrong_source", [("head_sha", new string('f', 40))]),
-                         ("retried", [("run_attempt", 2)]), ("running", [("status", "in_progress"), ("conclusion", null)]),
-                         ("succeeded", [("conclusion", "success")]), ("cancelled", [("conclusion", "cancelled")]),
-                     })
-            {
-                Evidence(f);
-                f.Http.Json(ReleaseFixture.ActionUrl(41), ReleaseFixture.With(FailedRun(f), changes));
-                await Rejects(f, label);
-            }
-        });
-
-        RetiredCase("prepare requires the failed login and skipped publish steps", async f =>
-        {
-            foreach (var (label, jobs) in new[]
-                     {
-                         ("missing_job", Jobs(0)), ("partial_jobs", Jobs(2, Job())), ("duplicate_job", Jobs(2, Job(), Job())),
-                         ("job_succeeded", Jobs(1, Job(conclusion: "success"))),
-                         ("login_succeeded", Jobs(1, Job(steps: [Step("Run NuGet/login@v1", "success"), Step("Publish tool to NuGet.org", "skipped")]))),
-                         ("publish_ran", Jobs(1, Job(steps: [Step("Run NuGet/login@v1", "failure"), Step("Publish tool to NuGet.org", "success")]))),
-                         ("missing_steps", Jobs(1, Job(steps: []))),
-                     })
-            {
-                Evidence(f);
-                f.Http.Json(ReleaseFixture.AttemptJobsUrl(41), jobs);
-                await Rejects(f, label);
-            }
-        });
-
-        RetiredCase("prepare fails closed when retirement evidence is missing or conflicting", async f =>
-        {
-            foreach (var (label, url, response) in new (string, string, object)[]
-                     {
-                         ("run_missing", ReleaseFixture.ActionUrl(41), 404), ("run_unavailable", ReleaseFixture.ActionUrl(41), 503),
-                         ("jobs_missing", ReleaseFixture.AttemptJobsUrl(41), 404), ("jobs_unavailable", ReleaseFixture.AttemptJobsUrl(41), 503),
-                         ("release_unavailable", ReleaseFixture.ReleaseUrl(prior), 403),
-                         ("legacy_published", ReleaseFixture.PackageUrl(prior, "Piston"), "published"u8.ToArray()),
-                         ("renamed_published", ReleaseFixture.PackageUrl(prior), "published"u8.ToArray()),
-                         ("legacy_unavailable", ReleaseFixture.PackageUrl(prior, "Piston"), 503),
-                         ("renamed_unavailable", ReleaseFixture.PackageUrl(prior), new HttpRequestException("controlled outage")),
-                     })
-            {
-                Evidence(f);
-                f.Http.Responses[url] = response;
-                await Rejects(f, label);
-            }
-
-            Evidence(f);
-            f.Http.Json(ReleaseFixture.ReleaseUrl(prior), new JsonObject { ["tag_name"] = prior.Tag });
-            await Rejects(f, "release_exists");
-        });
-
-        var retryDay = new DateOnly(2026, 11, 3);
-        var retryPrior = new ReleaseVersion(retryDay, 1, true);
-        RetiredAttemptEvidence[] retryEvidence =
-        [
-            new(1, "publish", "failure", [new("Run NuGet/login@v1", "failure"), new("Publish tool to NuGet.org", "skipped")]),
-            new(2, "package", "failure", [new("Pack framework-dependent tool", "failure")]),
-        ];
-        JsonObject RetryRun(GitFixture f, int runAttempt = 2) => new()
-        {
-            ["id"] = 52,
-            ["path"] = ".github/workflows/release.yml@refs/heads/main",
-            ["event"] = "workflow_run",
-            ["head_sha"] = f.SourceSha,
-            ["run_attempt"] = runAttempt,
-            ["status"] = "completed",
-            ["conclusion"] = "failure",
-        };
-        void RetryEvidence(GitFixture f)
-        {
-            f.Http.Json(ReleaseFixture.ActionUrl(52), RetryRun(f));
-            f.Http.Json(ReleaseFixture.AttemptJobsUrl(52, 1), Jobs(1, Job()));
-            f.Http.Json(ReleaseFixture.AttemptJobsUrl(52, 2),
-                Jobs(1, Job(name: "package", steps: [Step("Pack framework-dependent tool", "failure")])));
-            f.Http.Responses[ReleaseFixture.ReleaseUrl(retryPrior)] = 404;
-            f.Http.Responses[ReleaseFixture.PackageUrl(retryPrior, "Piston")] = 404;
-            f.Http.Responses[ReleaseFixture.PackageUrl(retryPrior)] = 404;
-        }
-
-        void RetryRetiredCase(string name, Func<GitFixture, Task> body) => GitCase(name, async f =>
-        {
-            await f.Tag(retryPrior, 52);
-            f.Retired[retryPrior.Tag] = new RetiredReservation(
-                52, f.SourceSha, "Piston", "The login failed before publication and the retry failed packaging.", retryEvidence);
-            RetryEvidence(f);
-            await body(f);
-        });
-
-        async Task RejectsRetry(GitFixture f, string? label = null)
-        {
-            await Expect.ThrowsAsync(() => f.PrepareAt(retryDay, runId: 53), label: label);
-            await ExpectTags(f, retryPrior.Tag);
-        }
-
-        RetryRetiredCase("prepare retires the exact two-attempt failure without changing its tag", async f =>
-        {
-            var original = await f.Git("--git-dir", f.Origin, "cat-file", "-p", $"refs/tags/{retryPrior.Tag}");
-            var (version, reused) = await f.PrepareAt(retryDay, runId: 53);
-            Expect.Equal("2026.1103.2-dev", version.Version);
-            Expect.Equal(false, reused);
-            Expect.Equal(original, await f.Git("--git-dir", f.Origin, "cat-file", "-p", $"refs/tags/{retryPrior.Tag}"));
-            Expect.Sequence(
-                [ReleaseFixture.ActionUrl(52), ReleaseFixture.AttemptJobsUrl(52, 1), ReleaseFixture.AttemptJobsUrl(52, 2),
-                 ReleaseFixture.ReleaseUrl(retryPrior), ReleaseFixture.PackageUrl(retryPrior, "Piston"),
-                 ReleaseFixture.PackageUrl(retryPrior)],
-                f.Http.Requests);
-        });
-
-        RetryRetiredCase("prepare continues after two-attempt retirement", async f =>
-        {
-            await f.PrepareAt(retryDay, runId: 53);
-            f.Success(53);
-            var (third, reused) = await f.PrepareAt(retryDay, runId: 54);
-            Expect.Equal("2026.1103.3-dev", third.Version);
-            Expect.Equal(false, reused);
-            await ExpectTags(f, "v2026.1103.1-dev", "v2026.1103.2-dev", "v2026.1103.3-dev");
-        });
-
-        RetryRetiredCase("prepare never reuses the newly retired run", async f =>
-        {
-            await Expect.ThrowsAsync(() => f.PrepareAt(retryDay, runId: 52), "retired");
-            await ExpectTags(f, retryPrior.Tag);
-            Expect.Equal(0, f.Http.Requests.Count);
-        });
-
-        RetryRetiredCase("prepare rejects changed attempt and job evidence", async f =>
-        {
-            foreach (var (label, runAttempt) in new[] { ("missing_retry", 1), ("extra_retry", 3) })
-            {
-                RetryEvidence(f);
-                f.Http.Json(ReleaseFixture.ActionUrl(52), RetryRun(f, runAttempt));
-                await RejectsRetry(f, label);
-            }
-
-            foreach (var (label, jobs) in new[]
-                     {
-                         ("changed_login", Jobs(1, Job(steps: [Step("Run NuGet/login@v1", "success"), Step("Publish tool to NuGet.org", "skipped")]))),
-                         ("missing_package_job", Jobs(0)),
-                         ("changed_pack_job", Jobs(1, Job(name: "package", steps: [Step("Pack framework-dependent tool", "success")]))),
-                         ("duplicate_package_job", Jobs(2, Job(name: "package", steps: [Step("Pack framework-dependent tool", "failure")]),
-                             Job(name: "package", steps: [Step("Pack framework-dependent tool", "failure")]))),
-                     })
-            {
-                RetryEvidence(f);
-                f.Http.Json(ReleaseFixture.AttemptJobsUrl(52, label == "changed_login" ? 1 : 2), jobs);
-                await RejectsRetry(f, label);
-            }
-
-            RetryEvidence(f);
-            f.Http.Responses[ReleaseFixture.AttemptJobsUrl(52, 2)] = 404;
-            await RejectsRetry(f, "retry_jobs_missing");
-        });
-
-        RetryRetiredCase("prepare fails closed when two-attempt artifacts are present or unavailable", async f =>
-        {
-            foreach (var (label, url, response) in new (string, string, object)[]
-                     {
-                         ("release_unavailable", ReleaseFixture.ReleaseUrl(retryPrior), 403),
-                         ("release_present", ReleaseFixture.ReleaseUrl(retryPrior), Encoding.UTF8.GetBytes(
-                             new JsonObject { ["tag_name"] = retryPrior.Tag }.ToJsonString())),
-                         ("old_package_present", ReleaseFixture.PackageUrl(retryPrior, "Piston"), "published"u8.ToArray()),
-                         ("current_package_present", ReleaseFixture.PackageUrl(retryPrior), "published"u8.ToArray()),
-                         ("old_package_unavailable", ReleaseFixture.PackageUrl(retryPrior, "Piston"), 503),
-                         ("current_package_unavailable", ReleaseFixture.PackageUrl(retryPrior), new HttpRequestException("controlled outage")),
-                     })
-            {
-                RetryEvidence(f);
-                f.Http.Responses[url] = response;
-                await RejectsRetry(f, label);
-            }
-        });
-
-        var rejectedDay = new DateOnly(2026, 11, 23);
-        var rejectedPrior = new ReleaseVersion(rejectedDay, 1, true);
-        var rejectedRetirement = ReleaseTooling.DefaultRetiredReservations[rejectedPrior.Tag];
-        JsonObject RejectedRun(GitFixture f, int runAttempt = 1) => new()
-        {
-            ["id"] = 63,
-            ["path"] = ".github/workflows/release.yml@refs/heads/main",
-            ["event"] = "workflow_run",
-            ["head_sha"] = f.SourceSha,
-            ["run_attempt"] = runAttempt,
-            ["status"] = "completed",
-            ["conclusion"] = "failure",
-        };
-        JsonObject RejectedJob(string publish = "failure") => Job(steps:
-        [
-            Step("Run NuGet/login@v1.2.0", "success"),
-            Step("Reconcile an earlier publication", "success"),
-            Step("Publish tool to NuGet.org", publish),
-        ]);
-        void RejectedEvidence(GitFixture f)
-        {
-            f.Http.Json(ReleaseFixture.ActionUrl(63), RejectedRun(f));
-            f.Http.Json(ReleaseFixture.AttemptJobsUrl(63), Jobs(1, RejectedJob()));
-            f.Http.Responses[ReleaseFixture.ReleaseUrl(rejectedPrior)] = 404;
-            f.Http.Responses[ReleaseFixture.PackageUrl(rejectedPrior)] = 404;
-        }
-        void RejectedPublishCase(string name, Func<GitFixture, Task> body) => GitCase(name, async f =>
-        {
-            await f.Tag(rejectedPrior, 63);
-            f.Retired[rejectedPrior.Tag] = rejectedRetirement with { RunId = 63, SourceSha = f.SourceSha };
-            RejectedEvidence(f);
-            await body(f);
-        });
-
-        RejectedPublishCase("prepare retires the rejected package without changing its tag", async f =>
-        {
-            var original = await f.Git("--git-dir", f.Origin, "cat-file", "-p", $"refs/tags/{rejectedPrior.Tag}");
-            var (version, reused) = await f.PrepareAt(rejectedDay, runId: 64);
-            Expect.Equal("2026.1123.2-dev", version.Version);
-            Expect.Equal(false, reused);
-            Expect.Equal(original, await f.Git("--git-dir", f.Origin, "cat-file", "-p", $"refs/tags/{rejectedPrior.Tag}"));
-            Expect.Sequence(
-                [ReleaseFixture.ActionUrl(63), ReleaseFixture.AttemptJobsUrl(63), ReleaseFixture.ReleaseUrl(rejectedPrior),
-                 ReleaseFixture.PackageUrl(rejectedPrior), ReleaseFixture.PackageUrl(rejectedPrior)],
-                f.Http.Requests);
-        });
-
-        RejectedPublishCase("prepare rejects changed or published rejected-package evidence", async f =>
-        {
-            RejectedEvidence(f);
-            f.Http.Json(ReleaseFixture.ActionUrl(63), RejectedRun(f, runAttempt: 2));
-            await Expect.ThrowsAsync(() => f.PrepareAt(rejectedDay, runId: 64), label: "retried run");
-
-            RejectedEvidence(f);
-            f.Http.Json(ReleaseFixture.AttemptJobsUrl(63), Jobs(1, RejectedJob(publish: "success")));
-            await Expect.ThrowsAsync(() => f.PrepareAt(rejectedDay, runId: 64), label: "successful publish");
-
-            RejectedEvidence(f);
-            f.Http.Responses[ReleaseFixture.PackageUrl(rejectedPrior)] = "published"u8.ToArray();
-            await Expect.ThrowsAsync(() => f.PrepareAt(rejectedDay, runId: 64), label: "package exists");
-            await ExpectTags(f, rejectedPrior.Tag);
-        });
-    }
-
     private static void RegisterPackageTests()
     {
         Case("package check rejects a BOM in MCP metadata", () =>
