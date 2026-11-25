@@ -18,7 +18,8 @@ dotnet tool install --global DamianH.Piston
 
 Piston is a framework-dependent .NET tool. Pin a specific release with `--version <version>`.
 Releases use calendar versions such as `2026.1101.2`; use `--prerelease` to
-include automatically published `-dev` builds.
+include automatically published `-dev` builds. Packages are validated locally
+before publication; NuGet indexing can delay their availability after a release succeeds.
 
 ## Get started
 

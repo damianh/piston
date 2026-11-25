@@ -229,48 +229,12 @@ jobs:
           dotnet nuget push "packages/DamianH.Piston.$VERSION.nupkg" --source https://api.nuget.org/v3/index.json \
             --api-key "$NUGET_API_KEY"
 
-  verify-public:
+  github-release:
     needs: [context, package, publish]
     if: >-
       !cancelled() && needs.context.result == 'success' &&
-      needs.package.result == 'success' && needs.publish.result == 'success'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - name: Check out trusted release tooling
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ github.sha }}
-          path: release-tooling
-      - name: Check out the tested source
-        uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.context.outputs.source_sha }}
-          path: source
-      - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: |
-            10.0.x
-            11.0.x
-      - uses: actions/download-artifact@v8
-        with:
-          name: ${{ needs.package.outputs.artifact }}
-          path: packages
-      - name: Verify public package and dnx MCP after indexing
-        working-directory: source
-        env:
-          PISTON_PACKAGES: ${{ github.workspace }}/packages
-        run: dotnet run build.cs -- smoke-public
-      - name: Verify the public package matches the reserved source and artifact
-        env:
-          RELEASE_PACKAGE: ${{ github.workspace }}/packages/DamianH.Piston.${{ needs.package.outputs.version }}.nupkg
-          RELEASE_VERSION: ${{ needs.package.outputs.version }}
-          RELEASE_SOURCE_SHA: ${{ needs.context.outputs.source_sha }}
-        run: dotnet run release-tooling/build.cs -- release-verify-package
-
-  github-release:
-    needs: [context, package, publish, verify-public]
-    if: needs.context.outputs.kind == 'stable'
+      needs.package.result == 'success' && needs.publish.result == 'success' &&
+      needs.context.outputs.kind == 'stable'
     runs-on: ubuntu-latest
     permissions:
       contents: write
