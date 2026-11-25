@@ -2114,21 +2114,56 @@ internal sealed partial class ReleaseTooling
                 + "Resolve and rerun that workflow before publishing another version.");
         }
 
-        var result = await GitHubJsonAsync($"{RepoPath(repo)}/actions/runs/{record.RunId}/jobs?per_page=100");
-        var jobs = Array(result, "jobs");
-        if (jobs is null || Integer(result, "total_count") != jobs.Count || jobs.Any(j => j.ValueKind != JsonValueKind.Object))
-        {
-            throw new ReleaseException($"Release {record.Version.Tag} has incomplete job evidence from workflow run {record.RunId}.");
-        }
+        var jobs = await WorkflowJobsAsync(record.RunId, repo);
 
         foreach (var name in record.Version.Dev ? new[] { "publish" } : new[] { "publish", "github-release" })
         {
-            if (jobs.Where(j => String(j, "name") == name).ToList() is not [var job]
+            var executions = jobs.Where(j => String(j, "name") == name).ToList();
+            var attempts = executions.Select(j => Integer(j, "run_attempt")).ToList();
+            if (executions.Count == 0 || attempts.Any(attempt => attempt is null or < 1))
+            {
+                throw new ReleaseException(
+                    $"Release {record.Version.Tag} from workflow run {record.RunId} has no unique successful {name} job.");
+            }
+
+            var latestAttempt = attempts.Max();
+            if (executions.Where((_, index) => attempts[index] == latestAttempt).ToList() is not [var job]
                 || String(job, "status") != "completed"
                 || String(job, "conclusion") != "success")
             {
                 throw new ReleaseException(
                     $"Release {record.Version.Tag} from workflow run {record.RunId} has no unique successful {name} job.");
+            }
+        }
+    }
+
+    private async Task<List<JsonElement>> WorkflowJobsAsync(long runId, string repo)
+    {
+        const int pageSize = 100;
+        var jobs = new List<JsonElement>();
+        long? totalCount = null;
+        for (var page = 1; ; page++)
+        {
+            var result = await GitHubJsonAsync(
+                $"{RepoPath(repo)}/actions/runs/{runId}/jobs?filter=all&per_page={pageSize}&page={page}");
+            var current = Array(result, "jobs");
+            var count = Integer(result, "total_count");
+            if (current is null
+                || count is null or < 0 or > int.MaxValue
+                || current.Count > pageSize
+                || current.Any(job => job.ValueKind != JsonValueKind.Object)
+                || (totalCount is { } expected && count != expected)
+                || jobs.Count + current.Count > count
+                || (current.Count == 0 && jobs.Count < count))
+            {
+                throw new ReleaseException($"Release from workflow run {runId} has incomplete job evidence.");
+            }
+
+            totalCount = count;
+            jobs.AddRange(current);
+            if (jobs.Count == count)
+            {
+                return jobs;
             }
         }
     }
@@ -2837,7 +2872,8 @@ internal class ReleaseFixture : IDisposable
 
     public static string ActionUrl(long runId) => $"{Api}/repos/{Repo}/actions/runs/{runId}";
 
-    public static string JobsUrl(long runId) => $"{Api}/repos/{Repo}/actions/runs/{runId}/jobs?per_page=100";
+    public static string JobsUrl(long runId, int page = 1) =>
+        $"{Api}/repos/{Repo}/actions/runs/{runId}/jobs?filter=all&per_page=100&page={page}";
 
     public static string AttemptJobsUrl(long runId, int attempt = 1) =>
         $"{Api}/repos/{Repo}/actions/runs/{runId}/attempts/{attempt}/jobs?per_page=100";
@@ -2921,15 +2957,19 @@ internal class ReleaseFixture : IDisposable
         return buffer.ToArray();
     }
 
-    public static JsonObject Job(string name, string conclusion = "success", string status = "completed") => new()
+    public static JsonObject Job(string name, string conclusion = "success", string status = "completed", int attempt = 1) => new()
     {
         ["name"] = name,
         ["status"] = status,
         ["conclusion"] = conclusion,
+        ["run_attempt"] = attempt,
     };
 
     public static JsonObject Jobs(params JsonObject[] jobs) =>
         new() { ["total_count"] = jobs.Length, ["jobs"] = new JsonArray([.. jobs]) };
+
+    public static JsonObject Jobs(int totalCount, params JsonObject[] jobs) =>
+        new() { ["total_count"] = totalCount, ["jobs"] = new JsonArray([.. jobs]) };
 
     public void Success(long runId, bool stable = false)
     {
@@ -3526,6 +3566,27 @@ internal static partial class ReleaseTests
             Expect.Sequence([ReleaseFixture.ActionUrl(41), ReleaseFixture.JobsUrl(41)], f.Http.Requests);
         });
 
+        GitCase("prepare accepts successful partial rerun evidence across paginated attempts", async f =>
+        {
+            var prior = new ReleaseVersion(Day, 1, false);
+            await f.Tag(prior, 41);
+            f.Success(41, stable: true);
+            var firstPage = new[] { ReleaseFixture.Job("publish", attempt: 1) }
+                .Concat(Enumerable.Range(1, 99).Select(index => ReleaseFixture.Job($"other-{index}")))
+                .ToArray();
+            f.Http.Json(ReleaseFixture.JobsUrl(41), ReleaseFixture.Jobs(101, firstPage));
+            f.Http.Json(ReleaseFixture.JobsUrl(41, page: 2), ReleaseFixture.Jobs(
+                101, ReleaseFixture.Job("github-release", attempt: 2)));
+
+            var (version, reused) = await f.PrepareAt(Day, runId: 42, dev: true);
+            Expect.Equal(false, reused);
+            Expect.Equal("2026.1101.2-dev", version.Version);
+            Expect.Sequence(
+                [ReleaseFixture.ActionUrl(41), ReleaseFixture.JobsUrl(41), ReleaseFixture.JobsUrl(41, page: 2)],
+                f.Http.Requests);
+            await ExpectTags(f, prior.Tag, "v2026.1101.2-dev");
+        });
+
         GitCase("prepare shares stable and dev counters without waiting for NuGet", async f =>
         {
             var prior = new ReleaseVersion(Day, 4, false);
@@ -3549,6 +3610,9 @@ internal static partial class ReleaseTests
                          ("missing", ReleaseFixture.Jobs()),
                          ("skipped", ReleaseFixture.Jobs(ReleaseFixture.Job("publish", "skipped"))),
                          ("failed", ReleaseFixture.Jobs(ReleaseFixture.Job("publish", "failure"))),
+                         ("latest_failed", ReleaseFixture.Jobs(
+                             ReleaseFixture.Job("publish", attempt: 1),
+                             ReleaseFixture.Job("publish", "failure", attempt: 2))),
                          ("in_progress", ReleaseFixture.Jobs(ReleaseFixture.Job("publish", status: "in_progress"))),
                          ("duplicate", ReleaseFixture.Jobs(ReleaseFixture.Job("publish"), ReleaseFixture.Job("publish"))),
                          ("truncated", new JsonObject
@@ -3559,6 +3623,11 @@ internal static partial class ReleaseTests
                      })
             {
                 f.Http.Json(ReleaseFixture.JobsUrl(41), jobs);
+                if (label == "truncated")
+                {
+                    f.Http.Json(ReleaseFixture.JobsUrl(41, page: 2), ReleaseFixture.Jobs(2));
+                }
+
                 await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42), label: label);
                 await ExpectTags(f, prior.Tag);
             }
