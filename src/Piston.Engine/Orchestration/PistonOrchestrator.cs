@@ -1244,10 +1244,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     _activeRunChanges = null;
                 }
 
-                if (ReferenceEquals(_pauseCancelledCts, cts))
-                {
-                    _pauseCancelledCts = null;
-                }
+                _ = _pauseCancelledRuns.TryRemove(cts, out _);
 
                 if (_activeTestPhase is { } phase && ReferenceEquals(phase.Cts, cts))
                 {
@@ -2722,7 +2719,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     [.. tests.Select(t => t with { Status = TestStatus.NotRun })],
                     DateTimeOffset.UtcNow,
                     TimeSpan.Zero)
-                { ProjectId = projectId });
+                { ProjectId = projectId, DiscoveryOnly = true });
             }
         }
 
@@ -2760,8 +2757,10 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             .Where(s => s.ExecutionLog is not null)
             .Select(s => s.ExecutionLog!.ProjectPath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var resultKeys = newResults.Select(s => s.Key).ToHashSet(StringComparer.Ordinal);
 
         var merged = existing
+            .Where(s => !(s.DiscoveryOnly && resultKeys.Contains(s.Key)))
             .Select(s => s with
             {
                 Tests = s.Tests.Where(t => !Rerun(s.Key, t)).ToList(),

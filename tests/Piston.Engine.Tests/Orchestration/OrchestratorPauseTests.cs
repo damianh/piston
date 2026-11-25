@@ -309,6 +309,71 @@ public sealed class OrchestratorPauseTests
         Assert.Equal(["/fake/B.cs"], analyzer.Batches[^1]);
     }
 
+    [Fact]
+    public async Task PausingAResumedFileChangeRunAgain_KeepsItsChangesQueued()
+    {
+        string[] projects = ["/fake/A.csproj", "/fake/B.csproj"];
+        var state = new PistonState();
+        var watcher = new RaisingFileWatcher();
+        var analyzer = new RecordingImpactAnalyzer(projects);
+        var runner = new ProjectByProjectRunner();
+        await using var orchestrator = new PistonOrchestrator(
+            watcher, new StubBuildService(), runner, analyzer, state);
+        await orchestrator.StartAsync(Solution);
+        _ = await WaitForRunAsync(state, r => r.Trigger == TestRunTrigger.Startup);
+
+        var blocked = runner.BlockAt("/fake/B.csproj");
+        watcher.Raise("/fake/A.cs");
+        await blocked.WaitAsync(Timeout, _ct);
+        orchestrator.Pause();
+        var first = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Cancelled);
+
+        blocked = runner.BlockAt("/fake/B.csproj");
+        orchestrator.Resume();
+        await blocked.WaitAsync(Timeout, _ct);
+        orchestrator.Pause();
+        _ = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Cancelled && r.Sequence > first.Sequence);
+
+        Assert.Equal(1, state.PausedChangeCount);
+
+        // A changed filter rules out continuing, so resume runs for the queued change instead.
+        state.TestFilter = "FullyQualifiedName~Test1";
+        orchestrator.Resume();
+
+        _ = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Completed && r.Trigger == TestRunTrigger.FileChange);
+        Assert.Equal(2, analyzer.Batches.Count);
+        Assert.Equal(["/fake/A.cs"], analyzer.Batches[^1]);
+    }
+
+    [Fact]
+    public async Task PausingAgainBeforeThePausedRunHasStopped_StillKeepsItsResults()
+    {
+        string[] projects = ["/fake/A.csproj", "/fake/B.csproj", "/fake/C.csproj"];
+        var state = new PistonState();
+        var runner = new ProjectByProjectRunner();
+        var blocked = runner.BlockAt("/fake/B.csproj");
+        var hold = runner.HoldCancellation();
+        await using var orchestrator = new PistonOrchestrator(
+            new RaisingFileWatcher(), new StubBuildService(), runner, new RecordingImpactAnalyzer(projects), state);
+        await orchestrator.StartAsync(Solution);
+        await blocked.WaitAsync(Timeout, _ct);
+
+        orchestrator.Pause();
+        orchestrator.Resume();
+        orchestrator.Pause();
+        hold.SetResult();
+        _ = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Cancelled && r.StartedAt is not null);
+
+        Assert.Equal(TestStatus.Passed, StatusOf(state, "A"));
+        Assert.True(state.HasInterruptedRun);
+
+        orchestrator.Resume();
+
+        _ = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Completed);
+        Assert.Equal(["/fake/B.csproj", "/fake/C.csproj"], runner.Runs[^1]);
+        Assert.All(projects, p => Assert.Equal(TestStatus.Passed, StatusOf(state, p)));
+    }
+
     private static async Task<TestRunRecord> WaitForRunAsync(PistonState state, Func<TestRunRecord, bool> match)
     {
         using var timeout = new CancellationTokenSource(Timeout);
@@ -329,8 +394,17 @@ public sealed class OrchestratorPauseTests
     {
         private readonly ConcurrentQueue<IReadOnlyList<string>> _runs = new();
         private string? _blockAt;
+        private TaskCompletionSource? _cancellationHold;
 
         public IReadOnlyList<IReadOnlyList<string>> Runs => [.. _runs];
+
+        // Keeps a blocked run from finishing after it is cancelled until the returned source completes.
+        public TaskCompletionSource HoldCancellation()
+        {
+            var hold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Volatile.Write(ref _cancellationHold, hold);
+            return hold;
+        }
 
         public TaskCompletionSource Blocked { get; private set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -377,7 +451,15 @@ public sealed class OrchestratorPauseTests
                 if (Interlocked.CompareExchange(ref _blockAt, null, project) == project)
                 {
                     _ = Blocked.TrySetResult();
-                    await Task.Delay(System.Threading.Timeout.Infinite, ct);
+                    try
+                    {
+                        await Task.Delay(System.Threading.Timeout.Infinite, ct);
+                    }
+                    catch (OperationCanceledException) when (Volatile.Read(ref _cancellationHold) is { } hold)
+                    {
+                        await hold.Task;
+                        throw;
+                    }
                 }
 
                 var suite = new TestSuite(Path.GetFileNameWithoutExtension(project), [Test(project, TestStatus.Passed)],

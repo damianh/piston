@@ -27,8 +27,8 @@ public sealed partial class PistonOrchestrator
     // Pausing cancelled the startup run, so resuming runs it again; guarded by _lifecycleLock.
     private bool _pausedStartupRun;
 
-    // The run cancelled by the latest pause; guarded by _lifecycleLock.
-    private CancellationTokenSource? _pauseCancelledCts;
+    // Runs cancelled by pausing that have not finished yet; a quick pause, resume and pause can leave two.
+    private readonly ConcurrentDictionary<CancellationTokenSource, byte> _pauseCancelledRuns = new();
 
     // The test phase of the newest run, so pausing can tell which test projects it had still to run; guarded by
     // _lifecycleLock.
@@ -107,7 +107,7 @@ public sealed partial class PistonOrchestrator
                 _pausedContinuation = _activeTestPhase is { } phase && ReferenceEquals(phase.Cts, cts)
                     ? phase.Remaining()
                     : null;
-                _pauseCancelledCts = cts;
+                _pauseCancelledRuns[cts] = 0;
                 cts.Cancel();
             }
 
@@ -142,6 +142,13 @@ public sealed partial class PistonOrchestrator
             {
                 // Every change queued while paused was made before the interrupted run started, so it covers them.
                 continuation = valid;
+                if (_pausedChanges.Count > 0)
+                {
+                    // Not analysed again, but kept as the run's changes so pausing the continuation queues them again.
+                    var changes = _pausedChanges.Values.Select(c => c.Change).OrderBy(c => c.Timestamp).ToList();
+                    batch = new FileChangeBatch(changes, changes[^1].Timestamp);
+                }
+
                 _pausedChanges.Clear();
             }
             else if (_pausedStartupRun)
@@ -165,7 +172,7 @@ public sealed partial class PistonOrchestrator
             // watcher run supersedes it rather than the other way round.
             if (continuation is not null && solutionPath is not null && !_disposed)
             {
-                cts = RegisterRunLocked(null, continuation.Trigger);
+                cts = RegisterRunLocked(batch, continuation.Trigger);
                 _activeTestPhase = new ActiveTestPhase(cts, continuation);
             }
             else if ((rerunStartup || batch is not null) && solutionPath is not null && !_disposed)
@@ -270,7 +277,7 @@ public sealed partial class PistonOrchestrator
     }
 
     private string? PausedReason(CancellationTokenSource cts) =>
-        ReferenceEquals(Volatile.Read(ref _pauseCancelledCts), cts) ? PausedCancelReason : null;
+        _pauseCancelledRuns.ContainsKey(cts) ? PausedCancelReason : null;
 
     // Caller holds _lifecycleLock.
     private void PublishPauseState()

@@ -42,6 +42,27 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
     }
 
     [Fact]
+    public void MergeTestSuites_ReplacesADiscoveryOnlySuite_WhoseTestNamesDifferFromTheResults()
+    {
+        static TestResult T(string fqn, TestStatus status) =>
+            new(fqn, fqn, status, TimeSpan.Zero, null, null, null, null);
+
+        var existing = new[]
+        {
+            new TestSuite("LibTests", [T("A", TestStatus.NotRun)], DateTimeOffset.UtcNow, TimeSpan.Zero) { ProjectId = LibTestsId, DiscoveryOnly = true },
+            new TestSuite("Other", [T("Other.T.C", TestStatus.Passed)], DateTimeOffset.UtcNow, TimeSpan.Zero) { ProjectId = "Other.csproj", DiscoveryOnly = true },
+        };
+        var results = new[]
+        {
+            new TestSuite("LibTests", [T("Lib.T.A", TestStatus.Passed)], DateTimeOffset.UtcNow, TimeSpan.Zero) { ProjectId = LibTestsId },
+        };
+
+        var merged = PistonOrchestrator.MergeTestSuites(existing, results).SelectMany(s => s.Tests).Select(t => t.FullyQualifiedName);
+
+        Assert.Equal(["Other.T.C", "Lib.T.A"], merged);
+    }
+
+    [Fact]
     public void MergeTestSuites_ReplacesRerunTestsByFqn_EvenWhenSuiteNamesDiffer()
     {
         static TestResult T(string fqn, TestStatus status) =>
