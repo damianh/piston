@@ -2100,18 +2100,72 @@ internal sealed partial class ReleaseTooling
             }
 
             Console.WriteLine($"Workflow run {record.RunId} is unavailable; verifying its public release.");
+            await VerifyPublicReservationAsync(record, repo);
+            return;
         }
-        else if (Integer(run, "id") != record.RunId
-                 || WorkflowPath(String(run, "path") ?? "") != ReleaseWorkflow
-                 || String(run, "status") != "completed"
-                 || String(run, "conclusion") != "success")
+
+        if (Integer(run, "id") != record.RunId
+            || WorkflowPath(String(run, "path") ?? "") != ReleaseWorkflow
+            || String(run, "status") != "completed"
+            || String(run, "conclusion") != "success")
         {
             throw new ReleaseException(
                 $"Release {record.Version.Tag} from workflow run {record.RunId} is incomplete. "
                 + "Resolve and rerun that workflow before publishing another version.");
         }
 
-        await VerifyPublicReservationAsync(record, repo);
+        var jobs = await WorkflowJobsAsync(record.RunId, repo);
+
+        foreach (var name in record.Version.Dev ? new[] { "publish" } : new[] { "publish", "github-release" })
+        {
+            var executions = jobs.Where(j => String(j, "name") == name).ToList();
+            var attempts = executions.Select(j => Integer(j, "run_attempt")).ToList();
+            if (executions.Count == 0 || attempts.Any(attempt => attempt is null or < 1))
+            {
+                throw new ReleaseException(
+                    $"Release {record.Version.Tag} from workflow run {record.RunId} has no unique successful {name} job.");
+            }
+
+            var latestAttempt = attempts.Max();
+            if (executions.Where((_, index) => attempts[index] == latestAttempt).ToList() is not [var job]
+                || String(job, "status") != "completed"
+                || String(job, "conclusion") != "success")
+            {
+                throw new ReleaseException(
+                    $"Release {record.Version.Tag} from workflow run {record.RunId} has no unique successful {name} job.");
+            }
+        }
+    }
+
+    private async Task<List<JsonElement>> WorkflowJobsAsync(long runId, string repo)
+    {
+        const int pageSize = 100;
+        var jobs = new List<JsonElement>();
+        long? totalCount = null;
+        for (var page = 1; ; page++)
+        {
+            var result = await GitHubJsonAsync(
+                $"{RepoPath(repo)}/actions/runs/{runId}/jobs?filter=all&per_page={pageSize}&page={page}");
+            var current = Array(result, "jobs");
+            var count = Integer(result, "total_count");
+            if (current is null
+                || count is null or < 0 or > int.MaxValue
+                || current.Count > pageSize
+                || current.Any(job => job.ValueKind != JsonValueKind.Object)
+                || (totalCount is { } expected && count != expected)
+                || jobs.Count + current.Count > count
+                || (current.Count == 0 && jobs.Count < count))
+            {
+                throw new ReleaseException($"Release from workflow run {runId} has incomplete job evidence.");
+            }
+
+            totalCount = count;
+            jobs.AddRange(current);
+            if (jobs.Count == count)
+            {
+                return jobs;
+            }
+        }
     }
 
     // A checkpoint records that preceding publications or retirements were verified before this tag.
@@ -2818,6 +2872,9 @@ internal class ReleaseFixture : IDisposable
 
     public static string ActionUrl(long runId) => $"{Api}/repos/{Repo}/actions/runs/{runId}";
 
+    public static string JobsUrl(long runId, int page = 1) =>
+        $"{Api}/repos/{Repo}/actions/runs/{runId}/jobs?filter=all&per_page=100&page={page}";
+
     public static string AttemptJobsUrl(long runId, int attempt = 1) =>
         $"{Api}/repos/{Repo}/actions/runs/{runId}/attempts/{attempt}/jobs?per_page=100";
 
@@ -2900,13 +2957,31 @@ internal class ReleaseFixture : IDisposable
         return buffer.ToArray();
     }
 
-    public void Success(long runId) => Http.Json(ActionUrl(runId), new JsonObject
+    public static JsonObject Job(string name, string conclusion = "success", string status = "completed", int attempt = 1) => new()
     {
-        ["id"] = runId,
-        ["path"] = ".github/workflows/release.yml@refs/heads/main",
-        ["status"] = "completed",
-        ["conclusion"] = "success",
-    });
+        ["name"] = name,
+        ["status"] = status,
+        ["conclusion"] = conclusion,
+        ["run_attempt"] = attempt,
+    };
+
+    public static JsonObject Jobs(params JsonObject[] jobs) =>
+        new() { ["total_count"] = jobs.Length, ["jobs"] = new JsonArray([.. jobs]) };
+
+    public static JsonObject Jobs(int totalCount, params JsonObject[] jobs) =>
+        new() { ["total_count"] = totalCount, ["jobs"] = new JsonArray([.. jobs]) };
+
+    public void Success(long runId, bool stable = false)
+    {
+        Http.Json(ActionUrl(runId), new JsonObject
+        {
+            ["id"] = runId,
+            ["path"] = ".github/workflows/release.yml@refs/heads/main",
+            ["status"] = "completed",
+            ["conclusion"] = "success",
+        });
+        Http.Json(JobsUrl(runId), Jobs(Job("publish"), Job("github-release", stable ? "success" : "skipped")));
+    }
 
     public void PublicPackage(ReleaseVersion version, string sourceSha, string dll = "expected executable", string signature = "signature") =>
         Http.Responses[PackageUrl(version)] = MakePackage(version, sourceSha, dll: dll, signature: signature);
@@ -3067,7 +3142,8 @@ internal static partial class ReleaseTests
         return document.RootElement.Clone();
     }
 
-    private static bool CanRun(string job, Dictionary<string, string> results, bool publish = true, bool cancelled = false)
+    private static bool CanRun(
+        string job, Dictionary<string, string> results, bool publish = true, bool cancelled = false, bool stable = false)
     {
         var workflow = File.ReadAllText(ReleaseTooling.ReleaseWorkflow).ReplaceLineEndings("\n");
         var jobMatch = Regex.Match(workflow, $@"^  {Regex.Escape(job)}:\n(.*?)(?=^  [a-z][a-z0-9-]*:\n|\z)",
@@ -3083,7 +3159,7 @@ internal static partial class ReleaseTests
 
         var checks = new List<bool>();
         var resultChecks = new HashSet<string>();
-        var (hasCancellation, hasPublish) = (false, false);
+        var (hasCancellation, hasPublish, hasStable) = (false, false, false);
         foreach (var clause in guard.Split(" && "))
         {
             if (clause == "!cancelled()")
@@ -3095,6 +3171,11 @@ internal static partial class ReleaseTests
             {
                 hasPublish = true;
                 checks.Add(publish);
+            }
+            else if (clause == "needs.context.outputs.kind == 'stable'")
+            {
+                hasStable = true;
+                checks.Add(stable);
             }
             else
             {
@@ -3109,12 +3190,19 @@ internal static partial class ReleaseTests
         Expect.True(hasCancellation, $"Missing cancellation guard: {job}");
         Expect.True(direct.SetEquals(resultChecks), $"{job} guards [{string.Join(", ", resultChecks)}] but needs [{string.Join(", ", direct)}].");
         Expect.Equal(job == "publish", hasPublish, $"{job} publish guard");
+        Expect.Equal(job == "github-release", hasStable, $"{job} stable guard");
         return checks.All(c => c);
     }
 
     private static void RegisterWorkflowTests()
     {
-        Case("skipped stable checks do not block dev publish or verification", () =>
+        Case("release workflow does not wait for public verification", () =>
+        {
+            var workflow = File.ReadAllText(ReleaseTooling.ReleaseWorkflow);
+            Expect.True(!Regex.IsMatch(workflow, @"^  verify-public:", RegexOptions.Multiline), "verify-public should not be a job");
+        });
+
+        Case("skipped stable checks do not block dev publish", () =>
         {
             var results = new Dictionary<string, string>
             {
@@ -3125,10 +3213,10 @@ internal static partial class ReleaseTests
                 ["publish"] = "success",
             };
             Expect.True(CanRun("publish", results), "publish should run");
-            Expect.True(CanRun("verify-public", results), "verify-public should run");
+            Expect.True(!CanRun("github-release", results), "github-release should not run for dev");
         });
 
-        Case("stable success allows publish and verification", () =>
+        Case("stable success allows publish and GitHub release", () =>
         {
             var results = new Dictionary<string, string>
             {
@@ -3139,12 +3227,12 @@ internal static partial class ReleaseTests
                 ["publish"] = "success",
             };
             Expect.True(CanRun("publish", results), "publish should run");
-            Expect.True(CanRun("verify-public", results), "verify-public should run");
+            Expect.True(CanRun("github-release", results, stable: true), "github-release should run");
         });
 
         Case("failed, cancelled or skipped direct dependencies block jobs", () =>
         {
-            foreach (var (job, dependencies) in new[] { ("publish", new[] { "context", "package" }), ("verify-public", ["context", "package", "publish"]) })
+            foreach (var (job, dependencies) in new[] { ("publish", new[] { "context", "package" }), ("github-release", ["context", "package", "publish"]) })
             {
                 foreach (var dependency in dependencies)
                 {
@@ -3152,24 +3240,24 @@ internal static partial class ReleaseTests
                     {
                         var results = new Dictionary<string, string> { ["context"] = "success", ["package"] = "success", ["publish"] = "success" };
                         results[dependency] = result;
-                        Expect.True(!CanRun(job, results), $"{job} should not run when {dependency} is {result}");
+                        Expect.True(!CanRun(job, results, stable: true), $"{job} should not run when {dependency} is {result}");
                     }
                 }
             }
         });
 
-        Case("workflow cancellation blocks publish and verification", () =>
+        Case("workflow cancellation blocks publish and GitHub release", () =>
         {
             var results = new Dictionary<string, string> { ["context"] = "success", ["package"] = "success", ["publish"] = "success" };
             Expect.True(!CanRun("publish", results, cancelled: true), "publish should not run");
-            Expect.True(!CanRun("verify-public", results, cancelled: true), "verify-public should not run");
+            Expect.True(!CanRun("github-release", results, cancelled: true, stable: true), "github-release should not run");
         });
 
-        Case("validation only skips publish and verification", () =>
+        Case("validation only skips publish and GitHub release", () =>
         {
             var results = new Dictionary<string, string> { ["context"] = "success", ["package"] = "success", ["publish"] = "skipped" };
             Expect.True(!CanRun("publish", results, publish: false), "publish should not run");
-            Expect.True(!CanRun("verify-public", results, publish: false), "verify-public should not run");
+            Expect.True(!CanRun("github-release", results, publish: false, stable: true), "github-release should not run");
         });
     }
 
@@ -3325,10 +3413,11 @@ internal static partial class ReleaseTests
             var prior = new ReleaseVersion(Day, 1, true);
             await f.Tag(prior, 41);
             f.Success(41);
-            f.Http.Responses[ReleaseFixture.PackageUrl(prior)] = (Func<object>)(() =>
+            var run = f.Http.Responses[ReleaseFixture.ActionUrl(41)];
+            f.Http.Responses[ReleaseFixture.ActionUrl(41)] = (Func<object>)(() =>
             {
                 f.Clock = new DateTimeOffset(2026, 11, 2, 0, 0, 0, TimeSpan.Zero);
-                return ReleaseFixture.MakePackage(prior, f.SourceSha);
+                return run;
             });
             f.Clock = new DateTimeOffset(2026, 11, 1, 23, 59, 0, TimeSpan.Zero);
             var (version, reused) = await f.Tooling().PrepareAsync(f.Worktree, Repo, f.SourceSha, 42, dev: false, preview: false);
@@ -3464,30 +3553,97 @@ internal static partial class ReleaseTests
             await ExpectTags(f, "v2026.1102.1-dev");
         });
 
-        GitCase("prepare accepts verified successful previous run", async f =>
+        GitCase("prepare accepts successful dev publish without waiting for NuGet", async f =>
         {
             var prior = new ReleaseVersion(Day, 1, true);
             await f.Tag(prior, 41);
             f.Success(41);
-            f.PublicPackage(prior, f.SourceSha);
+            f.Http.Responses[ReleaseFixture.PackageUrl(prior)] = 503;
             var (version, reused) = await f.PrepareAt(Day, runId: 42, dev: false);
             Expect.Equal(false, reused);
             Expect.Equal("2026.1101.2", version.Version);
             await ExpectTags(f, "v2026.1101.1-dev", "v2026.1101.2");
+            Expect.Sequence([ReleaseFixture.ActionUrl(41), ReleaseFixture.JobsUrl(41)], f.Http.Requests);
         });
 
-        GitCase("prepare shares stable and dev counters", async f =>
+        GitCase("prepare accepts successful partial rerun evidence across paginated attempts", async f =>
+        {
+            var prior = new ReleaseVersion(Day, 1, false);
+            await f.Tag(prior, 41);
+            f.Success(41, stable: true);
+            var firstPage = new[] { ReleaseFixture.Job("publish", attempt: 1) }
+                .Concat(Enumerable.Range(1, 99).Select(index => ReleaseFixture.Job($"other-{index}")))
+                .ToArray();
+            f.Http.Json(ReleaseFixture.JobsUrl(41), ReleaseFixture.Jobs(101, firstPage));
+            f.Http.Json(ReleaseFixture.JobsUrl(41, page: 2), ReleaseFixture.Jobs(
+                101, ReleaseFixture.Job("github-release", attempt: 2)));
+
+            var (version, reused) = await f.PrepareAt(Day, runId: 42, dev: true);
+            Expect.Equal(false, reused);
+            Expect.Equal("2026.1101.2-dev", version.Version);
+            Expect.Sequence(
+                [ReleaseFixture.ActionUrl(41), ReleaseFixture.JobsUrl(41), ReleaseFixture.JobsUrl(41, page: 2)],
+                f.Http.Requests);
+            await ExpectTags(f, prior.Tag, "v2026.1101.2-dev");
+        });
+
+        GitCase("prepare shares stable and dev counters without waiting for NuGet", async f =>
         {
             var prior = new ReleaseVersion(Day, 4, false);
             await f.Tag(prior, 41);
-            f.Success(41);
-            f.PublicPackage(prior, f.SourceSha);
-            f.PublicRelease(prior);
-            f.DownloadAsset(ReleaseFixture.MakePackage(prior, f.SourceSha));
+            f.Success(41, stable: true);
+            f.Http.Responses[ReleaseFixture.PackageUrl(prior)] = 404;
             var (version, reused) = await f.PrepareAt(Day, runId: 42, dev: true);
             Expect.Equal(false, reused);
             Expect.Equal("2026.1101.5-dev", version.Version);
             await ExpectTags(f, "v2026.1101.4", "v2026.1101.5-dev");
+            Expect.Sequence([ReleaseFixture.ActionUrl(41), ReleaseFixture.JobsUrl(41)], f.Http.Requests);
+        });
+
+        GitCase("prepare blocks incomplete publish job evidence", async f =>
+        {
+            var prior = new ReleaseVersion(Day, 1, true);
+            await f.Tag(prior, 41);
+            f.Success(41);
+            foreach (var (label, jobs) in new[]
+                     {
+                         ("missing", ReleaseFixture.Jobs()),
+                         ("skipped", ReleaseFixture.Jobs(ReleaseFixture.Job("publish", "skipped"))),
+                         ("failed", ReleaseFixture.Jobs(ReleaseFixture.Job("publish", "failure"))),
+                         ("latest_failed", ReleaseFixture.Jobs(
+                             ReleaseFixture.Job("publish", attempt: 1),
+                             ReleaseFixture.Job("publish", "failure", attempt: 2))),
+                         ("in_progress", ReleaseFixture.Jobs(ReleaseFixture.Job("publish", status: "in_progress"))),
+                         ("duplicate", ReleaseFixture.Jobs(ReleaseFixture.Job("publish"), ReleaseFixture.Job("publish"))),
+                         ("truncated", new JsonObject
+                         {
+                             ["total_count"] = 2,
+                             ["jobs"] = new JsonArray(ReleaseFixture.Job("publish")),
+                         }),
+                     })
+            {
+                f.Http.Json(ReleaseFixture.JobsUrl(41), jobs);
+                if (label == "truncated")
+                {
+                    f.Http.Json(ReleaseFixture.JobsUrl(41, page: 2), ReleaseFixture.Jobs(2));
+                }
+
+                await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42), label: label);
+                await ExpectTags(f, prior.Tag);
+            }
+
+            f.Http.Responses[ReleaseFixture.JobsUrl(41)] = 503;
+            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42), label: "jobs_unavailable");
+            await ExpectTags(f, prior.Tag);
+        });
+
+        GitCase("prepare blocks a stable run without a successful GitHub release job", async f =>
+        {
+            var prior = new ReleaseVersion(Day, 1, false);
+            await f.Tag(prior, 41);
+            f.Success(41);
+            await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42));
+            await ExpectTags(f, prior.Tag);
         });
 
         GitCase("prepare accepts verified expired stable run", async f =>
@@ -3549,11 +3705,11 @@ internal static partial class ReleaseTests
             await ExpectTags(f, "v2026.1101.1");
         });
 
-        GitCase("prepare blocks missing or mismatched public evidence", async f =>
+        GitCase("prepare blocks missing or mismatched public evidence for an expired run", async f =>
         {
             var prior = new ReleaseVersion(Day, 1, false);
             await f.Tag(prior, 41);
-            f.Success(41);
+            f.Http.Responses[ReleaseFixture.ActionUrl(41)] = 404;
             foreach (var label in new[] { "missing_package", "wrong_commit", "missing_release", "missing_asset", "nuget_error" })
             {
                 f.PublicPackage(prior, f.SourceSha);
@@ -3580,12 +3736,10 @@ internal static partial class ReleaseTests
     {
         GitCase("prepare blocks unresolved older reservation", async f =>
         {
-            var newer = new ReleaseVersion(Day, 2, true);
             await f.Tag(new ReleaseVersion(Day, 1, true), 40);
-            await f.Tag(newer, 41);
+            await f.Tag(new ReleaseVersion(Day, 2, true), 41);
             f.Http.Json(ReleaseFixture.ActionUrl(40), Run(40, "completed", "failure"));
             f.Success(41);
-            f.PublicPackage(newer, f.SourceSha);
             await Expect.ThrowsAsync(() => f.PrepareAt(Day, runId: 42));
             await ExpectTags(f, "v2026.1101.1-dev", "v2026.1101.2-dev");
         });
@@ -3603,30 +3757,25 @@ internal static partial class ReleaseTests
         {
             var (first, _) = await f.PrepareAt(Day, runId: 40);
             f.Success(40);
-            f.PublicPackage(first, f.SourceSha);
             var (second, _) = await f.PrepareAt(Day, runId: 41, dev: false);
             var body = GitFixture.TagBody(await f.Git("cat-file", "-p", $"refs/tags/{second.Tag}"));
             Expect.Contains($"\"verified_through\":\"{first.Tag}\"", body);
 
-            f.Success(41);
-            f.PublicPackage(second, f.SourceSha);
-            f.PublicRelease(second);
+            f.Success(41, stable: true);
             f.Http.Responses.Remove(ReleaseFixture.ActionUrl(40));
-            f.Http.Responses.Remove(ReleaseFixture.PackageUrl(first));
+            f.Http.Responses.Remove(ReleaseFixture.JobsUrl(40));
             f.Http.Requests.Clear();
-            f.DownloadAsset(ReleaseFixture.MakePackage(second, f.SourceSha));
             var (third, reused) = await f.PrepareAt(Day, runId: 42);
             Expect.Equal(false, reused);
             Expect.Equal("2026.1101.3-dev", third.Version);
             Expect.True(!f.Http.Requests.Contains(ReleaseFixture.ActionUrl(40)), "older run should not be checked");
-            Expect.True(!f.Http.Requests.Contains(ReleaseFixture.PackageUrl(first)), "older package should not be checked");
+            Expect.Sequence([ReleaseFixture.ActionUrl(41), ReleaseFixture.JobsUrl(41)], f.Http.Requests);
         });
 
         GitCase("retry reuses a checkpoint after earlier publication was verified", async f =>
         {
             var (first, _) = await f.PrepareAt(Day, runId: 40);
             f.Success(40);
-            f.PublicPackage(first, f.SourceSha);
             var (second, _) = await f.PrepareAt(Day, runId: 41);
             f.Http.Requests.Clear();
             var (retry, reused) = await f.PrepareAt(new(2026, 11, 2), runId: 41);
@@ -3803,9 +3952,8 @@ internal static partial class ReleaseTests
 
         RetiredCase("prepare continues history after verified retirement", async f =>
         {
-            var (previous, _) = await f.PrepareAt(Day, runId: 42);
+            await f.PrepareAt(Day, runId: 42);
             f.Success(42);
-            f.PublicPackage(previous, f.SourceSha);
             var (version, reused) = await f.PrepareAt(Day, runId: 43);
             Expect.Equal("2026.1101.3-dev", version.Version);
             Expect.Equal(false, reused);
@@ -3947,9 +4095,8 @@ internal static partial class ReleaseTests
 
         RetryRetiredCase("prepare continues after two-attempt retirement", async f =>
         {
-            var (second, _) = await f.PrepareAt(retryDay, runId: 53);
+            await f.PrepareAt(retryDay, runId: 53);
             f.Success(53);
-            f.PublicPackage(second, f.SourceSha);
             var (third, reused) = await f.PrepareAt(retryDay, runId: 54);
             Expect.Equal("2026.1103.3-dev", third.Version);
             Expect.Equal(false, reused);
