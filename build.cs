@@ -291,7 +291,7 @@ async Task SmokeMcpAsync(string? command = null, string[]? arguments = null,
         text = string.Join('\n', result.Content.OfType<TextContentBlock>().Select(c => c.Text));
         isError = result.IsError == true;
     }
-    catch (Exception ex)
+    catch (Exception ex) when (ex is SmokeTestException or TimeoutException)
     {
         DumpDiagnostics("piston mcp stderr", stderr);
         throw new SmokeTestException($"MCP smoke test failed during {phase}: {ex.Message}");
@@ -334,6 +334,7 @@ async Task SmokeDistributionAsync()
     {
         ["DOTNET_CLI_HOME"] = Path.Combine(root, "cli-home"),
         ["NUGET_PACKAGES"] = Path.Combine(root, "nuget-packages"),
+        ["PISTON_RUNTIMES"] = Path.Combine(root, "local-data"),
         ["DOTNET_NOLOGO"] = "true",
         ["MSBUILDDISABLENODEREUSE"] = "1",
     };
@@ -483,26 +484,16 @@ async Task SmokeDistributionAsync()
 
                 phase = "live update";
                 await ProbeUpdateAsync("mcp");
-                // Windows runs the tool from a per-version runtime copy, so a live session must survive the update.
-                // Elsewhere the old store is deleted under the process; record the outcome without failing.
                 phase = "forced run after update";
-                try
+                LogSmokePhase("START: live MCP forced run after update");
+                var result = await client.CallToolAsync("run_tests", cancellationToken: timeout.Token);
+                var text = string.Join('\n', result.Content.OfType<TextContentBlock>().Select(c => c.Text));
+                if (result.IsError == true || !text.Contains("Passed: 4, Failed: 4", StringComparison.Ordinal))
                 {
-                    LogSmokePhase("START: live MCP forced run after update");
-                    var result = await client.CallToolAsync("run_tests", cancellationToken: timeout.Token);
-                    var text = string.Join('\n', result.Content.OfType<TextContentBlock>().Select(c => c.Text));
-                    if (OperatingSystem.IsWindows()
-                        && (result.IsError == true || !text.Contains("Passed: 4, Failed: 4", StringComparison.Ordinal)))
-                    {
-                        throw new SmokeTestException($"Live MCP session could not run tests after updating:\n{text}");
-                    }
+                    throw new SmokeTestException($"Live MCP session could not run tests after updating:\n{text}");
+                }
 
-                    Console.WriteLine($"Live MCP forced run after update: isError={result.IsError == true}\n{text}");
-                }
-                catch (Exception ex) when (ex is IOException or McpException && !OperatingSystem.IsWindows())
-                {
-                    Console.WriteLine($"OBSERVATION: live MCP could not run tests after update: {ex.Message}");
-                }
+                Console.WriteLine($"Live MCP forced run after update: isError={result.IsError == true}\n{text}");
                 phase = "shutdown";
                 LogSmokePhase("DONE: live MCP forced run; START: old MCP shutdown");
             }
@@ -533,11 +524,19 @@ async Task SmokeDistributionAsync()
         {
             try
             {
-                _ = await WaitForStartupRunAsync(daemon);
+                try
+                {
+                    _ = await WaitForStartupRunAsync(daemon);
+                }
+                catch (Exception ex)
+                {
+                    throw new SmokeTestException($"{ex.Message}\n{daemonOutput}");
+                }
+
                 await ProbeUpdateAsync("daemon");
                 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
                 using var response = await http.GetAsync($"http://localhost:{webPort}/");
-                if (OperatingSystem.IsWindows() && !response.IsSuccessStatusCode)
+                if (!response.IsSuccessStatusCode)
                 {
                     throw new SmokeTestException($"Live daemon dashboard failed after updating: {response.StatusCode}");
                 }
@@ -1100,8 +1099,7 @@ static List<string> RuntimePackageIds(string packagePath)
         .Select(e => (string)e.Attribute("Id")!).ToList();
 }
 
-// Windows runs piston.cmd, which copies the payload out of the tool store so updates never find it in use;
-// other platforms use the portable package and the dotnet runner.
+// Windows runs piston.cmd; the portable any package stages and replaces its tool-store process on Unix.
 static void CheckPackageContents(string directory, string? expectedVersion = null)
 {
     var package = FindToolPackage(directory, expectedVersion);
@@ -1237,6 +1235,15 @@ static List<string> CheckRuntimePackage(string path, string id, string runtime, 
         problems.Add("Piston.dll is missing");
     }
 
+    if (windows || runtime == "any")
+    {
+        if (ReadEntry("piston.runtime-id") is not { } runtimeId
+            || !Regex.IsMatch(runtimeId, $@"^{Regex.Escape(version)}-[0-9a-f]{{16}}\s*$"))
+        {
+            problems.Add("piston.runtime-id must identify the version and payload");
+        }
+    }
+
     if (windows)
     {
         foreach (var script in new[] { "piston.cmd", "piston-run.cmd" })
@@ -1250,12 +1257,6 @@ static List<string> CheckRuntimePackage(string path, string id, string runtime, 
             {
                 problems.Add($"{script} must use CRLF line endings");
             }
-        }
-
-        if (ReadEntry("piston.runtime-id") is not { } runtimeId
-            || !Regex.IsMatch(runtimeId, $@"^{Regex.Escape(version)}-[0-9a-f]{{16}}\s*$"))
-        {
-            problems.Add("piston.runtime-id must identify the version and payload");
         }
 
         if (entries.Contains(prefix + "Piston.exe"))

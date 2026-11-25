@@ -87,7 +87,6 @@ public sealed class RuntimeStagingTests : IDisposable
     [Fact]
     public void Stage_ClaimsAnExistingRuntimeSoCleanupKeepsIt()
     {
-        Assert.SkipUnless(OperatingSystem.IsWindows(), "Runtime copies are only used on Windows.");
         var now = DateTime.UtcNow;
         var runtime = StageAged("1.0.0-abc", now - TimeSpan.FromDays(30));
 
@@ -111,22 +110,19 @@ public sealed class RuntimeStagingTests : IDisposable
     [Fact]
     public void Cleanup_RemovesOnlyStaleUnusedRuntimes()
     {
-        Assert.SkipUnless(OperatingSystem.IsWindows(), "Runtime copies are only used on Windows.");
         var now = DateTime.UtcNow;
         var current = StageAged("current", now - TimeSpan.FromDays(30));
         var recent = StageAged("recent", now - TimeSpan.FromDays(1));
         var stale = StageAged("stale", now - TimeSpan.FromDays(30));
         var inUse = StageAged("in-use", now - TimeSpan.FromDays(30));
+        using var activeLease = RuntimeStaging.AcquireLease(inUse);
+        File.SetLastWriteTimeUtc(Path.Combine(inUse, RuntimeStaging.LastUsed), now - TimeSpan.FromDays(30));
         var abandoned = Directory.CreateDirectory(Path.Combine(_runtimes, "x.0123.staging")).FullName;
         Directory.SetLastWriteTimeUtc(abandoned, now - TimeSpan.FromDays(1));
         var inProgress = Directory.CreateDirectory(Path.Combine(_runtimes, "y.4567.staging")).FullName;
         var unmarked = Directory.CreateDirectory(Path.Combine(_runtimes, "unmarked")).FullName;
 
-        // A loaded assembly keeps its runtime directory from being renamed.
-        using (File.Open(Path.Combine(inUse, "Piston.dll"), FileMode.Open, FileAccess.Read, FileShare.Read))
-        {
-            RuntimeStaging.Cleanup(_runtimes, Path.GetFileName(current), now);
-        }
+        RuntimeStaging.Cleanup(_runtimes, Path.GetFileName(current), now);
 
         Assert.Equal(
             new[] { current, inProgress, inUse, recent, unmarked }.Order(StringComparer.Ordinal),

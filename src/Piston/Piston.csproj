@@ -15,8 +15,8 @@
   <!--
     The tool ships as RID-specific packages behind the DamianH.Piston pointer package. The Windows packages
     start through Launcher/piston.cmd, which runs Piston from a per-build copy outside the .NET tool store so
-    `dotnet tool update` works while Piston is running. Every other platform uses the framework-dependent
-    'any' package and the dotnet runner.
+    `dotnet tool update` works while Piston is running. Linux and macOS use the framework-dependent 'any'
+    package and replace the tool-store process with a per-build runtime copy on startup.
   -->
   <PropertyGroup>
     <ToolPackageRuntimeIdentifiers>win-x64;win-arm64;any</ToolPackageRuntimeIdentifiers>
@@ -87,12 +87,9 @@
   <!-- Publish Piston.Web and copy its wwwroot output to our wwwroot -->
   <Import Project="..\BlazorWebUI.targets" />
 
-  <!--
-    Names the launcher's runtime copy after the version and a hash of the published files, so a rebuilt
-    package with the same version never reuses a stale copy.
-  -->
+  <!-- Names each runtime copy after the version and a hash of its published files. -->
   <Target Name="WritePistonRuntimeId" AfterTargets="PublishBlazorWebUIOnPublish"
-          Condition="$(RuntimeIdentifier.StartsWith('win-'))">
+          Condition="$(RuntimeIdentifier.StartsWith('win-')) Or '$(RuntimeIdentifier)' == 'any'">
     <ItemGroup>
       <_PistonPayload Include="$(PublishDir)**\*" Exclude="$(PublishDir)piston.runtime-id">
         <RelativePath>%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
