@@ -1447,7 +1447,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             //   - A selected run runs exactly its selection, ignoring the user's TestFilter
             //   - If Tier 3 produced FQNs, build a dotnet-test filter expression
             //   - If the user also has a TestFilter, AND the two together
-            var userFilter = selection is null ? _state.TestFilter : null;
+            var configuredFilter = _state.TestFilter;
+            var userFilter = selection is null ? configuredFilter : null;
             var effectiveFilter = selection is null
                 ? BuildEffectiveFilter(impactResult, userFilter)
                 : selection.Filter;
@@ -1692,7 +1693,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 continues?.Trigger ?? trigger,
                 testTargets ?? [],
                 NormalizeFilter(effectiveFilter),
-                continues is null ? NormalizeFilter(userFilter) : continues.UserFilter,
+                continues is null ? NormalizeFilter(configuredFilter) : continues.UserFilter,
                 continues?.ChangeGeneration ?? changeGenerationAtStart,
                 testedThroughGeneration,
                 continues?.FullScope ?? run.IsFullScope));
@@ -1908,12 +1909,14 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                         projectStatuses[result.ProjectPath] = projectStatus;
                     }
 
-                    if (projectStatus == Models.ProjectRunStatus.Completed)
+                    var testCount = result.Suites.Sum(s => s.Tests.Count);
+
+                    // Only a project with complete results is finished; anything else is run again on resume.
+                    if (projectStatus == Models.ProjectRunStatus.Completed && result.RunnerError is null && (testCount > 0 || filtered))
                     {
                         testPhase.Settle(result.ProjectPath);
                     }
 
-                    var testCount = result.Suites.Sum(s => s.Tests.Count);
                     string? noTestsReason = null;
                     if (testCount == 0 && !filtered && !result.Crashed && result.TimedOut is null)
                     {

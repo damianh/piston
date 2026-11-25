@@ -374,6 +374,53 @@ public sealed class OrchestratorPauseTests
         Assert.All(projects, p => Assert.Equal(TestStatus.Passed, StatusOf(state, p)));
     }
 
+    [Fact]
+    public async Task PausingASelectedRun_WithATestFilterConfigured_ResumeContinuesIt()
+    {
+        string[] projects = ["/fake/A.csproj", "/fake/B.csproj", "/fake/C.csproj"];
+        var state = new PistonState();
+        var runner = new ProjectByProjectRunner();
+        await using var orchestrator = new PistonOrchestrator(
+            new RaisingFileWatcher(), new StubBuildService(), runner, new RecordingImpactAnalyzer(projects), state);
+        await orchestrator.StartAsync(Solution);
+        var startup = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Completed);
+
+        state.TestFilter = "FullyQualifiedName~Test1";
+        var solutionDirectory = Path.GetDirectoryName(Path.GetFullPath(Solution))!;
+        var blocked = runner.BlockAt("/fake/B.csproj");
+        _ = orchestrator.RunSelectedAsync(new TestSelection([.. projects.Select(p => TestProjectNames.ProjectId(solutionDirectory, p))]));
+        await blocked.WaitAsync(Timeout, _ct);
+        orchestrator.Pause();
+        var cancelled = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Cancelled && r.Sequence > startup.Sequence);
+
+        orchestrator.Resume();
+
+        var run = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Completed && r.Sequence > cancelled.Sequence);
+        Assert.Equal(TestRunTrigger.Targeted, run.Trigger);
+        Assert.Equal(["/fake/B.csproj", "/fake/C.csproj"], runner.Runs[^1]);
+    }
+
+    [Fact]
+    public async Task PausingAfterAProjectReportedNoTests_ResumeRunsItAgain()
+    {
+        string[] projects = ["/fake/A.csproj", "/fake/B.csproj"];
+        var state = new PistonState();
+        var runner = new ProjectByProjectRunner();
+        _ = runner.Empty.TryAdd("/fake/A.csproj", 0);
+        var blocked = runner.BlockAt("/fake/B.csproj");
+        await using var orchestrator = new PistonOrchestrator(
+            new RaisingFileWatcher(), new StubBuildService(), runner, new RecordingImpactAnalyzer(projects), state);
+        await orchestrator.StartAsync(Solution);
+        await blocked.WaitAsync(Timeout, _ct);
+        orchestrator.Pause();
+        var cancelled = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Cancelled);
+
+        orchestrator.Resume();
+
+        _ = await WaitForRunAsync(state, r => r.Status != TestRunStatus.Cancelled && r.Sequence > cancelled.Sequence);
+        Assert.Equal(projects, runner.Runs[^1]);
+    }
+
     private static async Task<TestRunRecord> WaitForRunAsync(PistonState state, Func<TestRunRecord, bool> match)
     {
         using var timeout = new CancellationTokenSource(Timeout);
@@ -397,6 +444,9 @@ public sealed class OrchestratorPauseTests
         private TaskCompletionSource? _cancellationHold;
 
         public IReadOnlyList<IReadOnlyList<string>> Runs => [.. _runs];
+
+        // Projects that report no tests when run.
+        public ConcurrentDictionary<string, byte> Empty { get; } = new();
 
         // Keeps a blocked run from finishing after it is cancelled until the returned source completes.
         public TaskCompletionSource HoldCancellation()
@@ -462,7 +512,8 @@ public sealed class OrchestratorPauseTests
                     }
                 }
 
-                var suite = new TestSuite(Path.GetFileNameWithoutExtension(project), [Test(project, TestStatus.Passed)],
+                var suite = new TestSuite(Path.GetFileNameWithoutExtension(project),
+                    Empty.ContainsKey(project) ? [] : [Test(project, TestStatus.Passed)],
                     DateTimeOffset.UtcNow, TimeSpan.Zero);
                 suites.Add(suite);
                 var result = new ProjectTestResult(project, [suite], null, [], false);
