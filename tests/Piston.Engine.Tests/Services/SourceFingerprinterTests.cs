@@ -144,13 +144,25 @@ public sealed class SourceFingerprinterTests : IDisposable
         foreach (var input in new[]
                  {
                      "src/Lib/Code.cs", "src/Lib/Declared.tmp", "testdata/input.json", "App.slnx",
-                     "src/Directory.Build.props",
+                     "src/Directory.Build.props", ".gitignore",
                  })
         {
             var previous = SourceFingerprinter.Compute(scope);
             Write(input, Guid.NewGuid().ToString());
             Assert.NotEqual(previous.Value, SourceFingerprinter.Compute(scope).Value);
         }
+    }
+
+    [Fact]
+    public void ProjectScope_CoversIgnoreRulesAndDirectoriesOnTheWayToProjects()
+    {
+        var scope = ProjectScope();
+
+        Assert.True(scope.Covers(Path.Combine(_root, ".gitignore")));
+        Assert.True(scope.Covers(Path.Combine(_root, "src", ".gitignore")));
+        Assert.True(scope.Covers(Path.Combine(_root, "src")));
+        Assert.False(scope.Covers(Path.Combine(_root, "testdata")));
+        Assert.False(scope.Covers(Path.Combine(_root, "testdata", ".gitignore")));
     }
 
     [Fact]

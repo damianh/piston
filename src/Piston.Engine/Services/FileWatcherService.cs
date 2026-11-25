@@ -216,13 +216,14 @@ public sealed class FileWatcherService : IFileWatcherService
             AddDirectoryWatchers(e.FullPath);
         }
 
-        if (!IsFingerprintInput(e.FullPath) && !IsFingerprintInput(e.OldFullPath))
+        // Queue both endpoints: debounce filtering may drop one (e.g. a git-ignored destination) but not the other.
+        foreach (var path in new[] { e.OldFullPath, e.FullPath })
         {
-            return;
+            if (IsFingerprintInput(path))
+            {
+                ScheduleDebounce(new FileChangeEvent(path, e.ChangeType, _timeProvider.GetUtcNow()));
+            }
         }
-
-        var path = IsFingerprintInput(e.FullPath) ? e.FullPath : e.OldFullPath;
-        ScheduleDebounce(new FileChangeEvent(path, e.ChangeType, _timeProvider.GetUtcNow()));
     }
 
     private void AddWatcher(string directory, bool includeSubdirectories, IEnumerable<string>? filters = null)
@@ -371,13 +372,24 @@ public sealed class FileWatcherService : IFileWatcherService
         }
     }
 
-    private void RemoveDirectoryWatchers(string directory)
+    /// <summary>
+    /// Stops watching <paramref name="directory"/> and its subdirectories; when <paramref name="expected"/> is
+    /// given, only if it still is the watcher of <paramref name="directory"/>, so a late error from a replaced
+    /// watcher leaves the replacement alone.
+    /// </summary>
+    private void RemoveDirectoryWatchers(string directory, FileSystemWatcher? expected = null)
     {
         var path = Path.GetFullPath(directory);
         var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
         List<FileSystemWatcher> removed = [];
         lock (_watcherLock)
         {
+            if (expected is not null
+                && (!_directoryWatchers.TryGetValue(path, out var current) || !ReferenceEquals(current, expected)))
+            {
+                return;
+            }
+
             foreach (var watched in _directoryWatchers.Keys
                          .Where(candidate => IsUnderDirectory(path, candidate, comparison))
                          .ToArray())
@@ -446,11 +458,16 @@ public sealed class FileWatcherService : IFileWatcherService
             // Windows fails a directory's watcher (often with "Access is denied") when the directory is deleted,
             // frequently after the parent's Deleted event already stopped tracking it. The parent's watcher
             // reports the deletion; a directory outside the inputs needs no watching.
-            if (sender is FileSystemWatcher watcher && IsStaleWatcher(watcher, out var directory))
+            if (sender is FileSystemWatcher watcher && IsStaleWatcher(watcher, out var directory, out var tracked))
             {
                 DiagnosticLog.Instance?.Write("FileWatcher",
                     $"Stopped watching {directory}: {e.GetException().Message}");
-                RemoveDirectoryWatchers(directory);
+                // An untracked watcher was already removed; its directory may since have a replacement.
+                if (tracked)
+                {
+                    RemoveDirectoryWatchers(directory, watcher);
+                }
+
                 return;
             }
 
@@ -462,10 +479,9 @@ public sealed class FileWatcherService : IFileWatcherService
         }
     }
 
-    private bool IsStaleWatcher(FileSystemWatcher watcher, out string directory)
+    private bool IsStaleWatcher(FileSystemWatcher watcher, out string directory, out bool tracked)
     {
         directory = watcher.Path;
-        bool tracked;
         bool isDirectoryWatcher;
         string? root;
         lock (_watcherLock)

@@ -31,6 +31,8 @@ public sealed class SourceInputScope
     [
         .. SourceFingerprinter.AncestorInputNames,
         ".editorconfig", "Directory.Solution.props", "Directory.Solution.targets",
+        // Ignore rules select which project-directory files are inputs.
+        ".gitignore",
     ];
 
     private readonly string[] _cones;
@@ -141,7 +143,9 @@ public sealed class SourceInputScope
         return string.Equals(fullPath, SolutionPath, PathComparison)
             || _declaredInputs.Contains(fullPath)
             || IsInProjectDirectory(fullPath)
-            || IsAnchorFile(fullPath);
+            || IsAnchorFile(fullPath)
+            // Deleting or moving a directory on the way to inputs removes them without per-file events.
+            || _anchorDirectories.Contains(fullPath);
     }
 
     /// <summary>

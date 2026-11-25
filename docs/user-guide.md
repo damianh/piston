@@ -377,7 +377,7 @@ The source fingerprint is a SHA-256 over the solution's source inputs. These are
 
 - the solution file;
 - every file in the directory of each project under the solution directory, except files git ignores;
-- `.editorconfig`, `Directory.Build.*`, `Directory.Packages.props`, `Directory.Solution.*`, `global.json` and `NuGet.config` in the solution directory and in the directories between it and each project;
+- `.editorconfig`, `.gitignore`, `Directory.Build.*`, `Directory.Packages.props`, `Directory.Solution.*`, `global.json` and `NuGet.config` in the solution directory and in the directories between it and each project;
 - every evaluated build input under the solution directory, whether git ignores it or not: imports, and `Compile`, `None`, `Content` and other declared file items.
 
 Until the graph is available, or when it cannot be evaluated, the fingerprint is `piston-source-v2`, which covers every file under the solution directory. Both exclude `bin`, `obj`, `TestResults`, `.git`, `.vs`, `.idea`, `.piston` and `node_modules`. Both also cover the nearest ancestor `global.json`, `Directory.Build.*`, `Directory.Packages.props` and `NuGet.config`. Git-ignore rules come from `git ls-files`/`git check-ignore`. Without git, every file in a project directory counts.

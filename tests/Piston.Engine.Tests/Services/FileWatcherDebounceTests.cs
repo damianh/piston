@@ -548,6 +548,20 @@ public sealed class FileWatcherDebounceTests
             };
             await File.WriteAllTextAsync(declared, "x", _ct);
             await received.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+            // Renaming an input to an ignored name removes the input.
+            var code = Path.Combine(projectDir, "Code.cs");
+            await File.WriteAllTextAsync(code, "x", _ct);
+            var renamed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            sut.FileChanged += batch =>
+            {
+                if (batch.Changes.Any(change => change.FilePath == code && change.ChangeType == WatcherChangeTypes.Renamed))
+                {
+                    _ = renamed.TrySetResult();
+                }
+            };
+            File.Move(code, Path.Combine(projectDir, "Code.tmp"));
+            await renamed.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
         }
         finally
         {
