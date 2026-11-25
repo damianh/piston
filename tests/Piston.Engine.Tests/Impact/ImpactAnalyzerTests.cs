@@ -225,6 +225,18 @@ public sealed class ImpactAnalyzerTests : IDisposable
     }
 
     [Fact]
+    public async Task DeletedCsproj_ReturnsFullRunInsteadOfAMissingBuildTarget()
+    {
+        var analyzer = new ImpactAnalyzer(_factory);
+        await analyzer.InitializeAsync("solution.slnx", CancellationToken.None);
+        File.Delete(_libCsproj);
+
+        // Alone, and as carried forward into the run of a later, unrelated edit.
+        Assert.True(analyzer.Analyze([Change(_libCsproj)]).IsFullRun);
+        Assert.True(analyzer.Analyze([Change(_libCsproj), Change(_testsFile)]).IsFullRun);
+    }
+
+    [Fact]
     public async Task PropsChange_RefreshesGraphWithoutRequestingRedundantRebuild()
     {
         var analyzer = new ImpactAnalyzer(_factory);

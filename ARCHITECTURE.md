@@ -207,7 +207,8 @@ the in-memory MSBuild solution graph as another ownership lookup. A test-project
 source change selects that test project. A production-project change follows
 transitive dependents and selects affected test projects.
 
-Unknown ownership, unavailable graph data, and broad build-input changes can
+Unknown ownership, unavailable graph data, a project file that no longer exists,
+and broad build-input changes can
 fall back to a full run. Project/build-input changes can require graph
 reinitialization. The graph is held in memory; there is no implemented
 `.piston/project-graph.json` cache or persisted graph recovery.
