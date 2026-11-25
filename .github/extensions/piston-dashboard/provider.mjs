@@ -36,11 +36,7 @@ export function loopbackEndpoint(value) {
     return url;
 }
 
-export function resolveExecutable(command, cwd, {
-    platform = process.platform,
-    pathValue = process.env.PATH ?? "",
-    pathExt = process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD",
-} = {}) {
+function worktreeScope(cwd, platform) {
     const pathApi = platform === "win32" ? path.win32 : path;
     const directory = realpathSync.native(cwd);
     let root = directory;
@@ -58,20 +54,32 @@ export function resolveExecutable(command, cwd, {
         return relative === "" || (!pathApi.isAbsolute(relative) && relative !== ".."
             && !relative.startsWith(`..${pathApi.sep}`));
     };
+    const trustedDirectories = pathValue => pathValue.split(pathApi.delimiter).flatMap(entry => {
+        if (!entry || !pathApi.isAbsolute(entry)) return [];
+        try {
+            const resolved = realpathSync.native(entry);
+            return insideRoot(resolved) ? [] : [resolved];
+        } catch {
+            return [];
+        }
+    });
+    return { pathApi, root, insideRoot, trustedDirectories };
+}
+
+/** Resolves a command from PATH, ignoring relative entries and anything inside the worktree. Windows batch files are only accepted with `allowBatch`, because they must run through {@link commandLine}. */
+export function resolveExecutable(command, cwd, {
+    platform = process.platform,
+    pathValue = process.env.PATH ?? "",
+    pathExt = process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD",
+    allowBatch = false,
+} = {}) {
+    const { pathApi, root, insideRoot, trustedDirectories } = worktreeScope(cwd, platform);
+    const allowed = allowBatch ? [".COM", ".EXE", ".BAT", ".CMD"] : [".COM", ".EXE"];
     const extensions = platform === "win32"
-        ? (path.extname(command) ? [""] : pathExt.split(";").filter(extension => [".COM", ".EXE", ".BAT", ".CMD"].includes(extension.toUpperCase())))
+        ? (path.extname(command) ? [""] : pathExt.split(";").filter(extension => allowed.includes(extension.toUpperCase())))
         : [""];
 
-    for (const entry of pathValue.split(pathApi.delimiter)) {
-        if (!entry || !pathApi.isAbsolute(entry)) continue;
-        let directory;
-        try {
-            directory = realpathSync.native(entry);
-        } catch {
-            continue;
-        }
-        if (insideRoot(directory)) continue;
-
+    for (const directory of trustedDirectories(pathValue)) {
         for (const extension of extensions) {
             const candidate = pathApi.join(directory, pathApi.extname(command) ? command : command + extension);
             try {
@@ -90,9 +98,15 @@ export function resolveExecutable(command, cwd, {
 /**
  * How to start a resolved executable. Node cannot start a Windows batch file (the Piston tool's
  * `piston.cmd` entry point) without cmd.exe, so batch files run through cmd.exe with every argument quoted.
- * Characters that cmd.exe expands or cannot quote are rejected rather than escaped.
+ * Characters that cmd.exe expands or cannot quote are rejected rather than escaped. Commands the batch file
+ * runs (such as `dotnet`) are looked up by cmd.exe, so it gets no current-directory lookup and a PATH
+ * without relative or worktree entries.
  */
-export function commandLine(file, args, platform = process.platform, comSpec = process.env.ComSpec) {
+export function commandLine(file, args, cwd, {
+    platform = process.platform,
+    comSpec = process.env.ComSpec,
+    env = process.env,
+} = {}) {
     if (platform !== "win32" || ![".bat", ".cmd"].includes(path.win32.extname(file).toLowerCase())) {
         return { file, args, options: {}, wrapped: false };
     }
@@ -100,15 +114,31 @@ export function commandLine(file, args, platform = process.platform, comSpec = p
         if (/["%\r\n\0]/.test(value)) {
             throw new Error(`Cannot pass '${value}' to '${file}': it contains a character cmd.exe cannot quote safely.`);
         }
-        return `"${value}"`;
+        // Programs parse a backslash before the closing quote as an escaped quote; doubling keeps it literal.
+        return `"${value.replace(/(\\+)$/, "$1$1")}"`;
     };
     const command = [file, ...args].map(quote).join(" ");
+    const environment = Object.fromEntries(Object.entries(env).filter(([name]) => name.toUpperCase() !== "PATH"));
+    environment.PATH = worktreeScope(cwd, platform).trustedDirectories(
+        Object.entries(env).find(([name]) => name.toUpperCase() === "PATH")?.[1] ?? "").join(";");
+    environment.NoDefaultCurrentDirectoryInExePath = "1";
     return {
         file: comSpec || "cmd.exe",
         args: ["/d", "/s", "/v:off", "/c", `"${command}"`],
-        options: { windowsVerbatimArguments: true },
+        options: { windowsVerbatimArguments: true, env: environment },
         wrapped: true,
     };
+}
+
+/** The parent of a Windows process, or undefined if it has exited. */
+export async function parentProcessId(processId, executeCommand = execute) {
+    if (!Number.isSafeInteger(processId) || processId <= 0) return undefined;
+    const powershell = path.win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const { stdout } = await executeCommand(powershell, ["-NoProfile", "-NonInteractive", "-Command",
+        `(Get-CimInstance Win32_Process -Filter 'ProcessId=${processId}').ParentProcessId`],
+    { timeout: 10000, windowsHide: true });
+    const parent = Number.parseInt(stdout.trim(), 10);
+    return Number.isSafeInteger(parent) ? parent : undefined;
 }
 
 const changeBases = ["working", "branch", "range"];
@@ -152,7 +182,10 @@ export async function discover(cwd, executeCommand = execute, resolve = resolveE
         let stdout;
         let failed = false;
         try {
-            const command = commandLine(resolve("piston", cwd), ["dashboard", "--json"], platform);
+            const file = resolve("piston", cwd, { allowBatch: true });
+            // cmd.exe cannot keep a UNC current directory, so a batch launcher is told the worktree explicitly.
+            const wrapped = commandLine(file, ["dashboard", cwd, "--json"], cwd, { platform });
+            const command = wrapped.wrapped ? wrapped : commandLine(file, ["dashboard", "--json"], cwd, { platform });
             ({ stdout } = await executeCommand(command.file, command.args, {
                 cwd, timeout: 5000, maxBuffer: 64 * 1024, windowsHide: true, ...command.options,
             }));
@@ -224,7 +257,7 @@ async function worktreeRoot(directory) {
     }
 }
 
-export async function startDaemon(cwd, solution, worktree, inspect = discover, check = probe, launch = spawn, logRoot = tmpdir(), platform = process.platform, resolve = resolveExecutable) {
+export async function startDaemon(cwd, solution, worktree, inspect = discover, check = probe, launch = spawn, logRoot = tmpdir(), platform = process.platform, resolve = resolveExecutable, parentOf = parentProcessId) {
     if (typeof solution !== "string" || !solution.trim() || solution.length > 4096 || solution.includes("\0")) {
         throw new Error("Enter a solution path.");
     }
@@ -249,9 +282,9 @@ export async function startDaemon(cwd, solution, worktree, inspect = discover, c
     let child;
     let failure;
     let command;
-    const launchedAt = Date.now();
     try {
-        command = commandLine(resolve("piston", cwd), ["daemon", selected, "--no-stdio", "--config-directory", cwd], platform);
+        command = commandLine(resolve("piston", cwd, { allowBatch: true }),
+            ["daemon", selected, "--no-stdio", "--config-directory", cwd], cwd, { platform });
         // On Windows, detached means DETACHED_PROCESS: the daemon would have no console, so every console
         // process it starts would open a visible window. Give it a hidden console instead; it still outlives the canvas.
         child = launch(command.file, command.args, {
@@ -272,10 +305,9 @@ export async function startDaemon(cwd, solution, worktree, inspect = discover, c
         }
         const state = await inspect(cwd);
         if (state.state === "connected") {
-            // A batch launcher runs the daemon as a descendant of cmd.exe, so its PID is unknown. The launcher
-            // stays alive while the daemon runs, so accept an owner that took the worktree after this launch.
+            // A batch launcher's final command runs the daemon as a direct child of the launched cmd.exe.
             const ours = command.wrapped
-                ? Date.parse(state.acquiredAt) >= launchedAt - 2000
+                ? await parentOf(state.processId) === child.pid
                 : state.processId === child.pid;
             if (!ours) {
                 throw new Error("Another Piston owner started first. Retry the connection.");
