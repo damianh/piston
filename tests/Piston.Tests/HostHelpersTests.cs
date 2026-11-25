@@ -246,6 +246,23 @@ public sealed class HostHelpersTests : IDisposable
         Assert.Equal(configured, options.CoverageEnabled);
     }
 
+    [Fact]
+    public void BuildOptions_RequiresMcpTrustAndRecordsExplicitDaemonTrust()
+    {
+        var config = new Piston.Hosting.Configuration.PistonConfig();
+
+        var mcp = HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config, "mcp");
+        var daemon = HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config, "daemon");
+        var embedded = HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config);
+
+        Assert.True(mcp.RequireTrust);
+        Assert.False(mcp.TrustOnStart);
+        Assert.False(daemon.RequireTrust);
+        Assert.True(daemon.TrustOnStart);
+        Assert.False(embedded.RequireTrust);
+        Assert.False(embedded.TrustOnStart);
+    }
+
     [Theory]
     [InlineData(null, true, ImpactBackfillMode.Test)]
     [InlineData("test", true, ImpactBackfillMode.Test)]

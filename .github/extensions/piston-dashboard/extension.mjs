@@ -26,8 +26,8 @@ const openInput = {
 const changesInput = { type: "object", properties: changeProperties, additionalProperties: false };
 const descriptions = {
     refresh: "Rediscover the current worktree's dashboard without running tests.",
-    run: "Request a full test run.",
-    run_failed: "Request a run of the currently failed tests.",
+    run: "Request a full test run. If the repository is untrusted, ask the user to approve it first.",
+    run_failed: "Request a run of the currently failed tests. If the repository is untrusted, ask the user to approve it first.",
     show_changes: "Show the coverage-aware diff of the changes, each changed line coloured by what the tests prove "
         + "about it. Only navigates the panel; it never runs tests.",
 };

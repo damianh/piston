@@ -106,6 +106,49 @@ public sealed class McpStdioHostTests : IDisposable
         _ = await Assert.ThrowsAsync<HttpRequestException>(() => httpAfterShutdown.GetAsync($"{endpoint.Url}/api/dashboard", _ct));
     }
 
+    [Fact]
+    public async Task UntrustedRepository_RefusesToolsUntilUserTrustsIt()
+    {
+        var solution = CreateWorktree("untrusted");
+        var trustPath = Path.Combine(_root, "trust", "repositories.json");
+        var directory = new ExecutionCoordinationDirectory(Path.Combine(_root, "untrusted-coordination"));
+        var (host, run) = Start(new McpStdioHostOptions
+        {
+            SolutionPath = solution,
+            EngineOptions = new PistonOptions
+            {
+                SolutionPath = solution,
+                RequireTrust = true,
+                RepositoryTrustStorePath = trustPath,
+                ExecutionCoordinationDirectory = directory.BaseDirectory,
+                CoverageEnabled = false,
+                HistoryEnabled = false,
+                PersistResults = false,
+            },
+        }, _ct);
+        var client = await ConnectAsync();
+        try
+        {
+            var (isError, text) = await CallAsync(client, "verify");
+            Assert.True(isError);
+            Assert.Contains("not trusted for builds and tests", text);
+            Assert.Equal(EngineAvailabilityState.AwaitingTrust, host.Availability.State);
+
+            var trustStore = new RepositoryTrustStore(trustPath);
+            trustStore.Trust(CloneIdentity.FromWorktreePath(Path.GetDirectoryName(solution)!));
+            await WaitForAvailabilityAsync(host, EngineAvailabilityState.Available);
+
+            var (readError, _) = await CallAsync(client, "get_test_results");
+            Assert.False(readError);
+        }
+        finally
+        {
+            await client.DisposeAsync();
+            await _toServer.Writer.CompleteAsync();
+            Assert.Equal(0, await run.WaitAsync(TimeSpan.FromSeconds(30), _ct));
+        }
+    }
+
     private static async Task<(bool IsError, string Text)> CallAsync(
         McpClient client,
         string tool,
@@ -113,6 +156,17 @@ public sealed class McpStdioHostTests : IDisposable
     {
         var result = await client.CallToolAsync(tool, arguments ?? new Dictionary<string, object?>());
         return (result.IsError == true, string.Join("\n", result.Content.OfType<TextContentBlock>().Select(c => c.Text)));
+    }
+
+    private static async Task WaitForAvailabilityAsync(McpStdioHost host, EngineAvailabilityState expected)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+        while (host.Availability.State != expected && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(50);
+        }
+
+        Assert.Equal(expected, host.Availability.State);
     }
 
     private string CreateWorktree(string name)

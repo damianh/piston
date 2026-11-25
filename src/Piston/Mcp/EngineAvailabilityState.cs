@@ -7,6 +7,9 @@ public enum EngineAvailabilityState
 {
     Available,
 
+    /// <summary>The repository has not been approved for builds and tests.</summary>
+    AwaitingTrust,
+
     /// <summary>Another process owns the worktree; this server started no engine.</summary>
     OwnedElsewhere,
 

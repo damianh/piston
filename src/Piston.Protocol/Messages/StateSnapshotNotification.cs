@@ -41,5 +41,6 @@ public sealed record StateSnapshotNotification(
     IReadOnlyList<ProjectCoverageDto>? ProjectCoverage = null,
     string? CoverageError = null,
     bool IsPaused = false,
-    int PausedChangeCount = 0
+    int PausedChangeCount = 0,
+    string? RepositoryTrustPath = null
 );

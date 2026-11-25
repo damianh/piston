@@ -56,6 +56,12 @@ public sealed class EngineAvailability
     public void SetFaulted(string message) =>
         Set(EngineAvailabilityState.Faulted, $"Piston could not start: {message}");
 
+    public void SetAwaitingTrust(string repositoryPath) =>
+        Set(EngineAvailabilityState.AwaitingTrust,
+            $"Repository '{repositoryPath}' is not trusted for builds and tests. Ask the user to approve it in the Piston dashboard or run 'piston trust'; do not approve it yourself.");
+
+    public void SetAvailable() => Set(EngineAvailabilityState.Available, string.Empty);
+
     /// <summary>Marks the server as shutting down unless a more specific reason is already set.</summary>
     public void SetStopped()
     {

@@ -29,9 +29,17 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     private readonly MtpWarmHostPool? _warmHosts;
     private readonly string? _historyDirectory;
     private readonly bool _persistResults;
+    private readonly bool _requireTrust;
+    private readonly bool _trustOnStart;
+    private readonly RepositoryTrustStore? _repositoryTrustStore;
+    private readonly SemaphoreSlim _startGate = new(1, 1);
+    private CloneIdentity? _cloneIdentity;
     private WorktreeOwnership? _ownership;
     private RunHistoryStore? _history;
     private SavedResultsStore? _savedResults;
+    private volatile bool _orchestratorStarted;
+    private int _disposeRequested;
+    private bool _disposed;
 
     public PistonEngine(PistonOptions options)
         : this(options, NullActivityEventSink.Instance, serviceOverrides: null)
@@ -51,6 +59,15 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         _historyEnabled = options.HistoryEnabled;
         _historyDirectory = options.HistoryDirectory;
         _persistResults = options.PersistResults;
+        _requireTrust = options.RequireTrust;
+        _trustOnStart = options.TrustOnStart;
+        if (_requireTrust && options.TrustOnStart)
+        {
+            throw new ArgumentException("TrustOnStart cannot be combined with RequireTrust.", nameof(options));
+        }
+        _repositoryTrustStore = _requireTrust || options.TrustOnStart
+            ? new RepositoryTrustStore(options.RepositoryTrustStorePath ?? RepositoryTrustStore.ResolveDefaultPath())
+            : null;
 
         // Register MSBuild before any Microsoft.Build.* types are loaded.
         // This must happen before MsBuildSolutionGraph (or any class referencing MSBuild) is JIT-compiled.
@@ -83,7 +100,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         if (options.CoverageEnabled)
         {
             var coberturaParser = new CoberturaParser();
-            var coverageStore = new SqliteCoverageStore();
+            var coverageStore = serviceOverrides?.CoverageStore ?? new SqliteCoverageStore();
             _coverageStore = coverageStore;
             coverageProcessor = new CoverageProcessor(coberturaParser);
         }
@@ -214,6 +231,12 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
     public PistonState State => _state;
 
+    /// <summary>Raised after explicit or external approval starts a previously gated engine.</summary>
+    public event Action? RepositoryTrustGranted;
+
+    /// <summary>Canonical clone path displayed while the engine is awaiting trust.</summary>
+    public string? RepositoryTrustPath => _cloneIdentity?.RootPath;
+
     /// <summary>Worktree ownership held by this engine; null before <see cref="StartAsync"/>.</summary>
     internal WorktreeOwnership? Ownership => _ownership;
 
@@ -241,33 +264,57 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     /// <remarks>Hosts use this to bind their endpoints so an endpoint conflict does not start a run.</remarks>
     public async Task StartAsync(string solutionPath, Func<Task>? beforeRunsStart)
     {
+        await _startGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposing();
+            await StartUnderGateAsync(solutionPath, beforeRunsStart).ConfigureAwait(false);
+        }
+        finally
+        {
+            _ = _startGate.Release();
+        }
+    }
+
+    private async Task StartUnderGateAsync(string solutionPath, Func<Task>? beforeRunsStart)
+    {
         if (_ownership is not null)
         {
             throw new InvalidOperationException("The engine has already been started.");
         }
 
         solutionPath = PathNormalizer.GetFullPath(solutionPath);
+        _state.SolutionPath = solutionPath;
         _coordinationDirectory.RejectLegacyBudget();
         _coordinationDirectory.EnsureReady();
         _ownership = WorktreeOwnership.Acquire(
             _coordinationDirectory, solutionPath, _ownerHost, dashboardUrl: _ownerDashboardUrl);
-        // Only the owner may touch the worktree's .piston directory.
-        _diagnosticLog.Open();
-        _diagnosticLog.Write("Engine",
-            $"Worktree ownership: {_ownership.Worktree.RootPath} (key {_ownership.Worktree.Key}); " +
-            $"execution directory: {_coordinationDirectory.BaseDirectory}");
-
-        OpenHistory(solutionPath);
-        OpenSavedResults(solutionPath);
 
         try
         {
+            _cloneIdentity = CloneIdentity.FromWorktreePath(_ownership.Worktree.RootPath);
+            _state.RepositoryTrustPath = _cloneIdentity.RootPath;
+            if (_repositoryTrustStore is not null && _trustOnStart)
+            {
+                _repositoryTrustStore.Trust(_cloneIdentity);
+            }
+
+            var awaitingTrust = _requireTrust && !_repositoryTrustStore!.IsTrusted(_cloneIdentity);
+            if (awaitingTrust)
+            {
+                _state.Phase = PistonPhase.AwaitingTrust;
+                _state.NotifyChanged();
+            }
+
             if (beforeRunsStart is not null)
             {
                 await beforeRunsStart().ConfigureAwait(false);
             }
 
-            await _orchestrator.StartAsync(solutionPath).ConfigureAwait(false);
+            if (!awaitingTrust)
+            {
+                await StartOrchestratorUnderGateAsync().ConfigureAwait(false);
+            }
         }
         catch
         {
@@ -279,8 +326,87 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             throw;
         }
 
-        _activitySink.Emit(new SolutionLoadedActivityEvent(solutionPath, 0));
     }
+
+    private async Task StartOrchestratorUnderGateAsync()
+    {
+        if (_orchestratorStarted)
+        {
+            return;
+        }
+
+        // Only a trusted owner may touch the solution's .piston directory or evaluate its MSBuild projects.
+        _diagnosticLog.Open();
+        _diagnosticLog.Write("Engine",
+            $"Worktree ownership: {_ownership!.Worktree.RootPath} (key {_ownership.Worktree.Key}); " +
+            $"execution directory: {_coordinationDirectory.BaseDirectory}");
+        OpenHistory(_solutionPath);
+        OpenSavedResults(_solutionPath);
+        await _orchestrator.StartAsync(_solutionPath).ConfigureAwait(false);
+        _orchestratorStarted = true;
+        _activitySink.Emit(new SolutionLoadedActivityEvent(_solutionPath, 0));
+        RepositoryTrustGranted?.Invoke();
+    }
+
+    /// <summary>Grants trust for this clone and starts the deferred engine.</summary>
+    public async Task GrantTrustAsync()
+    {
+        ThrowIfDisposing();
+        await _startGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposing();
+            if (!_requireTrust || _repositoryTrustStore is null || _cloneIdentity is null)
+            {
+                throw new InvalidOperationException("This engine is not awaiting repository trust.");
+            }
+
+            _repositoryTrustStore.Trust(_cloneIdentity);
+            await StartOrchestratorUnderGateAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _ = _startGate.Release();
+        }
+    }
+
+    /// <summary>Starts the deferred engine if another process has granted trust.</summary>
+    public async Task<bool> RefreshTrustAsync()
+    {
+        ThrowIfDisposing();
+        await _startGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            ThrowIfDisposing();
+            if (!_requireTrust || _repositoryTrustStore is null || _cloneIdentity is null || _orchestratorStarted)
+            {
+                return true;
+            }
+
+            if (!_repositoryTrustStore.IsTrusted(_cloneIdentity))
+            {
+                return false;
+            }
+
+            await StartOrchestratorUnderGateAsync().ConfigureAwait(false);
+            return true;
+        }
+        finally
+        {
+            _ = _startGate.Release();
+        }
+    }
+
+    private void ThrowIfDisposing() => ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposeRequested) != 0, this);
+
+    private void ThrowIfTrustRequired()
+    {
+        if (_requireTrust && !_orchestratorStarted)
+        {
+            throw new RepositoryNotTrustedException(_cloneIdentity?.RootPath ?? _solutionDirectory);
+        }
+    }
+
 
     // Only the worktree owner writes history; a failure to open it leaves the engine without history.
     private void OpenHistory(string solutionPath)
@@ -359,14 +485,27 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         return attachment is null ? null : _artifactStore.Resolve(attachment);
     }
 
-    public Task ForceRunAsync() => _orchestrator.ForceRunAsync();
+    public Task ForceRunAsync()
+    {
+        ThrowIfTrustRequired();
+        return _orchestrator.ForceRunAsync();
+    }
 
-    public Task<TestRunRecord?> RequestRunAsync() => _orchestrator.RequestRunAsync();
+    public Task<TestRunRecord?> RequestRunAsync()
+    {
+        ThrowIfTrustRequired();
+        return _orchestrator.RequestRunAsync();
+    }
 
-    public Task<TestRunRecord> RunSelectedAsync(TestSelection selection) => _orchestrator.RunSelectedAsync(selection);
+    public Task<TestRunRecord> RunSelectedAsync(TestSelection selection)
+    {
+        ThrowIfTrustRequired();
+        return _orchestrator.RunSelectedAsync(selection);
+    }
 
     public async Task ResetAsync()
     {
+        ThrowIfTrustRequired();
         await _orchestrator.ResetAsync().ConfigureAwait(false);
         if (_state.SolutionPath is { } solutionPath)
         {
@@ -374,14 +513,31 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         }
     }
 
-    public void Stop() => _orchestrator.Stop();
+    public void Stop()
+    {
+        if (!_requireTrust || _orchestratorStarted)
+        {
+            _orchestrator.Stop();
+        }
+    }
 
-    public void Pause() => _orchestrator.Pause();
+    public void Pause()
+    {
+        ThrowIfTrustRequired();
+        _orchestrator.Pause();
+    }
 
-    public void Resume() => _orchestrator.Resume();
+    public void Resume()
+    {
+        ThrowIfTrustRequired();
+        _orchestrator.Resume();
+    }
 
-    public Task<Verification.VerificationResult> VerifyAsync(TimeSpan timeout, CancellationToken ct) =>
-        _orchestrator.VerifyAsync(timeout, ct);
+    public Task<Verification.VerificationResult> VerifyAsync(TimeSpan timeout, CancellationToken ct)
+    {
+        ThrowIfTrustRequired();
+        return _orchestrator.VerifyAsync(timeout, ct);
+    }
 
     public void SetFilter(string? filter)
     {
@@ -389,7 +545,11 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         _state.NotifyChanged();
     }
 
-    public void ClearResults() => _orchestrator.ClearResults(_solutionDirectory, _solutionPath);
+    public void ClearResults()
+    {
+        ThrowIfTrustRequired();
+        _orchestrator.ClearResults(_solutionDirectory, _solutionPath);
+    }
 
     public CoverageReportSnapshot? GetCoverageReport() => _orchestrator.GetCoverageReport();
 
@@ -420,19 +580,34 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        await _orchestrator.DisposeAsync().ConfigureAwait(false);
-        if (_warmHosts is not null)
+        _ = Interlocked.Exchange(ref _disposeRequested, 1);
+        await _startGate.WaitAsync().ConfigureAwait(false);
+        try
         {
-            await _warmHosts.DisposeAsync().ConfigureAwait(false);
-        }
+            if (_disposed)
+            {
+                return;
+            }
 
-        CloseSavedResults();
-        CloseHistory();
-        _coverageStore?.Dispose();
-        _pool.Dispose();
-        // Released after the orchestrator so no run executes without ownership.
-        _ownership?.Dispose();
-        _ownership = null;
-        _diagnosticLog.Dispose();
+            await _orchestrator.DisposeAsync().ConfigureAwait(false);
+            if (_warmHosts is not null)
+            {
+                await _warmHosts.DisposeAsync().ConfigureAwait(false);
+            }
+
+            CloseSavedResults();
+            CloseHistory();
+            _coverageStore?.Dispose();
+            _pool.Dispose();
+            // Released after the orchestrator so no run executes without ownership.
+            _ownership?.Dispose();
+            _ownership = null;
+            _diagnosticLog.Dispose();
+            _disposed = true;
+        }
+        finally
+        {
+            _ = _startGate.Release();
+        }
     }
 }

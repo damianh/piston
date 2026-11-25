@@ -56,6 +56,13 @@ public sealed class EngineCommandDispatcher(IEngine engine) : ICommandDispatcher
 
     public async Task<JsonNode?> HandleCommandAsync(string method, JsonNode? @params, CancellationToken ct)
     {
+        if ((method is ProtocolMethods.CoverageGetChangedLines or ProtocolMethods.CoverageGetChangeDiff)
+            && engine.State.Phase == PistonPhase.AwaitingTrust)
+        {
+            throw new JsonRpcException(JsonRpcErrorCodes.InvalidRequest,
+                "Repository trust is required before inspecting changed-line coverage.");
+        }
+
         switch (method)
         {
             case ProtocolMethods.EngineStart:
@@ -67,6 +74,10 @@ public sealed class EngineCommandDispatcher(IEngine engine) : ICommandDispatcher
 
             case ProtocolMethods.EngineForceRun:
                 await engine.ForceRunAsync().ConfigureAwait(false);
+                return null;
+
+            case ProtocolMethods.EngineGrantTrust:
+                await engine.GrantTrustAsync().ConfigureAwait(false);
                 return null;
 
             case ProtocolMethods.EngineStop:

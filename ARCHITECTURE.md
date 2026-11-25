@@ -56,6 +56,13 @@ in that process. `piston mcp` (`McpStdioHost`) instead runs an in-process engine
 for one agent session, selecting the worktree from its working directory and
 holding that worktree's ownership lock until the session ends.
 
+The stdio MCP host requires per-user repository trust before starting the
+orchestrator. It can bind the dashboard while the engine is in `AwaitingTrust`,
+but does not evaluate the solution, start file watching or run tests until an
+explicit dashboard grant or a separate `piston trust` command is observed. An
+explicit daemon start records trust before normal startup. Trust keys use the
+clone's Git common directory, so linked worktrees share the decision.
+
 ## Transports and clients
 
 The daemon routes JSON-RPC requests and notifications over named pipes, stdio,
