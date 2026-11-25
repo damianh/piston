@@ -126,7 +126,14 @@ await RunTargetsAndExitAsync(args,
 async Task SmokeDaemonAsync(string? expectedVersion = null)
 {
     var output = new StringBuilder();
-    using var daemon = StartPiston(output, "daemon", samples, "--web-port", "5299", "--mcp-port", "5300");
+    var webPort = FreePort();
+    var mcpPort = FreePort();
+    while (mcpPort == webPort)
+    {
+        mcpPort = FreePort();
+    }
+
+    using var daemon = StartPiston(output, "daemon", samples, "--web-port", $"{webPort}", "--mcp-port", $"{mcpPort}");
     try
     {
         var (line, status, counts, suites) = await WaitForStartupRunAsync(daemon);
@@ -161,7 +168,7 @@ async Task SmokeDaemonAsync(string? expectedVersion = null)
             }
 
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-            var page = await http.GetStringAsync("http://localhost:5299/");
+            var page = await http.GetStringAsync($"http://localhost:{webPort}/");
             if (!page.Contains("_framework/", StringComparison.Ordinal))
             {
                 throw new SmokeTestException("Restarted daemon has no dashboard assets.");
@@ -447,14 +454,21 @@ async Task SmokeDistributionAsync()
         await ToolCommandAsync("install", oldVersion);
         await CheckVersionAsync(oldVersion);
         var daemonOutput = new StringBuilder();
-        using (var daemon = StartPiston(daemonOutput, "daemon", samples, "--web-port", "5299", "--mcp-port", "5300"))
+        var webPort = FreePort();
+        var mcpPort = FreePort();
+        while (mcpPort == webPort)
+        {
+            mcpPort = FreePort();
+        }
+
+        using (var daemon = StartPiston(daemonOutput, "daemon", samples, "--web-port", $"{webPort}", "--mcp-port", $"{mcpPort}"))
         {
             try
             {
                 _ = await WaitForStartupRunAsync(daemon);
                 await ProbeUpdateAsync("daemon");
                 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-                using var response = await http.GetAsync("http://localhost:5299/");
+                using var response = await http.GetAsync($"http://localhost:{webPort}/");
                 if (OperatingSystem.IsWindows() && !response.IsSuccessStatusCode)
                 {
                     throw new SmokeTestException($"Live daemon dashboard failed after updating: {response.StatusCode}");
@@ -927,14 +941,15 @@ async Task SmokeToolAsync(string toolPath, string? expectedVersion, bool version
         }
     }
 
-    static int FreePort()
-    {
-        var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
-        listener.Start();
-        var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
-        listener.Stop();
-        return port;
-    }
+}
+
+static int FreePort()
+{
+    var listener = new System.Net.Sockets.TcpListener(System.Net.IPAddress.Loopback, 0);
+    listener.Start();
+    var port = ((System.Net.IPEndPoint)listener.LocalEndpoint).Port;
+    listener.Stop();
+    return port;
 }
 
 void DumpDiagnostics(string title, StringBuilder output)
