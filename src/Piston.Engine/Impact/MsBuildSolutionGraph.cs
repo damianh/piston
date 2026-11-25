@@ -23,6 +23,7 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
     private readonly Dictionary<string, TestProjectFacts> _testProjectFacts;
     private readonly string _solutionPath;
     private readonly ConcurrentBag<Project> _evaluated = [];
+    private readonly Lazy<SourceInputScope> _sourceScope;
 
     // Sorted list of (projectDirectory, projectPath) for directory-based ownership lookup
     private readonly List<(string Directory, string ProjectPath)> _sortedProjectDirs;
@@ -30,6 +31,8 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
     public IReadOnlyList<string> AllProjectPaths => _allProjects;
     public IReadOnlyList<string> TestProjectPaths => _testProjects;
     public string? VerificationCoverageIssue => VerificationInputCoverage.FindIssue(_solutionPath, _evaluated);
+    public SourceInputScope SourceScope => _sourceScope.Value;
+
 
     public MsBuildSolutionGraph(string solutionPath)
     {
@@ -50,6 +53,8 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
             }, CancellationToken.None);
 
         _allProjects = [];
+        _sourceScope = new Lazy<SourceInputScope>(() => SourceInputScope.ForProjects(_solutionPath, _allProjects,
+            VerificationInputCoverage.Collect(_solutionPath, _evaluated).Inputs));
         _testProjects = [];
         _nodesByPath = new Dictionary<string, List<ProjectGraphNode>>(StringComparer.OrdinalIgnoreCase);
         _sourceFilesByProject = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);

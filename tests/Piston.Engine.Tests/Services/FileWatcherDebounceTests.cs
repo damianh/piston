@@ -408,6 +408,154 @@ public sealed class FileWatcherDebounceTests
         }
     }
 
+    [Fact]
+    public async Task DirectoriesDeletedRightAfterCreation_DoNotFaultMonitoring()
+    {
+        // Tests that create and remove scratch directories once crashed the daemon (FileNotFoundException from
+        // starting a watcher on a vanished directory) or latched "Access is denied" monitoring errors.
+        using var sut = new FileWatcherService(TimeSpan.FromMilliseconds(50));
+        var dir = Directory.CreateTempSubdirectory("piston-watcher-churn-");
+        try
+        {
+            sut.Start(dir.FullName);
+            for (var i = 0; i < 100; i++)
+            {
+                var scratch = Directory.CreateDirectory(Path.Combine(dir.FullName, $"scratch-{i}", "nested", "deeper"));
+                await File.WriteAllTextAsync(Path.Combine(scratch.FullName, "spool.tmp"), "x", _ct);
+                Directory.Delete(Path.Combine(dir.FullName, $"scratch-{i}"), recursive: true);
+            }
+
+            var source = Path.Combine(dir.FullName, "Source.cs");
+            var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            sut.FileChanged += batch =>
+            {
+                if (batch.Changes.Any(change => change.FilePath == source))
+                {
+                    _ = received.TrySetResult();
+                }
+            };
+            await File.WriteAllTextAsync(source, "// source", _ct);
+            await received.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+            Assert.Null(sut.MonitoringError);
+        }
+        finally
+        {
+            sut.Stop();
+            dir.Delete(recursive: true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ProjectScope_WatchesOnlyProjectInputs(bool scopeBeforeStart)
+    {
+        using var sut = new FileWatcherService(TimeSpan.FromMilliseconds(50));
+        var fired = new ConcurrentQueue<FileChangeBatch>();
+        sut.FileChanged += fired.Enqueue;
+        var dir = Directory.CreateTempSubdirectory("piston-watcher-scope-");
+        try
+        {
+            var root = dir.FullName;
+            var project = Path.Combine(root, "src", "Lib", "Lib.csproj");
+            _ = Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+            _ = Directory.CreateDirectory(Path.Combine(root, "testdata"));
+            var declared = Path.Combine(root, "testdata", "input.json");
+            var scope = SourceInputScope.ForProjects(Path.Combine(root, "App.slnx"), [project], [declared]);
+            if (scopeBeforeStart)
+            {
+                sut.UpdateScope(scope);
+                sut.Start(root);
+            }
+            else
+            {
+                sut.Start(root);
+                sut.UpdateScope(scope);
+            }
+
+            var runtime = Directory.CreateDirectory(Path.Combine(root, ".compat-storage", "spool")).FullName;
+            await File.WriteAllTextAsync(Path.Combine(runtime, "entry.tmp"), "x", _ct);
+            await File.WriteAllTextAsync(Path.Combine(root, "testdata", "output.json"), "{}", _ct);
+            await Task.Delay(TimeSpan.FromMilliseconds(300), _ct);
+            Assert.Empty(fired);
+
+            string[] inputs =
+            [
+                Path.Combine(root, "src", "Lib", "Code.cs"),
+                declared,
+                Path.Combine(root, "src", "Directory.Build.props"),
+            ];
+            foreach (var input in inputs)
+            {
+                var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                void OnChanged(FileChangeBatch batch)
+                {
+                    if (batch.Changes.Any(change => change.FilePath == input))
+                    {
+                        _ = received.TrySetResult();
+                    }
+                }
+
+                sut.FileChanged += OnChanged;
+                await File.WriteAllTextAsync(input, "x", _ct);
+                await received.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+                sut.FileChanged -= OnChanged;
+            }
+
+            Assert.All(fired.SelectMany(batch => batch.Changes), change => Assert.Contains(change.FilePath, inputs));
+            Assert.Null(sut.MonitoringError);
+        }
+        finally
+        {
+            sut.Stop();
+            dir.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task ProjectScope_IgnoresGitIgnoredProjectFilesUnlessDeclared()
+    {
+        using var sut = new FileWatcherService(TimeSpan.FromMilliseconds(50));
+        var fired = new ConcurrentQueue<FileChangeBatch>();
+        sut.FileChanged += fired.Enqueue;
+        var dir = Directory.CreateTempSubdirectory("piston-watcher-ignore-");
+        try
+        {
+            var root = dir.FullName;
+            GitTestRepository.Init(root, "*.tmp", "cache/");
+            var projectDir = Directory.CreateDirectory(Path.Combine(root, "Lib")).FullName;
+            var declared = Path.Combine(projectDir, "Declared.tmp");
+            sut.UpdateScope(SourceInputScope.ForProjects(
+                Path.Combine(root, "App.slnx"), [Path.Combine(projectDir, "Lib.csproj")], [declared]));
+            sut.Start(root);
+
+            await File.WriteAllTextAsync(Path.Combine(projectDir, "spool.tmp"), "x", _ct);
+            var cache = Directory.CreateDirectory(Path.Combine(projectDir, "cache")).FullName;
+            await File.WriteAllTextAsync(Path.Combine(cache, "entry.bin"), "x", _ct);
+            await Task.Delay(TimeSpan.FromMilliseconds(300), _ct);
+            Assert.DoesNotContain(fired.SelectMany(batch => batch.Changes),
+                change => change.FilePath.EndsWith("spool.tmp", StringComparison.Ordinal)
+                    || change.FilePath.EndsWith("entry.bin", StringComparison.Ordinal));
+
+            var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            sut.FileChanged += batch =>
+            {
+                if (batch.Changes.Any(change => change.FilePath == declared))
+                {
+                    _ = received.TrySetResult();
+                }
+            };
+            await File.WriteAllTextAsync(declared, "x", _ct);
+            await received.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        }
+        finally
+        {
+            sut.Stop();
+            dir.Delete(recursive: true);
+        }
+    }
+
     private sealed class TestTimeProvider : TimeProvider
     {
         private TimeSpan _elapsed;

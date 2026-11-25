@@ -17,6 +17,7 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
     private readonly Action? _beginCoverageUpdate;
     private readonly Action? _endCoverageUpdate;
     private ISolutionGraph? _graph;
+    private volatile SourceInputScope? _sourceScope;
     private string? _solutionPath;
     private readonly Lock _graphLock = new();
 
@@ -436,7 +437,36 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
         // A failed refresh must not leave a stale graph available for run selection.
         _graph = null;
         _graph = _graphFactory(solutionPath);
+        UpdateSourceScope(_graph);
     }
+
+    // A failed refresh keeps the previous scope: flipping to every file under the solution directory while a
+    // project file is mid-edit would only churn the watcher and the fingerprint algorithm.
+    private void UpdateSourceScope(ISolutionGraph graph)
+    {
+        SourceInputScope? scope;
+        try
+        {
+            scope = graph.SourceScope;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            DiagnosticLog.Instance?.Write("ImpactAnalyzer", $"Source scope unavailable: {ex.Message}");
+            scope = null;
+        }
+
+        if (scope is null ? _sourceScope is null : scope.HasSameInputs(_sourceScope))
+        {
+            return;
+        }
+
+        _sourceScope = scope;
+        SourceScopeChanged?.Invoke(scope);
+    }
+
+    public SourceInputScope? SourceScope => _sourceScope;
+
+    public event Action<SourceInputScope?>? SourceScopeChanged;
 
     private bool TryRefreshGraph(string solutionPath)
     {

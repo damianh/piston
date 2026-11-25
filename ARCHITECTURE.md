@@ -175,10 +175,16 @@ Startup initializes the solution graph and, when coverage is enabled, the SQLite
 coverage store, starts watching, and triggers an initial build/test run. The
 pipeline awaits graph initialization before choosing per-project test targets.
 
-The watcher batches changes to every source-fingerprint input: any file under the
-solution directory except build outputs and directories such as `.git` and
-`node_modules`, plus the nearest ancestor `global.json`, `Directory.Build.*`,
-`Directory.Packages.props` and `NuGet.config`. Changes to `.sln`, `.slnx`, `.slnf`,
+The watcher batches changes to every source-fingerprint input (`SourceInputScope`).
+Until the solution graph is evaluated, that is any file under the solution directory
+except build outputs and directories such as `.git` and `node_modules`. Afterwards
+the impact analyzer publishes a project scope: the solution file, project directories
+(minus git-ignored files), build-configuration files on the way to them and every
+evaluated build input. The watcher then stops watching other directories, so files
+tests write elsewhere cannot trigger runs. Both scopes include the nearest ancestor
+`global.json`, `Directory.Build.*`, `Directory.Packages.props` and `NuGet.config`.
+Watcher callbacks never throw; a watcher failing because its directory was deleted
+is dropped rather than latched as a monitoring error. Changes to `.sln`, `.slnx`, `.slnf`,
 `.csproj`, `.props` or `.targets` refresh the solution graph; solution, `.props`
 and `.targets` changes trigger a full run.
 

@@ -27,8 +27,17 @@ internal static class VerificationInputCoverage
         "SplashScreen",
     };
 
-    public static string? FindIssue(string solutionPath, IEnumerable<Project> projects)
+    public static string? FindIssue(string solutionPath, IEnumerable<Project> projects) =>
+        Collect(solutionPath, projects).Issue;
+
+    /// <summary>
+    /// The first coverage issue, and the evaluated user inputs inside the fingerprint's boundaries (present
+    /// or not), which a project-scoped fingerprint must include wherever they are.
+    /// </summary>
+    public static (string? Issue, IReadOnlyList<string> Inputs) Collect(string solutionPath, IEnumerable<Project> projects)
     {
+        string? issue = null;
+        var covered = new List<string>();
         var root = Path.GetDirectoryName(Path.GetFullPath(solutionPath))!;
         var sdkRoot = Path.GetDirectoryName(typeof(Project).Assembly.Location)!;
         var userDotnetRoot = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dotnet");
@@ -221,8 +230,9 @@ internal static class VerificationInputCoverage
                     if (expandedAssemblyFile.Contains("$(", StringComparison.Ordinal)
                         || expandedAssemblyFile.Contains("@(", StringComparison.Ordinal))
                     {
-                        return $"Cannot establish coverage for UsingTask AssemblyFile '{usingTask.AssemblyFile}' " +
+                        issue ??= $"Cannot establish coverage for UsingTask AssemblyFile '{usingTask.AssemblyFile}' " +
                             $"in '{xml.FullPath}'. Use dotnet test explicitly; verify cannot prove full verification for this solution.";
+                        continue;
                     }
 
                     var assemblyPath = Path.GetFullPath(expandedAssemblyFile, sourceDirectory);
@@ -246,7 +256,7 @@ internal static class VerificationInputCoverage
                 var overlappingInput = protectedInputs.FirstOrDefault(input => IsUnder(input, exclusionRoot));
                 if (overlappingInput is not null)
                 {
-                    return $"Build input '{overlappingInput}' under '{exclusionRoot}' is also a project, import, or source input; " +
+                    issue ??= $"Build input '{overlappingInput}' under '{exclusionRoot}' is also a project, import, or source input; " +
                         "verification cannot safely apply the package/targeting-pack exclusion. " +
                         "Use dotnet test explicitly; verify cannot prove full verification for this solution.";
                 }
@@ -268,13 +278,17 @@ internal static class VerificationInputCoverage
 
                 if (!SourceFingerprinter.CoversPath(root, input))
                 {
-                    return $"Build input '{input}' is outside the source fingerprint. " +
+                    issue ??= $"Build input '{input}' is outside the source fingerprint. " +
                         "Use dotnet test explicitly; verify cannot prove full verification for this solution.";
+                }
+                else
+                {
+                    covered.Add(input);
                 }
             }
         }
 
-        return null;
+        return (issue, covered);
     }
 
     private static bool IsTrustedSdkToolchainImport(ResolvedImport import, string sdkRoot)

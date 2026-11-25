@@ -66,4 +66,10 @@ public interface IImpactAnalyzer
     /// build restores them). Returns whether it reloaded.
     /// </summary>
     bool RefreshGraphIfEvaluatedBeforeRestore() => false;
+
+    /// <summary>The current graph's source inputs, or null while no graph is loaded.</summary>
+    SourceInputScope? SourceScope => null;
+
+    /// <summary>Raised when <see cref="SourceScope"/> selects different inputs.</summary>
+    event Action<SourceInputScope?> SourceScopeChanged { add { } remove { } }
 }

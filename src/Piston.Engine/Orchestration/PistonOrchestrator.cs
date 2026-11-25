@@ -117,7 +117,26 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         _activitySink = activitySink;
 
         _fileWatcher.FileChanged += OnFileChanged;
+        _impactAnalyzer.SourceScopeChanged += OnSourceScopeChanged;
     }
+
+    private void OnSourceScopeChanged(SourceInputScope? scope) => _fileWatcher.UpdateScope(scope);
+
+    /// <summary>
+    /// The source inputs of <paramref name="solutionDir"/>: the loaded graph's project scope, or every file
+    /// under the directory until a graph for it has loaded.
+    /// </summary>
+    internal SourceInputScope SourceScopeFor(string solutionDir)
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(solutionDir));
+        return _impactAnalyzer.SourceScope is { } scope
+            && string.Equals(scope.Root, root, OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal)
+            ? scope
+            : SourceInputScope.ForDirectory(root);
+    }
+
+    private SourceFingerprint? ComputeSource(string solutionDir) =>
+        SourceFingerprinter.TryCompute(SourceScopeFor(solutionDir));
 
     public async Task StartAsync(string solutionPath)
     {
@@ -431,7 +450,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             {
                 await WaitForWatcherToSettleAsync(token).ConfigureAwait(false);
 
-                var current = SourceFingerprinter.TryCompute(solutionDir);
+                var scope = SourceScopeFor(solutionDir);
+                var current = SourceFingerprinter.TryCompute(scope);
                 if (_fileWatcher.MonitoringError is { } monitoringError)
                 {
                     return new VerificationResult(VerificationVerdict.Faulted,
@@ -457,6 +477,12 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     return new VerificationResult(VerificationVerdict.Faulted,
                         $"Could not evaluate build-input coverage: {ex.GetType().Name}: {ex.Message}",
                         VerificationSource.None, attempts, null, current);
+                }
+
+                // The refreshed graph can select different inputs (e.g. the first graph replacing the directory scope).
+                if (SourceScopeFor(solutionDir) is var refreshedScope && !refreshedScope.HasSameInputs(scope))
+                {
+                    current = SourceFingerprinter.TryCompute(refreshedScope);
                 }
 
                 if (_fileWatcher.MonitoringError is { } decisionMonitoringError)
@@ -532,7 +558,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     continue;
                 }
 
-                var after = SourceFingerprinter.TryCompute(solutionDir);
+                var after = ComputeSource(solutionDir);
                 var evaluation = after != current
                     ? new VerificationEvaluation(VerificationVerdict.Stale, true,
                         "Source changed after build-input coverage was evaluated.")
@@ -1264,7 +1290,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         {
             Status = TestRunStatus.Running,
             StartedAt = DateTimeOffset.UtcNow,
-            SourceBefore = SourceFingerprinter.TryCompute(solutionDir),
+            SourceBefore = ComputeSource(solutionDir),
             ChangedFiles = changes is null ? run.ChangedFiles : [.. changes.Select(c => c.FilePath)],
         };
         PublishActiveRun(run);
@@ -2092,7 +2118,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     try
                     {
                         coverageSourceUnverified = run.SourceBefore is not { } before
-                            || SourceFingerprinter.TryCompute(solutionDir) != before
+                            || ComputeSource(solutionDir) != before
                             || Interlocked.Read(ref _fileChangeGeneration) != changeGenerationAtStart
                             || ct.IsCancellationRequested;
                         var suppliedReports = coverageReportPaths.ToHashSet(StringComparer.Ordinal);
@@ -2341,7 +2367,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     {
         var started = run.StartedAt is not null;
         var changeObserved = started && Interlocked.Read(ref _fileChangeGeneration) != changeGenerationAtStart;
-        var after = computeAfter && solutionDir is not null ? SourceFingerprinter.TryCompute(solutionDir) : null;
+        var after = computeAfter && solutionDir is not null ? ComputeSource(solutionDir) : null;
 
         (var freshness, var freshnessReason) = (run.SourceBefore, after) switch
         {
@@ -2911,6 +2937,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     private async Task DisposeCoreAsync(Task drained, Task backfill)
     {
         _fileWatcher.FileChanged -= OnFileChanged;
+        _impactAnalyzer.SourceScopeChanged -= OnSourceScopeChanged;
         _fileWatcher.Dispose();
         await drained.ConfigureAwait(false);
         await backfill.ConfigureAwait(false);
