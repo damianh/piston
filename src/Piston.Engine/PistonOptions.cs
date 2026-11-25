@@ -1,6 +1,8 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Piston.Engine.Services;
+
 namespace Piston.Engine;
 
 /// <summary>
@@ -34,16 +36,24 @@ public sealed class PistonOptions
     public ImpactBackfillMode ImpactBackfill { get; init; } = ImpactBackfillMode.Test;
 
     /// <summary>
-    /// How long a test runs before it is reported as possibly hanging (a warning only). Null turns the
-    /// warning off. Default is 60 seconds.
+    /// How long a test runs before it is reported as possibly hanging (a warning only).
+    /// <see cref="TimeSpan.Zero"/> turns the warning off. Null (the default) uses half the test timeout, or
+    /// 60 seconds when the test timeout is off.
     /// </summary>
-    public TimeSpan? HangThreshold { get; init; } = TimeSpan.FromSeconds(60);
+    public TimeSpan? HangThreshold { get; init; }
 
     /// <summary>
-    /// Per-test limit: a test that runs longer fails as timed out and its project's run is cancelled
-    /// (other projects go on). Null (the default) turns it off.
+    /// Reads the per-test limit when each run starts: a test that runs longer fails as timed out and its project's
+    /// run is cancelled (other projects go on). The provider returns null to turn the limit off. Null (the default)
+    /// uses <see cref="TestTimeoutPolicy.DefaultTimeout"/>.
     /// </summary>
-    public TimeSpan? TestTimeout { get; init; }
+    public Func<TimeSpan?>? TestTimeoutProvider { get; init; }
+
+    /// <summary>
+    /// Whether a test that times out or is stopped gets its processes' managed stacks and a full-heap dump.
+    /// Default is true.
+    /// </summary>
+    public bool HangDiagnostics { get; init; } = true;
 
     /// <summary>
     /// Maximum number of concurrent <c>dotnet test</c> processes.

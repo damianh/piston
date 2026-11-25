@@ -22,6 +22,8 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     private readonly string _solutionDirectory;
     private readonly string _solutionPath;
     private readonly TestArtifactStore _artifactStore;
+    private readonly TestTimeoutPolicy _timeoutPolicy;
+    private readonly TimeoutTestExecutionStrategy _timeoutStrategy;
     private readonly ExecutionCoordinationDirectory _coordinationDirectory;
     private readonly string? _ownerHost;
     private readonly string? _ownerDashboardUrl;
@@ -143,10 +145,14 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             _ => new CompositeTestExecutionStrategy(mtpStrategy, vsTestStrategy),
         };
 
-        if (options.TestTimeout is { } testTimeout)
+        _timeoutPolicy = new TestTimeoutPolicy(options.TestTimeoutProvider, options.HangThreshold);
+        _timeoutStrategy = new TimeoutTestExecutionStrategy(strategy, () => _timeoutPolicy.Timeout)
         {
-            strategy = new TimeoutTestExecutionStrategy(strategy, testTimeout);
-        }
+            Diagnostics = options.HangDiagnostics
+                ? new ClrMdHangDiagnostics(Path.Combine(solutionDir, ".piston", "hang-diagnostics"))
+                : null,
+        };
+        strategy = _timeoutStrategy;
 
         var effectivePoolSize = options.ProcessPoolSize > 0
             ? options.ProcessPoolSize
@@ -188,7 +194,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         _orchestrator.BackfillOutputDirectory = projectPath =>
             mtpStrategy.ServerAppPath(projectPath) is { } appPath ? Path.GetDirectoryName(appPath) : null;
         _orchestrator.StartBackfillDiscovery = discoveryCache.Invalidate;
-        _orchestrator.HangThreshold = options.HangThreshold;
+        _orchestrator.TimeoutPolicy = _timeoutPolicy;
         _orchestrator.RetryFailedTests = Math.Clamp(options.RetryFailedTests, 0, PistonOptions.MaxRetryFailedTests);
         _orchestrator.SdkVersionProvider = serviceOverrides?.SdkVersionProvider
             ?? (dir => sdkVersions.GetOrAdd(dir, d => new Lazy<string?>(() => ProbeSdkVersion(d))).Value);
@@ -531,6 +537,16 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     {
         ThrowIfTrustRequired();
         _orchestrator.Resume();
+    }
+
+    public StopTestResult StopTest(string? projectPath = null)
+    {
+        ThrowIfTrustRequired();
+        var result = _timeoutStrategy.Stop(projectPath);
+        _diagnosticLog.Write("Engine", result.Stopped
+            ? $"Stop requested for {Path.GetFileName(result.ProjectPath)}{(result.TestName is null ? "" : $" ({result.TestName})")}"
+            : $"Stop requested{(projectPath is null ? "" : $" for {projectPath}")}, but no matching run is active");
+        return result;
     }
 
     public Task<Verification.VerificationResult> VerifyAsync(TimeSpan timeout, CancellationToken ct)

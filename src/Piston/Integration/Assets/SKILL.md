@@ -71,6 +71,13 @@ Finish with `verify`.
 `get_test_run("<runId>")` returns the full record behind any reply, and
 `get_test_history("<test>")` shows a test's recorded results.
 
+A test that runs past the test timeout (1 minute by default, set in the
+dashboard's Settings) fails as timed out, with the stacks of the threads that
+reference it as its stack trace; `get_test_result` shows them and the attached
+stack report and dump. To end a hang sooner, call `stop_test` (optional
+`project`). Either way the verdict is `Incomplete`: fix the hang, then call
+`verify` again.
+
 ## When Piston is unavailable
 
 If the `piston` MCP server is not connected, or a tool returns an error instead

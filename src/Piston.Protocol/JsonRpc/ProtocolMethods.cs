@@ -33,6 +33,12 @@ public static class ProtocolMethods
     /// <summary>Resume automatic processing, running once for the files changed while paused.</summary>
     public const string EngineResume = "engine/resume";
 
+    /// <summary>
+    /// Stop a hanging test: capture hang diagnostics, fail the running test and cancel its project's test process.
+    /// The rest of the run continues.
+    /// </summary>
+    public const string EngineStopTest = "engine/stopTest";
+
     /// <summary>Start a run of selected tests; replies once the run is requested, without awaiting it.</summary>
     public const string EngineRunTests = "engine/runTests";
     public const string EngineRunFailed = "engine/runFailed";

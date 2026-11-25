@@ -131,7 +131,9 @@ internal static class VerificationReport
                 p => $"{p.ProjectId}: {p.Status switch
                 {
                     ProjectRunStatus.Completed => NoResults(p),
-                    ProjectRunStatus.TimedOut when p.TimedOut is { } timeout => $"TimedOut ({timeout.Test} ran longer than {Durations.Format(timeout.Limit)})",
+                    ProjectRunStatus.TimedOut when p.TimedOut is { } timeout => timeout.Stopped
+                        ? $"Stopped ({timeout.Describe()})"
+                        : $"TimedOut ({timeout.Test} ran longer than {(timeout.Limit is { } limit ? Durations.Format(limit) : "the test timeout")})",
                     _ => p.Status.ToString(),
                 }}");
             AppendList(sb, "Tests without complete results",

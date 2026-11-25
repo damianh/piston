@@ -118,6 +118,44 @@ public sealed class TestArtifactStoreTests
         }
     }
 
+    [Fact]
+    public void Retain_MovesHangDumpsInAndKeepsOnlyTheNewest()
+    {
+        var root = CreateTempDirectory();
+        try
+        {
+            var store = new TestArtifactStore(root);
+            var oldRuns = Enumerable.Range(0, TestArtifactStore.MaxHangDumps)
+                .Select(i => (RunId: $"{i:D32}", Source: Path.Combine(root, $"old-{i}.dmp")))
+                .ToList();
+            foreach (var (runId, oldSource) in oldRuns)
+            {
+                File.WriteAllText(oldSource, "old");
+                _ = Retain(store, runId, [new TestAttachment(oldSource, "hang.dmp") { MoveOnRetain = true }]);
+            }
+
+            var oldest = Directory.GetFiles(Path.Combine(root, ".piston", "artifacts", oldRuns[0].RunId), "*.dmp").Single();
+            File.SetLastWriteTimeUtc(oldest, DateTime.UtcNow.AddHours(-1));
+            var source = Path.Combine(root, "new.dmp");
+            File.WriteAllBytes(source, new byte[TestArtifactStore.MaxFileBytes + 1]);
+            File.SetLastWriteTimeUtc(source, DateTime.UtcNow.AddHours(-2));
+
+            var retained = Retain(store, RunId, [new TestAttachment(source, "hang.dmp") { MoveOnRetain = true }]);
+
+            var attachment = Assert.Single(Assert.Single(retained).Tests[0].Attachments);
+            Assert.True(attachment.Retained);
+            Assert.False(File.Exists(source));
+            Assert.True(File.Exists(store.Resolve(attachment)));
+            Assert.False(File.Exists(oldest));
+            Assert.Equal(TestArtifactStore.MaxHangDumps,
+                Directory.GetFiles(Path.Combine(root, ".piston", "artifacts"), "*.dmp", SearchOption.AllDirectories).Length);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
     private static IReadOnlyList<TestSuite> Retain(
         TestArtifactStore store,
         string runId,

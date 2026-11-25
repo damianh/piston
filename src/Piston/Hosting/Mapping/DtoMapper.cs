@@ -367,7 +367,10 @@ public static class DtoMapper
                 project.TestCount,
                 project.NoTestsReason,
                 project.TimedOut?.Test,
-                project.TimedOut is { } timeout ? timeout.Limit.TotalMilliseconds : null))]);
+                project.TimedOut?.Limit?.TotalMilliseconds)
+            {
+                Stopped = project.TimedOut is { Stopped: true } ? true : null,
+            })]);
     }
 
     public static TestProjectResourcesDto ToResourcesDto(this TestRunProjectOutcome project) =>

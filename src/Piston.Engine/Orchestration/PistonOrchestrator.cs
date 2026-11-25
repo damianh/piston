@@ -1682,6 +1682,9 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
             _state.NotifyChanged();
 
+            TimeoutPolicy?.Refresh();
+            var hangThreshold = EffectiveHangThreshold;
+            var testTimeout = TimeoutPolicy?.Timeout;
             var testStart = DateTimeOffset.UtcNow;
 
             // Times running tests from live progress, for the longest-running test and the hang warning.
@@ -1702,7 +1705,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     var running = runningClock.Running();
                     foreach (var (projectPath, test, _, elapsed) in running)
                     {
-                        if (HangThreshold is { } threshold && elapsed >= threshold && !possiblyHanging.Contains(test))
+                        if (hangThreshold is { } threshold && elapsed >= threshold && !possiblyHanging.Contains(test))
                         {
                             possiblyHanging.Add(test);
                             newlyHanging.Add((projectPath, test, elapsed));
@@ -1717,7 +1720,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
                 foreach (var (projectPath, test, elapsed) in newlyHanging)
                 {
-                    var message = $"{test} ({Path.GetFileNameWithoutExtension(projectPath)}) has been running for {Durations.Format(elapsed)} and may be hanging";
+                    var message = $"{test} ({Path.GetFileNameWithoutExtension(projectPath)}) has been running for {Durations.Format(elapsed)} and may be hanging"
+                        + (testTimeout is { } limit ? $"; it times out at {Durations.Format(limit)}" : "");
                     log?.Write("Orchestrator", message);
                     DiagnosticLog.Instance?.Write("Orchestrator", message);
                 }
@@ -2474,7 +2478,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             {
                 Models.ProjectRunStatus.Completed => "no test results" + (o.NoTestsReason is null ? "" : $" ({o.NoTestsReason})"),
                 Models.ProjectRunStatus.TimedOut when o.TimedOut is { } timeout =>
-                    $"timed out ({timeout.Test} ran longer than the test timeout of {Durations.Format(timeout.Limit)})",
+                    timeout.Stopped ? timeout.Describe() : $"timed out ({timeout.Describe()})",
                 _ => o.Status.ToString(),
             })
             .ToList();

@@ -290,24 +290,41 @@ public sealed class HostHelpersTests : IDisposable
         Assert.Contains("impactBackfill", ex.Message);
     }
 
-    [Fact]
-    public void HangThresholdDefaultsTo60SecondsAndTestTimeoutIsOff()
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData("off", 0d)]
+    [InlineData("0", 0d)]
+    [InlineData("90", 90d)]
+    public void HangThresholdIsDerivedUnlessConfigured(string? configured, double? expectedSeconds)
     {
-        var options = HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, new Piston.Hosting.Configuration.PistonConfig());
-
-        Assert.Equal(TimeSpan.FromSeconds(60), options.HangThreshold);
-        Assert.Null(options.TestTimeout);
-    }
-
-    [Fact]
-    public void HangThresholdAndTestTimeoutAreRead()
-    {
-        var config = new Piston.Hosting.Configuration.PistonConfig { HangThreshold = "off", TestTimeout = "5m" };
+        var config = new Piston.Hosting.Configuration.PistonConfig { HangThreshold = configured };
 
         var options = HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config);
 
-        Assert.Null(options.HangThreshold);
-        Assert.Equal(TimeSpan.FromMinutes(5), options.TestTimeout);
+        Assert.Equal(expectedSeconds is { } s ? TimeSpan.FromSeconds(s) : null, options.HangThreshold);
+    }
+
+    [Fact]
+    public void TestTimeoutComesFromTheProvider()
+    {
+        var options = HostHelpers.BuildOptions(
+            "/w/App.slnx", 0, null, false, 0, new Piston.Hosting.Configuration.PistonConfig(),
+            testTimeoutProvider: () => TimeSpan.FromMinutes(5));
+
+        Assert.Equal(TimeSpan.FromMinutes(5), options.TestTimeoutProvider!());
+    }
+
+    [Fact]
+    public void ConfiguredTestTimeoutIsIgnoredWithAWarning()
+    {
+        var warnings = new List<string>();
+        var config = new Piston.Hosting.Configuration.PistonConfig { TestTimeout = "soon" };
+
+        _ = HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config, warn: warnings.Add);
+
+        var warning = Assert.Single(warnings);
+        Assert.Contains("testTimeout", warning);
+        Assert.Contains("Settings", warning);
     }
 
     [Theory]
@@ -353,16 +370,6 @@ public sealed class HostHelpersTests : IDisposable
         var ex = Assert.Throws<InvalidOperationException>(() => HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config));
 
         Assert.Contains("retryFailures", ex.Message);
-    }
-
-    [Fact]
-    public void InvalidTestTimeoutIsRejected()
-    {
-        var config = new Piston.Hosting.Configuration.PistonConfig { TestTimeout = "soon" };
-
-        var ex = Assert.Throws<InvalidOperationException>(() => HostHelpers.BuildOptions("/w/App.slnx", 0, null, false, 0, config));
-
-        Assert.Contains("testTimeout", ex.Message);
     }
 
     [Fact]

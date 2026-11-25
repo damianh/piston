@@ -1,3 +1,4 @@
+@using System.Globalization
 @inject EngineClientService Client
 @inject ThemeService Theme
 @inject ViewState ViewState
@@ -55,6 +56,35 @@
                                 CurrentPane == DetailPanePosition.Bottom, !SettingsAvailable, () => SetPaneAsync(DetailPanePosition.Bottom))
                         </div>
                     </div>
+
+                    <div class="flex items-center justify-between gap-6 px-4 py-3.5">
+                        <div>
+                            <label for="settings-test-timeout" class="font-medium">Test timeout</label>
+                            <div class="text-xs text-gray-400 mt-0.5">
+                                A test that runs longer fails with its stacks and its project's run is stopped. It is flagged as possibly hanging at half the timeout. Applies from the next run.
+                            </div>
+                        </div>
+                        <div class="flex shrink-0 items-center gap-2" @key="_timeoutVersion">
+                            <select id="settings-test-timeout" data-testid="settings-test-timeout"
+                                    class="rounded-md border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-gray-100 disabled:cursor-not-allowed disabled:opacity-50"
+                                    disabled="@(!SettingsAvailable)" @onchange="OnTimeoutPresetChanged">
+                                @foreach (var (seconds, label) in TimeoutPresets)
+                                {
+                                    <option value="@seconds.ToString(CultureInfo.InvariantCulture)" selected="@(!IsCustomTimeout && CurrentTimeoutSeconds == seconds)">@label</option>
+                                }
+                                <option value="custom" selected="@IsCustomTimeout">Custom…</option>
+                            </select>
+                            @if (IsCustomTimeout)
+                            {
+                                <input type="number" min="1" max="@TestSettings.MaxTimeoutSeconds" step="1"
+                                       aria-label="Test timeout in seconds" data-testid="settings-test-timeout-seconds"
+                                       class="w-20 rounded-md border border-gray-700 bg-gray-950 px-2 py-1 text-xs text-gray-100 tabular-nums"
+                                       value="@CurrentTimeoutSeconds.ToString(CultureInfo.InvariantCulture)"
+                                       disabled="@(!SettingsAvailable)" @onchange="OnCustomTimeoutChanged" />
+                                <span class="text-xs text-gray-400">s</span>
+                            }
+                        </div>
+                    </div>
                 </div>
 
                 <div class="px-4 py-3 border-t border-gray-800 rounded-b-lg bg-gray-900 text-xs text-gray-400" aria-live="polite">
@@ -64,12 +94,12 @@
                     }
                     else if (SettingsAvailable)
                     {
-                        <p>Layout is shared by every Piston dashboard for your user, saved in</p>
+                        <p>Layout and the test timeout are shared by every Piston dashboard and daemon for your user, saved in</p>
                         <p class="mt-1 font-mono text-gray-300 break-all select-all">@Client.SettingsFilePath</p>
                     }
                     else
                     {
-                        <p>This daemon can't save machine-wide settings, so layout changes apply to this page only.</p>
+                        <p>This daemon can't save machine-wide settings, so layout changes apply to this page only and the test timeout stays at its default.</p>
                     }
                 </div>
             </div>
@@ -141,6 +171,57 @@
         {
             _saveError = "Couldn't save the details pane setting. Check that the daemon is running and its settings file is valid JSON.";
             _paneVersion++; // re-create the radios so the browser drops the unsaved selection
+        }
+    }
+
+    private static readonly (double Seconds, string Label)[] TimeoutPresets =
+    [
+        (0, "Off"), (30, "30 s"), (60, "1 min"), (120, "2 min"), (300, "5 min"), (600, "10 min"),
+    ];
+
+    private int _timeoutVersion;
+    private bool _customTimeoutChosen;
+
+    private double CurrentTimeoutSeconds => Client.Settings.Tests?.TimeoutSeconds ?? TestSettings.DefaultTimeoutSeconds;
+
+    private bool IsCustomTimeout =>
+        _customTimeoutChosen || !TimeoutPresets.Any(p => p.Seconds == CurrentTimeoutSeconds);
+
+    private async Task OnTimeoutPresetChanged(ChangeEventArgs e)
+    {
+        if (e.Value as string == "custom")
+        {
+            _customTimeoutChosen = true;
+            return;
+        }
+
+        if (double.TryParse(e.Value as string, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds))
+        {
+            _customTimeoutChosen = false;
+            await SetTimeoutAsync(seconds);
+        }
+    }
+
+    private async Task OnCustomTimeoutChanged(ChangeEventArgs e)
+    {
+        if (!double.TryParse(e.Value as string, NumberStyles.Float, CultureInfo.InvariantCulture, out var seconds)
+            || seconds < 1 || seconds > TestSettings.MaxTimeoutSeconds)
+        {
+            _saveError = $"Enter a test timeout from 1 to {TestSettings.MaxTimeoutSeconds:N0} seconds, or choose Off.";
+            _timeoutVersion++;
+            return;
+        }
+
+        await SetTimeoutAsync(Math.Round(seconds));
+    }
+
+    private async Task SetTimeoutAsync(double seconds)
+    {
+        _saveError = null;
+        if (!await Client.UpdateSettingsAsync(new UserSettings(Tests: new TestSettings(seconds))))
+        {
+            _saveError = "Couldn't save the test timeout. Check that the daemon is running and its settings file is valid JSON.";
+            _timeoutVersion++;
         }
     }
 

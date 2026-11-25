@@ -12,6 +12,7 @@ internal sealed class TestArtifactStore
     public const long MaxFileBytes = 16 * 1024 * 1024;
     public const int MaxAttachmentsPerTest = 32;
     public const long MaxRunBytes = 256 * 1024 * 1024;
+    public const int MaxHangDumps = 3;
 
     private const int CopyBufferSize = 64 * 1024;
     private readonly string _solutionDirectory;
@@ -46,7 +47,10 @@ internal sealed class TestArtifactStore
                     if (retained.Retained)
                     {
                         testAttachmentCount++;
-                        totalBytes += retained.SizeBytes ?? 0;
+                        if (!attachment.MoveOnRetain)
+                        {
+                            totalBytes += retained.SizeBytes ?? 0;
+                        }
                     }
 
                     attachments.Add(retained);
@@ -209,6 +213,11 @@ internal sealed class TestArtifactStore
             return NotRetained($"Per-test limit of {MaxAttachmentsPerTest} retained files reached.", sourceBytes);
         }
 
+        if (attachment.MoveOnRetain)
+        {
+            return MoveIn(runId, index, attachment, sourcePath, sourceFilePath, sourceBytes, NotRetained);
+        }
+
         var remainingRunBytes = MaxRunBytes - runBytes;
         if (sourceBytes > MaxFileBytes)
         {
@@ -258,6 +267,62 @@ internal sealed class TestArtifactStore
             }
 
             return NotRetained($"Cannot copy attachment: {ex.Message}", sourceBytes);
+        }
+    }
+
+    private TestAttachment MoveIn(
+        string runId,
+        int index,
+        TestAttachment attachment,
+        string sourcePath,
+        string sourceFilePath,
+        long sourceBytes,
+        Func<string, long?, TestAttachment> notRetained)
+    {
+        try
+        {
+            var runDirectory = RunDirectory(runId);
+            EnsureSafeDirectory(runDirectory);
+            var destination = Path.Combine(runDirectory,
+                $"{index:D4}-{SafeFileName(attachment.DisplayName ?? Path.GetFileName(sourceFilePath))}");
+            File.Move(sourceFilePath, destination);
+            if (string.Equals(Path.GetExtension(destination), ".dmp", StringComparison.OrdinalIgnoreCase))
+            {
+                EnforceDumpLimit(destination);
+            }
+
+            return attachment with
+            {
+                Path = Path.GetRelativePath(_solutionDirectory, destination),
+                RunId = runId,
+                Index = index,
+                OriginalPath = sourcePath,
+                SizeBytes = sourceBytes,
+                Retained = true,
+                NotRetainedReason = null,
+                MoveOnRetain = false,
+            };
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException or SecurityException)
+        {
+            TryDeleteFile(sourceFilePath);
+            return notRetained($"Cannot move attachment: {ex.Message}", sourceBytes);
+        }
+    }
+
+    // Dumps are large, so only the newest few are kept across all runs.
+    private void EnforceDumpLimit(string keep)
+    {
+        var dumps = Directory.EnumerateDirectories(_rootDirectory)
+            .SelectMany(directory => Directory.EnumerateFiles(directory, "*.dmp"))
+            .Select(path => new FileInfo(path))
+            .OrderByDescending(file => string.Equals(file.FullName, keep, PathComparison))
+            .ThenByDescending(file => file.LastWriteTimeUtc)
+            .Skip(MaxHangDumps);
+        foreach (var dump in dumps)
+        {
+            _log?.Invoke($"Removing hang dump {dump.FullName}: only the newest {MaxHangDumps} are kept.");
+            TryDeleteFile(dump.FullName);
         }
     }
 

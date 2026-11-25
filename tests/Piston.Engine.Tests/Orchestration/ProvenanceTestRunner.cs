@@ -80,8 +80,8 @@ internal sealed class ProvenanceTestRunner : ITestRunnerService
             }
             if (TimedOutProjects.TryGetValue(path, out var timeout))
             {
-                var timedOutTest = new TestResult(timeout.Test, timeout.Test, TestStatus.Failed, timeout.Limit, null, "Timed out", null, null);
-                var timedOutSuite = new TestSuite(name, [timedOutTest], DateTimeOffset.UtcNow, timeout.Limit);
+                var timedOutTest = new TestResult(timeout.Test!, timeout.Test!, TestStatus.Failed, timeout.Limit ?? TimeSpan.Zero, null, "Timed out", null, null);
+                var timedOutSuite = new TestSuite(name, [timedOutTest], DateTimeOffset.UtcNow, timeout.Limit ?? TimeSpan.Zero);
                 all.Add(timedOutSuite);
                 Complete(new ProjectTestResult(path, [timedOutSuite], null, [], Crashed: false) { TimedOut = timeout });
                 continue;

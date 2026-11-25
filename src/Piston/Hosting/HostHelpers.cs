@@ -9,6 +9,7 @@ using Piston.Engine.Services;
 using Piston.Hosting.Configuration;
 using Piston.Hosting.Mapping;
 using Piston.Protocol.JsonRpc;
+using Piston.Protocol.Messages;
 
 namespace Piston.Hosting;
 
@@ -121,7 +122,9 @@ public static class HostHelpers
         int cliParallelism,
         PistonConfig config,
         string? ownerHost = null,
-        string? ownerDashboardUrl = null)
+        string? ownerDashboardUrl = null,
+        Func<TimeSpan?>? testTimeoutProvider = null,
+        Action<string>? warn = null)
     {
         var debounceMs = cliDebounceMs > 0 ? cliDebounceMs
             : config.DebounceMs is > 0 ? config.DebounceMs.Value
@@ -153,8 +156,15 @@ public static class HostHelpers
                 $"Invalid 'impactBackfill' in .piston.json: expected \"class\", \"test\" or \"off\"; got \"{config.ImpactBackfill}\".");
         }
 
-        var hangThreshold = ParseDuration(config.HangThreshold, "hangThreshold", TimeSpan.FromSeconds(60));
-        var testTimeout = ParseDuration(config.TestTimeout, "testTimeout", null);
+        // Unset derives the warning from the test timeout; "off" (null) must stay off, so it maps to zero.
+        TimeSpan? hangThreshold = config.HangThreshold is null
+            ? null
+            : ParseDuration(config.HangThreshold, "hangThreshold", null) ?? TimeSpan.Zero;
+        if (config.TestTimeout is not null)
+        {
+            (warn ?? (message => Console.Error.WriteLine($"warning: {message}")))(
+                "'testTimeout' in .piston.json is no longer used; set the test timeout in the dashboard's Settings.");
+        }
 
         var retryFailures = config.RetryFailures ?? 0;
         if (retryFailures is < 0 or > PistonOptions.MaxRetryFailedTests)
@@ -180,7 +190,7 @@ public static class HostHelpers
             CoverageEnabled = coverageEnabled,
             ImpactBackfill = coverageEnabled ? impactBackfill : ImpactBackfillMode.Off,
             HangThreshold = hangThreshold,
-            TestTimeout = testTimeout,
+            TestTimeoutProvider = testTimeoutProvider ?? CreateTestTimeoutProvider(),
             HistoryEnabled = config.History ?? true,
             PersistResults = config.PersistResults ?? true,
             RetryFailedTests = retryFailures,
@@ -277,6 +287,28 @@ public static class HostHelpers
         }
 
         return rules;
+    }
+
+    /// <summary>
+    /// Reads the test timeout from the machine-wide user settings each time it is called, so a change made in the
+    /// dashboard applies from the next run. Uses the default timeout when the settings are unavailable.
+    /// </summary>
+    public static Func<TimeSpan?> CreateTestTimeoutProvider()
+    {
+        UserSettingsStore? store = null;
+        try
+        {
+            if (UserSettingsStore.ResolveDefaultPath() is { } path)
+            {
+                store = new UserSettingsStore(path);
+            }
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            // The hosts report unavailable settings when they configure the dashboard.
+        }
+
+        return () => TestSettings.ResolveTimeout(store?.Get().Tests);
     }
 
     private static TimeSpan? ParseDuration(string? text, string key, TimeSpan? defaultValue)

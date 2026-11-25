@@ -916,7 +916,7 @@ async Task SmokeToolAsync(string toolPath, string? expectedVersion, bool version
                 [
                     "clear_results", "export_coverage", "get_changed_line_coverage", "get_coverage", "get_test_history",
                     "get_test_result", "get_test_results", "get_test_run", "plan_affected_tests", "run_affected_tests",
-                    "run_tests", "set_test_filter", "verify",
+                    "run_tests", "set_test_filter", "stop_test", "verify",
                 ];
                 var names = (await client.ListToolsAsync(cancellationToken: timeout.Token)).Select(t => t.Name).Order(StringComparer.Ordinal).ToArray();
                 if (!names.SequenceEqual(expectedTools))

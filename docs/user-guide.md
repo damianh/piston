@@ -339,6 +339,7 @@ To set up a coding agent (Copilot CLI, Claude Code or another MCP client), follo
 | `get_test_history` | Recorded results of one test (`test`, optional `project`) across runs in this worktree, newest first, with run ID, time, status, duration, source fingerprint and retry attempt; a flaky test has an `Evidence:` line. Empty `test` lists flaky tests with their evidence. See [Run history and failure classification](#run-history-and-failure-classification). |
 | `get_test_results` | Read current accumulated test results (may combine several runs; each suite shows its run ID). |
 | `set_test_filter` | Apply a test name filter. |
+| `stop_test` | Stop a hanging test: cancels the run of `project` (relative to the solution directory), or without one, the project with the longest-running test. The test fails as stopped and the project's unfinished tests are `NotRun`; see [Slow and hanging tests](#slow-and-hanging-tests). |
 | `get_coverage` | Line and branch coverage as JSON (`piston.coverage/v1`). Without `file`: solution and per-module totals plus the files with the most uncovered lines (`maxFiles`, default 50); returns an error when no lines were measured. With `file`: its totals, uncovered and partly covered line ranges, and current-source lines without validated evidence (`staleLines`). Incomplete collection adds `measurementStatus` and `unmeasuredProjects`. Requires coverage. |
 | `get_changed_line_coverage` | A verdict for each changed line (see [git bases](#git-bases)), as JSON (`piston.changed-line-coverage/v2`): covered by passing tests, covered only by failing tests, uncovered, non-executable, or unknown with a reason such as stale. Lines whose code changed since it was measured (or, for a range, in a file that differs from the working tree) are always unknown; lines in unchanged C# members keep their remapped coverage. See [verdicts](agent-usage.md#changed-line-coverage-verdicts). Requires coverage. |
 | `export_coverage` | Write the coverage report as LCOV or Cobertura (`format`) to `outputPath`, which must be inside the solution directory (default `.piston/coverage/lcov.info` or `cobertura.xml`). Requires coverage. |
@@ -529,8 +530,7 @@ options; dashboard preferences live in the separate [user settings file](#user-s
 | `testFilter` | `string` | Default filter passed to the selected test runner. |
 | `coverageEnabled` | `bool` | Request coverage collection (default `true`); set `false` to opt out. |
 | `impactBackfill` | `string` | With coverage, how finely to measure the impact map while idle: `"test"` (default), `"class"` or `"off"`. Per-test backfill is expensive; see [Coverage and impact selection](#coverage-and-impact-selection). |
-| `hangThreshold` | `string` | How long a test runs before it is reported as possibly hanging (default `60s`). See [Slow and hanging tests](#slow-and-hanging-tests). |
-| `testTimeout` | `string` | Per-test limit; off by default. See [Slow and hanging tests](#slow-and-hanging-tests). |
+| `hangThreshold` | `string` | How long a test runs before it is reported as possibly hanging (default: half the test timeout, or `60s` when the timeout is off). See [Slow and hanging tests](#slow-and-hanging-tests). |
 | `history` | `bool` | Keep per-test run history and classify failures (default `true`). See [Run history and failure classification](#run-history-and-failure-classification). |
 | `persistResults` | `bool` | Save and restore the latest aggregate test results across daemon restarts (default `true`). Restored results are unverified until a new run completes. |
 | `retryFailures` | `int` | Re-run a run's failed tests up to this many times (`0` to `3`, default `0`: off). See [Retrying failed tests](#retrying-failed-tests). |
@@ -549,14 +549,32 @@ While tests run, the status bar shows the test that has been running longest and
 `get_test_results` reports it as `Longest running:`. After `hangThreshold` the test is marked **possibly hanging**,
 a warning goes to `.piston/diagnostics.log` once, and the run's `possiblyHangingTests` (in `get_test_run`) lists it.
 
-`testTimeout` is a per-test limit. When a test runs longer, Piston cancels that project's test process (other projects
-go on). The test fails with "Timed out after 30 s: the test ran longer than the test timeout (30 s).", the project's
-other unfinished tests are `NotRun`, its finished tests keep their results, and the project's outcome is `TimedOut`
-with `timedOutTest`. The run ends `Incomplete`, and its status reason names the test.
+The **test timeout** is a per-test limit, 1 minute by default. Change it in the dashboard's **Settings** (Off, 30 s,
+1, 2, 5 or 10 minutes, or a custom number of seconds); it is stored with your [user settings](#user-settings) as
+`tests.timeoutSeconds` (`0` turns it off) and applies from the next run. It is not a `.piston.json` key: a
+`testTimeout` there is ignored with a warning. When a test runs longer, Piston:
 
-Durations are seconds (`90`) or a number with a unit (`500ms`, `30s`, `5m`, `1.5h`); `0` or `"off"` turns the setting
-off. Tests are timed from when the runner reports them started, so only runners that report running tests (MTP server
-mode and VSTest with Piston's live collector) can time them; elsewhere neither setting applies.
+1. reads the managed stacks of that project's .NET test processes with ClrMD and writes a full dump of the process
+   running the test;
+2. cancels that project's test process (other projects go on).
+
+The test fails with "Timed out after 1 min: the test ran longer than the test timeout (1 min).". Its stack trace shows
+the threads that reference the test, and it has two attachments: `hang-stacks.txt` (every thread of every inspected
+process) and `hang-<pid>.dmp`. Open the dump in Visual Studio, WinDbg or `dotnet-dump analyze`. Dumps are kept in the
+run's artifacts (`.piston/artifacts`) regardless of the per-file size limit, but only the newest 3 are kept. Capturing
+diagnostics is limited to 60 seconds. The project's other unfinished tests are `NotRun`, its finished tests keep their
+results, and its outcome is `TimedOut` with `timedOutTest`. The run ends `Incomplete`, its status reason names the
+test, and coverage is published for the other projects (the timed-out project's is reported as not measured).
+
+To end a hanging test sooner, select **Stop** next to the longest-running test in the status bar, or call the
+`stop_test` MCP tool (optional `project`; without one it stops the project with the longest-running test). The
+project's run ends as for a timeout, with the same diagnostics, and the test fails with "Stopped after …: the run was
+stopped on request." A project with no running test is cancelled without diagnostics.
+
+`hangThreshold` durations are seconds (`90`) or a number with a unit (`500ms`, `30s`, `5m`, `1.5h`); `0` or `"off"`
+turns the warning off. Tests are timed from when the runner reports them started, so only runners that report running
+tests (MTP server mode and VSTest with Piston's live collector) can time them; elsewhere neither the warning nor the
+timeout applies, but **Stop** still cancels the run.
 
 ### Run history and failure classification
 
@@ -641,6 +659,9 @@ invalid values fall back to defaults. Unknown keys are preserved on write.
 {
   "dashboard": {
     "detailPane": "bottom"
+  },
+  "tests": {
+    "timeoutSeconds": 120
   }
 }
 ```
@@ -648,6 +669,7 @@ invalid values fall back to defaults. Unknown keys are preserved on write.
 | Field | Type | Description |
 |---|---|---|
 | `dashboard.detailPane` | `string` | Where the test details pane docks when a dashboard opens: `"right"` (default) or `"bottom"`. |
+| `tests.timeoutSeconds` | `number` | The [test timeout](#slow-and-hanging-tests) in seconds: `60` by default, `0` turns it off, at most `86400`. Read by every daemon at the start of each run. |
 
 ### Child process environment
 

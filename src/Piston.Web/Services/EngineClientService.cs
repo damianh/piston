@@ -602,6 +602,14 @@ public sealed class EngineClientService : IAsyncDisposable
 
     public Task PauseAsync() => SendCommandAsync(ProtocolMethods.EnginePause);
     public Task ResumeAsync() => SendCommandAsync(ProtocolMethods.EngineResume);
+
+    /// <summary>Stops the run of the project's (or longest-running) test: the test fails as stopped and the run goes on.</summary>
+    public async Task<StopTestResponse?> StopTestAsync(string? projectPath, CancellationToken cancellationToken = default)
+    {
+        var result = await SendRequestAsync(
+            ProtocolMethods.EngineStopTest, new StopTestCommand(projectPath), cancellationToken).ConfigureAwait(false);
+        return result?.Deserialize<StopTestResponse>(JsonRpcSerializer.Options);
+    }
     public Task SetFilterAsync(string? filter) => SendCommandAsync(ProtocolMethods.EngineSetFilter, new SetFilterCommand(filter));
 
     public async ValueTask DisposeAsync()

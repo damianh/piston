@@ -107,6 +107,117 @@ public sealed class TimeoutTestExecutionStrategyTests
         Assert.True(forwarded > 0);
     }
 
+    [Fact]
+    public async Task NoTimeout_LetsTheRunGoOnUntilStopped()
+    {
+        var inner = new HangingStrategy([Test("T.Done", TestStatus.Passed), Test("T.Slow", TestStatus.Running)]);
+        var strategy = new TimeoutTestExecutionStrategy(inner, () => null);
+        var reported = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var execution = strategy.ExecuteAsync(
+            new ProjectTestRequest("/p/T.csproj", null, false), _ => reported.TrySetResult(), _ct);
+        await reported.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        await Task.Delay(200, _ct);
+        Assert.False(execution.IsCompleted);
+
+        var stop = strategy.Stop();
+        var result = await execution.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(new StopTestResult(true, "/p/T.csproj", "T.Slow"), stop);
+        Assert.Equal(new TestTimeout("T.Slow", null, Stopped: true), result.TimedOut);
+        var tests = Assert.Single(result.Suites).Tests;
+        Assert.Equal(TestStatus.Passed, tests.Single(t => t.FullyQualifiedName == "T.Done").Status);
+        var slow = tests.Single(t => t.FullyQualifiedName == "T.Slow");
+        Assert.Equal(TestStatus.Failed, slow.Status);
+        Assert.StartsWith("Stopped after ", slow.ErrorMessage, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Stop_TargetsTheRequestedProjectOnly()
+    {
+        var inner = new HangingStrategy([Test("T.Slow", TestStatus.Running)]);
+        var strategy = new TimeoutTestExecutionStrategy(inner, () => null);
+        var started = new CountdownEvent(2);
+        var first = strategy.ExecuteAsync(new ProjectTestRequest(Rooted("A.csproj"), null, false), _ => Signal(started), _ct);
+        var second = strategy.ExecuteAsync(new ProjectTestRequest(Rooted("B.csproj"), null, false), _ => Signal(started), _ct);
+        Assert.True(started.Wait(TimeSpan.FromSeconds(10), _ct));
+
+        Assert.False(strategy.Stop(Rooted("C.csproj")).Stopped);
+        var stop = strategy.Stop(Rooted("B.csproj"));
+
+        Assert.Equal(Rooted("B.csproj"), stop.ProjectPath);
+        Assert.True((await second.WaitAsync(TimeSpan.FromSeconds(10), _ct)).TimedOut!.Stopped);
+        Assert.False(first.IsCompleted);
+        _ = strategy.Stop();
+        _ = await first.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        static void Signal(CountdownEvent e)
+        {
+            if (!e.IsSet)
+            {
+                _ = e.Signal();
+            }
+        }
+    }
+
+    [Fact]
+    public void Stop_WithoutRunningProjects_StopsNothing()
+    {
+        var strategy = new TimeoutTestExecutionStrategy(new HangingStrategy([]), () => null);
+
+        Assert.Equal(new StopTestResult(false), strategy.Stop());
+    }
+
+    [Fact]
+    public async Task Timeout_CapturesDiagnosticsBeforeCancelling()
+    {
+        var inner = new HangingStrategy([Test("T.Slow", TestStatus.Running) with { Method = "T.Slow()" }]);
+        var attachment = new TestAttachment("/tmp/dump.dmp", "hang-1.dmp", null);
+        var diagnostics = new FakeDiagnostics(inner, new HangDiagnosticsResult("   at T.Slow()", [attachment]));
+        var strategy = new TimeoutTestExecutionStrategy(inner, TimeSpan.FromMilliseconds(100)) { Diagnostics = diagnostics };
+
+        var result = await strategy.ExecuteAsync(new ProjectTestRequest("/p/T.csproj", null, false), null, _ct);
+
+        var capture = Assert.Single(diagnostics.Captures);
+        Assert.Equal(("/p/T.csproj", "T.Slow", "T.Slow()"), (capture.ProjectPath, capture.Test, capture.Method));
+        Assert.False(diagnostics.CancelledBeforeCapture);
+        var slow = Assert.Single(Assert.Single(result.Suites).Tests);
+        Assert.Equal(TestStatus.Failed, slow.Status);
+        Assert.Equal("   at T.Slow()", slow.StackTrace);
+        Assert.Contains(attachment, slow.Attachments);
+    }
+
+    [Fact]
+    public async Task FailingDiagnostics_StillCancelTheRun()
+    {
+        var inner = new HangingStrategy([Test("T.Slow", TestStatus.Running)]);
+        var strategy = new TimeoutTestExecutionStrategy(inner, TimeSpan.FromMilliseconds(100))
+        {
+            Diagnostics = new FakeDiagnostics(inner, null, new InvalidOperationException("boom")),
+        };
+
+        var result = await strategy.ExecuteAsync(new ProjectTestRequest("/p/T.csproj", null, false), null, _ct);
+
+        Assert.True(inner.Cancelled);
+        Assert.Equal("T.Slow", result.TimedOut?.Test);
+    }
+
+    private static string Rooted(string file) => Path.Combine(Path.GetTempPath(), "piston-stop", file);
+
+    private sealed class FakeDiagnostics(HangingStrategy inner, HangDiagnosticsResult? result, Exception? error = null)
+        : IHangDiagnostics
+    {
+        public List<HangCapture> Captures { get; } = [];
+        public bool CancelledBeforeCapture { get; private set; }
+
+        public Task<HangDiagnosticsResult?> CaptureAsync(HangCapture capture, CancellationToken ct)
+        {
+            Captures.Add(capture);
+            CancelledBeforeCapture = inner.Cancelled;
+            return error is null ? Task.FromResult(result) : Task.FromException<HangDiagnosticsResult?>(error);
+        }
+    }
+
     private static TestResult Test(string name, TestStatus status) =>
         new(name, name, status, TimeSpan.Zero, null, null, null, null);
 

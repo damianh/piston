@@ -8,15 +8,23 @@ namespace Piston.Protocol.Messages;
 /// Every field is optional: null means "not set, use the built-in default". Also used as the
 /// <c>settings/update</c> patch, where only non-null fields are written.
 /// </summary>
-public sealed record UserSettings(DashboardSettings? Dashboard = null)
+public sealed record UserSettings(DashboardSettings? Dashboard = null, TestSettings? Tests = null)
 {
     /// <summary>
     /// Throws when any field holds a value outside its allowed range, such as an undefined enum
     /// value (System.Text.Json accepts any integer for an enum).
     /// </summary>
     /// <exception cref="ArgumentException">A field holds an invalid value.</exception>
-    public void Validate() => Dashboard?.Validate();
+    public void Validate()
+    {
+        Dashboard?.Validate();
+        Tests?.Validate();
+    }
 
     /// <summary>Returns a copy with every invalid field reset to null, i.e. to its built-in default.</summary>
-    public UserSettings WithoutInvalidValues() => this with { Dashboard = Dashboard?.WithoutInvalidValues() };
+    public UserSettings WithoutInvalidValues() => this with
+    {
+        Dashboard = Dashboard?.WithoutInvalidValues(),
+        Tests = Tests?.WithoutInvalidValues(),
+    };
 }

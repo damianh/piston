@@ -25,4 +25,10 @@ public sealed record TestAttachment(
 
     /// <summary>Why the file was not copied into Piston's artifact store.</summary>
     public string? NotRetainedReason { get; init; }
+
+    /// <summary>
+    /// A file Piston wrote (hang diagnostics) that is moved into the artifact store rather than copied, without the
+    /// per-file size limit.
+    /// </summary>
+    internal bool MoveOnRetain { get; init; }
 }

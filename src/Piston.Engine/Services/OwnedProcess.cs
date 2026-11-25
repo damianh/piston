@@ -124,10 +124,34 @@ internal sealed class OwnedProcess : IDisposable
 
     internal Process Process { get; }
 
+    /// <summary>Raised once when this instance is disposed.</summary>
+    internal event Action<OwnedProcess>? Disposed;
+
+    /// <summary>
+    /// Whether <paramref name="processId"/> runs in this process's job (Windows) or process group (Unix): the
+    /// target process or one it started. The launcher itself is excluded.
+    /// </summary>
+    internal bool ContainsProcess(int processId)
+    {
+        if (!_started || _disposed || processId == Process.Id)
+        {
+            return false;
+        }
+
+        if (_job is not null)
+        {
+            using var handle = OpenProcess(ProcessQueryLimitedInformation, false, (uint)processId);
+            return !handle.IsInvalid && IsProcessInJob(handle, _job, out var inJob) && inJob;
+        }
+
+        return getpgid(processId) == Process.Id;
+    }
+
     internal void Start()
     {
         _ = Process.Start();
         _started = true;
+        OwnedProcessScope.TrackInCurrent(this);
         if (_ownerLifetime is not null)
         {
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -263,6 +287,7 @@ internal sealed class OwnedProcess : IDisposable
         Process.Dispose();
         _job?.Dispose();
         _ownerLifetime?.Dispose();
+        Disposed?.Invoke(this);
     }
 
     private static SafeFileHandle CreateJob(string name)
@@ -336,6 +361,15 @@ internal sealed class OwnedProcess : IDisposable
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern uint SearchPathW(
         string path, string fileName, string extension, uint length, StringBuilder buffer, IntPtr filePart);
+
+    private const uint ProcessQueryLimitedInformation = 0x1000;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern SafeProcessHandle OpenProcess(uint desiredAccess, bool inheritHandle, uint processId);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsProcessInJob(SafeProcessHandle process, SafeFileHandle job, [MarshalAs(UnmanagedType.Bool)] out bool result);
 
     [DllImport("libc", SetLastError = true)]
     private static extern int access(string path, int mode);

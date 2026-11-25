@@ -126,6 +126,36 @@ public sealed class UserSettingsStoreTests : IDisposable
     }
 
     [Fact]
+    public void Update_TestTimeout_RoundTripsAndKeepsDashboardSettings()
+    {
+        var store = new UserSettingsStore(SettingsPath);
+        _ = store.Update(new UserSettings(new DashboardSettings(DetailPanePosition.Bottom)));
+
+        _ = store.Update(new UserSettings(Tests: new TestSettings(0)));
+
+        var settings = new UserSettingsStore(SettingsPath).Get();
+        Assert.Equal(DetailPanePosition.Bottom, settings.Dashboard?.DetailPane);
+        Assert.Equal(0, settings.Tests?.TimeoutSeconds);
+        Assert.Null(TestSettings.ResolveTimeout(settings.Tests));
+        Assert.Equal(TimeSpan.FromSeconds(TestSettings.DefaultTimeoutSeconds), TestSettings.ResolveTimeout(null));
+        Assert.Equal(TimeSpan.FromSeconds(90), TestSettings.ResolveTimeout(new TestSettings(90)));
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(TestSettings.MaxTimeoutSeconds + 1)]
+    [InlineData(double.NaN)]
+    public void Update_InvalidTestTimeout_ThrowsAndIsIgnoredWhenRead(double seconds)
+    {
+        var store = new UserSettingsStore(SettingsPath);
+
+        _ = Assert.Throws<ArgumentException>(() => store.Update(new UserSettings(Tests: new TestSettings(seconds))));
+
+        Write($$"""{ "tests": { "timeoutSeconds": {{(double.IsNaN(seconds) ? "-5" : seconds.ToString(System.Globalization.CultureInfo.InvariantCulture))}} } }""");
+        Assert.Null(store.Get().Tests?.TimeoutSeconds);
+    }
+
+    [Fact]
     public void Constructor_RelativePath_Throws() =>
         Assert.Throws<ArgumentException>(() => new UserSettingsStore("settings.json"));
 
