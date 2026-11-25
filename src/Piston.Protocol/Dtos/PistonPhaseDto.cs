@@ -10,5 +10,6 @@ public enum PistonPhaseDto
     Analyzing,
     Building,
     Testing,
-    Error
+    Error,
+    AwaitingTrust
 }

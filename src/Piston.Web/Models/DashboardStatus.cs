@@ -50,6 +50,7 @@ public static class DashboardStatus
             PistonPhaseDto.Analyzing => "⟳ Analyzing",
             PistonPhaseDto.Testing => "⟳ Testing",
             PistonPhaseDto.Error => "✖ Build failed",
+            PistonPhaseDto.AwaitingTrust => "⚠ Trust required",
             _ when failed > 0 => $"✖ {failed:N0} failed",
             _ when passed > 0 => $"✔ {passed:N0} passed",
             _ => null,

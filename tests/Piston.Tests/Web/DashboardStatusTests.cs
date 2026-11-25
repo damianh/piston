@@ -57,6 +57,7 @@ public class DashboardStatusTests
     {
         Assert.Equal("✖ 3 failed · Piston · Piston", DashboardStatus.Title(Snapshot(PistonPhaseDto.Watching, Suites), true));
         Assert.Equal("⟳ Building · Piston · Piston", DashboardStatus.Title(Snapshot(PistonPhaseDto.Building, Suites), true));
+        Assert.Equal("⚠ Trust required · Piston · Piston", DashboardStatus.Title(Snapshot(PistonPhaseDto.AwaitingTrust, []), true));
         Assert.Equal("Disconnected · Piston · Piston", DashboardStatus.Title(Snapshot(PistonPhaseDto.Idle, Suites), false));
         Assert.Equal("Piston", DashboardStatus.Title(null, true));
     }

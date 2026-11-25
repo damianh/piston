@@ -5,9 +5,10 @@
 @implements IDisposable
 
 <ConnectionOverlay IsConnected="@Client.IsConnected" IsConnecting="@Client.IsConnecting" />
+<RepositoryTrustOverlay />
 
 <div class="flex h-screen bg-gray-950 text-gray-100 font-sans text-sm overflow-hidden"
-     inert="@(!Client.IsConnected)"
+     inert="@(!Client.IsConnected || Client.CurrentSnapshot?.Phase == PistonPhaseDto.AwaitingTrust)"
      @onkeydown="HandleKeyDown" tabindex="0" @ref="_rootElement">
 
     <div class="flex flex-1 flex-col overflow-hidden">

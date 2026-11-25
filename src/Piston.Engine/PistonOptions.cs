@@ -114,4 +114,19 @@ public sealed class PistonOptions
 
     /// <summary>The local dashboard URL recorded in the worktree ownership details, when hosted.</summary>
     public string? OwnerDashboardUrl { get; init; }
+
+    /// <summary>
+    /// Requires explicit per-clone trust before loading the solution graph or running builds and tests.
+    /// Used by the stdio MCP host; the daemon remains an explicit user-started opt-in.
+    /// </summary>
+    public bool RequireTrust { get; init; }
+
+    /// <summary>Records per-clone trust when an explicitly started daemon takes ownership.</summary>
+    public bool TrustOnStart { get; init; }
+
+    /// <summary>
+    /// Absolute repository trust store path. Null uses the per-user default; primarily useful for
+    /// embedding and isolated tests.
+    /// </summary>
+    public string? RepositoryTrustStorePath { get; init; }
 }

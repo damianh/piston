@@ -43,7 +43,7 @@ public static class TestTreeBuilder
     /// </summary>
     public static bool IsDiscovering(StateSnapshotNotification snapshot) =>
         snapshot.Phase is PistonPhaseDto.Analyzing or PistonPhaseDto.Building or PistonPhaseDto.Testing
-        || (snapshot.LastBuild is null && snapshot.Phase is not PistonPhaseDto.Error);
+        || (snapshot.LastBuild is null && snapshot.Phase is not (PistonPhaseDto.Error or PistonPhaseDto.AwaitingTrust));
 
     public static List<TestNode> Build(
         IReadOnlyList<TestSuiteDto> suites,

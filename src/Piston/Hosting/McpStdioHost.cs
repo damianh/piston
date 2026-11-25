@@ -38,12 +38,15 @@ public sealed class McpStdioHost(McpStdioHostOptions options)
         var shutdown = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         PistonEngine? engine = null;
         WorktreePresenceMonitor? monitor = null;
+        using var trustMonitorCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var trustMonitor = Task.CompletedTask;
         try
         {
             engine = await StartEngineAsync().ConfigureAwait(false);
             if (engine is not null)
             {
                 monitor = StartPresenceMonitor(engine, shutdown);
+                trustMonitor = MonitorTrustAsync(engine, shutdown, trustMonitorCts.Token);
             }
 
             var builder = Host.CreateEmptyApplicationBuilder(new HostApplicationBuilderSettings
@@ -75,6 +78,8 @@ public sealed class McpStdioHost(McpStdioHostOptions options)
             await shutdown.Task.ConfigureAwait(false);
             _log("[piston] Shutting down.");
             Availability.SetStopped();
+            await trustMonitorCts.CancelAsync().ConfigureAwait(false);
+            await trustMonitor.ConfigureAwait(false);
             await parentWatchCts.CancelAsync().ConfigureAwait(false);
             await parentWatch.ConfigureAwait(false);
 
@@ -124,10 +129,15 @@ public sealed class McpStdioHost(McpStdioHostOptions options)
         {
             var activity = new ActivityEventSinkProxy();
             engine = new PistonEngine(engineOptions, activity);
+            engine.RepositoryTrustGranted += Availability.SetAvailable;
             _log($"[piston] Starting engine for: {solutionPath}");
             var startingEngine = engine;
             await engine.StartAsync(solutionPath, () => StartDashboardAsync(startingEngine, activity))
                 .ConfigureAwait(false);
+            if (engine.State.Phase == Piston.Engine.Models.PistonPhase.AwaitingTrust)
+            {
+                Availability.SetAwaitingTrust(engine.RepositoryTrustPath!);
+            }
             return engine;
         }
         catch (WorktreeOwnershipConflictException ex)
@@ -146,6 +156,28 @@ public sealed class McpStdioHost(McpStdioHostOptions options)
             await engine.DisposeAsync().ConfigureAwait(false);
         }
         return null;
+    }
+
+    private async Task MonitorTrustAsync(
+        PistonEngine engine, TaskCompletionSource shutdown, CancellationToken ct)
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        try
+        {
+            while (!shutdown.Task.IsCompleted && await timer.WaitForNextTickAsync(ct).ConfigureAwait(false))
+            {
+                if (engine.State.Phase == Piston.Engine.Models.PistonPhase.AwaitingTrust)
+                {
+                    _ = await engine.RefreshTrustAsync().ConfigureAwait(false);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch (Exception ex)
+        {
+            Availability.SetFaulted($"Could not check repository trust: {ex.Message}");
+            _log($"[piston] {Availability.Reason}");
+        }
     }
 
     private async Task StartDashboardAsync(PistonEngine engine, ActivityEventSinkProxy activity)

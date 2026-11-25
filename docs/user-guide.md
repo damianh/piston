@@ -140,6 +140,7 @@ piston mcp [<solution>] [--debounce <ms>] [--filter <pattern>] [--coverage|--no-
 # Manage a running daemon / inspect worktree owners
 piston stop [<solution>] [--force]
 piston status [<solution>] [--all]
+piston trust [<path>] [--list|--revoke]
 
 # Export the running daemon's coverage report (stdout unless -o is given)
 piston coverage-export [<solution>] [--format lcov|cobertura] [-o <file>]
@@ -151,6 +152,11 @@ piston init copilot|claude [--write] [--scope user|repo] [--force]
 `piston status --all` lists every live worktree owner (PID, `mcp` or `daemon`, solution, worktree and dashboard URL where available) and stale ownership records. The dashboard's **Machine** tab shows the same ownership overview and links to local dashboards. If a worktree's owner cannot be reached over the daemon pipe (for example a `piston mcp` process, or a daemon whose worktree was deleted), `piston stop` prints the owner's PID, solution and worktree and exits 1; `piston stop --force` sends SIGTERM and kills the process if it has not exited.
 
 `piston status` prints the daemon's PID, solution, phase, web and MCP URLs, and its latest and active run. `piston stop` asks the daemon to shut down, then waits for its process to exit. It exits 0 only once the process has exited, so the ports are free; with no daemon running it prints `No daemon running` and also exits 0. Startup failures exit with code 1 and an `error:` message: a worktree that already has a daemon, or an occupied `--mcp-port`/`--web-port`. Endpoints bind after worktree ownership is taken and before the startup run, so a port conflict starts no build or test run.
+
+`piston trust` records trust for the current Git clone (or the supplied path) in the
+per-user trust store. `--list` shows trusted clones; `--revoke` removes trust for the
+current or supplied clone. Trust is shared by linked worktrees. Starting `piston daemon`
+explicitly trusts the clone and runs its normal startup build and tests.
 
 `piston coverage-export` asks the running daemon for its coverage report and writes it as LCOV (default) or Cobertura XML, for editors, CI or ReportGenerator. Files changed since they were measured are left out. Large exports are transferred in bounded chunks from one snapshot, so they can exceed the pipe's per-message size limit without mixing measurements from different runs. It exits 1 when no daemon is running or coverage is disabled.
 
@@ -277,11 +283,18 @@ For coding agents, use the stdio server: configure `piston mcp` once, globally, 
 { "mcpServers": { "piston": { "type": "local", "command": "piston", "args": ["mcp"], "tools": ["*"] } } }
 ```
 
-The agent host starts one `piston mcp` process per session, with the working directory set to the session's worktree. That process:
+The agent host starts one `piston mcp` process per session, with the working directory set to the session's worktree. In a trusted clone, that process:
 - runs an in-process engine: a full startup run, then watcher-triggered runs;
 - logs only to stderr;
 - exits when the session ends (stdin EOF, SIGTERM, or parent death on Unix), killing build/test processes and releasing worktree ownership;
 - exits if the worktree is deleted.
+
+For an untrusted clone, MCP starts without evaluating MSBuild projects, starting watchers
+or running tests. The dashboard displays a user approval prompt; `piston trust [path]`
+also grants trust. Engine-dependent MCP requests are refused until approval. Trust is
+per clone, so linked worktrees share it, and trust persists across sessions. Review the
+clone before approving; trust also covers its future branches and worktrees. See
+[Repository trust](../SECURITY.md#repository-trust).
 
 If another Piston process already owns the worktree, or the engine cannot start, the server still answers and every tool reports the reason. Ask for explicit consent before running a separate test command as a fallback. To uninstall, run `dotnet tool uninstall -g DamianH.Piston` and remove the config entry.
 

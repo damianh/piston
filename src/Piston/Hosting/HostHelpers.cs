@@ -191,6 +191,8 @@ public static class HostHelpers
             TestResourceRules = testResourceRules,
             OwnerHost = ownerHost,
             OwnerDashboardUrl = ownerDashboardUrl,
+            RequireTrust = ownerHost == McpStdioHost.OwnerHost,
+            TrustOnStart = ownerHost == "daemon",
         };
     }
 

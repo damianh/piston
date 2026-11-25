@@ -48,6 +48,8 @@ piston init claude --write
 
 The setup installs the MCP entry and Piston's agent instructions. The client starts a separate stdio server for each worktree. See the [agent setup guide](docs/agent-usage.md) for other clients and configuration.
 
+For safety, a new MCP session in an untrusted clone waits for user approval before evaluating the solution or running tests. The dashboard canvas itself only inspects state; see the [security policy](SECURITY.md#repository-trust) for trust scope and commands.
+
 ## Coverage
 
 Coverage is on by default for the daemon and MCP engine. The dashboard shows line and branch coverage

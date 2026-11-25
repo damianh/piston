@@ -8,7 +8,9 @@ import { promisify } from "node:util";
 import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { changesQuery, createDashboardCanvas, discover, discoverSolutions, loopbackEndpoint, normalizeWorkingDirectory, openQuery, probe, rpc, startDaemon } from "./provider.mjs";
+import { changesQuery, createDashboardCanvas, discover, discoverSolutions, loopbackEndpoint, normalizeWorkingDirectory, openQuery, probe, resolveExecutable, rpc, startDaemon } from "./provider.mjs";
+
+const passthroughResolver = command => command;
 
 test("Windows worktree paths use ordinary spelling for CLI discovery", () => {
     assert.equal(normalizeWorkingDirectory("\\\\?\\D:\\repo\\wt", "win32"), "D:\\repo\\wt");
@@ -26,7 +28,7 @@ test("discovery preserves validated CLI error responses from exit code 1", async
         assert.deepEqual(args, ["dashboard", "--json"]);
         assert.equal(options.cwd, "/repo/current");
         throw Object.assign(new Error("Command failed"), { code: 1, stdout: JSON.stringify(state) });
-    });
+    }, passthroughResolver);
     assert.deepEqual(result, state);
 });
 
@@ -39,11 +41,32 @@ test("discovery rejects launch failures, malformed output and unexpected exit st
         Object.assign(new Error("Command failed"), { code: 1, stdout: '{"state":"error"}' }),
         Object.assign(new Error("Command failed"), { code: 1, stdout: '{"state":"connected","message":"ok"}' }),
     ]) {
-        await assert.rejects(discover("/repo/current", async () => { throw error; }), /Could not inspect Piston/);
+        await assert.rejects(discover("/repo/current", async () => { throw error; }, passthroughResolver), /Could not inspect Piston/);
     }
     assert.deepEqual(await discover("/repo/current", async () => ({
         stdout: '{"state":"disabled","message":"Opt in."}',
-    })), { state: "disabled", message: "Opt in." });
+    }), passthroughResolver), { state: "disabled", message: "Opt in." });
+});
+
+test("executable resolution skips worktree and relative PATH entries", async t => {
+    const root = await mkdtemp(path.join(tmpdir(), "piston-executable-test-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const worktree = path.join(root, "worktree");
+    const safeBin = path.join(root, "safe-bin");
+    await mkdir(worktree);
+    await mkdir(safeBin);
+    const extension = process.platform === "win32" ? ".exe" : "";
+    const planted = path.join(worktree, `piston${extension}`);
+    const safe = path.join(safeBin, `piston${extension}`);
+    await writeFile(planted, "planted");
+    await writeFile(safe, "safe");
+
+    assert.equal(resolveExecutable("piston", worktree, {
+        pathValue: [worktree, "relative-bin", safeBin].join(path.delimiter),
+    }), await realpath(safe));
+    assert.throws(() => resolveExecutable("piston", worktree, {
+        pathValue: [worktree, "relative-bin"].join(path.delimiter),
+    }), /outside worktree/);
 });
 
 async function serve(t, handler, upgrade) {
@@ -127,23 +150,23 @@ test("daemon startup validates the selected worktree, launches detached and chec
         async next => {
             assert.equal(next, state);
             if (checks++ === 0) throw new Error("Not ready yet.");
-        }, launch, root, "linux"), state);
+        }, launch, root, "linux", passthroughResolver), state);
     assert.equal(checks, 2);
     // A detached Windows daemon has no console, so its child processes would open visible windows.
     detached = false;
     assert.equal(await startDaemon(worktree, "App.slnx", worktree, async () => state,
-        async () => {}, launch, root, "win32"), state);
+        async () => {}, launch, root, "win32", passthroughResolver), state);
     await assert.rejects(startDaemon(worktree, path.join(root, "other.slnx"), worktree,
-        async () => state, async () => {}, launch, root), /inside this worktree/);
+        async () => state, async () => {}, launch, root, process.platform, passthroughResolver), /inside this worktree/);
     await assert.rejects(startDaemon(worktree, "App.slnx", worktree,
-        async () => ({ ...state, processId: 43 }), async () => {}, launch, root, "win32"), /Another Piston owner/);
+        async () => ({ ...state, processId: 43 }), async () => {}, launch, root, "win32", passthroughResolver), /Another Piston owner/);
     await assert.rejects(startDaemon(worktree, "App.slnx", worktree,
         async () => ({ state: "disconnected" }), async () => {}, () => {
             const child = new EventEmitter();
             child.unref = () => {};
             setImmediate(() => child.emit("error", new Error("Cannot launch Piston.")));
             return child;
-        }, root), /Cannot launch Piston/);
+        }, root, process.platform, passthroughResolver), /Cannot launch Piston/);
 });
 
 test("daemon startup rejects solutions in a different canonical worktree", async t => {
@@ -171,13 +194,13 @@ test("daemon startup rejects solutions in a different canonical worktree", async
         return child;
     };
     const inspect = async () => ({ ...connected("http://127.0.0.1:1234/"), processId, worktree });
-    await startDaemon(worktree, path.join("apps", "Valid.slnx"), worktree, inspect, async () => {}, launch, root);
+    await startDaemon(worktree, path.join("apps", "Valid.slnx"), worktree, inspect, async () => {}, launch, root, process.platform, passthroughResolver);
     assert.equal(launches, 1);
 
     await assert.rejects(startDaemon(worktree, path.join("nested", "Other.slnx"), worktree,
-        inspect, async () => {}, launch, root), /canonical worktree/);
+        inspect, async () => {}, launch, root, process.platform, passthroughResolver), /canonical worktree/);
     await assert.rejects(startDaemon(plainWorktree, path.join("nested", "Other.slnx"), plainWorktree,
-        inspect, async () => {}, launch, root), /canonical worktree/);
+        inspect, async () => {}, launch, root, process.platform, passthroughResolver), /canonical worktree/);
     assert.equal(launches, 1);
 });
 

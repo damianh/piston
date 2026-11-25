@@ -69,6 +69,10 @@ public sealed class EngineCommandDispatcher(IEngine engine) : ICommandDispatcher
                 await engine.ForceRunAsync().ConfigureAwait(false);
                 return null;
 
+            case ProtocolMethods.EngineGrantTrust:
+                await engine.GrantTrustAsync().ConfigureAwait(false);
+                return null;
+
             case ProtocolMethods.EngineStop:
                 engine.Stop();
                 return null;

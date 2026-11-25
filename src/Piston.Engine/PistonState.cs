@@ -9,6 +9,7 @@ public sealed class PistonState
 {
     public PistonPhase Phase { get; set; }
     public string? SolutionPath { get; set; }
+    public string? RepositoryTrustPath { get; set; }
     public BuildResult? LastBuild { get; set; }
     public IReadOnlyList<TestSuite> TestSuites { get; set; } = [];
 

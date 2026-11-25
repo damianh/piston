@@ -158,8 +158,10 @@ directory, normally the worktree. Each session therefore gets its own `piston mc
 process, engine and results. Nothing needs to run before the agent starts. Per
 process:
 
-- **Startup.** It takes worktree ownership, does a full startup build + test run,
-  then reruns on file changes (the same behaviour as the daemon).
+- **Startup.** In a trusted clone, it takes worktree ownership, does a full startup
+  build + test run, then reruns on file changes (the same behaviour as the daemon).
+  In an untrusted clone, it serves the dashboard but does not evaluate the solution,
+  start the watcher or run tests until the user approves trust.
 - **Output streams.** Logs go to stderr; stdout carries only MCP JSON-RPC.
 - **Shutdown.** It exits when the session ends: stdin EOF, SIGTERM, or (on Unix)
   the parent process dying. On exit it cancels runs, kills the build/test process
@@ -174,6 +176,10 @@ process:
   solution …) … This MCP server started no engine and will not run tests here.`
 - **Startup failure.** If there is no solution or no SDK, every tool returns
   `Piston could not start: …`.
+- **Trust required.** Tools that require the engine are refused until the user approves
+  the clone in the dashboard or runs `piston trust [path]`. The agent must ask the user;
+  it cannot grant trust itself. Trust is per clone, shared by linked worktrees, and can
+  be listed or revoked with `piston trust --list` or `piston trust --revoke [path]`.
 
 `verify` and `get_test_run` replies name the solution (`Solution: …` /
 `"solutionPath"`), including queued runs and runs cancelled before execution.

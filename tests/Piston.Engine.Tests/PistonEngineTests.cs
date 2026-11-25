@@ -20,6 +20,51 @@ public sealed class PistonEngineTests : IDisposable
     public void OwnershipHandle_IsNotExposedToLibraryConsumers() => Assert.Null(typeof(PistonEngine).GetProperty("Ownership"));
 
     [Fact]
+    public async Task RequiredTrust_DefersRepositoryAccessAndRunsUntilApproved()
+    {
+        var worktree = Path.Combine(_root, "untrusted");
+        _ = Directory.CreateDirectory(Path.Combine(worktree, ".git"));
+        var solution = Path.Combine(worktree, "Test.slnx");
+        File.WriteAllText(solution, "<Solution />");
+        var directory = new ExecutionCoordinationDirectory(Path.Combine(_root, "trust-coordination"));
+        var buildService = new GatedBuildService();
+        await using var engine = new PistonEngine(new PistonOptions
+        {
+            SolutionPath = solution,
+            CoverageEnabled = false,
+            HistoryEnabled = false,
+            PersistResults = false,
+            RequireTrust = true,
+            RepositoryTrustStorePath = Path.Combine(_root, "trust", "repositories.json"),
+            ExecutionCoordinationDirectory = directory.BaseDirectory,
+        }, NullActivityEventSink.Instance, new EngineServiceOverrides(
+            BuildService: buildService,
+            ImpactAnalyzer: new StubImpactAnalyzer([]),
+            SdkVersionProvider: _ => null));
+
+        try
+        {
+            await engine.StartAsync(solution);
+
+            Assert.Equal(PistonPhase.AwaitingTrust, engine.State.Phase);
+            Assert.Equal(WorktreeIdentity.CanonicalizePath(worktree), engine.State.RepositoryTrustPath);
+            Assert.False(buildService.Started.Task.IsCompleted);
+            Assert.False(Directory.Exists(Path.Combine(worktree, ".piston")));
+            await Assert.ThrowsAsync<RepositoryNotTrustedException>(() => engine.RequestRunAsync());
+
+            await engine.GrantTrustAsync();
+            await buildService.Started.Task.WaitAsync(TimeSpan.FromSeconds(30), _ct);
+            Assert.True(new RepositoryTrustStore(Path.Combine(_root, "trust", "repositories.json"))
+                .IsTrusted(CloneIdentity.FromWorktreePath(worktree)));
+            Assert.NotEqual(PistonPhase.AwaitingTrust, engine.State.Phase);
+        }
+        finally
+        {
+            buildService.Release();
+        }
+    }
+
+    [Fact]
     public async Task DisposeAsync_HoldsWorktreeOwnership_UntilActivePipelineUnwinds()
     {
         var solution = Path.Combine(_root, "Test.slnx");

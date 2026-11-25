@@ -7,6 +7,10 @@ description: Run Piston against this repo (dogfooding) and open its native Copil
 
 Piston dogfoods itself: the daemon watches `Piston.slnx`, builds and runs its tests, and serves the dashboard at `http://localhost:5199` (MCP at `http://localhost:5200`).
 
+Starting `piston daemon` explicitly trusts this clone and runs its normal startup
+build and tests. An untrusted stdio MCP session instead waits for user approval in
+the dashboard or via `piston trust`; do not grant trust on the user's behalf.
+
 ## Inspect before starting
 
 Opening a dashboard is not permission to start an engine or tests. First run
@@ -53,7 +57,8 @@ The connection shell survives engine loss, displays recovery guidance when an
 owner has no published dashboard, and reconnects to a replacement owner of the same worktree. It follows
 the app's theme. Closing the canvas does not stop Piston. The `run` and
 `run_failed` actions explicitly request execution; do not invoke them merely to
-open or refresh the dashboard.
+open or refresh the dashboard. If a repository is untrusted, ask the user to
+approve it before requesting a run. Opening or refreshing the canvas only inspects state.
 
 If extension registration/reload tools are unavailable or the runtime has no
 native canvas support, say so and open the URL returned by discovery in the

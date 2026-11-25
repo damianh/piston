@@ -5,6 +5,7 @@ import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { createServer, request } from "node:http";
 import { mkdtemp, open, readFile, realpath, stat } from "node:fs/promises";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -33,6 +34,47 @@ export function loopbackEndpoint(value) {
         throw new Error("Piston advertised an invalid loopback dashboard endpoint.");
     }
     return url;
+}
+
+export function resolveExecutable(command, cwd, {
+    platform = process.platform,
+    pathValue = process.env.PATH ?? "",
+    pathExt = process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD",
+} = {}) {
+    const pathApi = platform === "win32" ? path.win32 : path;
+    const root = realpathSync.native(cwd);
+    const insideRoot = candidate => {
+        const relative = pathApi.relative(root, candidate);
+        return relative === "" || (!pathApi.isAbsolute(relative) && relative !== ".."
+            && !relative.startsWith(`..${pathApi.sep}`));
+    };
+    const extensions = platform === "win32"
+        ? (path.extname(command) ? [""] : pathExt.split(";").filter(extension => [".COM", ".EXE"].includes(extension.toUpperCase())))
+        : [""];
+
+    for (const entry of pathValue.split(pathApi.delimiter)) {
+        if (!entry || !pathApi.isAbsolute(entry)) continue;
+        let directory;
+        try {
+            directory = realpathSync.native(entry);
+        } catch {
+            continue;
+        }
+        if (insideRoot(directory)) continue;
+
+        for (const extension of extensions) {
+            const candidate = pathApi.join(directory, pathApi.extname(command) ? command : command + extension);
+            try {
+                if (!existsSync(candidate) || !statSync(candidate).isFile()) continue;
+                const resolved = realpathSync.native(candidate);
+                if (!insideRoot(resolved)) return resolved;
+            } catch {
+                continue;
+            }
+        }
+    }
+
+    throw new Error(`Could not resolve '${command}' from an absolute PATH entry outside worktree '${root}'.`);
 }
 
 const changeBases = ["working", "branch", "range"];
@@ -71,12 +113,12 @@ export function openQuery(input) {
     return changesQuery({ base, baseRef });
 }
 
-export async function discover(cwd, executeCommand = execute) {
+export async function discover(cwd, executeCommand = execute, resolve = resolveExecutable) {
     try {
         let stdout;
         let failed = false;
         try {
-            ({ stdout } = await executeCommand("piston", ["dashboard", "--json"], {
+            ({ stdout } = await executeCommand(resolve("piston", cwd), ["dashboard", "--json"], {
                 cwd, timeout: 5000, maxBuffer: 64 * 1024, windowsHide: true,
             }));
         } catch (error) {
@@ -109,10 +151,10 @@ export async function probe(state) {
     return target;
 }
 
-export async function discoverSolutions(worktree, cwd, executeCommand = execute) {
+export async function discoverSolutions(worktree, cwd, executeCommand = execute, resolve = resolveExecutable) {
     const root = await realpath(worktree);
     const base = await realpath(cwd);
-    const { stdout } = await executeCommand("git", [
+    const { stdout } = await executeCommand(resolve("git", root), [
         "ls-files", "--cached", "--others", "--exclude-standard", "--full-name", "-z", "--",
         ":(icase,glob)**/*.sln", ":(icase,glob)**/*.slnx", ":(icase,glob)**/*.slnf",
     ], { cwd: root, timeout: 10000, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
@@ -147,7 +189,7 @@ async function worktreeRoot(directory) {
     }
 }
 
-export async function startDaemon(cwd, solution, worktree, inspect = discover, check = probe, launch = spawn, logRoot = tmpdir(), platform = process.platform) {
+export async function startDaemon(cwd, solution, worktree, inspect = discover, check = probe, launch = spawn, logRoot = tmpdir(), platform = process.platform, resolve = resolveExecutable) {
     if (typeof solution !== "string" || !solution.trim() || solution.length > 4096 || solution.includes("\0")) {
         throw new Error("Enter a solution path.");
     }
@@ -174,7 +216,7 @@ export async function startDaemon(cwd, solution, worktree, inspect = discover, c
     try {
         // On Windows, detached means DETACHED_PROCESS: the daemon would have no console, so every console
         // process it starts would open a visible window. Give it a hidden console instead; it still outlives the canvas.
-        child = launch("piston", ["daemon", selected, "--no-stdio", "--config-directory", cwd], {
+        child = launch(resolve("piston", cwd), ["daemon", selected, "--no-stdio", "--config-directory", cwd], {
             cwd, detached: platform !== "win32", stdio: ["ignore", log.fd, log.fd], windowsHide: true,
         });
         child.once("error", error => { failure = error.message; });

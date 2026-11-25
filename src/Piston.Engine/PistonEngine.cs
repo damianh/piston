@@ -29,9 +29,15 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
     private readonly MtpWarmHostPool? _warmHosts;
     private readonly string? _historyDirectory;
     private readonly bool _persistResults;
+    private readonly bool _requireTrust;
+    private readonly bool _trustOnStart;
+    private readonly RepositoryTrustStore? _repositoryTrustStore;
+    private readonly SemaphoreSlim _startGate = new(1, 1);
+    private CloneIdentity? _cloneIdentity;
     private WorktreeOwnership? _ownership;
     private RunHistoryStore? _history;
     private SavedResultsStore? _savedResults;
+    private volatile bool _orchestratorStarted;
 
     public PistonEngine(PistonOptions options)
         : this(options, NullActivityEventSink.Instance, serviceOverrides: null)
@@ -51,6 +57,15 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         _historyEnabled = options.HistoryEnabled;
         _historyDirectory = options.HistoryDirectory;
         _persistResults = options.PersistResults;
+        _requireTrust = options.RequireTrust;
+        _trustOnStart = options.TrustOnStart;
+        if (_requireTrust && options.TrustOnStart)
+        {
+            throw new ArgumentException("TrustOnStart cannot be combined with RequireTrust.", nameof(options));
+        }
+        _repositoryTrustStore = _requireTrust || options.TrustOnStart
+            ? new RepositoryTrustStore(options.RepositoryTrustStorePath ?? RepositoryTrustStore.ResolveDefaultPath())
+            : null;
 
         // Register MSBuild before any Microsoft.Build.* types are loaded.
         // This must happen before MsBuildSolutionGraph (or any class referencing MSBuild) is JIT-compiled.
@@ -214,6 +229,12 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
     public PistonState State => _state;
 
+    /// <summary>Raised after explicit or external approval starts a previously gated engine.</summary>
+    public event Action? RepositoryTrustGranted;
+
+    /// <summary>Canonical clone path displayed while the engine is awaiting trust.</summary>
+    public string? RepositoryTrustPath => _cloneIdentity?.RootPath;
+
     /// <summary>Worktree ownership held by this engine; null before <see cref="StartAsync"/>.</summary>
     internal WorktreeOwnership? Ownership => _ownership;
 
@@ -247,18 +268,17 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         }
 
         solutionPath = PathNormalizer.GetFullPath(solutionPath);
+        _state.SolutionPath = solutionPath;
         _coordinationDirectory.RejectLegacyBudget();
         _coordinationDirectory.EnsureReady();
         _ownership = WorktreeOwnership.Acquire(
             _coordinationDirectory, solutionPath, _ownerHost, dashboardUrl: _ownerDashboardUrl);
-        // Only the owner may touch the worktree's .piston directory.
-        _diagnosticLog.Open();
-        _diagnosticLog.Write("Engine",
-            $"Worktree ownership: {_ownership.Worktree.RootPath} (key {_ownership.Worktree.Key}); " +
-            $"execution directory: {_coordinationDirectory.BaseDirectory}");
-
-        OpenHistory(solutionPath);
-        OpenSavedResults(solutionPath);
+        _cloneIdentity = CloneIdentity.FromWorktreePath(_ownership.Worktree.RootPath);
+        _state.RepositoryTrustPath = _cloneIdentity.RootPath;
+        if (_repositoryTrustStore is not null && _trustOnStart)
+        {
+            _repositoryTrustStore.Trust(_cloneIdentity);
+        }
 
         try
         {
@@ -267,7 +287,15 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
                 await beforeRunsStart().ConfigureAwait(false);
             }
 
-            await _orchestrator.StartAsync(solutionPath).ConfigureAwait(false);
+            if (!_requireTrust || _repositoryTrustStore!.IsTrusted(_cloneIdentity))
+            {
+                await StartOrchestratorAsync().ConfigureAwait(false);
+            }
+            else
+            {
+                _state.Phase = PistonPhase.AwaitingTrust;
+                _state.NotifyChanged();
+            }
         }
         catch
         {
@@ -279,8 +307,78 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
             throw;
         }
 
-        _activitySink.Emit(new SolutionLoadedActivityEvent(solutionPath, 0));
     }
+
+    private async Task StartOrchestratorAsync()
+    {
+        await _startGate.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (_orchestratorStarted)
+            {
+                return;
+            }
+
+            // Only a trusted owner may touch the solution's .piston directory or evaluate its MSBuild projects.
+            _diagnosticLog.Open();
+            _diagnosticLog.Write("Engine",
+                $"Worktree ownership: {_ownership!.Worktree.RootPath} (key {_ownership.Worktree.Key}); " +
+                $"execution directory: {_coordinationDirectory.BaseDirectory}");
+            OpenHistory(_solutionPath);
+            OpenSavedResults(_solutionPath);
+            await _orchestrator.StartAsync(_solutionPath).ConfigureAwait(false);
+            _orchestratorStarted = true;
+            _activitySink.Emit(new SolutionLoadedActivityEvent(_solutionPath, 0));
+            RepositoryTrustGranted?.Invoke();
+        }
+        finally
+        {
+            _ = _startGate.Release();
+        }
+    }
+
+    /// <summary>Grants trust for this clone and starts the deferred engine.</summary>
+    public async Task GrantTrustAsync()
+    {
+        if (!_requireTrust || _repositoryTrustStore is null || _cloneIdentity is null)
+        {
+            throw new InvalidOperationException("This engine is not awaiting repository trust.");
+        }
+
+        _repositoryTrustStore.Trust(_cloneIdentity);
+        await StartOrchestratorAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Starts the deferred engine if another process has granted trust.</summary>
+    public async Task<bool> RefreshTrustAsync()
+    {
+        if (!_requireTrust || _repositoryTrustStore is null || _cloneIdentity is null)
+        {
+            return true;
+        }
+
+        if (_orchestratorStarted)
+        {
+            return true;
+        }
+
+        if (!_repositoryTrustStore.IsTrusted(_cloneIdentity))
+        {
+            return false;
+        }
+
+        await StartOrchestratorAsync().ConfigureAwait(false);
+        return true;
+    }
+
+    private void ThrowIfTrustRequired()
+    {
+        if (_requireTrust && !_orchestratorStarted)
+        {
+            throw new RepositoryNotTrustedException(_cloneIdentity?.RootPath ?? _solutionDirectory);
+        }
+    }
+
 
     // Only the worktree owner writes history; a failure to open it leaves the engine without history.
     private void OpenHistory(string solutionPath)
@@ -359,14 +457,27 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         return attachment is null ? null : _artifactStore.Resolve(attachment);
     }
 
-    public Task ForceRunAsync() => _orchestrator.ForceRunAsync();
+    public Task ForceRunAsync()
+    {
+        ThrowIfTrustRequired();
+        return _orchestrator.ForceRunAsync();
+    }
 
-    public Task<TestRunRecord?> RequestRunAsync() => _orchestrator.RequestRunAsync();
+    public Task<TestRunRecord?> RequestRunAsync()
+    {
+        ThrowIfTrustRequired();
+        return _orchestrator.RequestRunAsync();
+    }
 
-    public Task<TestRunRecord> RunSelectedAsync(TestSelection selection) => _orchestrator.RunSelectedAsync(selection);
+    public Task<TestRunRecord> RunSelectedAsync(TestSelection selection)
+    {
+        ThrowIfTrustRequired();
+        return _orchestrator.RunSelectedAsync(selection);
+    }
 
     public async Task ResetAsync()
     {
+        ThrowIfTrustRequired();
         await _orchestrator.ResetAsync().ConfigureAwait(false);
         if (_state.SolutionPath is { } solutionPath)
         {
@@ -376,8 +487,11 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
     public void Stop() => _orchestrator.Stop();
 
-    public Task<Verification.VerificationResult> VerifyAsync(TimeSpan timeout, CancellationToken ct) =>
-        _orchestrator.VerifyAsync(timeout, ct);
+    public Task<Verification.VerificationResult> VerifyAsync(TimeSpan timeout, CancellationToken ct)
+    {
+        ThrowIfTrustRequired();
+        return _orchestrator.VerifyAsync(timeout, ct);
+    }
 
     public void SetFilter(string? filter)
     {
@@ -385,7 +499,11 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         _state.NotifyChanged();
     }
 
-    public void ClearResults() => _orchestrator.ClearResults(_solutionDirectory, _solutionPath);
+    public void ClearResults()
+    {
+        ThrowIfTrustRequired();
+        _orchestrator.ClearResults(_solutionDirectory, _solutionPath);
+    }
 
     public CoverageReportSnapshot? GetCoverageReport() => _orchestrator.GetCoverageReport();
 

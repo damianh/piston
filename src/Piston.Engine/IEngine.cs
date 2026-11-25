@@ -9,6 +9,9 @@ public interface IEngine : IDisposable
     Task StartAsync(string solutionPath);
     Task ForceRunAsync();
 
+    /// <summary>Grants per-clone trust and starts the deferred engine, when trust is required.</summary>
+    Task GrantTrustAsync() => throw new NotSupportedException("Repository trust is not supported by this engine.");
+
     /// <summary>
     /// Requests a full-scope run and returns that run's provenance record once it is terminal.
     /// The default implementation is for test doubles; it cannot bind the result to the request.

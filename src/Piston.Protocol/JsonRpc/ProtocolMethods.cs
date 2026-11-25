@@ -14,6 +14,9 @@ public static class ProtocolMethods
     /// <summary>Force an immediate test run.</summary>
     public const string EngineForceRun = "engine/forceRun";
 
+    /// <summary>Grant trust for the current clone and start a deferred engine.</summary>
+    public const string EngineGrantTrust = "engine/grantTrust";
+
     /// <summary>Stop the engine.</summary>
     public const string EngineStop = "engine/stop";
 
