@@ -77,6 +77,45 @@ public sealed class RepositoryTrustTests : IDisposable
         Assert.NotEqual(CloneIdentity.FromWorktreePath(trustedClone).Key, identity.Key);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CloneIdentity_DoesNotInheritTrustThroughGitMetadataLinks(bool directoryLink)
+    {
+        var trustedClone = Path.Combine(_root, "trusted");
+        var git = Path.Combine(trustedClone, ".git");
+        var realWorktree = Path.Combine(_root, "real");
+        var forgedWorktree = Path.Combine(_root, "forged");
+        var admin = Path.Combine(git, "worktrees", "real");
+        _ = Directory.CreateDirectory(admin);
+        _ = Directory.CreateDirectory(realWorktree);
+        _ = Directory.CreateDirectory(forgedWorktree);
+        var realGitFile = Path.Combine(realWorktree, ".git");
+        File.WriteAllText(realGitFile, $"gitdir: {admin}");
+        File.WriteAllText(Path.Combine(admin, "gitdir"), realGitFile);
+        File.WriteAllText(Path.Combine(admin, "commondir"), "../..");
+
+        try
+        {
+            if (directoryLink)
+            {
+                _ = Directory.CreateSymbolicLink(Path.Combine(forgedWorktree, ".git"), git);
+            }
+            else
+            {
+                _ = File.CreateSymbolicLink(Path.Combine(forgedWorktree, ".git"), realGitFile);
+            }
+        }
+        catch (UnauthorizedAccessException) when (OperatingSystem.IsWindows())
+        {
+            Assert.Skip("Creating symbolic links is not permitted on this Windows machine.");
+        }
+
+        var identity = CloneIdentity.FromWorktreePath(forgedWorktree);
+        Assert.Equal(WorktreeIdentity.CanonicalizePath(forgedWorktree), identity.RootPath);
+        Assert.NotEqual(CloneIdentity.FromWorktreePath(trustedClone).Key, identity.Key);
+    }
+
     [Fact]
     public void CloneIdentity_UsesWorktreeRootWhenGitMetadataIsUnavailable()
     {

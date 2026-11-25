@@ -299,6 +299,7 @@ async Task SmokeDistributionAsync()
     var feed = Path.Combine(root, "feed");
     var originalTool = tool;
     var originalSamples = samples;
+    var fixtureTrusted = false;
     var environment = new Dictionary<string, string?>
     {
         ["DOTNET_CLI_HOME"] = Path.Combine(root, "cli-home"),
@@ -398,6 +399,10 @@ async Task SmokeDistributionAsync()
             }
         }
 
+        _ = await ReadAsync("dotnet",
+            ["dnx", $"{PackageId}@{oldVersion}", "--source", feed, "--", "trust", samples],
+            configureEnvironment: Configure);
+        fixtureTrusted = true;
         await SmokeMcpAsync("dotnet",
             ["dnx", $"{PackageId}@{oldVersion}", "--source", feed, "--", "mcp", samples], environment,
             expectedServerVersion: oldVersion);
@@ -473,9 +478,21 @@ async Task SmokeDistributionAsync()
     }
     finally
     {
-        tool = originalTool;
-        samples = originalSamples;
-        DeleteDirectory(root);
+        try
+        {
+            if (fixtureTrusted)
+            {
+                _ = await ReadAsync("dotnet",
+                    ["dnx", $"{PackageId}@{oldVersion}", "--source", feed, "--", "trust", samples, "--revoke"],
+                    configureEnvironment: Configure);
+            }
+        }
+        finally
+        {
+            tool = originalTool;
+            samples = originalSamples;
+            DeleteDirectory(root);
+        }
     }
 }
 
@@ -491,6 +508,21 @@ async Task SmokePublicAsync()
 
     var root = Path.Combine(Path.GetTempPath(), $"piston-public-{Guid.NewGuid():N}");
     var originalSamples = samples;
+    var fixtureTrusted = false;
+    var environment = new Dictionary<string, string?>
+    {
+        ["DOTNET_CLI_HOME"] = Path.Combine(root, "cli-home"),
+        ["NUGET_PACKAGES"] = Path.Combine(root, "nuget-packages"),
+        ["DOTNET_NOLOGO"] = "true",
+    };
+    void Configure(IDictionary<string, string?> env)
+    {
+        foreach (var (key, value) in environment)
+        {
+            env[key] = value;
+        }
+    }
+
     _ = Directory.CreateDirectory(root);
     try
     {
@@ -518,21 +550,32 @@ async Task SmokePublicAsync()
 
         CheckPackageContents(root, expectedVersion: version);
         samples = CreateSmokeFixture(root, originalSamples);
+        _ = await ReadAsync("dotnet",
+            ["dnx", $"{PackageId}@{version}", "--source", "https://api.nuget.org/v3/index.json", "--", "trust", samples],
+            configureEnvironment: Configure);
+        fixtureTrusted = true;
         await SmokeMcpAsync("dotnet",
             ["dnx", $"{PackageId}@{version}", "--source", "https://api.nuget.org/v3/index.json", "--", "mcp", samples],
-            new Dictionary<string, string?>
-            {
-                ["DOTNET_CLI_HOME"] = Path.Combine(root, "cli-home"),
-                ["NUGET_PACKAGES"] = Path.Combine(root, "nuget-packages"),
-                ["DOTNET_NOLOGO"] = "true",
-            },
+            environment,
             expectedServerVersion: version);
         Console.WriteLine($"PASS: NuGet.org metadata and dnx MCP for {PackageId} {version}.");
     }
     finally
     {
-        samples = originalSamples;
-        DeleteDirectory(root);
+        try
+        {
+            if (fixtureTrusted)
+            {
+                _ = await ReadAsync("dotnet",
+                    ["dnx", $"{PackageId}@{version}", "--source", "https://api.nuget.org/v3/index.json", "--", "trust", samples, "--revoke"],
+                    configureEnvironment: Configure);
+            }
+        }
+        finally
+        {
+            samples = originalSamples;
+            DeleteDirectory(root);
+        }
     }
 }
 

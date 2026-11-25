@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { changesQuery, createDashboardCanvas, discover, discoverSolutions, loopbackEndpoint, normalizeWorkingDirectory, openQuery, probe, resolveExecutable, rpc, startDaemon } from "./provider.mjs";
@@ -131,6 +131,34 @@ test("solution discovery uses current tracked and untracked worktree files, excl
     assert.deepEqual(await discoverSolutions(root, path.join(root, "apps")), [
         "Filter.slnf", "Nested.SLNX", path.join("..", "Root.sln"),
     ].sort((a, b) => a.localeCompare(b)));
+});
+
+test("solution discovery does not execute a repository-configured fsmonitor hook", async t => {
+    const root = await mkdtemp(path.join(tmpdir(), "piston-fsmonitor-test-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const git = promisify(execFile);
+    await git("git", ["init", "-q"], { cwd: root });
+    await writeFile(path.join(root, "App.slnx"), "");
+    await git("git", ["add", "App.slnx"], { cwd: root });
+    const hook = path.join(root, "fsmonitor");
+    const marker = path.join(root, "hook-ran");
+    await writeFile(hook, `#!/bin/sh\nprintf ran > '${marker.replaceAll("\\", "/")}'\nprintf 'token\\0'\n`);
+    await chmod(hook, 0o755);
+    await git("git", ["config", "core.fsmonitor", hook.replaceAll("\\", "/")], { cwd: root });
+    const configCount = Number(process.env.GIT_CONFIG_COUNT ?? 0);
+    const env = {
+        ...process.env,
+        GIT_CONFIG_COUNT: String(configCount + 1),
+        [`GIT_CONFIG_KEY_${configCount}`]: "core.fsmonitor",
+        [`GIT_CONFIG_VALUE_${configCount}`]: hook.replaceAll("\\", "/"),
+    };
+    const executeWithHook = (command, args, options) => git(command, args, { ...options, env });
+    await git("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { cwd: root, env });
+    assert.equal(await readFile(marker, "utf8"), "ran");
+    await rm(marker);
+
+    assert.deepEqual(await discoverSolutions(root, root, executeWithHook), ["App.slnx"]);
+    await assert.rejects(readFile(marker), { code: "ENOENT" });
 });
 
 test("solution discovery failures are visible in the canvas", async t => {

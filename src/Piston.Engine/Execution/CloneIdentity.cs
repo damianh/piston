@@ -19,9 +19,14 @@ public sealed record CloneIdentity(string RootPath, string Key)
     {
         var worktree = WorktreeIdentity.FromSolutionPath(path);
         var gitPath = Path.Combine(worktree.RootPath, ".git");
-        var commonDirectory = Directory.Exists(gitPath)
-            ? gitPath
-            : File.Exists(gitPath) ? ResolveCommonDirectory(worktree.RootPath, gitPath) : null;
+        string? commonDirectory = null;
+        if ((Directory.Exists(gitPath) || File.Exists(gitPath))
+            && (File.GetAttributes(gitPath) & FileAttributes.ReparsePoint) == 0)
+        {
+            commonDirectory = Directory.Exists(gitPath)
+                ? gitPath
+                : ResolveCommonDirectory(worktree.RootPath, gitPath);
+        }
         var root = WorktreeIdentity.CanonicalizePath(commonDirectory ?? worktree.RootPath);
         var key = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(root)))[..32];
         return new CloneIdentity(root, key);

@@ -5,6 +5,7 @@ using Piston.Engine.Coverage;
 using Piston.Engine.Execution;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
+using Piston.Engine.Tests.Coverage;
 using Piston.Engine.Tests.Orchestration;
 using Xunit;
 
@@ -69,6 +70,72 @@ public sealed class PistonEngineTests : IDisposable
         finally
         {
             buildService.Release();
+        }
+    }
+
+    [Fact]
+    public async Task DisposeAsync_WaitsForDeferredStartup_AndRejectsTrustAfterShutdownBegins()
+    {
+        var worktree = Path.Combine(_root, "deferred");
+        _ = Directory.CreateDirectory(Path.Combine(worktree, ".git"));
+        var solution = Path.Combine(worktree, "Test.slnx");
+        File.WriteAllText(solution, "<Solution />");
+        var directory = new ExecutionCoordinationDirectory(Path.Combine(_root, "coordination"));
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var store = new StubCoverageStore
+        {
+            Initialization = () =>
+            {
+                started.SetResult();
+                return release.Task;
+            },
+        };
+        var buildService = new GatedBuildService();
+        var engine = new PistonEngine(new PistonOptions
+        {
+            SolutionPath = solution,
+            CoverageEnabled = true,
+            HistoryEnabled = false,
+            PersistResults = false,
+            RequireTrust = true,
+            RepositoryTrustStorePath = Path.Combine(_root, "trust", "repositories.json"),
+            ExecutionCoordinationDirectory = directory.BaseDirectory,
+        }, NullActivityEventSink.Instance, new EngineServiceOverrides(
+            BuildService: buildService,
+            ImpactAnalyzer: new StubImpactAnalyzer([]),
+            SdkVersionProvider: _ => null,
+            CoverageStore: store));
+
+        Task? granting = null;
+        Task? disposing = null;
+        try
+        {
+            await engine.StartAsync(solution);
+            granting = engine.GrantTrustAsync();
+            await started.Task.WaitAsync(TimeSpan.FromSeconds(30), _ct);
+            disposing = engine.DisposeAsync().AsTask();
+
+            Assert.False(disposing.IsCompleted);
+            _ = Assert.Throws<WorktreeOwnershipConflictException>(() => WorktreeOwnership.Acquire(directory, solution));
+            _ = await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.GrantTrustAsync());
+            _ = await Assert.ThrowsAsync<ObjectDisposedException>(() => engine.RefreshTrustAsync());
+
+            release.SetResult();
+            buildService.Release();
+            await granting.WaitAsync(TimeSpan.FromSeconds(30), _ct);
+            await disposing.WaitAsync(TimeSpan.FromSeconds(30), _ct);
+            using var free = WorktreeOwnership.Acquire(directory, solution);
+        }
+        finally
+        {
+            release.TrySetResult();
+            buildService.Release();
+            if (granting is not null)
+            {
+                await granting;
+            }
+            await (disposing ?? engine.DisposeAsync().AsTask());
         }
     }
 

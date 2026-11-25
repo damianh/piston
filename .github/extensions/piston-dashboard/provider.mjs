@@ -165,7 +165,7 @@ export async function discoverSolutions(worktree, cwd, executeCommand = execute,
     const root = await realpath(worktree);
     const base = await realpath(cwd);
     const { stdout } = await executeCommand(resolve("git", root), [
-        "ls-files", "--cached", "--others", "--exclude-standard", "--full-name", "-z", "--",
+        "-c", "core.fsmonitor=false", "ls-files", "--cached", "--others", "--exclude-standard", "--full-name", "-z", "--",
         ":(icase,glob)**/*.sln", ":(icase,glob)**/*.slnx", ":(icase,glob)**/*.slnf",
     ], { cwd: root, timeout: 10000, maxBuffer: 8 * 1024 * 1024, windowsHide: true });
     const files = await Promise.all(stdout.split("\0").filter(Boolean).map(async name => {
