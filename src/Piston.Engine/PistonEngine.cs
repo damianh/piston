@@ -376,6 +376,10 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
     public void Stop() => _orchestrator.Stop();
 
+    public void Pause() => _orchestrator.Pause();
+
+    public void Resume() => _orchestrator.Resume();
+
     public Task<Verification.VerificationResult> VerifyAsync(TimeSpan timeout, CancellationToken ct) =>
         _orchestrator.VerifyAsync(timeout, ct);
 

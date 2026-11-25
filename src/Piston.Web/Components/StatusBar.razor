@@ -14,6 +14,18 @@
 
         <span class="shrink-0 @phaseColor">@phaseIcon @phase</span>
 
+        @if (Snapshot.IsPaused)
+        {
+            <span class="flex items-center gap-1 shrink-0 text-yellow-400" role="status" data-testid="paused-indicator"
+                  title="Automatic runs are paused: file changes are queued until you resume">
+                <svg class="w-2.5 h-2.5" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                    <rect x="3.5" y="2.5" width="3" height="11" rx="0.8" />
+                    <rect x="9.5" y="2.5" width="3" height="11" rx="0.8" />
+                </svg>
+                Paused@(Snapshot.PausedChangeCount > 0 ? $" · {Snapshot.PausedChangeCount:N0} changed" : "")
+            </span>
+        }
+
         @if (phase == PistonPhaseDto.Building)
         {
             var total = Snapshot.TotalBuildProjects;

@@ -90,6 +90,14 @@ public sealed class EngineCommandDispatcher(IEngine engine) : ICommandDispatcher
                 await engine.ResetAsync().ConfigureAwait(false);
                 return null;
 
+            case ProtocolMethods.EnginePause:
+                engine.Pause();
+                return null;
+
+            case ProtocolMethods.EngineResume:
+                engine.Resume();
+                return null;
+
             case ProtocolMethods.CoverageGetForFile:
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<GetFileCoverageCommand>(@params);

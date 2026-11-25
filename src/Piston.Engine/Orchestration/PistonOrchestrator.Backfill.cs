@@ -66,7 +66,7 @@ public sealed partial class PistonOrchestrator
     {
         _backfillCts?.Cancel();
         _backfillCts = null;
-        if (BackfillGranularity is not { } granularity || _stopping || _disposed || !_coverageEnabled
+        if (BackfillGranularity is not { } granularity || _stopping || _disposed || _paused || !_coverageEnabled
             || !_coverageStoreReady || _state.CoverageError is not null
             || _coverageStore is not IImpactMapStore || _coverageProcessor is null || _solutionPath is null)
         {

@@ -829,7 +829,9 @@ public static class DtoMapper
                     .Select(project => new ProjectCoverageDto(
                         project.ProjectPath, project.Status.ToString().ToLowerInvariant(), project.Message, project.RunId))]
                 : null,
-            CoverageError: state.CoverageError
+            CoverageError: state.CoverageError,
+            IsPaused: state.IsPaused,
+            PausedChangeCount: state.PausedChangeCount
         );
 
     public static CoverageSummaryDto ToCoverageSummaryDto(CoverageReportSnapshot? report, string? solutionDirectory) =>
