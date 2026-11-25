@@ -273,28 +273,31 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         _coordinationDirectory.EnsureReady();
         _ownership = WorktreeOwnership.Acquire(
             _coordinationDirectory, solutionPath, _ownerHost, dashboardUrl: _ownerDashboardUrl);
-        _cloneIdentity = CloneIdentity.FromWorktreePath(_ownership.Worktree.RootPath);
-        _state.RepositoryTrustPath = _cloneIdentity.RootPath;
-        if (_repositoryTrustStore is not null && _trustOnStart)
-        {
-            _repositoryTrustStore.Trust(_cloneIdentity);
-        }
 
         try
         {
+            _cloneIdentity = CloneIdentity.FromWorktreePath(_ownership.Worktree.RootPath);
+            _state.RepositoryTrustPath = _cloneIdentity.RootPath;
+            if (_repositoryTrustStore is not null && _trustOnStart)
+            {
+                _repositoryTrustStore.Trust(_cloneIdentity);
+            }
+
+            var awaitingTrust = _requireTrust && !_repositoryTrustStore!.IsTrusted(_cloneIdentity);
+            if (awaitingTrust)
+            {
+                _state.Phase = PistonPhase.AwaitingTrust;
+                _state.NotifyChanged();
+            }
+
             if (beforeRunsStart is not null)
             {
                 await beforeRunsStart().ConfigureAwait(false);
             }
 
-            if (!_requireTrust || _repositoryTrustStore!.IsTrusted(_cloneIdentity))
+            if (!awaitingTrust)
             {
                 await StartOrchestratorAsync().ConfigureAwait(false);
-            }
-            else
-            {
-                _state.Phase = PistonPhase.AwaitingTrust;
-                _state.NotifyChanged();
             }
         }
         catch
@@ -485,7 +488,13 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         }
     }
 
-    public void Stop() => _orchestrator.Stop();
+    public void Stop()
+    {
+        if (!_requireTrust || _orchestratorStarted)
+        {
+            _orchestrator.Stop();
+        }
+    }
 
     public Task<Verification.VerificationResult> VerifyAsync(TimeSpan timeout, CancellationToken ct)
     {

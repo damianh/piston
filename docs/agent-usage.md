@@ -174,8 +174,8 @@ process:
   second session, or a daemon you started), it still serves MCP but starts no
   engine. Every tool then returns `Piston owned by another process (PID …,
   solution …) … This MCP server started no engine and will not run tests here.`
-- **Startup failure.** If there is no solution or no SDK, every tool returns
-  `Piston could not start: …`.
+- **Startup failure.** If there is no solution or the engine cannot start, every
+  tool returns `Piston could not start: …`.
 - **Trust required.** Tools that require the engine are refused until the user approves
   the clone in the dashboard or runs `piston trust [path]`. The agent must ask the user;
   it cannot grant trust itself. Trust is per clone, shared by linked worktrees, and can

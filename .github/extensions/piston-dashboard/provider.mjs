@@ -42,7 +42,17 @@ export function resolveExecutable(command, cwd, {
     pathExt = process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD",
 } = {}) {
     const pathApi = platform === "win32" ? path.win32 : path;
-    const root = realpathSync.native(cwd);
+    const directory = realpathSync.native(cwd);
+    let root = directory;
+    for (let current = directory; ;) {
+        if (existsSync(pathApi.join(current, ".git"))) {
+            root = current;
+            break;
+        }
+        const parent = pathApi.dirname(current);
+        if (parent === current) break;
+        current = parent;
+    }
     const insideRoot = candidate => {
         const relative = pathApi.relative(root, candidate);
         return relative === "" || (!pathApi.isAbsolute(relative) && relative !== ".."

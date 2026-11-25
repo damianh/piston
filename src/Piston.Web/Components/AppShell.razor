@@ -12,7 +12,10 @@
      @onkeydown="HandleKeyDown" tabindex="0" @ref="_rootElement">
 
     <div class="flex flex-1 flex-col overflow-hidden">
-        <SolutionDetail KeyboardEvent="@_lastKeyDown" />
+        @if (Client.IsConnected && Client.CurrentSnapshot is { Phase: not PistonPhaseDto.AwaitingTrust })
+        {
+            <SolutionDetail KeyboardEvent="@_lastKeyDown" />
+        }
     </div>
 </div>
 
@@ -62,6 +65,7 @@
 
         _previousSnapshot = snapshot;
         await ShowStatusAsync();
+        StateHasChanged();
     });
 
     // The tab title and favicon show the run state while the dashboard is in a background tab.

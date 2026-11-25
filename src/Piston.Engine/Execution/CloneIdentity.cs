@@ -40,9 +40,17 @@ public sealed record CloneIdentity(string RootPath, string Key)
             }
 
             var commonFile = Path.Combine(adminDirectory, "commondir");
-            return File.Exists(commonFile)
-                ? ResolvePath(adminDirectory, ReadPathFile(commonFile))
-                : adminDirectory;
+            if (!File.Exists(commonFile))
+            {
+                return null;
+            }
+
+            var commonDirectory = ResolvePath(adminDirectory, ReadPathFile(commonFile));
+            var worktreesDirectory = ResolvePath(commonDirectory, "worktrees");
+            return Directory.Exists(commonDirectory)
+                && PathsEqual(Path.GetDirectoryName(adminDirectory)!, worktreesDirectory)
+                ? commonDirectory
+                : null;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {

@@ -588,7 +588,7 @@ public sealed class EngineClientService : IAsyncDisposable
     public Task ResetAsync() => SendCommandAsync(ProtocolMethods.EngineReset);
     public async Task GrantTrustAsync()
     {
-        var response = await SendForResponseAsync(ProtocolMethods.EngineGrantTrust).ConfigureAwait(false);
+        var response = await SendForResponseAsync(ProtocolMethods.EngineGrantTrust, null).ConfigureAwait(false);
         if (response?.Error is { } error)
         {
             throw new InvalidOperationException(error.Message);

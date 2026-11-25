@@ -780,10 +780,6 @@ static async Task<int> RunMcpAsync(
         }
         options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config,
             McpStdioHost.OwnerHost);
-        if (!HostHelpers.DotnetSdkAvailable())
-        {
-            startupError = "'dotnet' SDK not found on PATH. Install .NET 11 SDK from https://dot.net.";
-        }
     }
     catch (InvalidOperationException ex)
     {

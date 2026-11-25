@@ -44,8 +44,9 @@ public sealed class RepositoryTrustStore
 
     public void Trust(CloneIdentity clone) => Update(document =>
     {
-        document.Repositories.RemoveAll(repository => repository.Key == clone.Key);
+        _ = document.Repositories.RemoveAll(repository => repository.Key == clone.Key);
         document.Repositories.Add(new TrustedRepository(clone.Key, clone.RootPath));
+        return true;
     });
 
     public bool Revoke(CloneIdentity clone) => Update(document =>
@@ -54,21 +55,25 @@ public sealed class RepositoryTrustStore
     private TrustDocument Read()
     {
         lock (_gate)
-        using (AcquireFileLock())
         {
-            return ReadDocument();
+            using (AcquireFileLock())
+            {
+                return ReadDocument();
+            }
         }
     }
 
     private T Update<T>(Func<TrustDocument, T> action)
     {
         lock (_gate)
-        using (AcquireFileLock())
         {
-            var document = ReadDocument();
-            var result = action(document);
-            WriteDocument(document);
-            return result;
+            using (AcquireFileLock())
+            {
+                var document = ReadDocument();
+                var result = action(document);
+                WriteDocument(document);
+                return result;
+            }
         }
     }
 

@@ -44,14 +44,20 @@ public sealed class PistonEngineTests : IDisposable
 
         try
         {
-            await engine.StartAsync(solution);
+            await engine.StartAsync(solution, () =>
+            {
+                Assert.Equal(PistonPhase.AwaitingTrust, engine.State.Phase);
+                return Task.CompletedTask;
+            });
 
             Assert.Equal(PistonPhase.AwaitingTrust, engine.State.Phase);
-            Assert.Equal(WorktreeIdentity.CanonicalizePath(worktree), engine.State.RepositoryTrustPath);
+            Assert.Equal(WorktreeIdentity.CanonicalizePath(Path.Combine(worktree, ".git")), engine.State.RepositoryTrustPath);
             Assert.False(buildService.Started.Task.IsCompleted);
             Assert.False(Directory.Exists(Path.Combine(worktree, ".piston")));
-            await Assert.ThrowsAsync<RepositoryNotTrustedException>(() => engine.RequestRunAsync());
+            _ = await Assert.ThrowsAsync<RepositoryNotTrustedException>(() => engine.RequestRunAsync());
 
+            engine.Stop();
+            Assert.Equal(PistonPhase.AwaitingTrust, engine.State.Phase);
             await engine.GrantTrustAsync();
             await buildService.Started.Task.WaitAsync(TimeSpan.FromSeconds(30), _ct);
             Assert.True(new RepositoryTrustStore(Path.Combine(_root, "trust", "repositories.json"))

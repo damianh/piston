@@ -58,6 +58,26 @@ public sealed class RepositoryTrustTests : IDisposable
     }
 
     [Fact]
+    public void CloneIdentity_RejectsForgedAdminDirectoryWithMatchingBacklink()
+    {
+        var trustedClone = Path.Combine(_root, "trusted");
+        var trustedGit = Path.Combine(trustedClone, ".git");
+        var forgedWorktree = Path.Combine(_root, "forged");
+        var forgedAdmin = Path.Combine(forgedWorktree, "admin");
+        _ = Directory.CreateDirectory(trustedGit);
+        _ = Directory.CreateDirectory(forgedAdmin);
+        var forgedGitFile = Path.Combine(forgedWorktree, ".git");
+        File.WriteAllText(forgedGitFile, $"gitdir: {forgedAdmin}");
+        File.WriteAllText(Path.Combine(forgedAdmin, "gitdir"), forgedGitFile);
+        File.WriteAllText(Path.Combine(forgedAdmin, "commondir"), trustedGit);
+
+        var identity = CloneIdentity.FromWorktreePath(forgedWorktree);
+
+        Assert.Equal(WorktreeIdentity.CanonicalizePath(forgedWorktree), identity.RootPath);
+        Assert.NotEqual(CloneIdentity.FromWorktreePath(trustedClone).Key, identity.Key);
+    }
+
+    [Fact]
     public void CloneIdentity_UsesWorktreeRootWhenGitMetadataIsUnavailable()
     {
         var plain = Path.Combine(_root, "plain");

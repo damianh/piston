@@ -69,6 +69,28 @@ test("executable resolution skips worktree and relative PATH entries", async t =
     }), /outside worktree/);
 });
 
+test("executable resolution excludes the entire worktree for nested session directories", async t => {
+    const root = await mkdtemp(path.join(tmpdir(), "piston-nested-executable-test-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const worktree = path.join(root, "worktree");
+    const nested = path.join(worktree, "src");
+    const plantedBin = path.join(worktree, "bin");
+    const safeBin = path.join(root, "safe-bin");
+    await mkdir(path.join(worktree, ".git"), { recursive: true });
+    await mkdir(nested);
+    await mkdir(plantedBin);
+    await mkdir(safeBin);
+    const executable = `piston${process.platform === "win32" ? ".exe" : ""}`;
+    await writeFile(path.join(plantedBin, executable), "planted");
+    const safe = path.join(safeBin, executable);
+    await writeFile(safe, "safe");
+
+    assert.equal(resolveExecutable("piston", nested, {
+        pathValue: [plantedBin, safeBin].join(path.delimiter),
+    }), await realpath(safe));
+    assert.throws(() => resolveExecutable("piston", nested, { pathValue: plantedBin }), /outside worktree/);
+});
+
 async function serve(t, handler, upgrade) {
     const server = createServer(handler);
     const sockets = new Set();
