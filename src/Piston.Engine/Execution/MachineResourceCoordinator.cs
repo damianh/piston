@@ -2,8 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Globalization;
-using System.Net;
-using System.Net.Sockets;
+using System.Net.NetworkInformation;
 using System.Text.Json;
 using Piston.Engine.Models;
 
@@ -170,31 +169,8 @@ internal sealed class MachineResourceCoordinator(
     }
 
     /// <summary>Whether a TCP listener on <paramref name="port"/> already exists on any local address.</summary>
-    internal static bool IsPortInUse(int port)
-    {
-        IPAddress[] addresses = Socket.OSSupportsIPv6
-            ? [IPAddress.Any, IPAddress.Loopback, IPAddress.IPv6Any, IPAddress.IPv6Loopback]
-            : [IPAddress.Any, IPAddress.Loopback];
-        foreach (var address in addresses)
-        {
-            try
-            {
-                var listener = new TcpListener(address, port);
-                listener.Start();
-                listener.Stop();
-            }
-            catch (SocketException ex) when (ex.SocketErrorCode is SocketError.AddressAlreadyInUse or SocketError.AccessDenied)
-            {
-                return true;
-            }
-            catch (SocketException)
-            {
-                // The address family or address is unavailable on this machine.
-            }
-        }
-
-        return false;
-    }
+    internal static bool IsPortInUse(int port) =>
+        IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners().Any(endpoint => endpoint.Port == port);
 
     private async Task<FileStream> AcquireLockAsync(CancellationToken ct)
     {
