@@ -24,6 +24,12 @@ public sealed record TestSuite(
     /// <summary>True when restored from disk and not re-verified since the daemon restart.</summary>
     public bool Restored { get; init; }
 
+    /// <summary>
+    /// True when the suite only lists tests discovered by a run that pausing interrupted. Discovery can name tests
+    /// differently from their results, so any results for the project replace the whole suite.
+    /// </summary>
+    public bool DiscoveryOnly { get; init; }
+
     /// <summary>What Piston did to run the process that produced this suite, when it was recorded.</summary>
     [JsonIgnore]
     public ExecutionLog? ExecutionLog { get; init; }
