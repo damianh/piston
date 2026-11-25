@@ -17,6 +17,8 @@ namespace Piston.Protocol.Dtos;
 /// <param name="InRunHistory">True when the run is currently kept in the run history (the dashboard's Runs tab).</param>
 /// <param name="NoEarlierResults">The run had no earlier results to compare with (the session's first results, or the
 /// first after results were cleared), so its outcome changes are unknown rather than empty.</param>
+/// <param name="BuildErrors">The first build errors, each truncated; <paramref name="BuildErrorCount"/> is the total.
+/// Null from daemons that don't report them.</param>
 public sealed record SessionTimelineEntryDto(
     string RunId,
     long Sequence,
@@ -47,4 +49,5 @@ public sealed record SessionTimelineEntryDto(
     int FixedCount,
     IReadOnlyList<FailureClassificationDto> FailureClassifications,
     bool InRunHistory,
-    bool NoEarlierResults = false);
+    bool NoEarlierResults = false,
+    IReadOnlyList<string>? BuildErrors = null);

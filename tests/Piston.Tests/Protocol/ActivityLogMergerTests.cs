@@ -42,6 +42,16 @@ public sealed class ActivityLogMergerTests
     }
 
     [Fact]
+    public void Merge_PreservesLocalReconnectMarkerWhenHistoryIsBackfilled()
+    {
+        var reconnect = Event(null, 3, ActivityEventTypes.Reconnect);
+
+        var merged = ActivityLogMerger.Merge([Event("history", 1)], [reconnect], capacity: 10);
+
+        Assert.Equal([ActivityEventTypes.McpToolCall, ActivityEventTypes.Reconnect], merged.Select(e => e.Type));
+    }
+
+    [Fact]
     public void Merge_OrdersChronologicallyAndKeepsNewestWithinCapacity()
     {
         var history = new[] { Event("a", 1), Event("c", 3) };

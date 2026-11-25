@@ -56,7 +56,8 @@ public sealed class SessionTimelineCommandTests
                 DateTimeOffset.UnixEpoch.AddSeconds(4), "abc", "abc", SourceChangeObserved: false, ["/repo/Code.cs"], 1,
                 BuildStatus.Succeeded, 0, Passed: 3, Failed: 1, Skipped: 0,
                 [new TestOutcomeReference("A.Tests", "A.Broke")], 1, [new TestOutcomeReference("A.Tests", "A.Healed")], 1,
-                [new FailureClassification("A.Tests", "A.Broke", FailureKind.New, "Passed in run r0.")], InRunHistory: true),
+                [new FailureClassification("A.Tests", "A.Broke", FailureKind.New, "Passed in run r0.")], InRunHistory: true,
+                BuildErrors: ["CS0001: boom"]),
         ];
         engine.StoredRuns = [Stored("r1")];
         var dispatcher = new EngineCommandDispatcher(engine);
@@ -76,6 +77,7 @@ public sealed class SessionTimelineCommandTests
         Assert.Equal(new TestOutcomeReferenceDto("A.Tests", "A.Healed"), Assert.Single(entry.FixedTests));
         Assert.Equal(new FailureClassificationDto("A.Tests", "A.Broke", "New", "Passed in run r0.", "A.Tests"), Assert.Single(entry.FailureClassifications));
         Assert.True(entry.InRunHistory);
+        Assert.Equal(["CS0001: boom"], entry.BuildErrors);
     }
 
     [Fact]

@@ -35,6 +35,7 @@
     <Compile Include="..\..\src\Piston.Web\Models\RunComparison.cs" Link="Web\RunComparison.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\RunComparisonEntry.cs" Link="Web\RunComparisonEntry.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\SessionTimeline.cs" Link="Web\SessionTimeline.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\SessionFeed.cs" Link="Web\SessionFeed.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\SessionTimelineItem.cs" Link="Web\SessionTimelineItem.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\SessionTimelineEdit.cs" Link="Web\SessionTimelineEdit.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\SessionTimelineRun.cs" Link="Web\SessionTimelineRun.cs" />
