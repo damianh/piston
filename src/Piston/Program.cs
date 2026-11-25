@@ -17,6 +17,12 @@ using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
 
+// Internal step of the Windows launcher (piston.cmd), not a user command.
+if (args is [RuntimeStaging.Command, .. var stageArgs])
+{
+    return RuntimeStaging.Run(stageArgs, Console.Error);
+}
+
 // ── Shared arguments & options ─────────────────────────────────────────────────
 
 var rootSolutionArg = CreateSolutionArgument();

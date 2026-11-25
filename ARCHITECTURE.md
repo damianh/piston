@@ -14,7 +14,7 @@ This document describes implemented behavior and its limits.
 
 | Project | Responsibility |
 |---|---|
-| `Piston` | .NET tool: CLI launch/attach, browser, foreground daemon, stop/status, stdio MCP server (`piston mcp`); daemon composition, protocol routing, web hosting, configuration, MCP tools and call tracking. |
+| `Piston` | .NET tool: CLI launch/attach, browser, foreground daemon, stop/status, stdio MCP server (`piston mcp`); daemon composition, protocol routing, web hosting, configuration, MCP tools and call tracking. On Windows the packed tool starts through `piston.cmd`, which runs a per-build copy outside the .NET tool store (`RuntimeStaging`) so `dotnet tool update` never finds it in use. |
 | `Piston.Engine` | Watcher, impact analysis, builds, test execution, current state, coverage processing. |
 | `Piston.Protocol` | JSON-RPC contracts, DTOs, framing, named-pipe and stdio transports. |
 | `Piston.Web` | Blazor WebAssembly dashboard connected over WebSocket. |
