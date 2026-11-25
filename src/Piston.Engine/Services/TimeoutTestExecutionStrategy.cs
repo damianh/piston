@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Engine.Models;
+using Piston.Engine.Orchestration;
 
 namespace Piston.Engine.Services;
 
@@ -140,18 +141,15 @@ public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
                 try
                 {
                     result = await _inner.ExecuteAsync(request, Progress, cts.Token).ConfigureAwait(false);
-
-                    // Runners may return what finished (an earlier target framework, say) instead of throwing.
-                    interrupted = cts.IsCancellationRequested;
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested && execution.Hit is not null)
                 {
                     result = new ProjectTestResult(request.ProjectPath, [], null, [], Crashed: false);
-                    interrupted = true;
                 }
                 finally
                 {
-                    execution.MarkCompleted();
+                    // Runners may return what finished (an earlier target framework, say) instead of throwing.
+                    interrupted = execution.MarkCompleted();
                 }
             }
 
@@ -174,19 +172,16 @@ public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
             }
         }
 
-        var finished = result.Suites.SelectMany(s => s.Tests)
-            .Where(t => t.Status != TestStatus.Running)
-            .GroupBy(t => t.ResultKey)
-            .ToDictionary(g => g.Key, g => g.Last());
-
         // A run that finished before the cancellation landed keeps its result.
-        if (execution.Hit is not { } hit
-            || ct.IsCancellationRequested
-            || !interrupted
-            || (hit.Test is not null && finished.ContainsKey(hit.Test)))
+        if (execution.Hit is not { } hit || ct.IsCancellationRequested || !interrupted)
         {
             return result;
         }
+
+        // Distinct tests may share a result key (MTP keys them by node UID), so every finished entry is kept.
+        var finished = result.Suites.SelectMany(s => s.Tests)
+            .Where(t => t.Status != TestStatus.Running)
+            .ToLookup(t => t.ResultKey);
 
         var message = hit.Stopped
             ? $"Stopped after {Durations.Format(hit.Elapsed ?? TimeSpan.Zero)}: the run was stopped on request."
@@ -194,22 +189,15 @@ public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
         var diagnostics = execution.DiagnosticsResult;
         var latest = execution.Latest;
         var reported = latest.SelectMany(s => s.Tests).Select(t => t.ResultKey).ToHashSet();
-        var unreported = finished.Values.Where(t => !reported.Contains(t.ResultKey)).ToList();
+        var unreported = finished.Where(g => !reported.Contains(g.Key)).SelectMany(g => g).ToList();
+        var merged = new HashSet<string>();
         var suites = latest
             .Select(s => s with
             {
                 Tests = s.Tests
-                    .Select(t => finished.TryGetValue(t.ResultKey, out var done) ? done
-                        : t.ResultKey == hit.Test
-                        ? t with
-                        {
-                            Status = TestStatus.Failed,
-                            Duration = hit.Elapsed ?? t.Duration,
-                            ErrorMessage = message,
-                            StackTrace = diagnostics?.Stacks ?? t.StackTrace,
-                            Attachments = diagnostics is null ? t.Attachments : [.. t.Attachments, .. diagnostics.Attachments],
-                        }
-                        : t.Status == TestStatus.Running ? t with { Status = TestStatus.NotRun } : t)
+                    .SelectMany(t => finished.Contains(t.ResultKey)
+                        ? (merged.Add(t.ResultKey) ? finished[t.ResultKey] : [])
+                        : [Interrupted(t)])
                     .ToList(),
             })
             .ToList();
@@ -222,11 +210,31 @@ public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
                 TimeSpan.FromTicks(unreported.Sum(t => t.Duration.Ticks))));
         }
 
+        // Partial coverage is not measured, but the runner left its results directories for cleanup.
+        var temporaryDirectories = result.TemporaryDirectories
+            .Concat(result.CoverageReportPaths
+                .Select(PistonOrchestrator.CoverageResultsDirectory)
+                .OfType<string>())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
         return new ProjectTestResult(request.ProjectPath, suites, null, [], Crashed: false)
         {
             Log = result.Log,
             TimedOut = new TestTimeout(hit.Test, hit.Stopped ? null : hit.Limit, hit.Stopped),
+            TemporaryDirectories = temporaryDirectories,
         };
+
+        TestResult Interrupted(TestResult t) => t.ResultKey == hit.Test
+            ? t with
+            {
+                Status = TestStatus.Failed,
+                Duration = hit.Elapsed ?? t.Duration,
+                ErrorMessage = message,
+                StackTrace = diagnostics?.Stacks ?? t.StackTrace,
+                Attachments = diagnostics is null ? t.Attachments : [.. t.Attachments, .. diagnostics.Attachments],
+            }
+            : t.Status == TestStatus.Running ? t with { Status = TestStatus.NotRun } : t;
     }
 
     private bool Trigger(Execution execution, string? test, TimeSpan? elapsed, bool stopped, TimeSpan? limit = null)
@@ -298,6 +306,7 @@ public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
         private IReadOnlyList<TestSuite> _latest = [];
         private Hit? _hit;
         private bool _completed;
+        private bool _cancelledBeforeCompletion;
 
         public string ProjectPath => projectPath;
 
@@ -373,16 +382,23 @@ public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
             }
         }
 
-        public void MarkCompleted()
+        /// <summary>Marks the run completed and returns whether it was cancelled here before it completed.</summary>
+        public bool MarkCompleted()
         {
             lock (_gate)
             {
                 _completed = true;
+                return _cancelledBeforeCompletion;
             }
         }
 
         public void Cancel()
         {
+            lock (_gate)
+            {
+                _cancelledBeforeCompletion |= !_completed;
+            }
+
             try
             {
                 cts.Cancel();
