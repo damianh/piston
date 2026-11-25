@@ -3,7 +3,6 @@
 
 using System.Collections.Concurrent;
 using Piston.Engine.Coverage;
-using Piston.Engine.Execution;
 using Piston.Engine.Impact;
 using Piston.Engine.Models;
 using Piston.Engine.Orchestration;
