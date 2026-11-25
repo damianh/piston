@@ -1081,9 +1081,9 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
     {
         info = await client.GetDaemonInfoAsync(statusCts.Token);
     }
-    catch (InvalidOperationException)
+    catch (InvalidOperationException ex)
     {
-        // Older daemon without daemon/info.
+        Console.Error.WriteLine($"[piston] Could not retrieve daemon metadata: {ex.Message}");
     }
     catch (OperationCanceledException)
     {

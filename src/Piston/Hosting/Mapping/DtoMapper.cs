@@ -831,6 +831,8 @@ public static class DtoMapper
                         project.ProjectPath, project.Status.ToString().ToLowerInvariant(), project.Message, project.RunId))]
                 : null,
             CoverageError: state.CoverageError,
+            IsPaused: state.IsPaused,
+            PausedChangeCount: state.PausedChangeCount,
             RepositoryTrustPath: state.RepositoryTrustPath
         );
 

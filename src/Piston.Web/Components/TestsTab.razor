@@ -8,6 +8,9 @@
     <!-- Toolbar -->
     <Toolbar Filter="@_filter"
              OnReset="Reset"
+             IsPaused="@(_snapshot?.IsPaused == true)"
+             PausedChangeCount="@(_snapshot?.PausedChangeCount ?? 0)"
+             OnTogglePause="TogglePauseAsync"
              OnExpandAll="() => SetExpanded(true)"
              OnCollapseAll="() => SetExpanded(false)"
              Grouping="@_viewState.Grouping"
@@ -394,6 +397,9 @@
         _selectedTest = null;
         await Client.ResetAsync();
     }
+
+    private Task TogglePauseAsync() =>
+        _snapshot?.IsPaused == true ? Client.ResumeAsync() : Client.PauseAsync();
 
     private void ToggleExpand() => SetExpanded(!_viewState.TreeExpanded);
 

@@ -600,6 +600,8 @@ public sealed class EngineClientService : IAsyncDisposable
         }
     }
 
+    public Task PauseAsync() => SendCommandAsync(ProtocolMethods.EnginePause);
+    public Task ResumeAsync() => SendCommandAsync(ProtocolMethods.EngineResume);
     public Task SetFilterAsync(string? filter) => SendCommandAsync(ProtocolMethods.EngineSetFilter, new SetFilterCommand(filter));
 
     public async ValueTask DisposeAsync()

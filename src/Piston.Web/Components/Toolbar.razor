@@ -8,6 +8,36 @@
         ⟲
     </button>
 
+    <!-- Pause/resume automatic processing -->
+    @{
+        var pauseLabel = IsPaused ? "Resume" : "Pause";
+        var pauseTitle = IsPaused
+            ? PausedChangeCount > 0
+                ? $"Resume: run the tests affected by the {PausedChangeCount:N0} changed file(s) queued while paused"
+                : "Resume: run tests again when files change"
+            : "Pause: stop running tests on file changes and cancel the current run; Run and Reset still work";
+    }
+    <div class="flex items-center gap-1.5">
+        <button type="button"
+                class="w-6 h-6 shrink-0 flex items-center justify-center rounded @(IsPaused ? "bg-yellow-500/15 ring-1 ring-inset ring-yellow-500/40 text-yellow-400 hover:bg-yellow-500/25" : "bg-gray-800 hover:bg-gray-700 text-gray-300")"
+                title="@pauseTitle" aria-label="@pauseLabel" aria-pressed="@(IsPaused ? "true" : "false")"
+                data-testid="pause-toggle" @onclick="OnTogglePause">
+            @if (IsPaused)
+            {
+                <svg class="w-3 h-3" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                    <path d="M4.5 2.8v10.4a.6.6 0 0 0 .9.5l8.3-5.2a.6.6 0 0 0 0-1L5.4 2.3a.6.6 0 0 0-.9.5z" />
+                </svg>
+            }
+            else
+            {
+                <svg class="w-3 h-3" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                    <rect x="3.5" y="2.5" width="3" height="11" rx="0.8" />
+                    <rect x="9.5" y="2.5" width="3" height="11" rx="0.8" />
+                </svg>
+            }
+        </button>
+    </div>
+
     <!-- Expand/collapse all -->
     <div class="flex items-center gap-1">
         <button class="w-6 h-6 shrink-0 flex items-center justify-center bg-gray-800 hover:bg-gray-700 text-gray-300 rounded transition-colors"
@@ -131,6 +161,9 @@
 @code {
     [Parameter] public string? Filter { get; set; }
     [Parameter] public EventCallback OnReset { get; set; }
+    [Parameter] public bool IsPaused { get; set; }
+    [Parameter] public int PausedChangeCount { get; set; }
+    [Parameter] public EventCallback OnTogglePause { get; set; }
     [Parameter] public EventCallback OnExpandAll { get; set; }
     [Parameter] public EventCallback OnCollapseAll { get; set; }
     [Parameter] public EventCallback<string?> OnFilterChanged { get; set; }

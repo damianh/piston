@@ -496,6 +496,18 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
         }
     }
 
+    public void Pause()
+    {
+        ThrowIfTrustRequired();
+        _orchestrator.Pause();
+    }
+
+    public void Resume()
+    {
+        ThrowIfTrustRequired();
+        _orchestrator.Resume();
+    }
+
     public Task<Verification.VerificationResult> VerifyAsync(TimeSpan timeout, CancellationToken ct)
     {
         ThrowIfTrustRequired();

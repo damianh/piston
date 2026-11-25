@@ -55,6 +55,8 @@ public sealed class PistonEngineTests : IDisposable
             Assert.False(buildService.Started.Task.IsCompleted);
             Assert.False(Directory.Exists(Path.Combine(worktree, ".piston")));
             _ = await Assert.ThrowsAsync<RepositoryNotTrustedException>(() => engine.RequestRunAsync());
+            _ = Assert.Throws<RepositoryNotTrustedException>(() => engine.Pause());
+            _ = Assert.Throws<RepositoryNotTrustedException>(() => engine.Resume());
 
             engine.Stop();
             Assert.Equal(PistonPhase.AwaitingTrust, engine.State.Phase);
