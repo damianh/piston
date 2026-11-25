@@ -19,7 +19,7 @@ This document describes implemented behavior and its limits.
 | `Piston.Protocol` | JSON-RPC contracts, DTOs, framing, named-pipe and stdio transports. |
 | `Piston.Web` | Blazor WebAssembly dashboard connected over WebSocket. |
 | `Piston.LiveCollector` | VSTest data collector, deployed with the engine, that streams per-test start/end events to the engine over loopback (`PISTON_LIVE_PORT`). |
-| `Piston.ProcessHost` | Small launcher that puts a test process in its own Unix session or Windows job, so the engine can terminate the test process and its descendants together (`OwnedTestProcess`). |
+| `Piston.ProcessHost` | Launcher that puts a build or test command in its own Unix session or Windows job, so the engine can terminate the command and its descendants together (`OwnedProcess`). |
 
 Hosting and MCP source live in `src/Piston/Hosting` and `src/Piston/Mcp`.
 Their `Piston.Hosting` and `Piston.Mcp` namespaces remain, but they are not
@@ -405,11 +405,15 @@ actionable startup error. The files are not changed automatically. Old daemon
 and MCP processes must be restarted: they continue enforcing their own budget
 and do not account for new-version runs.
 
-`MachineExecutionOverviewReader` reads live and stale owners without examining
-legacy admission files or inferring whether an owner is running. The dashboard
+`MachineExecutionOverviewReader` reads live owners and automatically prunes stale
+JSON sidecars without examining legacy admission files or inferring whether an owner is running. Pruning
+holds the existing ownership lock continuously through deletion so it cannot delete a new
+owner's details. Lock files remain, and malformed stale sidecars are removed too. The dashboard
 polls `machine/getOverview` while the Machine tab is open; `piston status --all`
 uses the same reader. Unreadable owner directories or locks produce a visible
-error and unknown ownership, not an empty-success list. Filesystem probes
+error and unknown ownership, not an empty-success list. Pruning failures are also visible;
+best-effort readers retain a stale record and log the failure. A released ownership lock
+does not establish descendant liveness. Filesystem probes
 distinguish missing directories from access and I/O failures.
 
 **Test resources** (`MachineResourceCoordinator`, behind the internal
@@ -658,6 +662,19 @@ clear [run history](#coverage-and-persistence), which `get_test_history` and
 `verify`'s failure classification read.
 
 ## Build processes and engine test setup
+
+Engine builds, test execution and discovery share `OwnedProcess` and bounded
+`RedirectedProcessDrain` cleanup. The Windows launcher closes its temporary job
+handle after joining the job, leaving the engine as its sole handle owner.
+Kill-on-job-close therefore also covers an engine crash. On Unix, the launcher
+establishes a session and starts a guardian in the same process group before
+launching the command. A private, current-user-only pipe connects the guardian
+to the engine; connection setup is bounded, and EOF or a broken connection
+kills the group. The guardian has separate standard streams and stays alive
+after the command launcher exits, protecting orphaned output-holding descendants
+and keeping the group identity from being reused until cleanup. Cancellation
+and normal completion still explicitly terminate and drain the tree. Build
+cleanup errors are logged and included in a failed build result.
 
 Engine-test setup process helpers drain both stdout and stderr and enforce a
 90-second deadline. A small test-only process host establishes a Unix session or

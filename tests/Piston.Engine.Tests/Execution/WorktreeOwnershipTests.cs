@@ -386,7 +386,7 @@ public sealed class WorktreeOwnershipTests : IDisposable
     }
 
     [Fact]
-    public void ListOwners_ReportsStaleDetailsLeftByCrashedOwner_WithoutHostField()
+    public void ListOwners_PrunesStaleDetailsAndKeepsTheLock()
     {
         var worktree = WorktreeIdentity.FromSolutionPath(CreateSolution(CreateWorktree("crashed")));
         var owners = Path.Combine(_directory.StateDirectory, "owners");
@@ -394,10 +394,74 @@ public sealed class WorktreeOwnershipTests : IDisposable
         File.WriteAllText(Path.Combine(owners, worktree.Key + ".json"),
             $$"""{ "processId": 99999, "solutionPath": "/x/App.slnx", "worktreePath": "/x", "acquiredAt": "2026-01-01T00:00:00+00:00" }""");
 
-        var record = Assert.Single(WorktreeOwnership.ListOwners(_directory));
-        Assert.Equal(OwnershipLiveness.Stale, record.Liveness);
-        Assert.Null(record.Owner!.Host);
-        Assert.Equal(99999, record.Owner.ProcessId);
+        Assert.Empty(WorktreeOwnership.ListOwners(_directory));
+        Assert.False(File.Exists(Path.Combine(owners, worktree.Key + ".json")));
+        Assert.True(File.Exists(Path.Combine(owners, worktree.Key + ".lock")));
+        Assert.Empty(WorktreeOwnership.ListOwners(_directory));
+    }
+
+    [Fact]
+    public void ListOwners_PrunesMalformedDetailsAfterOwnerIsKilled()
+    {
+        var solution = CreateSolution(CreateWorktree("crashed"));
+        using var holder = LeaseHolderProcess.Start("own", _directory.BaseDirectory, solution);
+        Assert.Equal("READY", holder.WaitForLine("READY", "ERROR"));
+        var key = WorktreeIdentity.FromSolutionPath(solution).Key;
+        var infoPath = Path.Combine(_directory.OwnersDirectory, key + ".json");
+        holder.Kill();
+        File.WriteAllText(infoPath, "{ malformed");
+
+        Assert.Empty(WorktreeOwnership.ListOwners(_directory, reportErrors: true));
+        Assert.False(File.Exists(infoPath));
+        using var recovered = WorktreeOwnership.Acquire(_directory, solution);
+        Assert.Equal(recovered.Owner, Assert.Single(WorktreeOwnership.ListOwners(_directory)).Owner);
+    }
+
+    [Fact]
+    public void ListOwners_ReportsPruningFailureInsteadOfHidingIt()
+    {
+        var owner = WorktreeOwnership.Acquire(_directory, CreateSolution(CreateWorktree("blocked")));
+        var infoPath = Path.Combine(_directory.OwnersDirectory, owner.Worktree.Key + ".json");
+        owner.Dispose();
+        _ = Directory.CreateDirectory(infoPath);
+
+        var stale = Assert.Single(WorktreeOwnership.ListOwners(_directory));
+        Assert.Equal(OwnershipLiveness.Stale, stale.Liveness);
+        var error = Record.Exception(() => WorktreeOwnership.ListOwners(_directory, reportErrors: true));
+        Assert.True(error is IOException or UnauthorizedAccessException, error?.ToString());
+        Assert.True(Directory.Exists(infoPath));
+    }
+
+    [Fact]
+    public async Task ListOwners_ConcurrentPruningDoesNotRemoveANewOwnersDetails()
+    {
+        var solution = CreateSolution(CreateWorktree("racing"));
+        using var stop = CancellationTokenSource.CreateLinkedTokenSource(_ct);
+        var readers = Enumerable.Range(0, 4).Select(reader => Task.Run(async () =>
+        {
+            while (!stop.IsCancellationRequested)
+            {
+                _ = WorktreeOwnership.ListOwners(_directory, reportErrors: true);
+                await Task.Delay(1, _ct);
+            }
+        }, _ct)).ToArray();
+        try
+        {
+            for (var i = 0; i < 30; i++)
+            {
+                using var owner = WorktreeOwnership.Acquire(
+                    _directory, solution, contentionRetry: TimeSpan.FromSeconds(5));
+                await Task.Delay(1, _ct);
+                Assert.Equal(owner.Owner, WorktreeOwnership.TryReadInfo(
+                    Path.Combine(_directory.OwnersDirectory, owner.Worktree.Key + ".json")));
+            }
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await Task.WhenAll(readers);
+        }
+        Assert.Empty(WorktreeOwnership.ListOwners(_directory));
     }
 
     [Fact]

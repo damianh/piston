@@ -12,7 +12,7 @@ internal static class RedirectedProcessDrain
     internal static readonly TimeSpan KillTimeout = TimeSpan.FromSeconds(10);
 
     internal static async Task<bool> WaitForExitAndDrainAsync(
-        OwnedTestProcess ownedProcess,
+        OwnedProcess ownedProcess,
         TimeSpan drainTimeout,
         CancellationToken ct,
         Action<string> onDrainTimeout,
@@ -53,7 +53,7 @@ internal static class RedirectedProcessDrain
     }
 
     internal static async Task KillAndWaitAsync(
-        OwnedTestProcess ownedProcess,
+        OwnedProcess ownedProcess,
         CancellationToken ct,
         Action<string> onTimeout)
     {

@@ -3,25 +3,32 @@
 
 using System.ComponentModel;
 using System.Diagnostics;
+using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace Piston.Engine.Services;
 
-/// <summary>Owns a job or process group that survives the test process's exit.</summary>
-internal sealed class OwnedTestProcess : IDisposable
+/// <summary>Owns a job or process group that survives the target process's exit.</summary>
+internal sealed class OwnedProcess : IDisposable
 {
     private readonly SafeFileHandle? _job;
+    private readonly NamedPipeServerStream? _ownerLifetime;
     private bool _started;
     private bool _cleanedUp;
+    private bool _disposed;
 
-    internal OwnedTestProcess(ProcessStartInfo startInfo)
+    internal OwnedProcess(ProcessStartInfo startInfo)
     {
         var launcherHost = LauncherHostPath();
         var fileName = ResolveTargetPath(startInfo.FileName);
-        var jobName = OperatingSystem.IsWindows() ? $"piston-tests-{Guid.NewGuid():N}" : string.Empty;
-        _job = OperatingSystem.IsWindows() ? CreateJob(jobName) : null;
+        // Short: on Unix .NET places the pipe at $TMPDIR/CoreFxPipe_<name>, and macOS limits socket paths to 104 bytes.
+        var ownershipName = $"pst-{Guid.NewGuid():N}";
+        _job = OperatingSystem.IsWindows() ? CreateJob(ownershipName) : null;
+        _ownerLifetime = OperatingSystem.IsWindows() ? null : new NamedPipeServerStream(
+            ownershipName, PipeDirection.Out, 1, PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly);
         var arguments = startInfo.Arguments;
         var argumentList = startInfo.ArgumentList.ToArray();
         startInfo.FileName = launcherHost;
@@ -29,7 +36,7 @@ internal sealed class OwnedTestProcess : IDisposable
         startInfo.ArgumentList.Clear();
         startInfo.ArgumentList.Add("exec");
         startInfo.ArgumentList.Add(typeof(ProcessHost.Program).Assembly.Location);
-        startInfo.ArgumentList.Add(jobName);
+        startInfo.ArgumentList.Add(ownershipName);
         startInfo.ArgumentList.Add(fileName);
         startInfo.ArgumentList.Add(arguments);
         foreach (var argument in argumentList)
@@ -85,7 +92,7 @@ internal sealed class OwnedTestProcess : IDisposable
                 }
             }
 
-            throw new Win32Exception(2, $"Cannot find the test executable: {fileName}");
+            throw new Win32Exception(2, $"Cannot find the target executable: {fileName}");
         }
 
         // Match CreateProcess's search order in the original parent, not the dotnet launcher.
@@ -121,6 +128,25 @@ internal sealed class OwnedTestProcess : IDisposable
     {
         _ = Process.Start();
         _started = true;
+        if (_ownerLifetime is not null)
+        {
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            try
+            {
+                _ownerLifetime.WaitForConnectionAsync(timeout.Token).GetAwaiter().GetResult();
+            }
+            catch (OperationCanceledException ex)
+            {
+                Dispose();
+                // Not a caller cancellation: surface it as a startup failure callers already handle.
+                throw new InvalidOperationException("The process launcher did not connect to its owner-lifetime pipe.", ex);
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
+        }
     }
 
     internal string? KillProcessTree()
@@ -138,9 +164,13 @@ internal sealed class OwnedTestProcess : IDisposable
                 error = new Win32Exception(Marshal.GetLastPInvokeError()).Message;
             }
         }
-        else if (kill(-Process.Id, 9) != 0 && Marshal.GetLastPInvokeError() != 3)
+        else if (kill(-Process.Id, 9) != 0)
         {
-            error = new Win32Exception(Marshal.GetLastPInvokeError()).Message;
+            var killError = Marshal.GetLastPInvokeError();
+            if (!IsProcessGroupGone(killError))
+            {
+                error = new Win32Exception(killError).Message;
+            }
         }
 
         try
@@ -189,9 +219,19 @@ internal sealed class OwnedTestProcess : IDisposable
         if (kill(-Process.Id, 0) != 0)
         {
             var error = Marshal.GetLastPInvokeError();
-            return error == 3 ? false : throw new Win32Exception(error);
+            return IsProcessGroupGone(error) ? false : throw new Win32Exception(error);
         }
 
+        return HasLiveGroupMembers();
+    }
+
+    // ESRCH means the group is gone. Darwin also reports EPERM when every remaining member is an unreaped zombie,
+    // so on macOS EPERM only counts as gone when no live member remains.
+    private bool IsProcessGroupGone(int error) =>
+        error == 3 || (error == 1 && OperatingSystem.IsMacOS() && !HasLiveGroupMembers());
+
+    private bool HasLiveGroupMembers()
+    {
         var live = false;
         foreach (var candidate in System.Diagnostics.Process.GetProcesses())
         {
@@ -209,14 +249,20 @@ internal sealed class OwnedTestProcess : IDisposable
 
     public void Dispose()
     {
+        if (_disposed)
+        {
+            return;
+        }
+        _disposed = true;
         var error = KillProcessTree();
         if (error is not null)
         {
-            DiagnosticLog.Instance?.Write("TestProcess", $"Could not terminate the test process tree: {error}");
+            DiagnosticLog.Instance?.Write("OwnedProcess", $"Could not terminate the process tree: {error}");
         }
 
         Process.Dispose();
         _job?.Dispose();
+        _ownerLifetime?.Dispose();
     }
 
     private static SafeFileHandle CreateJob(string name)

@@ -30,7 +30,7 @@ public static class StatusAllFormatter
 
         foreach (var record in stale)
         {
-            lines.Add($"Stale: {OwnerLookup.Describe(record)} (owner exited without cleanup; harmless)");
+            lines.Add($"Stale: {OwnerLookup.Describe(record)} (ownership released; diagnostic record could not be pruned)");
         }
 
         if (overview.Error is { Length: > 0 } error)

@@ -3,7 +3,7 @@
 
 namespace Piston.Engine.Execution;
 
-/// <summary>Reads worktree ownership without changing coordination state.</summary>
+/// <summary>Reads live worktree ownership and prunes stale diagnostic sidecars.</summary>
 public static class MachineExecutionOverviewReader
 {
     public static Task<MachineExecutionOverview> ReadAsync(

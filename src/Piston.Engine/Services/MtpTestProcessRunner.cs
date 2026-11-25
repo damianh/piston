@@ -454,7 +454,7 @@ internal static partial class MtpTestProcessRunner
             ? null
             : new TrailingThrottle(() => onProgress(BuildLiveSnapshot(liveResults, liveResultsLock)), TestProcessRunner.ProgressInterval);
 
-        using var ownedProcess = new OwnedTestProcess(psi);
+        using var ownedProcess = new OwnedProcess(psi);
         var process = ownedProcess.Process;
 
         process.OutputDataReceived += (_, e) =>

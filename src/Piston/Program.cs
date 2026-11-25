@@ -105,7 +105,7 @@ var forceOpt = new Option<bool>("--force")
 
 var allOpt = new Option<bool>("--all")
 {
-    Description = "List live and stale worktree ownership records.",
+    Description = "List live worktree owners and prune stale ownership records.",
 };
 
 // ── Root command (default: web UI with auto-start) ─────────────────────────────

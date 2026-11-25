@@ -15,6 +15,34 @@ public static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args[0] == "--spawn-tree")
+        {
+            File.WriteAllText(Path.Combine(args[1], "target.pid"), Environment.ProcessId.ToString());
+            using var branch = Process.Start(TreeStart("--spawn-branch", args[1]))
+                ?? throw new InvalidOperationException("Could not start the tree branch.");
+            await branch.WaitForExitAsync();
+            File.WriteAllText(Path.Combine(args[1], "ready"), "");
+            if (!bool.Parse(args[2]))
+            {
+                await Task.Delay(TimeSpan.FromMinutes(1));
+            }
+            return 0;
+        }
+
+        if (args[0] == "--spawn-branch")
+        {
+            using var leaf = Process.Start(TreeStart("--hold-tree", args[1]))
+                ?? throw new InvalidOperationException("Could not start the tree leaf.");
+            return 0;
+        }
+
+        if (args[0] == "--hold-tree")
+        {
+            File.WriteAllText(Path.Combine(args[1], "descendant.pid"), Environment.ProcessId.ToString());
+            await Task.Delay(TimeSpan.FromMinutes(1));
+            return 0;
+        }
+
         if (args[0] == "--hold-output")
         {
             await Task.Delay(TimeSpan.FromMinutes(1));
@@ -91,6 +119,15 @@ public static class Program
             ?? throw new InvalidOperationException("Could not start test child process.");
         await child.WaitForExitAsync();
         return child.ExitCode;
+    }
+
+    private static ProcessStartInfo TreeStart(string mode, string root)
+    {
+        var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, CreateNoWindow = true };
+        start.ArgumentList.Add(typeof(Program).Assembly.Location);
+        start.ArgumentList.Add(mode);
+        start.ArgumentList.Add(root);
+        return start;
     }
 
     private static SafeFileHandle CreateJob()

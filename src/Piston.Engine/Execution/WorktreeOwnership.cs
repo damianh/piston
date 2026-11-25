@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using System.Text.Json;
+using Piston.Engine.Services;
 
 namespace Piston.Engine.Execution;
 
@@ -102,7 +103,7 @@ public sealed class WorktreeOwnership : IDisposable
     }
 
     /// <summary>
-    /// Lists ownership records in <paramref name="directory"/>, probing each lock without blocking.
+    /// Lists ownership records in <paramref name="directory"/>, pruning stale details under their lock.
     /// A probe briefly takes an unheld lock; <see cref="Acquire"/> retries briefly to ride over it.
     /// </summary>
     public static IReadOnlyList<OwnershipRecord> ListOwners(
@@ -132,22 +133,47 @@ public sealed class WorktreeOwnership : IDisposable
         {
             var key = Path.GetFileNameWithoutExtension(lockPath);
             var infoPath = Path.Combine(directory.OwnersDirectory, key + ".json");
-            var liveness = ProbeLock(lockPath, reportErrors);
-            if (liveness == OwnershipLiveness.None)
+            var record = ReadOwnerAndPruneStaleDetails(lockPath, infoPath, key, reportErrors);
+            if (record is not null)
             {
-                continue;
+                records.Add(record);
             }
-
-            var info = TryReadInfo(infoPath);
-            if (liveness == OwnershipLiveness.Stale && info is null)
-            {
-                // A released lock without details is the normal idle state, not a stale record.
-                continue;
-            }
-
-            records.Add(new OwnershipRecord(key, liveness, info));
         }
         return records;
+    }
+
+    private static OwnershipRecord? ReadOwnerAndPruneStaleDetails(
+        string lockPath, string infoPath, string key, bool reportErrors)
+    {
+        try
+        {
+            using var probe = ExclusiveFileLock.TryAcquire(lockPath, FileMode.Open);
+            if (probe is null)
+            {
+                return new OwnershipRecord(key, OwnershipLiveness.Live, TryReadInfo(infoPath));
+            }
+
+            try
+            {
+                // Keep the lock held until deletion finishes, so a new owner's details cannot be removed.
+                File.Delete(infoPath);
+                return null;
+            }
+            catch (Exception ex) when (!reportErrors && ex is IOException or UnauthorizedAccessException)
+            {
+                DiagnosticLog.Instance?.Write("Ownership", $"Could not prune stale owner details '{infoPath}': {ex.Message}");
+                return new OwnershipRecord(key, OwnershipLiveness.Stale, TryReadInfo(infoPath));
+            }
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+        catch (Exception ex) when (!reportErrors && ex is IOException or UnauthorizedAccessException)
+        {
+            DiagnosticLog.Instance?.Write("Ownership", $"Could not inspect owner lock '{lockPath}': {ex.Message}");
+            return null;
+        }
     }
 
     public static OwnershipRecord? FindLiveOwner(
@@ -211,7 +237,10 @@ public sealed class WorktreeOwnership : IDisposable
     {
         try
         {
-            using var document = JsonDocument.Parse(File.ReadAllBytes(infoPath));
+            // Share delete so readers never block pruning, release, or the owner's atomic replace.
+            using var stream = new FileStream(
+                infoPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var document = JsonDocument.Parse(stream);
             var root = document.RootElement;
             string? safeDashboardUrl = null;
             if (root.TryGetProperty("dashboardUrl", out var dashboardUrl)

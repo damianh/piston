@@ -39,7 +39,7 @@ public sealed class RedirectedProcessDrainTests
         var targetArguments = start.Arguments;
         var targetPath = Path.Combine(Path.GetTempPath(), "another-dotnet-installation");
         start.Environment["PATH"] = targetPath;
-        using var ownedProcess = new OwnedTestProcess(start);
+        using var ownedProcess = new OwnedProcess(start);
         var launcher = ownedProcess.Process.StartInfo;
         var runtimeRoot = new DirectoryInfo(RuntimeEnvironment.GetRuntimeDirectory()).Parent!.Parent!.Parent!;
         var host = Path.Combine(runtimeRoot.FullName, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
@@ -143,7 +143,7 @@ public sealed class RedirectedProcessDrainTests
     [Fact]
     public async Task WaitForExitAndDrainAsync_CutsOffOutputHeldOpenByChildProcess()
     {
-        using var ownedProcess = new OwnedTestProcess(StartInfo("--spawn-output-holder"));
+        using var ownedProcess = new OwnedProcess(StartInfo("--spawn-output-holder"));
         var process = ownedProcess.Process;
         var holderId = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
         process.OutputDataReceived += (_, e) =>
@@ -185,7 +185,7 @@ public sealed class RedirectedProcessDrainTests
     [Fact]
     public async Task KillAndWaitAsync_ImmediatelyAfterStart_TerminatesTheHost()
     {
-        using var ownedProcess = new OwnedTestProcess(StartInfo("--hold-output"));
+        using var ownedProcess = new OwnedProcess(StartInfo("--hold-output"));
         ownedProcess.Start();
         ownedProcess.Process.BeginOutputReadLine();
         ownedProcess.Process.BeginErrorReadLine();
@@ -198,7 +198,7 @@ public sealed class RedirectedProcessDrainTests
     [Fact]
     public async Task WaitForExitAndDrainAsync_PreservesNormalOutputAndExitCode()
     {
-        using var ownedProcess = new OwnedTestProcess(StartInfo("--write-output"));
+        using var ownedProcess = new OwnedProcess(StartInfo("--write-output"));
         var process = ownedProcess.Process;
         var stdout = new ConcurrentQueue<string>();
         var stderr = new ConcurrentQueue<string>();
