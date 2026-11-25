@@ -219,6 +219,11 @@ jobs:
           VERSION: ${{ needs.package.outputs.version }}
           NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
         run: |
+          # Push the runtime-specific packages before the pointer package that names them.
+          for package in packages/DamianH.Piston.*."$VERSION".nupkg; do
+            dotnet nuget push "$package" --source https://api.nuget.org/v3/index.json \
+              --api-key "$NUGET_API_KEY" --skip-duplicate
+          done
           dotnet nuget push "packages/DamianH.Piston.$VERSION.nupkg" --source https://api.nuget.org/v3/index.json \
             --api-key "$NUGET_API_KEY"
 

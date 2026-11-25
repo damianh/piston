@@ -44,8 +44,8 @@ dotnet tool install DamianH.Piston --version 0.0.0-local --tool-path ./tools --s
 ./tools/piston daemon /path/to/solution.slnx
 ```
 
-Use an actual solution path in the last command. On Windows, the executable is
-`.\tools\piston.exe`. Package ID is `DamianH.Piston`, command name is `piston`, and `0.0.0-local`
+Use an actual solution path in the last command. On Windows, the command is
+`.\tools\piston.cmd` (see [Windows runtime copies](#windows-runtime-copies)). Package ID is `DamianH.Piston`, command name is `piston`, and `0.0.0-local`
 is the local development package version; use the built/released version when
 it differs. The package is framework-dependent and requires the .NET 11 SDK
 and ASP.NET Core 11 runtime, plus the target solution's own SDK requirements.
@@ -77,8 +77,13 @@ Registry. The framework-dependent runtime requirements above still apply.
 
 ### Upgrading
 
-**Stop every Piston process using the installed package before updating, on all
-operating systems.** Close/disconnect stdio MCP sessions in each client, stop
+On **Windows**, `dotnet tool update` works while Piston is running: MCP sessions
+and daemons keep running the version they started with, and new commands use the
+updated version. Reconnect MCP clients and restart daemons when you want them on
+the new version.
+
+On **Linux and macOS**, stop every Piston process using the installed package
+before updating. Close/disconnect stdio MCP sessions in each client, stop
 daemons with `piston stop` in each worktree, and use `piston status --all` to
 check for remaining owners. Do not use `--force` unless you intend to terminate
 the identified process.
@@ -92,6 +97,10 @@ Use `--version <version>` to pin the update. For an isolated installation,
 replace `--global` with `--tool-path ./tools`; for a local feed, also add
 `--source ./packages`. Reconnect MCP clients and restart any daemon with its
 previous options (including `--no-coverage`, if used) after updating.
+
+**Updating from a release without runtime copies on Windows:** earlier releases
+ran directly from the tool store, so the first update to a release with runtime
+copies still requires stopping their processes. Later updates do not.
 
 If an earlier local build was installed under the `Piston` package ID, stop its
 processes and uninstall it before installing the renamed package:
@@ -109,23 +118,42 @@ rename the package, and both IDs provide the same `piston` command.
 |---|---|
 | Linux | Two-version validation on Ubuntu found that updating succeeds while the old process remains live. Its removed package directory makes the dashboard return 404 and a forced MCP test run return `Incomplete`. Stop/update/restart restores the dashboard and full test execution. |
 | macOS | Validation on macOS found the same behavior as Linux: updating succeeds, but the old daemon loses dashboard assets and the old MCP process cannot complete a forced test run. Stop/update/restart restores both. |
-| Windows | Validation found that both live MCP and daemon updates fail to uninstall the old version with an access-denied error for the tool store. The old processes continue working. Closing the clients/stopping the daemon, retrying the update and restarting succeeds. |
+| Windows | Updating succeeds while MCP sessions and daemons run; they keep serving the dashboard and running tests on their original version. |
 
-These observations come from a [three-OS non-publishing release validation](https://github.com/damianh/piston/actions/runs/41178160412)
+The Linux and macOS observations come from a [three-OS non-publishing release validation](https://github.com/damianh/piston/actions/runs/41178160412)
 using .NET 10 and isolated `--tool-path` installations (the same `.store` layout).
 They are not an uninterrupted-upgrade guarantee for every SDK/runtime version.
 Update success does not mean an already-running process upgraded.
 
 `dotnet run build.cs -- smoke-distribution` probes live stdio MCP and daemon
-updates with two versions in disposable tool stores, logs the actual behavior,
-and requires the replacement CLI/MCP/daemon to work. It does not update a user's
+updates with two versions in disposable tool stores. On Windows it requires the
+update to succeed and the running MCP session and daemon to keep working; on
+Linux and macOS it logs their behavior. It always requires the replacement
+CLI/MCP/daemon to work. It does not update a user's
 global installation. With `dnx`, disconnect the client, change its pinned package
 version and reconnect; an already-running process never switches versions.
+
+#### Windows runtime copies
+
+On Windows the package installs a `piston.cmd` launcher instead of `piston.exe`.
+On its first start for each package build, it copies the tool to
+`%LOCALAPPDATA%\Piston\runtimes\<version>-<hash>` and runs Piston from there with
+`dotnet`, so nothing in the .NET tool store stays in use. Runtime copies unused for
+7 days are deleted when another build is first started; copies still in use are kept.
+Linux and macOS install the portable package and run from the tool store as before.
+
+Because the command is a batch file:
+
+- `dotnet` must be on `PATH`.
+- Quote arguments containing `&`, `|`, `<`, `>` or `^`.
+- Pressing Ctrl+C in an interactive console may ask `Terminate batch job (Y/N)?`.
+- Clients that launch MCP servers without a shell and cannot run `.cmd` files
+  directly should use `cmd /c piston mcp` as the command.
 
 ## Usage
 
 Examples below assume `piston` is on `PATH`; with the isolated install above,
-substitute `./tools/piston` (or `.\tools\piston.exe` on Windows).
+substitute `./tools/piston` (or `.\tools\piston.cmd` on Windows).
 
 ```sh
 # Start (or attach to) the daemon and open the web dashboard

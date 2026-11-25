@@ -12,11 +12,32 @@
     <RepositoryUrl>https://github.com/damianh/piston</RepositoryUrl>
     <PackageProjectUrl>https://github.com/damianh/piston</PackageProjectUrl>
   </PropertyGroup>
+  <!--
+    The tool ships as RID-specific packages behind the DamianH.Piston pointer package. The Windows packages
+    start through Launcher/piston.cmd, which runs Piston from a per-build copy outside the .NET tool store so
+    `dotnet tool update` works while Piston is running. Every other platform uses the framework-dependent
+    'any' package and the dotnet runner.
+  -->
+  <PropertyGroup>
+    <ToolPackageRuntimeIdentifiers>win-x64;win-arm64;any</ToolPackageRuntimeIdentifiers>
+    <RuntimeIdentifiers>$(ToolPackageRuntimeIdentifiers)</RuntimeIdentifiers>
+  </PropertyGroup>
+  <PropertyGroup Condition="$(RuntimeIdentifier.StartsWith('win-'))">
+    <ToolCommandRunner>executable</ToolCommandRunner>
+    <ToolEntryPoint>piston.cmd</ToolEntryPoint>
+    <UseAppHost>false</UseAppHost>
+    <SelfContained>false</SelfContained>
+  </PropertyGroup>
+  <ItemGroup Condition="$(RuntimeIdentifier.StartsWith('win-'))">
+    <None Include="Launcher\piston.cmd;Launcher\piston-run.cmd" Link="%(Filename)%(Extension)"
+          CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
   <ItemGroup>
     <!-- The NuGet README is intentionally separate from the repository README. -->
     <None Update="README.md" Pack="true" PackagePath="/" />
   </ItemGroup>
-  <Target Name="GenerateMcpMetadata" BeforeTargets="_GetPackageFiles">
+  <!-- MCP registry metadata belongs to the DamianH.Piston pointer package only. -->
+  <Target Name="GenerateMcpMetadata" BeforeTargets="_GetPackageFiles" Condition="'$(RuntimeIdentifier)' == ''">
     <PropertyGroup>
       <_McpMetadata>$([System.IO.File]::ReadAllText('$(MSBuildProjectDirectory)/Integration/server.json').Replace('@VERSION@', '$(PackageVersion)'))</_McpMetadata>
     </PropertyGroup>
@@ -63,4 +84,28 @@
 
   <!-- Publish Piston.Web and copy its wwwroot output to our wwwroot -->
   <Import Project="..\BlazorWebUI.targets" />
+
+  <!--
+    Names the launcher's runtime copy after the version and a hash of the published files, so a rebuilt
+    package with the same version never reuses a stale copy.
+  -->
+  <Target Name="WritePistonRuntimeId" AfterTargets="PublishBlazorWebUIOnPublish"
+          Condition="$(RuntimeIdentifier.StartsWith('win-'))">
+    <ItemGroup>
+      <_PistonPayload Include="$(PublishDir)**\*" Exclude="$(PublishDir)piston.runtime-id">
+        <RelativePath>%(RecursiveDir)%(Filename)%(Extension)</RelativePath>
+      </_PistonPayload>
+    </ItemGroup>
+    <GetFileHash Files="@(_PistonPayload)">
+      <Output TaskParameter="Items" ItemName="_PistonPayloadHash" />
+    </GetFileHash>
+    <WriteLinesToFile File="$(IntermediateOutputPath)piston-payload.txt"
+                      Lines="@(_PistonPayloadHash->'%(RelativePath) %(FileHash)')" Overwrite="true" />
+    <GetFileHash Files="$(IntermediateOutputPath)piston-payload.txt">
+      <Output TaskParameter="Hash" PropertyName="_PistonPayloadDigest" />
+    </GetFileHash>
+    <WriteLinesToFile File="$(PublishDir)piston.runtime-id"
+                      Lines="$(PackageVersion)-$(_PistonPayloadDigest.Substring(0, 16).ToLowerInvariant())"
+                      Overwrite="true" />
+  </Target>
 </Project>

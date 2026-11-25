@@ -65,7 +65,9 @@ See the [user guide](docs/user-guide.md#coverage-and-impact-selection).
 
 ## Upgrade safely
 
-Stop Piston sessions and daemons before updating the installed tool. On Linux and macOS, a live update can remove files still needed by the running process; on Windows, loaded files can block the update. Close MCP clients, stop each daemon with `piston stop`, then update and restart:
+On Windows, `dotnet tool update` works while Piston runs: running MCP sessions and daemons keep their version, and new commands use the update. The first update from an older release still needs those processes stopped.
+
+On Linux and macOS, stop Piston sessions and daemons before updating, because a live update can remove files still needed by the running process. Close MCP clients, stop each daemon with `piston stop`, then update and restart:
 
 ```sh
 dotnet tool update --global DamianH.Piston

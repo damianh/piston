@@ -14,7 +14,8 @@ This requires an actual published NuGet release. Until one is available, or for
 local development, pack with `dotnet pack src/Piston/Piston.csproj -c Release -o packages`
 and install with `--version 0.0.0-local --source ./packages --no-cache`.
 To pick up a rebuilt local package, use a new version (`-p:Version=0.0.0-local.2`).
-**Disconnect all stdio MCP sessions and stop daemons before updating on every OS**,
+**On Linux and macOS, disconnect all stdio MCP sessions and stop daemons before updating**
+(on Windows, running sessions keep working through an update),
 then run `dotnet tool update --global DamianH.Piston` (for a local package, add
 `--version 0.0.0-local.2 --source ./packages`) and reconnect the clients.
 See the [upgrade behavior and publishing prerequisites](user-guide.md#upgrading).
