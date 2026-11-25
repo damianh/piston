@@ -19,7 +19,7 @@ public sealed class TestTimeoutPolicy
     private readonly Func<TimeSpan?> _timeoutProvider;
     private readonly TimeSpan? _hangThresholdOverride;
     private readonly Lock _gate = new();
-    private TimeSpan? _timeout;
+    private TimeSpan? _timeout = DefaultTimeout;
 
     /// <param name="timeoutProvider">Returns the current test timeout, null when it is off. Null uses <see cref="DefaultTimeout"/>.</param>
     /// <param name="hangThresholdOverride">
@@ -49,7 +49,7 @@ public sealed class TestTimeoutPolicy
         ? explicitThreshold > TimeSpan.Zero ? explicitThreshold : null
         : Timeout is { } timeout ? timeout / 2 : DefaultHangThreshold;
 
-    /// <summary>Re-reads the test timeout; a provider that throws keeps the previous value.</summary>
+    /// <summary>Re-reads the test timeout; a provider that throws keeps the previous value, initially <see cref="DefaultTimeout"/>.</summary>
     public void Refresh()
     {
         TimeSpan? timeout;

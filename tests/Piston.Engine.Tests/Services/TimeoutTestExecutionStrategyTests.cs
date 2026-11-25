@@ -202,6 +202,40 @@ public sealed class TimeoutTestExecutionStrategyTests
         Assert.Equal("T.Slow", result.TimedOut?.Test);
     }
 
+    [Fact]
+    public async Task StalledDiagnostics_StillCancelTheRun()
+    {
+        var inner = new HangingStrategy([Test("T.Slow", TestStatus.Running)]);
+        var strategy = new TimeoutTestExecutionStrategy(inner, TimeSpan.FromMilliseconds(100))
+        {
+            Diagnostics = new FakeDiagnostics(inner, null) { Stall = true },
+            DiagnosticsTimeout = TimeSpan.FromMilliseconds(200),
+        };
+
+        var result = await strategy.ExecuteAsync(new ProjectTestRequest("/p/T.csproj", null, false), null, _ct);
+
+        Assert.True(inner.Cancelled);
+        Assert.Equal("T.Slow", result.TimedOut?.Test);
+    }
+
+    [Fact]
+    public async Task RunnerReturningEarlierResultsOnCancellation_StillTimesOut()
+    {
+        // A multi-target project returns the frameworks that finished when a later one is cancelled.
+        var inner = new HangingStrategy([Test("T.Slow", TestStatus.Running)])
+        {
+            Finished = [Test("T.Earlier", TestStatus.Passed)],
+        };
+        var strategy = new TimeoutTestExecutionStrategy(inner, TimeSpan.FromMilliseconds(100));
+
+        var result = await strategy.ExecuteAsync(new ProjectTestRequest("/p/T.csproj", null, false), null, _ct);
+
+        Assert.Equal("T.Slow", result.TimedOut?.Test);
+        var tests = result.Suites.SelectMany(s => s.Tests).ToList();
+        Assert.Equal(TestStatus.Passed, tests.Single(t => t.FullyQualifiedName == "T.Earlier").Status);
+        Assert.Equal(TestStatus.Failed, tests.Single(t => t.FullyQualifiedName == "T.Slow").Status);
+    }
+
     private static string Rooted(string file) => Path.Combine(Path.GetTempPath(), "piston-stop", file);
 
     private sealed class FakeDiagnostics(HangingStrategy inner, HangDiagnosticsResult? result, Exception? error = null)
@@ -209,11 +243,18 @@ public sealed class TimeoutTestExecutionStrategyTests
     {
         public List<HangCapture> Captures { get; } = [];
         public bool CancelledBeforeCapture { get; private set; }
+        public bool Stall { get; init; }
 
         public Task<HangDiagnosticsResult?> CaptureAsync(HangCapture capture, CancellationToken ct)
         {
             Captures.Add(capture);
             CancelledBeforeCapture = inner.Cancelled;
+            if (Stall)
+            {
+                // Like a synchronous stack read that never observes the token.
+                return new TaskCompletionSource<HangDiagnosticsResult?>().Task;
+            }
+
             return error is null ? Task.FromResult(result) : Task.FromException<HangDiagnosticsResult?>(error);
         }
     }
@@ -225,6 +266,7 @@ public sealed class TimeoutTestExecutionStrategyTests
     private sealed class HangingStrategy(IReadOnlyList<TestResult> tests) : ITestExecutionStrategy
     {
         public IReadOnlyList<TestResult>? Later { get; init; }
+        public IReadOnlyList<TestResult> Finished { get; init; } = [];
         public bool Cancelled { get; private set; }
 
         public bool CanExecute(string projectPath) => true;
@@ -248,7 +290,10 @@ public sealed class TimeoutTestExecutionStrategyTests
                 Cancelled = true;
             }
 
-            return new ProjectTestResult(request.ProjectPath, [], null, [], Crashed: false);
+            IReadOnlyList<TestSuite> finished = Finished.Count == 0
+                ? []
+                : [new TestSuite("T", Finished, DateTimeOffset.UtcNow, TimeSpan.Zero)];
+            return new ProjectTestResult(request.ProjectPath, finished, null, [], Crashed: false);
         }
     }
 

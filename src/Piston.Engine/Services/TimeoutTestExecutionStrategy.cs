@@ -14,9 +14,6 @@ namespace Piston.Engine.Services;
 /// </summary>
 public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
 {
-    /// <summary>How long hang diagnostics may take before the run is cancelled without them.</summary>
-    internal static readonly TimeSpan DiagnosticsTimeout = TimeSpan.FromSeconds(60);
-
     private readonly ITestExecutionStrategy _inner;
     private readonly Func<TimeSpan?> _timeoutProvider;
     private readonly TimeProvider _time;
@@ -39,6 +36,9 @@ public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
 
     /// <summary>Captures stacks and dumps of a hung test's processes before its run is cancelled.</summary>
     internal IHangDiagnostics? Diagnostics { get; init; }
+
+    /// <summary>How long hang diagnostics may take before the run is cancelled without them.</summary>
+    internal TimeSpan DiagnosticsTimeout { get; init; } = TimeSpan.FromSeconds(60);
 
     public bool CanExecute(string projectPath) => _inner.CanExecute(projectPath);
 
@@ -129,6 +129,7 @@ public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
         }
 
         ProjectTestResult result;
+        var interrupted = false;
         try
         {
             var interval = timeout is { } t
@@ -139,10 +140,14 @@ public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
                 try
                 {
                     result = await _inner.ExecuteAsync(request, Progress, cts.Token).ConfigureAwait(false);
+
+                    // Runners may return what finished (an earlier target framework, say) instead of throwing.
+                    interrupted = cts.IsCancellationRequested;
                 }
                 catch (OperationCanceledException) when (!ct.IsCancellationRequested && execution.Hit is not null)
                 {
                     result = new ProjectTestResult(request.ProjectPath, [], null, [], Crashed: false);
+                    interrupted = true;
                 }
                 finally
                 {
@@ -169,8 +174,16 @@ public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
             }
         }
 
-        // A run that finished with results before the cancellation landed keeps them.
-        if (execution.Hit is not { } hit || ct.IsCancellationRequested || result.Suites.Count > 0)
+        var finished = result.Suites.SelectMany(s => s.Tests)
+            .Where(t => t.Status != TestStatus.Running)
+            .GroupBy(t => t.ResultKey)
+            .ToDictionary(g => g.Key, g => g.Last());
+
+        // A run that finished before the cancellation landed keeps its result.
+        if (execution.Hit is not { } hit
+            || ct.IsCancellationRequested
+            || !interrupted
+            || (hit.Test is not null && finished.ContainsKey(hit.Test)))
         {
             return result;
         }
@@ -179,11 +192,15 @@ public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
             ? $"Stopped after {Durations.Format(hit.Elapsed ?? TimeSpan.Zero)}: the run was stopped on request."
             : $"Timed out after {Durations.Format(hit.Elapsed ?? TimeSpan.Zero)}: the test ran longer than the test timeout ({Durations.Format(hit.Limit ?? TimeSpan.Zero)}).";
         var diagnostics = execution.DiagnosticsResult;
-        var suites = execution.Latest
+        var latest = execution.Latest;
+        var reported = latest.SelectMany(s => s.Tests).Select(t => t.ResultKey).ToHashSet();
+        var unreported = finished.Values.Where(t => !reported.Contains(t.ResultKey)).ToList();
+        var suites = latest
             .Select(s => s with
             {
                 Tests = s.Tests
-                    .Select(t => t.ResultKey == hit.Test
+                    .Select(t => finished.TryGetValue(t.ResultKey, out var done) ? done
+                        : t.ResultKey == hit.Test
                         ? t with
                         {
                             Status = TestStatus.Failed,
@@ -196,6 +213,14 @@ public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
                     .ToList(),
             })
             .ToList();
+        if (unreported.Count > 0)
+        {
+            suites.Add(new TestSuite(
+                TestProjectNames.SuiteName(request.ProjectPath),
+                unreported,
+                DateTimeOffset.UtcNow,
+                TimeSpan.FromTicks(unreported.Sum(t => t.Duration.Ticks))));
+        }
 
         return new ProjectTestResult(request.ProjectPath, suites, null, [], Crashed: false)
         {
@@ -229,9 +254,14 @@ public sealed class TimeoutTestExecutionStrategy : ITestExecutionStrategy
             {
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(execution.CallerToken);
                 timeoutCts.CancelAfter(DiagnosticsTimeout);
+
+                // Stack reads and dumps are synchronous and may not observe the token, so the wait itself is bounded
+                // to release the run; cancelling it kills the processes a stalled capture is attached to.
                 execution.DiagnosticsResult = await diagnostics.CaptureAsync(
-                    new HangCapture(execution.ProjectPath, test, testResult?.Method, execution.Processes.Processes),
-                    timeoutCts.Token).ConfigureAwait(false);
+                        new HangCapture(execution.ProjectPath, test, testResult?.Method, execution.Processes.Processes),
+                        timeoutCts.Token)
+                    .WaitAsync(DiagnosticsTimeout, execution.CallerToken)
+                    .ConfigureAwait(false);
             }
             catch (Exception ex)
             {

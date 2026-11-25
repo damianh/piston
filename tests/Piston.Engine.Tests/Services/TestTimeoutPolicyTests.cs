@@ -51,4 +51,12 @@ public sealed class TestTimeoutPolicyTests
         policy.Refresh();
         Assert.Equal(TimeSpan.FromSeconds(10), policy.Timeout);
     }
+
+    [Fact]
+    public void ProviderFailingOnTheFirstRead_UsesTheDefaultTimeout()
+    {
+        var policy = new TestTimeoutPolicy(() => throw new IOException("locked"));
+
+        Assert.Equal(TestTimeoutPolicy.DefaultTimeout, policy.Timeout);
+    }
 }
