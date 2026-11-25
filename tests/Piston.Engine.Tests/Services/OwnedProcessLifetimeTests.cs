@@ -109,10 +109,17 @@ public sealed class OwnedProcessLifetimeTests
         timeout.CancelAfter(TimeSpan.FromSeconds(10));
         while (true)
         {
-            var text = await File.ReadAllTextAsync(path, timeout.Token);
-            if (int.TryParse(text, out var pid))
+            try
             {
-                return pid;
+                var text = await File.ReadAllTextAsync(path, timeout.Token);
+                if (int.TryParse(text, out var pid))
+                {
+                    return pid;
+                }
+            }
+            catch (IOException)
+            {
+                // The fixture may still hold the file open for writing (a Windows sharing violation).
             }
             await Task.Delay(10, timeout.Token);
         }

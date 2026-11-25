@@ -164,9 +164,13 @@ internal sealed class OwnedProcess : IDisposable
                 error = new Win32Exception(Marshal.GetLastPInvokeError()).Message;
             }
         }
-        else if (kill(-Process.Id, 9) != 0 && Marshal.GetLastPInvokeError() != 3)
+        else if (kill(-Process.Id, 9) != 0)
         {
-            error = new Win32Exception(Marshal.GetLastPInvokeError()).Message;
+            var killError = Marshal.GetLastPInvokeError();
+            if (!IsProcessGroupGone(killError))
+            {
+                error = new Win32Exception(killError).Message;
+            }
         }
 
         try
@@ -215,9 +219,19 @@ internal sealed class OwnedProcess : IDisposable
         if (kill(-Process.Id, 0) != 0)
         {
             var error = Marshal.GetLastPInvokeError();
-            return error == 3 ? false : throw new Win32Exception(error);
+            return IsProcessGroupGone(error) ? false : throw new Win32Exception(error);
         }
 
+        return HasLiveGroupMembers();
+    }
+
+    // ESRCH means the group is gone. Darwin also reports EPERM when every remaining member is an unreaped zombie,
+    // so on macOS EPERM only counts as gone when no live member remains.
+    private bool IsProcessGroupGone(int error) =>
+        error == 3 || (error == 1 && OperatingSystem.IsMacOS() && !HasLiveGroupMembers());
+
+    private bool HasLiveGroupMembers()
+    {
         var live = false;
         foreach (var candidate in System.Diagnostics.Process.GetProcesses())
         {
