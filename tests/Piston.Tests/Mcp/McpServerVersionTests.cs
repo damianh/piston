@@ -23,12 +23,34 @@ public sealed class McpServerVersionTests
         Assert.NotNull(informationalVersion);
         var productVersion = informationalVersion.Split('+', 2)[0];
 
+        await ConnectAsync(client =>
+        {
+            var serverInfo = client.ServerInfo;
+            Assert.NotNull(serverInfo);
+            var advertisedVersion = serverInfo.Version;
+            Assert.NotNull(advertisedVersion);
+            Assert.Equal("piston", serverInfo.Name);
+            Assert.Equal(productVersion, advertisedVersion);
+            Assert.DoesNotContain("+", advertisedVersion);
+        });
+    }
+
+    [Fact]
+    public Task Initialize_TellsTheClientWhichToolsToUseAfterEditingAndBeforeFinishing() =>
+        ConnectAsync(client =>
+        {
+            Assert.Contains("run_affected_tests", client.ServerInstructions, StringComparison.Ordinal);
+            Assert.Contains("verify", client.ServerInstructions, StringComparison.Ordinal);
+        });
+
+    private async Task ConnectAsync(Action<McpClient> assert)
+    {
         var toServer = new Pipe();
         var toClient = new Pipe();
         using var shutdown = CancellationTokenSource.CreateLinkedTokenSource(_ct);
         var host = new McpStdioHost(new McpStdioHostOptions
         {
-            StartupError = "No engine is needed for the version handshake.",
+            StartupError = "No engine is needed for the handshake.",
             Input = toServer.Reader.AsStream(),
             Output = toClient.Writer.AsStream(),
             MonitorParentProcess = false,
@@ -42,13 +64,7 @@ public sealed class McpServerVersionTests
                 new StreamClientTransport(toServer.Writer.AsStream(), toClient.Reader.AsStream()),
                 cancellationToken: _ct);
 
-            var serverInfo = client.ServerInfo;
-            Assert.NotNull(serverInfo);
-            var advertisedVersion = serverInfo.Version;
-            Assert.NotNull(advertisedVersion);
-            Assert.Equal("piston", serverInfo.Name);
-            Assert.Equal(productVersion, advertisedVersion);
-            Assert.DoesNotContain("+", advertisedVersion);
+            assert(client);
         }
         finally
         {

@@ -56,8 +56,11 @@ port without changing the MCP stdio transport.
 
 The tool carries its harness assets: the MCP server entry, a `piston` skill
 that teaches the verification contract (section 4), and, for Copilot, the
-`piston-dashboard` canvas. `piston init` prints what it would install and where;
-it changes nothing until you add `--write`:
+`piston-dashboard` canvas. The MCP server also sends short instructions when a
+client connects (use `run_affected_tests` after editing and `verify` before
+finishing, not `dotnet test`); a client that passes server instructions to its
+model gets them without the skill. `piston init` prints what it would install
+and where; it changes nothing until you add `--write`:
 
 ```sh
 piston init copilot                  # dry run: the MCP entry and every target file
@@ -327,12 +330,32 @@ as a fallback. Never report a Piston pass that you did not receive.
 
 ## 5. Faster feedback while iterating
 
-Between edits, an agent can run just the tests its change affects instead of the
-whole suite. The affected-test tools take `files`, or, without `files`, git
-changes (`base`: `working`, `branch` or `range`, with `baseRef`):
+Piston runs the tests an edit affects by itself, about 300 ms after the edit
+(`debounceMs`). An agent does not start that run; it asks for its result. The
+affected-test tools take `files`, or, without `files`, git changes (`base`:
+`working`, `branch` or `range`, with `baseRef`):
 
 - `plan_affected_tests` previews what Piston would build and run, and why;
-- `run_affected_tests` runs that plan and waits for it.
+- `run_affected_tests` returns the result of testing those changes. It first
+  waits for pending file-change events and for any run in progress. It then
+  reuses the latest run (`"reused": true`) when that run is `Completed` or
+  `BuildFailed` on the present source, was not narrowed by a test filter, and
+  either ran every test or is a file-change run that analysed every one of the
+  files. Otherwise it runs the plan and waits for it. If a newer edit supersedes
+  that run, it waits again, up to three runs.
+
+The reply is the plan plus `reused` and `run`: the run's ID, status, trigger
+and counts, the failed tests with their messages (newly failing first, at most
+20), the `newlyFailing` and `fixed` counts, and the errors of a failed build.
+`run` is null when the changes affect no test. With git changes, pass the
+`files` you just edited to make reuse likely: a file-change run covers the
+files changed since the last completed run, not everything changed on the
+branch.
+
+A file-change run analyses its own batch of files and every changed file that
+no completed run has tested yet. An edit made while the previous edit's run is
+building or testing supersedes that run, and the next run then covers both
+edits. The same applies after a failed build or an incomplete run.
 
 Coverage is enabled by default unless the engine starts with an opt-out. With
 coverage enabled, `get_changed_line_coverage` gives each changed line a
@@ -419,6 +442,9 @@ instructions (for example `.github/copilot-instructions.md`):
   Ask what the user wants. Starting the Piston engine itself runs tests.
 - To check whether the code builds and tests pass, call the `verify` tool instead of
   running `dotnet build` / `dotnet test`.
+- After editing, call `run_affected_tests` with the files you changed for the result
+  of the tests the change affects. Piston runs them itself after every edit; the tool
+  waits for that run. It is not verification: finish with `verify`.
 - Only `Verdict: Passed` with `Counts as full verification: yes` counts as passing.
 - On `TestsFailed` / `BuildFailed`, fix the listed tests or errors and call
   `verify` again.

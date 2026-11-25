@@ -176,7 +176,12 @@ solution directory except build outputs and directories such as `.git` and
 and `.targets` changes trigger a full run.
 
 A new trigger cancels the preceding pipeline, and a semaphore serializes runs
-within that worktree. Independent worktrees can build and run tests concurrently.
+within that worktree. A cancelled run's changed files are not lost: the orchestrator
+keeps every changed file pending until a `Completed` run has analysed it, or a full
+run that started after the change has completed. A file-change run analyses its own
+batch plus the pending files, and records the union as `TestRunRecord.ChangedFiles`.
+Cancelled, faulted, build-failed and incomplete runs leave their files pending.
+Independent worktrees can build and run tests concurrently.
 Build/test subprocesses are terminated on cancellation. This is not a guarantee
 that partial or previously displayed results reflect the newest source. Selective
 runs retain results from untouched suites, so consumers must distinguish current
@@ -611,6 +616,20 @@ processes are fresh unless `warmTestHosts` is enabled (see
 timeout/cancellation, and returns a textual summary and its run ID. Completion
 does not depend on polling the aggregate phase or prior results. `get_test_results` reads
 current accumulated state without initiating a run.
+
+`run_affected_tests` calls `IEngine.RunAffectedAsync` (`PistonOrchestrator.Affected.cs`).
+It waits for pending watcher changes and for every active pipeline, then reuses the
+engine's latest run when that run is `Completed` or `BuildFailed`, `Current`, bound to
+the present source fingerprint, not narrowed by the user's filter, and either full scope
+or a file-change run whose `ChangedFiles` include every requested file. Otherwise it
+starts the planned run: a forced full run for a full-scope plan, else a `Targeted` run.
+A targeted run never supersedes another run, so if one started meanwhile the operation
+waits again; it also waits again, for at most
+three runs, when its own run is cancelled by a newer change. The dashboard's
+`engine/runTests` still rejects a selected run while another run is active.
+
+The server sends `McpServiceRegistration.ServerInstructions` in its `initialize`
+response over both transports.
 
 Run provenance: `PistonOrchestrator` creates a `TestRunRecord` for every
 run request and publishes it as `PistonState.CurrentRun`. When the run finishes, the

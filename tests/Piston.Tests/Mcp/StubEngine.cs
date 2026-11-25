@@ -90,6 +90,31 @@ internal sealed class StubEngine : IEngine
         return RunSelectedRun;
     }
 
+    /// <summary>Result of <see cref="RunAffectedAsync"/>; while null the call waits until it is cancelled.</summary>
+    public AffectedRun? AffectedRun { get; set; }
+
+    /// <summary>Thrown by <see cref="RunAffectedAsync"/> instead of returning a result.</summary>
+    public Exception? RunAffectedError { get; set; }
+
+    /// <summary>Files passed to the last <see cref="RunAffectedAsync"/> call.</summary>
+    public IReadOnlyList<string>? RunAffectedFiles { get; private set; }
+
+    public async Task<AffectedRun> RunAffectedAsync(IReadOnlyList<string> filePaths, CancellationToken ct)
+    {
+        RunAffectedFiles = filePaths;
+        if (RunAffectedError is { } error)
+        {
+            throw error;
+        }
+
+        if (AffectedRun is null)
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+        }
+
+        return AffectedRun!;
+    }
+
     /// <summary>Result returned by <see cref="VerifyAsync"/>.</summary>
     public VerificationResult? NextVerification { get; set; }
 

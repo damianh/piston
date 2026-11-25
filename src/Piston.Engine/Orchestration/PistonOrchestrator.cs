@@ -48,6 +48,12 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     private long _runSequence;
     private long _fileChangeGeneration;
 
+    // Changed files that no completed run has analysed yet, each with the generation of its latest change.
+    // A superseded, failed or incomplete run leaves its files here for the next file-change run.
+    private readonly Lock _pendingChangesLock = new();
+    private readonly Dictionary<string, (FileChangeEvent Change, long Generation)> _pendingChanges =
+        new(StringComparer.OrdinalIgnoreCase);
+
     // The last successful build whose run finished Current; guarded by _runLock.
     private BuildBaseline? _buildBaseline;
 
@@ -308,7 +314,13 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     /// The selection has no project ID, an ID that is not a test project, or a test whose name contains a double quote.
     /// </exception>
     /// <exception cref="InvalidOperationException">The engine is not ready, or a run is already in progress.</exception>
-    public Task<TestRunRecord> RunSelectedAsync(TestSelection selection)
+    public Task<TestRunRecord> RunSelectedAsync(TestSelection selection) =>
+        TryRunSelected(selection) ?? throw new InvalidOperationException("A test run is already in progress.");
+
+    /// <summary>
+    /// <see cref="RunSelectedAsync"/>, except that it returns null instead of failing when a run is already in progress.
+    /// </summary>
+    private Task<TestRunRecord>? TryRunSelected(TestSelection selection)
     {
         ArgumentNullException.ThrowIfNull(selection);
         var solutionPath = _solutionPath ?? throw new InvalidOperationException("The engine has not been started.");
@@ -341,7 +353,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         var known = _state.TestSuites
             .Where(s => projectIds.Contains(s.Key, StringComparer.Ordinal))
             .SelectMany(s => s.Tests);
-        return TriggerRunAsync(solutionPath, null, TestRunTrigger.Targeted,
+        return TryTriggerRun(solutionPath, null, TestRunTrigger.Targeted,
             new SelectedRun(paths, TestSelectionFilter.Build(selection.Tests, known)));
     }
 
@@ -1057,7 +1069,15 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             DiagnosticLog.Instance?.Write("FileWatcher", $"{change.ChangeType}: {change.FilePath}");
         }
 
-        _ = Interlocked.Increment(ref _fileChangeGeneration);
+        lock (_pendingChangesLock)
+        {
+            var generation = Interlocked.Increment(ref _fileChangeGeneration);
+            foreach (var change in batch.Changes)
+            {
+                _pendingChanges[change.FilePath] = (change, generation);
+            }
+        }
+
         _state.LastFileChangeTime = batch.Timestamp;
         _state.LastChangedFiles = batch.Changes.Select(e => e.FilePath).ToList();
         _activitySink.Emit(new FileChangesDetectedActivityEvent(
@@ -1065,11 +1085,48 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         _ = TriggerRunAsync(_solutionPath, batch, TestRunTrigger.FileChange);
     }
 
+    /// <summary>
+    /// The changes a file-change run analyses, oldest first, and the newest change generation among them:
+    /// its own batch plus every change left pending by runs that did not complete.
+    /// </summary>
+    private (IReadOnlyList<FileChangeEvent> Changes, long Generation) TakePendingChanges(FileChangeBatch batch)
+    {
+        lock (_pendingChangesLock)
+        {
+            var pending = _pendingChanges.Values.OrderBy(p => p.Generation).ToList();
+            var changes = pending.Select(p => p.Change).ToList();
+
+            // A full run that completed since the batch was raised has already forgotten the batch's files.
+            changes.AddRange(batch.Changes.Where(c => !_pendingChanges.ContainsKey(c.FilePath)));
+            return (changes, pending.Count > 0 ? pending[^1].Generation : 0);
+        }
+    }
+
+    // Changes raised later than the generation stay pending: the completed run did not see them.
+    private void ForgetPendingChanges(long throughGeneration)
+    {
+        lock (_pendingChangesLock)
+        {
+            foreach (var path in _pendingChanges.Where(p => p.Value.Generation <= throughGeneration).Select(p => p.Key).ToList())
+            {
+                _ = _pendingChanges.Remove(path);
+            }
+        }
+    }
+
     /// <summary>The test projects and filter of a <see cref="TestRunTrigger.Targeted"/> run.</summary>
     private sealed record SelectedRun(IReadOnlyList<string> TestProjectPaths, string? Filter);
 
-    private Task<TestRunRecord> TriggerRunAsync(
-        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, SelectedRun? selection = null)
+    // Only a selected run is ever refused, so a run without a selection always starts.
+    private Task<TestRunRecord> TriggerRunAsync(string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger) =>
+        TryTriggerRun(solutionPath, batch, trigger, selection: null)
+        ?? throw new InvalidOperationException("A test run is already in progress.");
+
+    /// <summary>
+    /// Starts a run, superseding the active one, unless it is a selected run and a run is active: then null.
+    /// </summary>
+    private Task<TestRunRecord>? TryTriggerRun(
+        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, SelectedRun? selection)
     {
         CancellationTokenSource cts;
         lock (_lifecycleLock)
@@ -1082,7 +1139,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             // Checked under the lock so a selected run cannot cancel a run that started meanwhile.
             if (selection is not null && _activePipelines > 0)
             {
-                throw new InvalidOperationException("A test run is already in progress.");
+                return null;
             }
 
             if (_activePipelines++ == 0)
@@ -1147,11 +1204,21 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
         var solutionDir = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? solutionPath;
         var changeGenerationAtStart = Interlocked.Read(ref _fileChangeGeneration);
+
+        // A file-change run analyses its batch and every change that no completed run has analysed.
+        IReadOnlyList<FileChangeEvent>? changes = null;
+        long? testedThroughGeneration = null;
+        if (batch is not null)
+        {
+            (changes, testedThroughGeneration) = TakePendingChanges(batch);
+        }
+
         run = run with
         {
             Status = TestRunStatus.Running,
             StartedAt = DateTimeOffset.UtcNow,
             SourceBefore = SourceFingerprinter.TryCompute(solutionDir),
+            ChangedFiles = changes is null ? run.ChangedFiles : [.. changes.Select(c => c.FilePath)],
         };
         PublishActiveRun(run);
 
@@ -1164,6 +1231,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         TestRunRecord Finish(TestRunStatus status, string? reason, bool computeAfter = true)
         {
             var finished = CompleteRun(run, status, reason, solutionDir, changeGenerationAtStart, computeAfter);
+            if (status == TestRunStatus.Completed && testedThroughGeneration is { } generation)
+            {
+                ForgetPendingChanges(generation);
+            }
+
             lock (_runRecordsLock)
             {
                 ArtifactStore?.Prune(_state.RecentRuns, _state.TestSuites);
@@ -1204,9 +1276,9 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             _state.NotifyChanged();
 
             var log = DiagnosticLog.Instance;
-            log?.Write("Orchestrator", (batch, selection) switch
+            log?.Write("Orchestrator", (changes, selection) switch
             {
-                ({ } b, _) => $"TriggerRun: {b.Changes.Count} file change(s)",
+                ({ } c, _) => $"TriggerRun: {c.Count} file change(s), {batch!.Changes.Count} in this batch",
                 (_, { } s) => $"TriggerRun: {s.TestProjectPaths.Count} selected test project(s)",
                 _ => "TriggerRun: full run (no batch)",
             });
@@ -1215,12 +1287,18 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             try
             {
                 // Building a test project also builds the projects it references.
-                impactResult = (batch, selection) switch
+                impactResult = (changes, selection) switch
                 {
-                    ({ } b, _) => _impactAnalyzer.Analyze(b.Changes),
+                    ({ } c, _) => _impactAnalyzer.Analyze(c),
                     (_, { } s) => new ImpactAnalysisResult([], s.TestProjectPaths, RequiresGraphRebuild: false, IsFullRun: false),
                     _ => _impactAnalyzer.AnalyzeFullRun(),
                 };
+
+                // A full run builds and tests everything that changed before it started.
+                if (impactResult.IsFullRun)
+                {
+                    testedThroughGeneration = Math.Max(testedThroughGeneration ?? 0, changeGenerationAtStart);
+                }
             }
             catch (OperationCanceledException)
             {

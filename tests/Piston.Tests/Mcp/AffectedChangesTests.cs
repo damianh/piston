@@ -113,46 +113,73 @@ public sealed class AffectedChangesTests : IDisposable
     }
 
     [Fact]
-    public async Task RunAffectedTests_RunsTheNarrowedSelectionAndReportsTheRun()
+    public async Task RunAffectedTests_ReportsTheRunThatTestedTheChanges()
     {
         var engine = Engine();
         var project = Path.Combine(_root, "tests", "Lib.Tests", "Lib.Tests.csproj");
-        engine.AffectedPlan = new ImpactAnalysisResult([], [project], false, false)
-        {
-            AffectedTestFqns = ["Lib.Tests.B.Two", "Lib.Tests.A.One"],
-        };
-        engine.RunSelectedRun = Task.FromResult(new TestRunRecord
-        {
-            RunId = "run-3",
-            EngineInstanceId = "engine",
-            Sequence = 3,
-            Trigger = TestRunTrigger.Targeted,
-            Status = TestRunStatus.Completed,
-            RequestedAt = DateTimeOffset.UnixEpoch,
-        });
+        static TestResult Failed(string name) => new(name, name, TestStatus.Failed, TimeSpan.Zero, null, $"{name} broke", null, null);
+        engine.AffectedRun = new AffectedRun(
+            new ImpactAnalysisResult([], [project], false, false) { AffectedTestFqns = ["Lib.Tests.A.One"] },
+            new TestRunRecord
+            {
+                RunId = "run-3",
+                EngineInstanceId = "engine",
+                Sequence = 3,
+                Trigger = TestRunTrigger.FileChange,
+                Status = TestRunStatus.Completed,
+                RequestedAt = DateTimeOffset.UnixEpoch,
+                Suites =
+                [
+                    new TestSuite("Lib.Tests", [Failed("Lib.Tests.A.Old"), Failed("Lib.Tests.A.One")], DateTimeOffset.UnixEpoch, TimeSpan.Zero)
+                    {
+                        ProjectId = "tests/Lib.Tests/Lib.Tests.csproj",
+                    },
+                ],
+                NewlyFailingTests = [new TestOutcomeReference("tests/Lib.Tests/Lib.Tests.csproj", "Lib.Tests.A.One")],
+            },
+            Reused: true);
         var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
 
         var json = JsonNode.Parse(await tools.RunAffectedTestsAsync(["src/Lib/Code.cs"], ct: _ct))!;
 
-        Assert.Equal(["tests/Lib.Tests/Lib.Tests.csproj"], engine.LastSelection!.ProjectIds);
-        Assert.Equal(["Lib.Tests.A.One", "Lib.Tests.B.Two"], engine.LastSelection.Tests);
+        Assert.Equal([Path.Combine(_root, "src", "Lib", "Code.cs")], engine.RunAffectedFiles);
         Assert.Equal("tests", (string?)json["scope"]);
-        Assert.Equal("run-3", (string?)json["run"]!["runId"]);
-        Assert.Equal("Completed", (string?)json["run"]!["status"]);
+        Assert.True((bool)json["reused"]!);
+        var run = json["run"]!;
+        Assert.Equal("run-3", (string?)run["runId"]);
+        Assert.Equal("FileChange", (string?)run["trigger"]);
+        Assert.Equal(2, (int)run["failed"]!);
+        Assert.Equal(1, (int)run["newlyFailing"]!);
+        var failed = run["failedTests"]!.AsArray();
+        Assert.Equal(["Lib.Tests.A.One", "Lib.Tests.A.Old"], failed.Select(t => (string?)t!["name"]));
+        Assert.True((bool)failed[0]!["new"]!);
+        Assert.Equal("Lib.Tests.A.One broke", (string?)failed[0]!["message"]);
     }
 
     [Fact]
-    public async Task RunAffectedTests_WhenNothingIsAffected_RunsNothing()
+    public async Task RunAffectedTests_WhenNothingIsAffected_ReportsNoRun()
     {
         var engine = Engine();
-        engine.AffectedPlan = new ImpactAnalysisResult([], [], false, false) { Explanation = "Only docs changed." };
+        engine.AffectedRun = new AffectedRun(
+            new ImpactAnalysisResult([], [], false, false) { Explanation = "Only docs changed." }, null, Reused: false);
         var tools = new CoverageTools(engine, NullMcpCallRecorder.Instance);
 
         var json = JsonNode.Parse(await tools.RunAffectedTestsAsync(["README.md"], ct: _ct))!;
 
         Assert.Equal("none", (string?)json["scope"]);
         Assert.Null(json["run"]);
-        Assert.Null(engine.LastSelection);
+        Assert.False((bool)json["reused"]!);
+    }
+
+    [Fact]
+    public async Task RunAffectedTests_WithoutAResultInTime_SaysTheRunContinues()
+    {
+        var tools = new CoverageTools(Engine(), NullMcpCallRecorder.Instance);
+
+        var ex = await Assert.ThrowsAsync<McpException>(() =>
+            tools.RunAffectedTestsAsync(["src/Lib/Code.cs"], timeoutSeconds: 1, ct: _ct));
+
+        Assert.Contains("No result within 1s", ex.Message, StringComparison.Ordinal);
     }
 
     [Fact]

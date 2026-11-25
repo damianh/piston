@@ -397,20 +397,25 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
     public IReadOnlyList<string> GetTestProjectPaths() => _orchestrator.GetTestProjectPaths();
 
-    public ImpactAnalysisResult PlanAffected(IReadOnlyList<string> filePaths)
-    {
-        // Mirror the watcher: changes under bin, obj and other excluded directories trigger nothing.
-        var watched = filePaths
+    public ImpactAnalysisResult PlanAffected(IReadOnlyList<string> filePaths) =>
+        WatchedFiles(filePaths) is { Count: > 0 } watched ? _orchestrator.PlanAffected(watched) : NoWatchedFileChanged;
+
+    public Task<AffectedRun> RunAffectedAsync(IReadOnlyList<string> filePaths, CancellationToken ct) =>
+        WatchedFiles(filePaths) is { Count: > 0 } watched
+            ? _orchestrator.RunAffectedAsync(watched, ct)
+            : Task.FromResult(new AffectedRun(NoWatchedFileChanged, null, Reused: false));
+
+    private static ImpactAnalysisResult NoWatchedFileChanged =>
+        new([], [], RequiresGraphRebuild: false, IsFullRun: false)
+        {
+            Explanation = "No watched file changed, so nothing would run.",
+        };
+
+    // Mirror the watcher: changes under bin, obj and other excluded directories trigger nothing.
+    private List<string> WatchedFiles(IReadOnlyList<string> filePaths) =>
+        [.. filePaths
             .Select(p => Path.GetFullPath(p, _solutionDirectory))
-            .Where(p => !File.Exists(p) || SourceFingerprinter.CoversPath(_solutionDirectory, p))
-            .ToList();
-        return watched.Count > 0
-            ? _orchestrator.PlanAffected(watched)
-            : new ImpactAnalysisResult([], [], RequiresGraphRebuild: false, IsFullRun: false)
-            {
-                Explanation = "No watched file changed, so nothing would run.",
-            };
-    }
+            .Where(p => !File.Exists(p) || SourceFingerprinter.CoversPath(_solutionDirectory, p))];
 
     public void Dispose() => DisposeAsync().AsTask().GetAwaiter().GetResult();
 

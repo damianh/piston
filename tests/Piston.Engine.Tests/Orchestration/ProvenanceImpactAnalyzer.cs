@@ -37,8 +37,24 @@ internal sealed class ProvenanceImpactAnalyzer(IReadOnlyList<string> testProject
     public HashSet<string> MtpProjects { get; } = [];
     public Task InitializeAsync(string solutionPath, CancellationToken ct) => Initialization;
 
-    public ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes) =>
-        new([TestProjects[0]], [TestProjects[0]], RequiresGraphRebuild: false, IsFullRun: false);
+    /// <summary>The file paths of every <see cref="Analyze"/> call, in call order.</summary>
+    public List<IReadOnlyList<string>> AnalyzedFiles { get; } = [];
+
+    public ImpactAnalysisResult Analyze(IReadOnlyList<FileChangeEvent> changes)
+    {
+        lock (AnalyzedFiles)
+        {
+            AnalyzedFiles.Add([.. changes.Select(c => c.FilePath)]);
+        }
+
+        return new([TestProjects[0]], [TestProjects[0]], RequiresGraphRebuild: false, IsFullRun: false);
+    }
+
+    /// <summary>What <see cref="Preview"/> returns; by default the first test project, like <see cref="Analyze"/>.</summary>
+    public ImpactAnalysisResult? PreviewResult { get; set; }
+
+    public ImpactAnalysisResult Preview(IReadOnlyList<FileChangeEvent> changes) =>
+        PreviewResult ?? new([TestProjects[0]], [TestProjects[0]], RequiresGraphRebuild: false, IsFullRun: false);
 
     public ImpactAnalysisResult AnalyzeFullRun() =>
         new(TestProjects, TestProjects, RequiresGraphRebuild: false, IsFullRun: true);

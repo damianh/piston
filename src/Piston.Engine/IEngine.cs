@@ -29,6 +29,15 @@ public interface IEngine : IDisposable
         throw new NotSupportedException("Running selected tests is not supported by this engine.");
 
     /// <summary>
+    /// Tests the changes to <paramref name="filePaths"/> (absolute, or relative to the solution directory). Waits
+    /// for the file watcher and any active run first, then reuses the latest run when it already tested those
+    /// changes on the present source; otherwise runs the tests <see cref="PlanAffected"/> selects, without
+    /// superseding another run. Cancelling <paramref name="ct"/> stops the wait, not the run.
+    /// </summary>
+    Task<Models.AffectedRun> RunAffectedAsync(IReadOnlyList<string> filePaths, CancellationToken ct) =>
+        throw new NotSupportedException("Running affected tests is not supported by this engine.");
+
+    /// <summary>
     /// Re-initialises the engine without restarting the process: cancels the active run, clears results
     /// and coverage, reloads the solution graph, restarts file monitoring and starts a full run that
     /// re-discovers all tests. Returns once the run is requested.
