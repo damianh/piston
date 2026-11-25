@@ -17,6 +17,12 @@ using Piston.Protocol.JsonRpc;
 using Piston.Protocol.Messages;
 using Piston.Protocol.Transports;
 
+// Internal step of the Windows launcher (piston.cmd), not a user command.
+if (args is [RuntimeStaging.Command, .. var stageArgs])
+{
+    return RuntimeStaging.Run(stageArgs, Console.Error);
+}
+
 // ── Shared arguments & options ─────────────────────────────────────────────────
 
 var rootSolutionArg = CreateSolutionArgument();
@@ -99,7 +105,21 @@ var forceOpt = new Option<bool>("--force")
 
 var allOpt = new Option<bool>("--all")
 {
-    Description = "List live and stale worktree ownership records.",
+    Description = "List live worktree owners and prune stale ownership records.",
+};
+
+var trustPathArg = new Argument<string?>("path")
+{
+    Arity = ArgumentArity.ZeroOrOne,
+    Description = "Repository path (defaults to the current directory).",
+};
+var trustListOpt = new Option<bool>("--list")
+{
+    Description = "List trusted clones.",
+};
+var trustRevokeOpt = new Option<bool>("--revoke")
+{
+    Description = "Revoke trust for the selected clone.",
 };
 
 // ── Root command (default: web UI with auto-start) ─────────────────────────────
@@ -289,6 +309,69 @@ statusCmd.SetAction(async parseResult =>
 });
 
 rootCommand.Subcommands.Add(statusCmd);
+
+// ── repository trust ──────────────────────────────────────────────────────────
+
+var trustCmd = new Command("trust", "Trust or revoke a repository clone for builds and tests.");
+trustCmd.Arguments.Add(trustPathArg);
+trustCmd.Options.Add(trustListOpt);
+trustCmd.Options.Add(trustRevokeOpt);
+trustCmd.SetAction(parseResult =>
+{
+    if (parseResult.GetValue(trustListOpt) && parseResult.GetValue(trustRevokeOpt))
+    {
+        Console.Error.WriteLine("error: --list and --revoke cannot be used together.");
+        return 1;
+    }
+
+    try
+    {
+        var store = new RepositoryTrustStore(RepositoryTrustStore.ResolveDefaultPath());
+        if (parseResult.GetValue(trustListOpt))
+        {
+            var trusted = store.List();
+            if (trusted.Count == 0)
+            {
+                Console.WriteLine("No trusted repositories.");
+            }
+            else
+            {
+                foreach (var repository in trusted)
+                {
+                    Console.WriteLine(repository.Path);
+                }
+            }
+            return 0;
+        }
+
+        var path = Path.GetFullPath(parseResult.GetValue(trustPathArg) ?? Directory.GetCurrentDirectory());
+        if (!Directory.Exists(path) && !File.Exists(path))
+        {
+            Console.Error.WriteLine($"error: Repository path '{path}' does not exist.");
+            return 1;
+        }
+
+        var clone = CloneIdentity.FromWorktreePath(path);
+        if (parseResult.GetValue(trustRevokeOpt))
+        {
+            Console.WriteLine(store.Revoke(clone)
+                ? $"Revoked trust for '{clone.RootPath}'."
+                : $"'{clone.RootPath}' was not trusted.");
+        }
+        else
+        {
+            store.Trust(clone);
+            Console.WriteLine($"Trusted '{clone.RootPath}' for builds and tests.");
+        }
+        return 0;
+    }
+    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or ExecutionCoordinationException)
+    {
+        Console.Error.WriteLine($"error: {ex.Message}");
+        return 1;
+    }
+});
+rootCommand.Subcommands.Add(trustCmd);
 
 // ── coverage-export subcommand ────────────────────────────────────────────────
 
@@ -703,10 +786,6 @@ static async Task<int> RunMcpAsync(
         }
         options = HostHelpers.BuildOptions(solutionPath, cliDebounceMs, cliFilter, cliCoverage, cliParallelism, config,
             McpStdioHost.OwnerHost);
-        if (!HostHelpers.DotnetSdkAvailable())
-        {
-            startupError = "'dotnet' SDK not found on PATH. Install .NET 11 SDK from https://dot.net.";
-        }
     }
     catch (InvalidOperationException ex)
     {
@@ -1008,9 +1087,9 @@ static async Task<int> RunStatusAsync(FileInfo? solutionArg, string? cliPipeName
     {
         info = await client.GetDaemonInfoAsync(statusCts.Token);
     }
-    catch (InvalidOperationException)
+    catch (InvalidOperationException ex)
     {
-        // Older daemon without daemon/info.
+        Console.Error.WriteLine($"[piston] Could not retrieve daemon metadata: {ex.Message}");
     }
     catch (OperationCanceledException)
     {

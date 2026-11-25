@@ -14,6 +14,9 @@ public static class ProtocolMethods
     /// <summary>Force an immediate test run.</summary>
     public const string EngineForceRun = "engine/forceRun";
 
+    /// <summary>Grant trust for the current clone and start a deferred engine.</summary>
+    public const string EngineGrantTrust = "engine/grantTrust";
+
     /// <summary>Stop the engine.</summary>
     public const string EngineStop = "engine/stop";
 
@@ -23,6 +26,12 @@ public static class ProtocolMethods
     /// <summary>Clear all test results.</summary>
     public const string EngineClearResults = "engine/clearResults";
     public const string EngineReset = "engine/reset";
+
+    /// <summary>Pause automatic processing: file changes are queued and the active run is cancelled.</summary>
+    public const string EnginePause = "engine/pause";
+
+    /// <summary>Resume automatic processing, running once for the files changed while paused.</summary>
+    public const string EngineResume = "engine/resume";
 
     /// <summary>Start a run of selected tests; replies once the run is requested, without awaiting it.</summary>
     public const string EngineRunTests = "engine/runTests";

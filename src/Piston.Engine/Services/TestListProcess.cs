@@ -61,10 +61,10 @@ internal static class TestListProcess
                 },
                 TestProcessRunner.ProgressInterval);
 
-        OwnedTestProcess ownedProcess;
+        OwnedProcess ownedProcess;
         try
         {
-            ownedProcess = new OwnedTestProcess(psi);
+            ownedProcess = new OwnedProcess(psi);
         }
         catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
         {

@@ -586,6 +586,22 @@ public sealed class EngineClientService : IAsyncDisposable
     }
 
     public Task ResetAsync() => SendCommandAsync(ProtocolMethods.EngineReset);
+    public async Task GrantTrustAsync()
+    {
+        var response = await SendForResponseAsync(ProtocolMethods.EngineGrantTrust, null).ConfigureAwait(false);
+        if (response?.Error is { } error)
+        {
+            throw new InvalidOperationException(error.Message);
+        }
+
+        if (response is null)
+        {
+            throw new InvalidOperationException("Piston did not respond to the repository trust request.");
+        }
+    }
+
+    public Task PauseAsync() => SendCommandAsync(ProtocolMethods.EnginePause);
+    public Task ResumeAsync() => SendCommandAsync(ProtocolMethods.EngineResume);
     public Task SetFilterAsync(string? filter) => SendCommandAsync(ProtocolMethods.EngineSetFilter, new SetFilterCommand(filter));
 
     public async ValueTask DisposeAsync()

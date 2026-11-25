@@ -3,6 +3,29 @@
 Piston is a local development tool. The daemon runs builds and tests for the solution it
 watches, which means it runs that solution's code, as the user who started it.
 
+## Repository trust
+
+Opening or refreshing the dashboard canvas only inspects the current worktree; it does not
+start an engine or run tests. A `piston mcp` process for an untrusted clone starts its
+dashboard without evaluating the solution or running tests. The dashboard offers a
+**Trust and start** action; alternatively, the user can run `piston trust [path]`. Until
+then, MCP requests that need an engine are refused and agents must ask the user rather
+than granting trust themselves.
+
+Trust is stored in the user's local application data, outside the repository, and applies
+to the whole Git clone (the common Git directory), including its linked worktrees. It can
+be inspected with `piston trust --list` and revoked with `piston trust --revoke [path]`.
+Starting Piston explicitly with `piston daemon`, the root `piston` command when it creates
+a daemon, or the canvas Start action trusts that clone and starts its normal startup run.
+After upgrading, each clone's first MCP session will wait for approval unless it is
+explicitly started or trusted.
+
+This gate prevents unattended session startup from executing an unfamiliar repository; it
+is not a sandbox. Trusting a clone also trusts its future branches and linked worktrees,
+so an untrusted PR checked out in an already-trusted clone can run automatically. An agent
+with shell access can still execute code directly. Review repositories before trusting
+them, and revoke trust when it is no longer needed.
+
 ## What the daemon exposes
 
 | Endpoint | Default | Who can reach it |

@@ -38,11 +38,13 @@ public sealed class DashboardDiscoveryTests : IDisposable
         using var owner = WorktreeOwnership.Acquire(_directory, current);
         using var otherOwner = WorktreeOwnership.Acquire(_directory, other);
         owner.PublishDashboardUrl("http://127.0.0.1:12345");
-        otherOwner.PublishDashboardUrl("http://evil.example:1234");
+        otherOwner.PublishDashboardUrl("http://localhost:1234");
+        var infoPath = Path.Combine(OwnersDirectory, $"{otherOwner.Worktree.Key}.json");
+        File.WriteAllText(infoPath, File.ReadAllText(infoPath)
+            .Replace("http://localhost:1234", "http://evil.example:1234", StringComparison.Ordinal));
         Assert.Equal("connected", DashboardDiscovery.Inspect(current, _directory).State);
         Assert.Equal("error", DashboardDiscovery.Inspect(other, _directory).State);
 
-        var infoPath = Path.Combine(OwnersDirectory, $"{otherOwner.Worktree.Key}.json");
         var metadata = File.ReadAllText(infoPath);
         otherOwner.Dispose();
         File.WriteAllText(infoPath, metadata);

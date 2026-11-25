@@ -14,8 +14,17 @@ public sealed class CoverageCommandLineTests : IDisposable
 {
     private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
     private readonly string _root = Directory.CreateTempSubdirectory("piston-coverage-cli-").FullName;
+    private bool _fixtureTrusted;
 
-    public void Dispose() => Directory.Delete(_root, recursive: true);
+    public void Dispose()
+    {
+        if (_fixtureTrusted)
+        {
+            _ = new RepositoryTrustStore(RepositoryTrustStore.ResolveDefaultPath())
+                .Revoke(CloneIdentity.FromWorktreePath(_root));
+        }
+        Directory.Delete(_root, recursive: true);
+    }
 
     [Theory]
     [InlineData("daemon", "--coverage")]
@@ -72,6 +81,7 @@ public sealed class CoverageCommandLineTests : IDisposable
         bool configured, string option, bool expected)
     {
         WriteEmptySolutionAndConfig(configured);
+        _fixtureTrusted = true;
 
         var result = await RunAsync("daemon", "App.slnx", "--stdio", option);
 
@@ -102,6 +112,9 @@ public sealed class CoverageCommandLineTests : IDisposable
         bool configured, string option, bool expected)
     {
         WriteEmptySolutionAndConfig(configured);
+        new RepositoryTrustStore(RepositoryTrustStore.ResolveDefaultPath())
+            .Trust(CloneIdentity.FromWorktreePath(_root));
+        _fixtureTrusted = true;
         using var process = Process.Start(StartInfo("mcp", "App.slnx", option))
             ?? throw new InvalidOperationException("Failed to start piston mcp.");
         var error = process.StandardError.ReadToEndAsync(_ct);

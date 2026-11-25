@@ -97,11 +97,13 @@ public sealed class MachineOverviewCommandTests : IDisposable
         using var healthy = WorktreeOwnership.Acquire(
             directory, Path.Combine(healthyRoot, "App.slnx"), dashboardUrl: "http://localhost:5199");
         using var invalid = WorktreeOwnership.Acquire(directory, Path.Combine(invalidRoot, "App.slnx"));
-        invalid.PublishDashboardUrl("http://evil.example:1234");
+        invalid.PublishDashboardUrl("http://localhost:1234");
+        var infoPath = Path.Combine(directory.BaseDirectory, "v1", "owners", $"{invalid.Worktree.Key}.json");
+        var metadata = (await File.ReadAllTextAsync(infoPath, _ct))
+            .Replace("http://localhost:1234", "http://evil.example:1234", StringComparison.Ordinal);
+        await File.WriteAllTextAsync(infoPath, metadata, _ct);
         if (stale)
         {
-            var infoPath = Path.Combine(directory.BaseDirectory, "v1", "owners", $"{invalid.Worktree.Key}.json");
-            var metadata = await File.ReadAllTextAsync(infoPath, _ct);
             invalid.Dispose();
             await File.WriteAllTextAsync(infoPath, metadata, _ct);
         }
@@ -113,12 +115,19 @@ public sealed class MachineOverviewCommandTests : IDisposable
 
         Assert.True(dto.OwnersAvailable);
         Assert.Null(dto.Error);
-        Assert.Equal(2, dto.Worktrees.Count);
+        Assert.Equal(stale ? 1 : 2, dto.Worktrees.Count);
         var pathComparer = OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
         Assert.Equal("http://localhost:5199",
             Assert.Single(dto.Worktrees, w => pathComparer.Equals(w.WorktreePath, healthyRoot)).DashboardUrl);
-        var invalidDto = Assert.Single(dto.Worktrees, w => pathComparer.Equals(w.WorktreePath, invalidRoot));
-        Assert.Null(invalidDto.DashboardUrl);
-        Assert.Equal(stale ? "Stale" : "Live", invalidDto.Liveness);
+        if (stale)
+        {
+            Assert.False(File.Exists(infoPath));
+        }
+        else
+        {
+            var invalidDto = Assert.Single(dto.Worktrees, w => pathComparer.Equals(w.WorktreePath, invalidRoot));
+            Assert.Null(invalidDto.DashboardUrl);
+            Assert.Equal("Live", invalidDto.Liveness);
+        }
     }
 }

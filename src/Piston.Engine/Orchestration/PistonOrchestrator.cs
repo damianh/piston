@@ -1082,7 +1082,34 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         _state.LastChangedFiles = batch.Changes.Select(e => e.FilePath).ToList();
         _activitySink.Emit(new FileChangesDetectedActivityEvent(
             _solutionPath, _state.LastChangedFiles));
-        _ = TriggerRunAsync(_solutionPath, batch, TestRunTrigger.FileChange);
+
+        // The pause check and the run registration are atomic, so a concurrent Pause() either sees this run or queues it.
+        CancellationTokenSource? cts = null;
+        var queued = false;
+        lock (_lifecycleLock)
+        {
+            if (!_disposed)
+            {
+                queued = TryQueuePausedChangeLocked(batch);
+                if (!queued)
+                {
+                    cts = RegisterRunLocked(batch, TestRunTrigger.FileChange);
+                }
+            }
+        }
+
+        if (queued)
+        {
+            _state.NotifyChanged();
+        }
+        else if (cts is not null)
+        {
+            _ = RunTrackedAsync(_solutionPath, batch, TestRunTrigger.FileChange, null, cts);
+        }
+        else
+        {
+            _ = TriggerRunAsync(_solutionPath, batch, TestRunTrigger.FileChange);
+        }
     }
 
     /// <summary>
@@ -1142,18 +1169,28 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 return null;
             }
 
-            if (_activePipelines++ == 0)
-            {
-                _pipelinesDrained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            }
-
-            CancelBackfill();
-            cts = new CancellationTokenSource();
-            var oldCts = _cts;
-            _cts = cts;
-            oldCts?.Cancel();
+            cts = RegisterRunLocked(batch, trigger);
         }
         return RunTrackedAsync(solutionPath, batch, trigger, selection, cts);
+    }
+
+    // Makes a new run the active one, superseding the previous run. Caller holds _lifecycleLock and starts
+    // RunTrackedAsync with the returned token source outside the lock.
+    private CancellationTokenSource RegisterRunLocked(FileChangeBatch? batch, TestRunTrigger trigger)
+    {
+        if (_activePipelines++ == 0)
+        {
+            _pipelinesDrained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        CancelBackfill();
+        var cts = new CancellationTokenSource();
+        var oldCts = _cts;
+        _cts = cts;
+        _activeRunChanges = batch?.Changes;
+        _startupRunPending |= trigger == TestRunTrigger.Startup;
+        oldCts?.Cancel();
+        return cts;
     }
 
     private async Task<TestRunRecord> RunTrackedAsync(
@@ -1170,6 +1207,12 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 if (ReferenceEquals(_cts, cts))
                 {
                     _cts = null;
+                    _activeRunChanges = null;
+                }
+
+                if (ReferenceEquals(_pauseCancelledCts, cts))
+                {
+                    _pauseCancelledCts = null;
                 }
 
                 cts.Dispose();
@@ -1199,7 +1242,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         {
             return CompleteRun(run, TestRunStatus.Cancelled, _stopping
                 ? "Engine stopped before the run started."
-                : "Superseded by a newer run before it started.");
+                : PausedReason(newCts) ?? "Superseded by a newer run before it started.");
         }
 
         var solutionDir = Path.GetDirectoryName(Path.GetFullPath(solutionPath)) ?? solutionPath;
@@ -1230,12 +1273,18 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
         TestRunRecord Finish(TestRunStatus status, string? reason, bool computeAfter = true)
         {
+            if (status == TestRunStatus.Cancelled && PausedReason(newCts) is { } pausedReason)
+            {
+                reason = pausedReason;
+            }
+
             var finished = CompleteRun(run, status, reason, solutionDir, changeGenerationAtStart, computeAfter);
             if (status == TestRunStatus.Completed && testedThroughGeneration is { } generation)
             {
                 ForgetPendingChanges(generation);
             }
 
+            DropPausedChangesCoveredBy(finished, changeGenerationAtStart);
             lock (_runRecordsLock)
             {
                 ArtifactStore?.Prune(_state.RecentRuns, _state.TestSuites);
@@ -2181,7 +2230,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         }
         catch (OperationCanceledException)
         {
-            // Superseded by a newer run — reset phase cleanly
+            // Superseded by a newer run or paused — reset phase cleanly
             _state.Phase = PistonPhase.Watching;
             _state.NotifyChanged();
             return Finish(TestRunStatus.Cancelled, "Superseded by a newer run.");

@@ -23,6 +23,16 @@ public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args[0] == "build")
+        {
+            var result = await new BuildService().BuildAsync(args[1], CancellationToken.None);
+            foreach (var error in result.Errors)
+            {
+                Console.Error.WriteLine(error);
+            }
+            return result.Status == Engine.Models.BuildStatus.Succeeded ? 0 : 1;
+        }
+
         if (args[0] == "discover")
         {
             var tests = await TestListProcess.RunAsync(
@@ -32,7 +42,7 @@ public static class Program
             return 0;
         }
 
-        if (args[0] is "run" or "run-raw")
+        if (args[0] is "run" or "run-raw" or "run-tree")
         {
             var start = new ProcessStartInfo(args[1])
             {
@@ -53,7 +63,7 @@ public static class Program
                 }
             }
 
-            using var owned = new OwnedTestProcess(start);
+            using var owned = new OwnedProcess(start);
             owned.Process.OutputDataReceived += (_, e) =>
             {
                 if (e.Data is not null)
@@ -69,6 +79,10 @@ public static class Program
                 }
             };
             owned.Start();
+            if (args[0] == "run-tree")
+            {
+                Console.WriteLine($"LAUNCHER {owned.Process.Id}");
+            }
             owned.Process.BeginOutputReadLine();
             owned.Process.BeginErrorReadLine();
             _ = await RedirectedProcessDrain.WaitForExitAndDrainAsync(

@@ -9,6 +9,9 @@ public interface IEngine : IDisposable
     Task StartAsync(string solutionPath);
     Task ForceRunAsync();
 
+    /// <summary>Grants per-clone trust and starts the deferred engine, when trust is required.</summary>
+    Task GrantTrustAsync() => throw new NotSupportedException("Repository trust is not supported by this engine.");
+
     /// <summary>
     /// Requests a full-scope run and returns that run's provenance record once it is terminal.
     /// The default implementation is for test doubles; it cannot bind the result to the request.
@@ -43,6 +46,15 @@ public interface IEngine : IDisposable
     /// re-discovers all tests. Returns once the run is requested.
     /// </summary>
     Task ResetAsync() => throw new NotSupportedException("Reset is not supported by this engine.");
+
+    /// <summary>
+    /// Pauses automatic processing: file changes are queued instead of starting runs, the idle impact backfill
+    /// stops and the active run is cancelled. Requested runs, reset and verification still execute.
+    /// </summary>
+    void Pause() => throw new NotSupportedException("Pausing is not supported by this engine.");
+
+    /// <summary>Resumes automatic processing, running once for the files changed while paused.</summary>
+    void Resume() => throw new NotSupportedException("Pausing is not supported by this engine.");
 
     /// <summary>
     /// Produces current full verification for the present source, reusing or awaiting qualifying runs

@@ -35,6 +35,22 @@ public sealed class CoverageCommandTests : IDisposable
     private static CoverageFileSummary Summary(string path, int total, int covered, bool stale = false) =>
         new(path, "Lib", total, covered, 4, 3, stale, IsPartial: false, "hash", 3, DateTimeOffset.UnixEpoch);
 
+    [Theory]
+    [InlineData(ProtocolMethods.CoverageGetChangedLines)]
+    [InlineData(ProtocolMethods.CoverageGetChangeDiff)]
+    public async Task ChangedCoverage_AwaitingTrust_IsRejected(string method)
+    {
+        var engine = new StubEngine();
+        engine.State.Phase = PistonPhase.AwaitingTrust;
+        engine.State.CoverageEnabled = true;
+        engine.State.SolutionPath = Path.Combine(_root, "App.slnx");
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var exception = await Assert.ThrowsAsync<JsonRpcException>(
+            () => dispatcher.HandleCommandAsync(method, null, _ct));
+        Assert.Contains("trust", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public void StateSnapshot_MapsAndSerializesProjectCoverageAndStorageError()
     {

@@ -249,7 +249,7 @@ internal sealed class MtpWarmHostPool(MtpServerSession.StageTimeouts? timeouts =
 
     private sealed class WarmHost(string key, string workingDirectory, string fingerprint) : IAsyncDisposable
     {
-        private OwnedTestProcess? _process;
+        private OwnedProcess? _process;
         private TcpClient? _client;
         private MtpServerSession.ServerLink? _link;
         private bool _ended;

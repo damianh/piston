@@ -48,6 +48,8 @@ piston init claude --write
 
 The setup installs the MCP entry and Piston's agent instructions. The client starts a separate stdio server for each worktree. See the [agent setup guide](docs/agent-usage.md) for other clients and configuration.
 
+For safety, a new MCP session in an untrusted clone waits for user approval before evaluating the solution or running tests. The dashboard canvas itself only inspects state; see the [security policy](SECURITY.md#repository-trust) for trust scope and commands.
+
 ## Coverage
 
 Coverage is on by default for the daemon and MCP engine. The dashboard shows line and branch coverage
@@ -65,7 +67,9 @@ See the [user guide](docs/user-guide.md#coverage-and-impact-selection).
 
 ## Upgrade safely
 
-Stop Piston sessions and daemons before updating the installed tool. On Linux and macOS, a live update can remove files still needed by the running process; on Windows, loaded files can block the update. Close MCP clients, stop each daemon with `piston stop`, then update and restart:
+On Windows, `dotnet tool update` works while Piston runs: running MCP sessions and daemons keep their version, and new commands use the update. The first update from an older release still needs those processes stopped.
+
+On Linux and macOS, stop Piston sessions and daemons before updating, because a live update can remove files still needed by the running process. Close MCP clients, stop each daemon with `piston stop`, then update and restart:
 
 ```sh
 dotnet tool update --global DamianH.Piston

@@ -6,9 +6,11 @@ description: Verify .NET code with the Piston MCP server instead of running dotn
 # Verifying .NET changes with Piston
 
 The `piston` MCP server (`piston mcp`, one process per agent session) keeps this
-worktree's solution built and tested continuously. Use its tools instead of
-running `dotnet build` / `dotnet test` yourself. Starting a Piston MCP engine
-itself triggers a full build and test run and subsequent runs on changes.
+worktree's solution built and tested continuously after the repository is trusted.
+In an untrusted clone, MCP starts without evaluating the solution or running tests
+until the user approves it in the dashboard or runs `piston trust [path]`. Trust is
+per clone and shared by linked worktrees. Do not grant trust on the user's behalf.
+Use its tools instead of running `dotnet build` / `dotnet test` yourself.
 
 Invoking `/piston` alone does not specify an operation: ask what the user wants.
 Do not treat a solution path alone as a request to run tests.
@@ -83,4 +85,5 @@ If the `piston-dashboard` canvas is installed, opening it or its `refresh` actio
 only inspects state. Its Start Piston button starts a daemon and its startup run;
 `run` and `run_failed` request tests. A daemon owns the worktree and cannot share
 it with a separate stdio MCP engine. A `piston mcp`
-session serves the dashboard on an ephemeral loopback port.
+session serves the dashboard on an ephemeral loopback port. If the dashboard shows
+the trust prompt, request approval from the user before calling run tools.

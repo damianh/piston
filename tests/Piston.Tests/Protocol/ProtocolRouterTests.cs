@@ -173,11 +173,13 @@ public sealed class ProtocolRouterTests
         await router.DisposeAsync();
     }
 
-    // ── Client sends engine/forceRun or engine/reset → receives success response ──
+    // ── Client sends an engine command → receives success response ──
 
     [Theory]
     [InlineData(ProtocolMethods.EngineForceRun)]
     [InlineData(ProtocolMethods.EngineReset)]
+    [InlineData(ProtocolMethods.EnginePause)]
+    [InlineData(ProtocolMethods.EngineResume)]
     public async Task ClientSendsEngineCommand_EngineMethodCalled_ReceivesResponse(string method)
     {
         var pipeName = UniquePipeName();
@@ -205,6 +207,8 @@ public sealed class ProtocolRouterTests
         Assert.Null(response.Error);
         Assert.Equal(method == ProtocolMethods.EngineForceRun, engine.ForceRunCalled);
         Assert.Equal(method == ProtocolMethods.EngineReset, engine.ResetCalled);
+        Assert.Equal(method == ProtocolMethods.EnginePause, engine.PauseCalled);
+        Assert.Equal(method == ProtocolMethods.EngineResume, engine.ResumeCalled);
 
         await cts.CancelAsync();
         await client.DisposeAsync();
@@ -422,6 +426,14 @@ public sealed class ProtocolRouterTests
         }
 
         public void Stop() { }
+
+        public bool PauseCalled { get; private set; }
+
+        public void Pause() => PauseCalled = true;
+
+        public bool ResumeCalled { get; private set; }
+
+        public void Resume() => ResumeCalled = true;
 
         public void SetFilter(string? filter) { }
 

@@ -44,8 +44,8 @@ dotnet tool install DamianH.Piston --version 0.0.0-local --tool-path ./tools --s
 ./tools/piston daemon /path/to/solution.slnx
 ```
 
-Use an actual solution path in the last command. On Windows, the executable is
-`.\tools\piston.exe`. Package ID is `DamianH.Piston`, command name is `piston`, and `0.0.0-local`
+Use an actual solution path in the last command. On Windows, the command is
+`.\tools\piston.cmd` (see [Windows runtime copies](#windows-runtime-copies)). Package ID is `DamianH.Piston`, command name is `piston`, and `0.0.0-local`
 is the local development package version; use the built/released version when
 it differs. The package is framework-dependent and requires the .NET 11 SDK
 and ASP.NET Core 11 runtime, plus the target solution's own SDK requirements.
@@ -77,8 +77,13 @@ Registry. The framework-dependent runtime requirements above still apply.
 
 ### Upgrading
 
-**Stop every Piston process using the installed package before updating, on all
-operating systems.** Close/disconnect stdio MCP sessions in each client, stop
+On **Windows**, `dotnet tool update` works while Piston is running: MCP sessions
+and daemons keep running the version they started with, and new commands use the
+updated version. Reconnect MCP clients and restart daemons when you want them on
+the new version.
+
+On **Linux and macOS**, stop every Piston process using the installed package
+before updating. Close/disconnect stdio MCP sessions in each client, stop
 daemons with `piston stop` in each worktree, and use `piston status --all` to
 check for remaining owners. Do not use `--force` unless you intend to terminate
 the identified process.
@@ -92,6 +97,10 @@ Use `--version <version>` to pin the update. For an isolated installation,
 replace `--global` with `--tool-path ./tools`; for a local feed, also add
 `--source ./packages`. Reconnect MCP clients and restart any daemon with its
 previous options (including `--no-coverage`, if used) after updating.
+
+**Updating from a release without runtime copies on Windows:** earlier releases
+ran directly from the tool store, so the first update to a release with runtime
+copies still requires stopping their processes. Later updates do not.
 
 If an earlier local build was installed under the `Piston` package ID, stop its
 processes and uninstall it before installing the renamed package:
@@ -109,23 +118,42 @@ rename the package, and both IDs provide the same `piston` command.
 |---|---|
 | Linux | Two-version validation on Ubuntu found that updating succeeds while the old process remains live. Its removed package directory makes the dashboard return 404 and a forced MCP test run return `Incomplete`. Stop/update/restart restores the dashboard and full test execution. |
 | macOS | Validation on macOS found the same behavior as Linux: updating succeeds, but the old daemon loses dashboard assets and the old MCP process cannot complete a forced test run. Stop/update/restart restores both. |
-| Windows | Validation found that both live MCP and daemon updates fail to uninstall the old version with an access-denied error for the tool store. The old processes continue working. Closing the clients/stopping the daemon, retrying the update and restarting succeeds. |
+| Windows | Updating succeeds while MCP sessions and daemons run; they keep serving the dashboard and running tests on their original version. |
 
-These observations come from a [three-OS non-publishing release validation](https://github.com/damianh/piston/actions/runs/41178160412)
+The Linux and macOS observations come from a [three-OS non-publishing release validation](https://github.com/damianh/piston/actions/runs/41178160412)
 using .NET 10 and isolated `--tool-path` installations (the same `.store` layout).
 They are not an uninterrupted-upgrade guarantee for every SDK/runtime version.
 Update success does not mean an already-running process upgraded.
 
 `dotnet run build.cs -- smoke-distribution` probes live stdio MCP and daemon
-updates with two versions in disposable tool stores, logs the actual behavior,
-and requires the replacement CLI/MCP/daemon to work. It does not update a user's
+updates with two versions in disposable tool stores. On Windows it requires the
+update to succeed and the running MCP session and daemon to keep working; on
+Linux and macOS it logs their behavior. It always requires the replacement
+CLI/MCP/daemon to work. It does not update a user's
 global installation. With `dnx`, disconnect the client, change its pinned package
 version and reconnect; an already-running process never switches versions.
+
+#### Windows runtime copies
+
+On Windows the package installs a `piston.cmd` launcher instead of `piston.exe`.
+On its first start for each package build, it copies the tool to
+`%LOCALAPPDATA%\Piston\runtimes\<version>-<hash>`; every start then runs Piston from
+there with `dotnet`, so nothing in the .NET tool store stays in use. Runtime copies unused
+for 7 days are deleted when another build is first started; copies still in use are kept.
+Linux and macOS install the portable package and run from the tool store as before.
+
+Because the command is a batch file:
+
+- `dotnet` must be on `PATH`.
+- Quote arguments containing `&`, `|`, `<`, `>` or `^`.
+- Pressing Ctrl+C in an interactive console may ask `Terminate batch job (Y/N)?`.
+- Clients that launch MCP servers without a shell and cannot run `.cmd` files
+  directly should use `cmd /c piston mcp` as the command.
 
 ## Usage
 
 Examples below assume `piston` is on `PATH`; with the isolated install above,
-substitute `./tools/piston` (or `.\tools\piston.exe` on Windows).
+substitute `./tools/piston` (or `.\tools\piston.cmd` on Windows).
 
 ```sh
 # Start (or attach to) the daemon and open the web dashboard
@@ -140,6 +168,7 @@ piston mcp [<solution>] [--debounce <ms>] [--filter <pattern>] [--coverage|--no-
 # Manage a running daemon / inspect worktree owners
 piston stop [<solution>] [--force]
 piston status [<solution>] [--all]
+piston trust [<path>] [--list|--revoke]
 
 # Export the running daemon's coverage report (stdout unless -o is given)
 piston coverage-export [<solution>] [--format lcov|cobertura] [-o <file>]
@@ -148,9 +177,14 @@ piston coverage-export [<solution>] [--format lcov|cobertura] [-o <file>]
 piston init copilot|claude [--write] [--scope user|repo] [--force]
 ```
 
-`piston status --all` lists every live worktree owner (PID, `mcp` or `daemon`, solution, worktree and dashboard URL where available) and stale ownership records. The dashboard's **Machine** tab shows the same ownership overview and links to local dashboards. If a worktree's owner cannot be reached over the daemon pipe (for example a `piston mcp` process, or a daemon whose worktree was deleted), `piston stop` prints the owner's PID, solution and worktree and exits 1; `piston stop --force` sends SIGTERM and kills the process if it has not exited.
+`piston status --all` lists every live worktree owner (PID, `mcp` or `daemon`, solution, worktree and dashboard URL where available). Ownership enumeration automatically removes stale diagnostic records while holding their ownership locks; persistent lock files remain. This removes metadata, not processes: a released ownership lock alone does not prove that an older owner's descendants exited. Cleanup failures are reported rather than silently treated as success. The dashboard's **Machine** tab shows the same ownership overview and links to local dashboards. If a worktree's owner cannot be reached over the daemon pipe (for example a `piston mcp` process, or a daemon whose worktree was deleted), `piston stop` prints the owner's PID, solution and worktree and exits 1; `piston stop --force` sends SIGTERM and kills the process if it has not exited.
 
 `piston status` prints the daemon's PID, solution, phase, web and MCP URLs, and its latest and active run. `piston stop` asks the daemon to shut down, then waits for its process to exit. It exits 0 only once the process has exited, so the ports are free; with no daemon running it prints `No daemon running` and also exits 0. Startup failures exit with code 1 and an `error:` message: a worktree that already has a daemon, or an occupied `--mcp-port`/`--web-port`. Endpoints bind after worktree ownership is taken and before the startup run, so a port conflict starts no build or test run.
+
+`piston trust` records trust for the current Git clone (or the supplied path) in the
+per-user trust store. `--list` shows trusted clones; `--revoke` removes trust for the
+current or supplied clone. Trust is shared by linked worktrees. Starting `piston daemon`
+explicitly trusts the clone and runs its normal startup build and tests.
 
 `piston coverage-export` asks the running daemon for its coverage report and writes it as LCOV (default) or Cobertura XML, for editors, CI or ReportGenerator. Files changed since they were measured are left out. Large exports are transferred in bounded chunks from one snapshot, so they can exceed the pipe's per-message size limit without mixing measurements from different runs. It exits 1 when no daemon is running or coverage is disabled.
 
@@ -241,7 +275,7 @@ A test's standard output and standard error are shown separately. Test-produced 
 
 The MTP `dotnet test` fallback's artifact summary does not identify the producing framework. If a test name matches multiple results, Piston reports the ambiguous attachment in the project's execution log rather than assigning it to the wrong test.
 
-Project, framework, namespace, class and pinned rows show how many tests they contain, with how many passed (✓) and failed (✗), and every group row shows its tests' summed duration. **Run failed** in the toolbar re-runs every failed test. Click the **Name** or **Duration** column header to sort the tree; click again to reverse direction. Duration starts slowest first and orders groups by summed test time. Pinned tests stay at the top, and status groups keep failures first. When a failure message has an expected and an actual value (xUnit, NUnit, MSTest or Shouldly), the test's details show them side by side with the difference highlighted. With [run history](#run-history-and-failure-classification), a test's details show its recorded results as squares (oldest first) with a duration sparkline and, when it is failing, whether the failure is new, pre-existing or flaky and why; tree rows mark new failures and flaky tests, and the toolbar's **new** and **flaky** toggles show only those tests. The browser tab's title and favicon show the run state (busy, passed or failed), so a background tab still tells you how the last run went, and screen readers announce when a run starts and finishes.
+Project, framework, namespace, class and pinned rows show how many tests they contain, with how many passed (✓) and failed (✗), and every group row shows its tests' summed duration. **Run failed** in the toolbar re-runs every failed test. The toolbar's pause button (⏸) pauses automatic processing: saved files no longer start runs and the idle coverage backfill stops, and a run in progress is cancelled (an interrupted startup run runs again on resume). While paused, the status bar shows **⏸ Paused** and how many files changed; **Run**, **Run failed**, **Reset** and MCP runs still work, and a completed full run covers the files changed before it started. Resume (▶) runs once, by impact, for every file that changed while paused. Pausing applies to the running daemon and is not remembered after it restarts. Click the **Name** or **Duration** column header to sort the tree; click again to reverse direction. Duration starts slowest first and orders groups by summed test time. Pinned tests stay at the top, and status groups keep failures first. When a failure message has an expected and an actual value (xUnit, NUnit, MSTest or Shouldly), the test's details show them side by side with the difference highlighted. With [run history](#run-history-and-failure-classification), a test's details show its recorded results as squares (oldest first) with a duration sparkline and, when it is failing, whether the failure is new, pre-existing or flaky and why; tree rows mark new failures and flaky tests, and the toolbar's **new** and **flaky** toggles show only those tests. The browser tab's title and favicon show the run state (busy, passed or failed), so a background tab still tells you how the last run went, and screen readers announce when a run starts and finishes.
 
 The **Coverage** tab (when the daemon runs with coverage enabled) shows line and branch totals, the measured files grouped by module, folder or as a flat list (filterable; click the *Name* or *Coverage* column header to sort, again to reverse) and the selected file's source with each line's hit count: covered lines green, partly covered branches yellow, uncovered lines red. A file is marked *stale* when it changed since it was measured and *partial* when only a selective run measured it. The tab also identifies projects whose coverage is missing or incomplete; totals then reflect only the available measurements. The line marks are aggregate coverage of the tests that ran. Below the source, a panel lists the tests the impact map records as executing the selected file, each with a badge for how precisely that was measured (`test`, `class` or `run`, see [Coverage and impact selection](#coverage-and-impact-selection)) and an *outdated* marker when the file or the measurement changed since; click a line number to narrow the list to that line, and click a test to open it in the **Tests** tab. After a selective run by changed lines, a test's details say why it ran, and the status bar shows the last run's scope. To export the report as LCOV or Cobertura, use `piston coverage-export` or the `export_coverage` MCP tool.
 
@@ -253,7 +287,7 @@ The **Runs** tab lists the runs kept in the [run history](#run-history-and-failu
 
 The **Timeline** tab tells the story of the daemon's session, newest first: each edit (the files that changed between runs), each run with its trigger, outcome and the tests it newly failed or fixed, and the MCP tool calls agents made in between. Identical consecutive calls collapse into one row; click a call for its parameters and result. **Agent calls** in the header shows or hides them. A run whose build failed lists its first 10 errors when you click *build failed*. Markers show when a solution was loaded and when the dashboard reconnected. The currently failing tests at the top link to the run and edit that introduced each failure; click a test to follow it through the timeline.
 
-The **Machine** tab shows live and stale worktree owners. It refreshes while open and links to another owner's local dashboard when available; it does not infer whether an owner is running tests.
+The **Machine** tab shows live worktree owners and reports ownership-read or stale-record cleanup failures. It refreshes while open and links to another owner's local dashboard when available; it does not infer whether an owner is running tests.
 
 Keyboard shortcuts (press `?` in the dashboard for the list): `R` runs the selection, `[` and `]` move to the previous or next failure, `1`–`4` show or hide failed, passed, skipped and not-run tests, `G` cycles the grouping, `E` expands or collapses all, and `S` sorts by duration (press again to reverse).
 
@@ -277,11 +311,18 @@ For coding agents, use the stdio server: configure `piston mcp` once, globally, 
 { "mcpServers": { "piston": { "type": "local", "command": "piston", "args": ["mcp"], "tools": ["*"] } } }
 ```
 
-The agent host starts one `piston mcp` process per session, with the working directory set to the session's worktree. That process:
+The agent host starts one `piston mcp` process per session, with the working directory set to the session's worktree. In a trusted clone, that process:
 - runs an in-process engine: a full startup run, then watcher-triggered runs;
 - logs only to stderr;
 - exits when the session ends (stdin EOF, SIGTERM, or parent death on Unix), killing build/test processes and releasing worktree ownership;
 - exits if the worktree is deleted.
+
+For an untrusted clone, MCP starts without evaluating MSBuild projects, starting watchers
+or running tests. The dashboard displays a user approval prompt; `piston trust [path]`
+also grants trust. Engine-dependent MCP requests are refused until approval. Trust is
+per clone, so linked worktrees share it, and trust persists across sessions. Review the
+clone before approving; trust also covers its future branches and worktrees. See
+[Repository trust](../SECURITY.md#repository-trust).
 
 If another Piston process already owns the worktree, or the engine cannot start, the server still answers and every tool reports the reason. Ask for explicit consent before running a separate test command as a fallback. To uninstall, run `dotnet tool uninstall -g DamianH.Piston` and remove the config entry.
 
@@ -368,7 +409,7 @@ Graceful engine disposal waits for cancelled pipelines to finish before releasin
 
 **Migration:** Machine budgets have been removed. Before starting a new daemon or MCP process, remove `budget.json` from the coordination directory and remove `execution.memoryMb` from `.piston.json`; Piston reports the relevant path rather than silently ignoring either setting. `piston status` and `piston stop` remain available to find and stop old owners. Restart older daemon and MCP processes as well: old versions continue applying their own admission limits and do not account for runs started by the new version. The `admission` run field and machine budget, running and queue fields have been removed from the MCP and protocol responses.
 
-Test execution and discovery use a launcher that establishes a Unix process group or Windows job before starting the test command. The launcher uses Piston's runtime installation, but resolves the target command in the original Piston process's context, preserving SDK selection. On Windows, test commands remain windowless and inherit the redirected stdout/stderr handles. After the command exits, redirected stdout/stderr get a five-second drain grace period. If descendants keep those streams open, Piston terminates the owned tree, bounds termination cleanup to ten seconds, and records that output was cut off in the run or diagnostic log.
+Builds, test execution and discovery use a launcher that establishes a Unix process group or Windows job before starting the command. The launcher uses Piston's runtime installation, but resolves the target command in the original Piston process's context, preserving SDK selection. On Windows, commands remain windowless and inherit the redirected stdout/stderr handles; only the engine retains the job handle, so engine exit also terminates the job. On Unix, a guardian in the group watches a private owner-lifetime pipe and kills the group when the engine exits, including abruptly. It survives the command launcher exiting so orphaned descendants remain protected. After the command exits, redirected stdout/stderr get a five-second drain grace period. If descendants keep those streams open, Piston terminates the owned tree, bounds termination cleanup to ten seconds, and records that output was cut off in the run or diagnostic log. Build cleanup failures fail the build result. This containment does not cover deliberately detached processes or external resources such as containers. Restart older engines after upgrading to get these guarantees.
 
 There is no OS-level CPU or memory cap; concurrent worktrees can increase machine resource pressure. Owner `.lock` files are left in place on purpose.
 

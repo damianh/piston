@@ -85,6 +85,7 @@ public static class DtoMapper
         PistonPhase.Analyzing => PistonPhaseDto.Analyzing,
         PistonPhase.Building => PistonPhaseDto.Building,
         PistonPhase.Testing => PistonPhaseDto.Testing,
+        PistonPhase.AwaitingTrust => PistonPhaseDto.AwaitingTrust,
         PistonPhase.Error => PistonPhaseDto.Error,
         _ => PistonPhaseDto.Idle,
     };
@@ -829,7 +830,10 @@ public static class DtoMapper
                     .Select(project => new ProjectCoverageDto(
                         project.ProjectPath, project.Status.ToString().ToLowerInvariant(), project.Message, project.RunId))]
                 : null,
-            CoverageError: state.CoverageError
+            CoverageError: state.CoverageError,
+            IsPaused: state.IsPaused,
+            PausedChangeCount: state.PausedChangeCount,
+            RepositoryTrustPath: state.RepositoryTrustPath
         );
 
     public static CoverageSummaryDto ToCoverageSummaryDto(CoverageReportSnapshot? report, string? solutionDirectory) =>

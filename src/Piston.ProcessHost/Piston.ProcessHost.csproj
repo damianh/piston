@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <!-- Started with dotnet exec, so RID-specific tool package builds share one framework-dependent build. -->
+    <IsRidAgnostic>true</IsRidAgnostic>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="Piston.Engine.Tests" />
