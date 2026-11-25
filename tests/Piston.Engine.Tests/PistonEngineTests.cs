@@ -129,7 +129,7 @@ public sealed class PistonEngineTests : IDisposable
         }
         finally
         {
-            release.TrySetResult();
+            _ = release.TrySetResult();
             buildService.Release();
             if (granting is not null)
             {
