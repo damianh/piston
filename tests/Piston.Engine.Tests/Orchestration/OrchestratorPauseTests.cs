@@ -221,6 +221,94 @@ public sealed class OrchestratorPauseTests
         Assert.Equal(TestRunTrigger.Startup, run.Trigger);
     }
 
+    [Fact]
+    public async Task PausingDuringTests_KeepsTheTree_AndResumeContinuesWithTheUnfinishedProjects()
+    {
+        string[] projects = ["/fake/A.csproj", "/fake/B.csproj", "/fake/C.csproj"];
+        var state = new PistonState();
+        var runner = new ProjectByProjectRunner();
+        var blocked = runner.BlockAt("/fake/B.csproj");
+        await using var orchestrator = new PistonOrchestrator(
+            new RaisingFileWatcher(), new StubBuildService(), runner, new RecordingImpactAnalyzer(projects), state);
+        await orchestrator.StartAsync(Solution);
+        await blocked.WaitAsync(Timeout, _ct);
+
+        orchestrator.Pause();
+        var cancelled = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Cancelled);
+
+        Assert.Equal(TestRunTrigger.Startup, cancelled.Trigger);
+        Assert.True(state.HasInterruptedRun);
+        Assert.Equal(TestStatus.Passed, StatusOf(state, "A"));
+        Assert.Equal(TestStatus.NotRun, StatusOf(state, "B"));
+        Assert.Equal(TestStatus.NotRun, StatusOf(state, "C"));
+
+        orchestrator.Resume();
+
+        var run = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Completed);
+        Assert.Equal(TestRunTrigger.Startup, run.Trigger);
+        Assert.Equal(["/fake/B.csproj", "/fake/C.csproj"], runner.Runs[^1]);
+        Assert.All(projects, p => Assert.Equal(TestStatus.Passed, StatusOf(state, p)));
+        Assert.False(state.HasInterruptedRun);
+    }
+
+    [Fact]
+    public async Task ChangesWhilePaused_RerunTheInterruptedRunInFull()
+    {
+        string[] projects = ["/fake/A.csproj", "/fake/B.csproj"];
+        var state = new PistonState();
+        var watcher = new RaisingFileWatcher();
+        var runner = new ProjectByProjectRunner();
+        var blocked = runner.BlockAt("/fake/B.csproj");
+        await using var orchestrator = new PistonOrchestrator(
+            watcher, new StubBuildService(), runner, new RecordingImpactAnalyzer(projects), state);
+        await orchestrator.StartAsync(Solution);
+        await blocked.WaitAsync(Timeout, _ct);
+        orchestrator.Pause();
+        _ = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Cancelled);
+
+        watcher.Raise("/fake/A.cs");
+        await Task.Delay(200, _ct);
+        Assert.False(state.HasInterruptedRun);
+        orchestrator.Resume();
+
+        var run = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Completed);
+        Assert.Equal(TestRunTrigger.Startup, run.Trigger);
+        Assert.Equal(projects, runner.Runs[^1]);
+    }
+
+    [Fact]
+    public async Task PausingAFileChangeRunDuringTests_ResumeContinuesIt_AndCoversItsChanges()
+    {
+        string[] projects = ["/fake/A.csproj", "/fake/B.csproj"];
+        var state = new PistonState();
+        var watcher = new RaisingFileWatcher();
+        var analyzer = new RecordingImpactAnalyzer(projects);
+        var runner = new ProjectByProjectRunner();
+        await using var orchestrator = new PistonOrchestrator(
+            watcher, new StubBuildService(), runner, analyzer, state);
+        await orchestrator.StartAsync(Solution);
+        _ = await WaitForRunAsync(state, r => r.Trigger == TestRunTrigger.Startup);
+
+        var blocked = runner.BlockAt("/fake/B.csproj");
+        watcher.Raise("/fake/A.cs");
+        await blocked.WaitAsync(Timeout, _ct);
+        orchestrator.Pause();
+        var cancelled = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Cancelled);
+
+        orchestrator.Resume();
+
+        var run = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Completed && r.Sequence > cancelled.Sequence);
+        Assert.Equal(TestRunTrigger.FileChange, run.Trigger);
+        Assert.Equal(["/fake/B.csproj"], runner.Runs[^1]);
+        Assert.Equal(0, state.PausedChangeCount);
+        _ = Assert.Single(analyzer.Batches);
+
+        // Its changes are covered: the next change is analysed alone.
+        watcher.Raise("/fake/B.cs");
+        _ = await WaitForRunAsync(state, r => r.Status == TestRunStatus.Completed && r.Sequence > run.Sequence);
+        Assert.Equal(["/fake/B.cs"], analyzer.Batches[^1]);
+    }
+
     private static async Task<TestRunRecord> WaitForRunAsync(PistonState state, Func<TestRunRecord, bool> match)
     {
         using var timeout = new CancellationTokenSource(Timeout);
@@ -231,6 +319,80 @@ public sealed class OrchestratorPauseTests
         }
 
         return found;
+    }
+
+    private static TestStatus StatusOf(PistonState state, string project) =>
+        Assert.Single(Assert.Single(state.TestSuites, s => s.Name == Path.GetFileNameWithoutExtension(project)).Tests).Status;
+
+    // Runs projects one by one, reporting each on completion; can block a project until the run is cancelled.
+    private sealed class ProjectByProjectRunner : ITestRunnerService
+    {
+        private readonly ConcurrentQueue<IReadOnlyList<string>> _runs = new();
+        private string? _blockAt;
+
+        public IReadOnlyList<IReadOnlyList<string>> Runs => [.. _runs];
+
+        public TaskCompletionSource Blocked { get; private set; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Blocks the next run when it reaches the project; the returned task completes once it is blocked.
+        public Task BlockAt(string project)
+        {
+            Blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            Volatile.Write(ref _blockAt, project);
+            return Blocked.Task;
+        }
+
+        public Task DiscoverTestsAsync(
+            IReadOnlyList<string> testProjectPaths, string? filter, Action<string, IReadOnlyList<TestResult>> onDiscovered,
+            CancellationToken ct)
+        {
+            foreach (var project in testProjectPaths)
+            {
+                onDiscovered(project, [Test(project, TestStatus.NotRun)]);
+            }
+
+            return Task.CompletedTask;
+        }
+
+        public Task<TestRunResult> RunTestsAsync(
+            string solutionPath, string? filter, Action<IReadOnlyList<TestSuite>>? onProgress, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public Task<TestRunResult> RunTestsAsync(
+            string solutionPath, IReadOnlyList<string>? testProjectPaths, string? filter, bool collectCoverage,
+            Action<IReadOnlyList<TestSuite>>? onProgress, CancellationToken ct) =>
+            throw new NotSupportedException();
+
+        public async Task<TestRunResult> RunTestsAsync(
+            string solutionPath, IReadOnlyList<string>? testProjectPaths, string? filter, bool collectCoverage,
+            Action<IReadOnlyList<TestSuite>>? onProgress, Action<ProjectTestResult>? onProjectCompleted,
+            CancellationToken ct)
+        {
+            var projects = testProjectPaths ?? [];
+            _runs.Enqueue(projects);
+            var suites = new List<TestSuite>();
+            var results = new List<ProjectTestResult>();
+            foreach (var project in projects)
+            {
+                if (Interlocked.CompareExchange(ref _blockAt, null, project) == project)
+                {
+                    _ = Blocked.TrySetResult();
+                    await Task.Delay(System.Threading.Timeout.Infinite, ct);
+                }
+
+                var suite = new TestSuite(Path.GetFileNameWithoutExtension(project), [Test(project, TestStatus.Passed)],
+                    DateTimeOffset.UtcNow, TimeSpan.Zero);
+                suites.Add(suite);
+                var result = new ProjectTestResult(project, [suite], null, [], false);
+                results.Add(result);
+                onProjectCompleted?.Invoke(result);
+            }
+
+            return new TestRunResult(suites, null, []) { Projects = results };
+        }
+
+        private static TestResult Test(string project, TestStatus status) =>
+            new(Path.GetFileNameWithoutExtension(project) + ".Test1", "Test1", status, TimeSpan.Zero, null, null, null, null);
     }
 
     private sealed class RaisingFileWatcher : IFileWatcherService
@@ -248,8 +410,9 @@ public sealed class OrchestratorPauseTests
         public void Dispose() { }
     }
 
-    private sealed class RecordingImpactAnalyzer : IImpactAnalyzer
+    private sealed class RecordingImpactAnalyzer(string[]? projects = null) : IImpactAnalyzer
     {
+        private readonly string[] _projects = projects ?? Projects;
         private readonly ConcurrentQueue<IReadOnlyList<string>> _batches = new();
 
         public IReadOnlyList<IReadOnlyList<string>> Batches => [.. _batches];
@@ -262,9 +425,9 @@ public sealed class OrchestratorPauseTests
             return AnalyzeFullRun();
         }
 
-        public ImpactAnalysisResult AnalyzeFullRun() => new(Projects, Projects, RequiresGraphRebuild: false, IsFullRun: true);
+        public ImpactAnalysisResult AnalyzeFullRun() => new(_projects, _projects, RequiresGraphRebuild: false, IsFullRun: true);
         public void InvalidateGraph() { }
-        public IReadOnlyList<string> GetAllTestProjectPaths() => Projects;
+        public IReadOnlyList<string> GetAllTestProjectPaths() => _projects;
         public bool IsMtpProject(string projectPath) => false;
         public string? GetMtpOutputPath(string projectPath) => null;
     }

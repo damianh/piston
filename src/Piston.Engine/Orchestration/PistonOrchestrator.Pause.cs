@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Collections.Concurrent;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
 
@@ -29,6 +30,43 @@ public sealed partial class PistonOrchestrator
     // The run cancelled by the latest pause; guarded by _lifecycleLock.
     private CancellationTokenSource? _pauseCancelledCts;
 
+    // The test phase of the newest run, so pausing can tell which test projects it had still to run; guarded by
+    // _lifecycleLock.
+    private ActiveTestPhase? _activeTestPhase;
+
+    // What resuming continues: the test projects a run cancelled by pausing in its test phase had still to run;
+    // guarded by _lifecycleLock.
+    private PausedContinuation? _pausedContinuation;
+
+    /// <summary>
+    /// The rest of a run that pausing cancelled during its test phase: the test projects it had not finished, run
+    /// with its trigger and effective filter. <see cref="ChangeGeneration"/>, <see cref="TestedThroughGeneration"/>
+    /// and <see cref="FullScope"/> describe the original run, so a continuation covers what that run would have.
+    /// </summary>
+    private sealed record PausedContinuation(
+        TestRunTrigger Trigger,
+        IReadOnlyList<string> RemainingTestProjects,
+        string? EffectiveFilter,
+        string? UserFilter,
+        long ChangeGeneration,
+        long? TestedThroughGeneration,
+        bool FullScope);
+
+    // A run's test phase; Settled is written by the run and read by Pause().
+    private sealed class ActiveTestPhase(CancellationTokenSource cts, PausedContinuation run)
+    {
+        private readonly ConcurrentDictionary<string, byte> _settled = new(StringComparer.Ordinal);
+
+        public CancellationTokenSource Cts => cts;
+
+        public PausedContinuation Run => run;
+
+        public void Settle(string projectPath) => _settled[projectPath] = 0;
+
+        public PausedContinuation Remaining() =>
+            run with { RemainingTestProjects = [.. run.RemainingTestProjects.Where(p => !_settled.ContainsKey(p))] };
+    }
+
     /// <summary>Whether automatic processing is paused.</summary>
     public bool IsPaused
     {
@@ -43,7 +81,8 @@ public sealed partial class PistonOrchestrator
 
     /// <summary>
     /// Pauses automatic processing: file changes are queued instead of starting runs and the idle impact backfill
-    /// stops. The active run is cancelled and its changed files are queued again. Requested runs still execute.
+    /// stops. The active run is cancelled and its changed files are queued again; when it was running tests, the test
+    /// projects it had not finished are kept for <see cref="Resume"/> to continue with. Requested runs still execute.
     /// </summary>
     public void Pause()
     {
@@ -65,6 +104,9 @@ public sealed partial class PistonOrchestrator
                 }
 
                 _pausedStartupRun |= _startupRunPending;
+                _pausedContinuation = _activeTestPhase is { } phase && ReferenceEquals(phase.Cts, cts)
+                    ? phase.Remaining()
+                    : null;
                 _pauseCancelledCts = cts;
                 cts.Cancel();
             }
@@ -77,13 +119,15 @@ public sealed partial class PistonOrchestrator
     }
 
     /// <summary>
-    /// Resumes automatic processing. Reruns a startup run that pausing cancelled; otherwise, when files changed while
-    /// paused, starts one run for all of them, or else restarts the idle impact backfill.
+    /// Resumes automatic processing. When pausing interrupted a run's tests and nothing changed since that run started,
+    /// continues it with the test projects it had not finished. Otherwise reruns a startup run that pausing cancelled,
+    /// or, when files changed while paused, starts one run for all of them, or else restarts the idle impact backfill.
     /// </summary>
     public void Resume()
     {
         FileChangeBatch? batch = null;
         var rerunStartup = false;
+        PausedContinuation? continuation = null;
         CancellationTokenSource? cts = null;
         var solutionPath = _solutionPath;
         lock (_lifecycleLock)
@@ -94,7 +138,13 @@ public sealed partial class PistonOrchestrator
             }
 
             _paused = false;
-            if (_pausedStartupRun)
+            if (TakeValidContinuationLocked() is { } valid)
+            {
+                // Every change queued while paused was made before the interrupted run started, so it covers them.
+                continuation = valid;
+                _pausedChanges.Clear();
+            }
+            else if (_pausedStartupRun)
             {
                 // Kept until DropPausedChangesCoveredBy sees a completed full-scope run, so a failed or filtered
                 // rerun is retried by the next resume.
@@ -113,7 +163,12 @@ public sealed partial class PistonOrchestrator
 
             // Registered under the lock, so a concurrent Pause() cancels and requeues this run, and a newer
             // watcher run supersedes it rather than the other way round.
-            if ((rerunStartup || batch is not null) && solutionPath is not null && !_disposed)
+            if (continuation is not null && solutionPath is not null && !_disposed)
+            {
+                cts = RegisterRunLocked(null, continuation.Trigger);
+                _activeTestPhase = new ActiveTestPhase(cts, continuation);
+            }
+            else if ((rerunStartup || batch is not null) && solutionPath is not null && !_disposed)
             {
                 cts = RegisterRunLocked(batch, rerunStartup ? TestRunTrigger.Startup : TestRunTrigger.FileChange);
             }
@@ -122,13 +177,42 @@ public sealed partial class PistonOrchestrator
         }
 
         DiagnosticLog.Instance?.Write("Orchestrator",
-            rerunStartup ? "Processing resumed; rerunning the startup run." : batch is null ? "Processing resumed." : $"Processing resumed with {batch.Changes.Count} queued change(s).");
+            continuation is not null ? $"Processing resumed; continuing the interrupted run with {continuation.RemainingTestProjects.Count} test project(s)."
+            : rerunStartup ? "Processing resumed; rerunning the startup run."
+            : batch is null ? "Processing resumed."
+            : $"Processing resumed with {batch.Changes.Count} queued change(s).");
         _state.NotifyChanged();
-        if (cts is not null)
+        if (cts is null)
+        {
+            return;
+        }
+
+        if (continuation is not null)
+        {
+            var selection = new SelectedRun(continuation.RemainingTestProjects, continuation.EffectiveFilter) { Continues = continuation };
+            _ = RunTrackedAsync(solutionPath!, null, continuation.Trigger, selection, cts);
+        }
+        else
         {
             _ = RunTrackedAsync(solutionPath!, batch, rerunStartup ? TestRunTrigger.Startup : TestRunTrigger.FileChange, null, cts);
         }
     }
+
+    // The interrupted run to continue, if nothing it depended on changed since it started. A startup run that is
+    // still owed is rerun in full unless the interrupted run is that startup run. Caller holds _lifecycleLock.
+    private PausedContinuation? TakeValidContinuationLocked()
+    {
+        var continuation = _pausedContinuation;
+        _pausedContinuation = null;
+        return continuation is not null
+            && Interlocked.Read(ref _fileChangeGeneration) == continuation.ChangeGeneration
+            && string.Equals(continuation.UserFilter, NormalizeFilter(_state.TestFilter), StringComparison.Ordinal)
+            && (!_pausedStartupRun || continuation.Trigger == TestRunTrigger.Startup)
+            ? continuation
+            : null;
+    }
+
+    private static string? NormalizeFilter(string? filter) => string.IsNullOrWhiteSpace(filter) ? null : filter;
 
     // Queues a file change while paused; returns false when not paused. Caller holds _lifecycleLock.
     private bool TryQueuePausedChangeLocked(FileChangeBatch batch)
@@ -144,16 +228,26 @@ public sealed partial class PistonOrchestrator
             _pausedChanges[change.FilePath] = (change, generation);
         }
 
+        // The interrupted run no longer reflects the sources, so resume runs for the changes instead.
+        _pausedContinuation = null;
         PublishPauseState();
         return true;
     }
 
-    // A completed full-scope run covered the changes queued before it started, and any cancelled startup run.
-    private void DropPausedChangesCoveredBy(TestRunRecord run, long changeGenerationAtStart)
+    // A completed full-scope run, or a completed continuation of one, covered the changes queued before the full-scope
+    // run started, any cancelled startup run and any run left to continue.
+    private void DropPausedChangesCoveredBy(TestRunRecord run, long changeGenerationAtStart, PausedContinuation? continues)
     {
-        if (run.Status != TestRunStatus.Completed
-            || !run.IsFullScope
-            || run.Trigger is not (TestRunTrigger.Forced or TestRunTrigger.Startup))
+        if (run.Status != TestRunStatus.Completed)
+        {
+            return;
+        }
+
+        if (continues is { FullScope: true })
+        {
+            changeGenerationAtStart = continues.ChangeGeneration;
+        }
+        else if (!run.IsFullScope || run.Trigger is not (TestRunTrigger.Forced or TestRunTrigger.Startup))
         {
             return;
         }
@@ -162,6 +256,7 @@ public sealed partial class PistonOrchestrator
         {
             _startupRunPending = false;
             _pausedStartupRun = false;
+            _pausedContinuation = null;
             foreach (var path in _pausedChanges.Where(c => c.Value.Generation <= changeGenerationAtStart).Select(c => c.Key).ToList())
             {
                 _ = _pausedChanges.Remove(path);
@@ -182,5 +277,6 @@ public sealed partial class PistonOrchestrator
     {
         _state.IsPaused = _paused;
         _state.PausedChangeCount = _pausedChanges.Count;
+        _state.HasInterruptedRun = _paused && _pausedContinuation is not null;
     }
 }

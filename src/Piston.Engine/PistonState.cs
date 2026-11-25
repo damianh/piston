@@ -167,6 +167,9 @@ public sealed class PistonState
     /// <summary>How many changed files are queued to run when processing resumes.</summary>
     public int PausedChangeCount { get; set; }
 
+    /// <summary>Whether pausing interrupted a run's tests, so resuming continues with the test projects it had not finished.</summary>
+    public bool HasInterruptedRun { get; set; }
+
     // ── Run provenance ───────────────────────────────────────────────────────
 
     /// <summary>Number of terminal runs retained in <see cref="RecentRuns"/> (in memory only).</summary>

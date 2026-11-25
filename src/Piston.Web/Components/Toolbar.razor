@@ -12,7 +12,9 @@
     @{
         var pauseLabel = IsPaused ? "Resume" : "Pause";
         var pauseTitle = IsPaused
-            ? PausedChangeCount > 0
+            ? HasInterruptedRun
+                ? "Resume: continue the interrupted run with the test projects it had not finished"
+                : PausedChangeCount > 0
                 ? $"Resume: run the tests affected by the {PausedChangeCount:N0} changed file(s) queued while paused"
                 : "Resume: run tests again when files change"
             : "Pause: stop running tests on file changes and cancel the current run; Run and Reset still work";
@@ -163,6 +165,7 @@
     [Parameter] public EventCallback OnReset { get; set; }
     [Parameter] public bool IsPaused { get; set; }
     [Parameter] public int PausedChangeCount { get; set; }
+    [Parameter] public bool HasInterruptedRun { get; set; }
     [Parameter] public EventCallback OnTogglePause { get; set; }
     [Parameter] public EventCallback OnExpandAll { get; set; }
     [Parameter] public EventCallback OnCollapseAll { get; set; }

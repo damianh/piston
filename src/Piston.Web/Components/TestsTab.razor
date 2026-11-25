@@ -10,6 +10,7 @@
              OnReset="Reset"
              IsPaused="@(_snapshot?.IsPaused == true)"
              PausedChangeCount="@(_snapshot?.PausedChangeCount ?? 0)"
+             HasInterruptedRun="@(_snapshot?.HasInterruptedRun == true)"
              OnTogglePause="TogglePauseAsync"
              OnExpandAll="() => SetExpanded(true)"
              OnCollapseAll="() => SetExpanded(false)"

@@ -1171,7 +1171,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     }
 
     /// <summary>The test projects and filter of a <see cref="TestRunTrigger.Targeted"/> run.</summary>
-    private sealed record SelectedRun(IReadOnlyList<string> TestProjectPaths, string? Filter);
+    private sealed record SelectedRun(IReadOnlyList<string> TestProjectPaths, string? Filter)
+    {
+        /// <summary>The paused run this run continues, if any.</summary>
+        public PausedContinuation? Continues { get; init; }
+    }
 
     // A superseding run is never refused, so it always starts.
     private Task<TestRunRecord> TriggerRunAsync(string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger) =>
@@ -1245,6 +1249,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     _pauseCancelledCts = null;
                 }
 
+                if (_activeTestPhase is { } phase && ReferenceEquals(phase.Cts, cts))
+                {
+                    _activeTestPhase = null;
+                }
+
                 cts.Dispose();
                 if (--_activePipelines == 0)
                 {
@@ -1286,6 +1295,12 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             (changes, testedThroughGeneration) = TakePendingChanges(batch);
         }
 
+        // A continuation completes the changes the interrupted run analysed.
+        if (selection?.Continues is { } interrupted)
+        {
+            testedThroughGeneration = interrupted.TestedThroughGeneration;
+        }
+
         run = run with
         {
             Status = TestRunStatus.Running,
@@ -1301,11 +1316,15 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         IReadOnlyList<ProjectTestResult> temporaryProjects = [];
         var completedTemporaryProjects = new ConcurrentBag<ProjectTestResult>();
 
+        // Set in the test phase: keeps the results and discovered tests of a run that pausing interrupted.
+        Action? keepInterruptedResults = null;
+
         TestRunRecord Finish(TestRunStatus status, string? reason, bool computeAfter = true)
         {
             if (status == TestRunStatus.Cancelled && PausedReason(newCts) is { } pausedReason)
             {
                 reason = pausedReason;
+                keepInterruptedResults?.Invoke();
             }
 
             var finished = CompleteRun(run, status, reason, solutionDir, changeGenerationAtStart, computeAfter);
@@ -1314,7 +1333,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 ForgetPendingChanges(generation);
             }
 
-            DropPausedChangesCoveredBy(finished, changeGenerationAtStart);
+            DropPausedChangesCoveredBy(finished, changeGenerationAtStart, selection?.Continues);
             lock (_runRecordsLock)
             {
                 ArtifactStore?.Prune(_state.RecentRuns, _state.TestSuites);
@@ -1670,6 +1689,51 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
             RefreshOverlay();
 
+            // Lets a pause keep this run's progress and continue with the test projects it had not finished.
+            var continues = selection?.Continues;
+            var testPhase = new ActiveTestPhase(newCts, new PausedContinuation(
+                continues?.Trigger ?? trigger,
+                testTargets ?? [],
+                NormalizeFilter(effectiveFilter),
+                continues is null ? NormalizeFilter(userFilter) : continues.UserFilter,
+                continues?.ChangeGeneration ?? changeGenerationAtStart,
+                testedThroughGeneration,
+                continues?.FullScope ?? run.IsFullScope));
+            if (testTargets is not null)
+            {
+                lock (_lifecycleLock)
+                {
+                    if (ReferenceEquals(_cts, newCts))
+                    {
+                        _activeTestPhase = testPhase;
+                    }
+                }
+
+                keepInterruptedResults = () =>
+                {
+                    List<TestSuite> settled;
+                    Dictionary<string, IReadOnlyList<TestResult>> discovered;
+                    lock (liveResultsLock)
+                    {
+                        settled = [.. settledProjects.SelectMany(p => liveByProject.GetValueOrDefault(p) ?? [])
+                            .Select(s => s with { RunId = run.RunId })];
+                        discovered = new Dictionary<string, IReadOnlyList<TestResult>>(discoveredByProject, StringComparer.Ordinal);
+                    }
+
+                    var retained = ArtifactStore?.Retain(run.RunId, settled) ?? settled;
+                    _state.BeginResultsUpdate();
+                    try
+                    {
+                        _state.TestSuites = MergeInterruptedResults(_state.TestSuites, retained, discovered, solutionDirectory);
+                        _state.InProgressSuites = [];
+                    }
+                    finally
+                    {
+                        _state.EndResultsUpdate();
+                    }
+                };
+            }
+
             // Run-local project outcomes (independent of the UI-facing ProjectStatuses).
             var projectOutcomes = new Dictionary<string, TestRunProjectOutcome>(StringComparer.Ordinal);
             foreach (var project in testTargets ?? [])
@@ -1845,6 +1909,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     if (projectStatuses.ContainsKey(result.ProjectPath))
                     {
                         projectStatuses[result.ProjectPath] = projectStatus;
+                    }
+
+                    if (projectStatus == Models.ProjectRunStatus.Completed)
+                    {
+                        testPhase.Settle(result.ProjectPath);
                     }
 
                     var testCount = result.Suites.Sum(s => s.Tests.Count);
@@ -2631,6 +2700,35 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     /// known framework matches the test under any framework. Suite names are not used for matching
     /// because they are not guaranteed to identify a project (e.g. TRX run names).
     /// </summary>
+    /// <summary>
+    /// Keeps what a paused run had produced: the results of the test projects it finished, and its discovered tests,
+    /// not yet run, for projects without known results.
+    /// </summary>
+    internal static IReadOnlyList<TestSuite> MergeInterruptedResults(
+        IReadOnlyList<TestSuite> existing,
+        IReadOnlyList<TestSuite> settled,
+        IReadOnlyDictionary<string, IReadOnlyList<TestResult>> discoveredByProject,
+        string solutionDirectory)
+    {
+        var merged = MergeTestSuites(existing, settled).ToList();
+        var known = merged.Select(s => s.Key).ToHashSet(StringComparer.Ordinal);
+        foreach (var (projectPath, tests) in discoveredByProject)
+        {
+            var projectId = TestProjectNames.ProjectId(solutionDirectory, projectPath);
+            if (tests.Count > 0 && known.Add(projectId))
+            {
+                merged.Add(new TestSuite(
+                    TestProjectNames.SuiteName(projectPath),
+                    [.. tests.Select(t => t with { Status = TestStatus.NotRun })],
+                    DateTimeOffset.UtcNow,
+                    TimeSpan.Zero)
+                { ProjectId = projectId });
+            }
+        }
+
+        return merged;
+    }
+
     internal static IReadOnlyList<TestSuite> MergeTestSuites(
         IReadOnlyList<TestSuite> existing,
         IReadOnlyList<TestSuite> newResults)
