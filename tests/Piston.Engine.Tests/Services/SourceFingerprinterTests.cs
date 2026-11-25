@@ -1,6 +1,7 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Diagnostics;
 using Piston.Engine.Services;
 using Xunit;
 
@@ -8,6 +9,7 @@ namespace Piston.Engine.Tests.Services;
 
 public sealed class SourceFingerprinterTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
     private readonly string _parent = Path.Combine(Path.GetTempPath(), $"piston-fp-{Guid.NewGuid():N}");
     private readonly string _root;
 
@@ -121,6 +123,52 @@ public sealed class SourceFingerprinterTests : IDisposable
         Path.Combine(_root, "App.slnx"),
         [Path.Combine(_root, "src", "Lib", "Lib.csproj")],
         declared.Select(relative => Path.Combine(_root, relative)));
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ComputeProjectScope_CompletesWithAPendingStdinRead(bool gitRepository)
+    {
+        if (gitRepository)
+        {
+            GitTestRepository.Init(_root, "*.tmp");
+        }
+        Write("src/Lib/Lib.csproj", "<Project />");
+        Write("src/Lib/Code.cs", "class Lib { }");
+        Write("src/Lib/cache.tmp", "ignored only in a git repository");
+        var expected = SourceFingerprinter.Compute(ProjectScope()).Value;
+        var start = new ProcessStartInfo("dotnet")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        start.ArgumentList.Add(typeof(ExecutionLeaseHolder.Program).Assembly.Location);
+        start.ArgumentList.Add("fingerprint");
+        start.ArgumentList.Add(Path.Combine(_root, "App.slnx"));
+        start.ArgumentList.Add(Path.Combine(_root, "src", "Lib", "Lib.csproj"));
+        using var process = Process.Start(start)!;
+        var output = process.StandardOutput.ReadToEndAsync(_ct);
+        var error = process.StandardError.ReadToEndAsync(_ct);
+        try
+        {
+            // Leave stdin open without sending data: Git must not inherit the blocked protocol reader.
+            await Task.WhenAll(process.WaitForExitAsync(_ct), output, error)
+                .WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            Assert.True(process.ExitCode == 0, await error);
+            Assert.Equal(expected, (await output).Trim());
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync(_ct).WaitAsync(TimeSpan.FromSeconds(5), _ct);
+            }
+        }
+    }
 
     [Fact]
     public void ComputeProjectScope_HashesProjectInputsButNotOtherFilesOrGitIgnoredFiles()

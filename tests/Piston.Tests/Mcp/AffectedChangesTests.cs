@@ -228,6 +228,7 @@ public sealed class AffectedChangesTests : IDisposable
         var psi = new ProcessStartInfo("git")
         {
             WorkingDirectory = _root,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
         };
@@ -237,6 +238,7 @@ public sealed class AffectedChangesTests : IDisposable
         }
 
         using var process = Process.Start(psi)!;
+        process.StandardInput.Close();
         var output = process.StandardOutput.ReadToEnd();
         var error = process.StandardError.ReadToEnd();
         process.WaitForExit();

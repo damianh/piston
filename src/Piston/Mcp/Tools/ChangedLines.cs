@@ -461,6 +461,7 @@ internal static partial class ChangedLines
         var psi = new ProcessStartInfo("git")
         {
             WorkingDirectory = directory,
+            RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -474,6 +475,7 @@ internal static partial class ChangedLines
         psi.Environment["GIT_OPTIONAL_LOCKS"] = "0";
         psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
         using var process = Process.Start(psi) ?? throw new InvalidOperationException("Could not start git.");
+        process.StandardInput.Close();
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(GitTimeout);
         try

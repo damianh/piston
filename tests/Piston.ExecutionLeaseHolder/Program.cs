@@ -17,12 +17,22 @@ namespace Piston.ExecutionLeaseHolder;
 /// <item><c>probe &lt;dir&gt;</c>: prepare the directory and exit 0, or print the error and exit 2.</item>
 /// <item><c>run[-raw] &lt;command&gt; [args]</c>: launch an owned test command and forward its output and exit code.</item>
 /// <item><c>discover</c>: run best-effort test discovery and print the number of results.</item>
+/// <item><c>fingerprint &lt;solution&gt; &lt;project&gt;</c>: fingerprint project inputs with a pending stdin read.</item>
 /// </list>
 /// </summary>
 public static class Program
 {
     public static async Task<int> Main(string[] args)
     {
+        if (args[0] == "fingerprint")
+        {
+            // Reproduce a stdio MCP host whose protocol reader is waiting for its next message.
+            _ = Console.OpenStandardInput().ReadAsync(new byte[1]);
+            var scope = SourceInputScope.ForProjects(args[1], [args[2]], []);
+            Console.WriteLine(SourceFingerprinter.Compute(scope).Value);
+            return 0;
+        }
+
         if (args[0] == "build")
         {
             var result = await new BuildService().BuildAsync(args[1], CancellationToken.None);

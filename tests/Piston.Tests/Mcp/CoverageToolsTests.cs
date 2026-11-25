@@ -825,13 +825,19 @@ public sealed class CoverageToolsTests : IDisposable
 
     private void Git(params string[] args)
     {
-        var psi = new ProcessStartInfo("git") { WorkingDirectory = _root, RedirectStandardError = true };
+        var psi = new ProcessStartInfo("git")
+        {
+            WorkingDirectory = _root,
+            RedirectStandardInput = true,
+            RedirectStandardError = true,
+        };
         foreach (var arg in args)
         {
             psi.ArgumentList.Add(arg);
         }
 
         using var process = Process.Start(psi)!;
+        process.StandardInput.Close();
         process.WaitForExit();
         Assert.True(process.ExitCode == 0, process.StandardError.ReadToEnd());
     }

@@ -28,3 +28,9 @@ When the `piston` MCP server is connected, verify with it instead of running `do
 - Before finishing, call `verify`. Only `Verdict: Passed` counts.
 
 When the `piston` MCP server is not connected, run `dotnet build Piston.slnx` and `dotnet test Piston.slnx` instead.
+
+For distribution CI failures, run `dotnet run build.cs -- smoke-distribution`. It uses isolated tool stores,
+logs timestamped MCP phases and bounded CLI probes, and dumps MCP stderr on failure. Sample test failures
+are intentional: success requires exactly 12 tests (4 passed, 4 failed, 4 skipped) and the final distribution PASS.
+Git subprocesses must redirect stdin and close it after any supplied input: inheriting a stdio MCP host's
+pending read can block Git for Windows, including Git commands in test fixtures.
