@@ -68,7 +68,10 @@ public sealed record TestRunRecord
     /// <summary>Tests that ran longer than the hang threshold during this run.</summary>
     public IReadOnlyList<string> PossiblyHangingTests { get; init; } = [];
 
-    /// <summary>The files whose change triggered this run; empty unless it was triggered by a file change.</summary>
+    /// <summary>
+    /// The changed files a file-change run analysed: those that triggered it and those left untested by earlier
+    /// runs that did not complete. Empty unless the run was triggered by a file change.
+    /// </summary>
     public IReadOnlyList<string> ChangedFiles { get; init; } = [];
 
     /// <summary>Project-scoped result keys of tests that failed before this run and passed in it.</summary>

@@ -132,6 +132,16 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
             {
                 requiresGraphRebuild = true;
                 var projectPath = Path.GetFullPath(change.FilePath);
+                if (!File.Exists(projectPath))
+                {
+                    // A deleted or renamed project cannot be a build target; a full run rebuilds what referenced it.
+                    return FullRunResult() with
+                    {
+                        RequiresGraphRebuild = true,
+                        Explanation = $"{Path.GetFileName(projectPath)} no longer exists.",
+                    };
+                }
+
                 _ = affectedProjects.Add(projectPath);
 
                 foreach (var dep in graph.GetTransitiveDependents(projectPath))

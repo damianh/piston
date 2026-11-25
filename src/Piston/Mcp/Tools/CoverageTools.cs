@@ -287,31 +287,32 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
     private async Task<(JsonObject Json, ImpactAnalysisResult Plan)> PlanAsync(
         string solutionDirectory, string[]? files, string? @base, string? baseRef, CancellationToken ct)
     {
-        string basis;
-        IReadOnlyList<string> changed;
-        IReadOnlyList<string> warnings = [];
-        if (files is { Length: > 0 })
-        {
-            basis = "files";
-            changed = [.. files.Where(f => !string.IsNullOrWhiteSpace(f)).Select(f => Path.GetFullPath(f, solutionDirectory))];
-        }
-        else
-        {
-            var changes = await GitChangesAsync(solutionDirectory, @base, baseRef, ct).ConfigureAwait(false);
-            basis = changes.Basis;
-            warnings = changes.Warnings;
-            changed = [.. changes.Files.Keys.Order(StringComparer.Ordinal)];
-        }
-
+        var (basis, changed, warnings) = await ChangedFilesAsync(solutionDirectory, files, @base, baseRef, ct).ConfigureAwait(false);
         var plan = changed.Count == 0
-            ? new ImpactAnalysisResult([], [], RequiresGraphRebuild: false, IsFullRun: false)
-            {
-                Explanation = "No file changed, so nothing would run.",
-            }
+            ? NothingChanged
             : engine.PlanAffected(changed) ?? throw new McpException("This engine cannot plan affected tests.");
         var json = AffectedPlan(basis, changed, plan, solutionDirectory);
         json["warnings"] = Strings(warnings);
         return (json, plan);
+    }
+
+    private static ImpactAnalysisResult NothingChanged => new([], [], RequiresGraphRebuild: false, IsFullRun: false)
+    {
+        Explanation = "No file changed, so nothing would run.",
+    };
+
+    /// <summary>The files to plan for: <paramref name="files"/> when given, else the git changes.</summary>
+    private static async Task<(string Basis, IReadOnlyList<string> Changed, IReadOnlyList<string> Warnings)> ChangedFilesAsync(
+        string solutionDirectory, string[]? files, string? @base, string? baseRef, CancellationToken ct)
+    {
+        if (files is { Length: > 0 })
+        {
+            return ("files",
+                [.. files.Where(f => !string.IsNullOrWhiteSpace(f)).Select(f => Path.GetFullPath(f, solutionDirectory))], []);
+        }
+
+        var changes = await GitChangesAsync(solutionDirectory, @base, baseRef, ct).ConfigureAwait(false);
+        return (changes.Basis, [.. changes.Files.Keys.Order(StringComparer.Ordinal)], changes.Warnings);
     }
 
     [McpServerTool(Name = PlanAffectedTestsTool), Description(
@@ -350,15 +351,18 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
     }
 
     [McpServerTool(Name = RunAffectedTestsTool), Description(
-        "Run the tests affected by a set of changed files and wait for the run, as JSON: the plan of " +
-        "plan_affected_tests (schema piston.affected-plan/v1) plus run (its ID, status and counts, or null when nothing " +
-        "is affected). Without files, uses git changes (see base): e.g. base=branch runs what changed since the branch " +
-        "left main. A full-scope plan runs every test. Selection is a heuristic: use verify for full verification.")]
+        "After editing code, get the result of the tests your change affects, as JSON: the plan of plan_affected_tests " +
+        "(schema piston.affected-plan/v1) plus reused and run (its ID, status, freshness, counts and failed tests, newly " +
+        "failing first; null when nothing is affected and no run is reused). Piston starts a run of the affected tests itself after every edit, so " +
+        "this waits for a run in progress and reuses it (reused: true) when it tested these files on the present " +
+        "source; otherwise it runs the plan. Pass the files you edited, or omit files to use git changes (see base): " +
+        "e.g. base=branch covers what changed since the branch left main. A full-scope plan runs every test. " +
+        "Selection is a heuristic: use verify for full verification.")]
     public async Task<string> RunAffectedTestsAsync(
         [Description("Changed files, absolute or relative to the solution directory. Omit to use git changes.")] string[]? files = null,
         [Description("When files is omitted: " + BaseRefDescription)] string? baseRef = null,
         [Description("When files is omitted: " + BaseDescription)] string? @base = null,
-        [Description("How long to wait for the run in seconds (default 600). On timeout the run continues.")] int timeoutSeconds = 600,
+        [Description("How long to wait for a result in seconds (default 600). On timeout the run continues.")] int timeoutSeconds = 600,
         CancellationToken ct = default)
     {
         availability?.ThrowIfUnavailable();
@@ -369,43 +373,18 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
         {
             var solutionDirectory = SolutionDirectory()
                 ?? throw new McpException("No solution is loaded.");
-            var (json, plan) = await PlanAsync(solutionDirectory, files, @base, baseRef, ct).ConfigureAwait(false);
-            var scope = json["scope"]!.GetValue<string>();
-            Task<TestRunRecord?> run;
-            try
-            {
-                run = scope switch
-                {
-                    "none" => Task.FromResult<TestRunRecord?>(null),
-                    "full" => engine.RequestRunAsync(),
-                    _ => AsNullable(engine.RunSelectedAsync(Selection(plan, SolutionDirectory()))),
-                };
-            }
-            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NotSupportedException)
-            {
-                throw new McpException($"Could not start the run: {ex.Message}");
-            }
+            var (basis, changed, warnings) = await ChangedFilesAsync(solutionDirectory, files, @base, baseRef, ct).ConfigureAwait(false);
+            var affected = changed.Count == 0
+                ? new AffectedRun(NothingChanged, null, Reused: false)
+                : await RunAffectedAsync(changed, timeoutSeconds, ct).ConfigureAwait(false);
 
-            TestRunRecord? record;
-            try
-            {
-                record = await run.WaitAsync(TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 3600)), ct)
-                    .ConfigureAwait(false);
-            }
-            catch (TimeoutException)
-            {
-                throw new McpException(
-                    $"The run did not finish within {timeoutSeconds}s; it continues. Use get_test_results to follow it.");
-            }
-            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
-            {
-                throw new McpException($"Could not start the run: {ex.Message}");
-            }
-
-            json["run"] = record is null ? null : RunSummary(record);
-            summary = record is null
-                ? $"{scope}: nothing to run"
-                : $"{scope}: run {record.RunId} {record.Status}";
+            var json = AffectedPlan(basis, changed, affected.Plan, solutionDirectory);
+            json["warnings"] = Strings(warnings);
+            json["reused"] = affected.Reused;
+            json["run"] = affected.Run is null ? null : RunSummary(affected.Run);
+            summary = affected.Run is { } run
+                ? $"{json["scope"]}: {(affected.Reused ? "reused run" : "run")} {run.RunId} {run.Status}"
+                : $"{json["scope"]}: nothing to run";
             succeeded = true;
             return json.ToJsonString(WriteOptions);
         }
@@ -415,25 +394,65 @@ public sealed class CoverageTools(IEngine engine, IMcpCallRecorder recorder, Eng
             recorder.Record(RunAffectedTestsTool, Describe(files, @base, baseRef), summary,
                 sw.Elapsed.TotalMilliseconds, succeeded);
         }
-
-        static async Task<TestRunRecord?> AsNullable(Task<TestRunRecord> task) => await task.ConfigureAwait(false);
     }
 
-    /// <summary>The test projects of a narrowed or project-scope plan, by solution-relative ID, with tests when narrowed.</summary>
-    internal static TestSelection Selection(ImpactAnalysisResult plan, string? solutionDirectory = null) => new(
-        [.. plan.AffectedTestProjectPaths
-            .Select(p => solutionDirectory is null ? Path.GetFullPath(p) : Relative(p, solutionDirectory))
-            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal)],
-        plan.NarrowsToTests ? [.. (plan.AffectedTestFqns ?? []).Order(StringComparer.Ordinal)] : null);
-
-    private static JsonObject RunSummary(TestRunRecord run) => new()
+    private async Task<AffectedRun> RunAffectedAsync(IReadOnlyList<string> changed, int timeoutSeconds, CancellationToken ct)
     {
-        ["runId"] = run.RunId,
-        ["status"] = run.Status.ToString(),
-        ["passed"] = run.Tests.Count(t => t.Status == TestStatus.Passed),
-        ["failed"] = run.Tests.Count(t => t.Status == TestStatus.Failed),
-        ["skipped"] = run.Tests.Count(t => t.Status == TestStatus.Skipped),
-    };
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(timeoutSeconds, 1, 3600)));
+        try
+        {
+            return await engine.RunAffectedAsync(changed, timeout.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new McpException(
+                $"No result within {timeoutSeconds}s; a run in progress continues. Use get_test_run(\"active\") to follow it.");
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NotSupportedException)
+        {
+            throw new McpException($"Could not start the run: {ex.Message}");
+        }
+    }
+
+    private static JsonObject RunSummary(TestRunRecord run)
+    {
+        var newlyFailing = run.NewlyFailingTests.ToHashSet();
+        var failed = run.Suites
+            .SelectMany(s => s.Tests.Where(t => t.Status == TestStatus.Failed)
+                .Select(t => (Project: s.Key, Test: t, New: newlyFailing.Contains(new TestOutcomeReference(s.Key, t.ResultKey)))))
+            .OrderByDescending(t => t.New)
+            .ToList();
+        var json = new JsonObject
+        {
+            ["runId"] = run.RunId,
+            ["status"] = run.Status.ToString(),
+            ["statusReason"] = run.StatusReason,
+            ["freshness"] = run.Freshness.ToString(),
+            ["freshnessReason"] = run.FreshnessReason,
+            ["trigger"] = run.Trigger.ToString(),
+            ["passed"] = run.Tests.Count(t => t.Status == TestStatus.Passed),
+            ["failed"] = failed.Count,
+            ["skipped"] = run.Tests.Count(t => t.Status == TestStatus.Skipped),
+            ["newlyFailing"] = run.NewlyFailingTests.Count,
+            ["fixed"] = run.FixedTests.Count,
+            ["failedTests"] = new JsonArray([.. failed.Take(VerificationReport.MaxListedItems).Select(t => (JsonNode)new JsonObject
+            {
+                ["name"] = t.Test.ResultKey,
+                ["project"] = t.Project,
+                ["new"] = t.New,
+                ["message"] = t.Test.ErrorMessage is { } message ? VerificationReport.Cap(message) : null,
+            })]),
+            ["failedTestsOmitted"] = Math.Max(0, failed.Count - VerificationReport.MaxListedItems),
+        };
+        if (run is { Status: TestRunStatus.BuildFailed, Build: { } build })
+        {
+            json["buildErrors"] = Strings(build.Errors.Take(VerificationReport.MaxListedItems).Select(VerificationReport.CapBuildError));
+            json["buildErrorsOmitted"] = Math.Max(0, build.Errors.Count - VerificationReport.MaxListedItems) + build.OmittedErrors;
+        }
+
+        return json;
+    }
 
     private static string? Describe(string[]? files, string? @base, string? baseRef) =>
         files is { Length: > 0 } ? string.Join(", ", files)

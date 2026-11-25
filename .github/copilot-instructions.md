@@ -20,4 +20,11 @@ The `roslynk` MCP server (configured in `.mcp.json`) provides Roslyn-based seman
 - Diagnostics: use `get_diagnostics` to verify changes compile cleanly; use `get_code_actions` / `apply_code_fix` for analyzer-suggested fixes.
 - Cleanup: `find_dead_code` and `find_dead_conditionals` help identify unused code.
 
-Still run `dotnet build` / `dotnet test` to validate changes before finishing.
+## Verifying changes
+
+When the `piston` MCP server is connected, verify with it instead of running `dotnet build` / `dotnet test` (the `piston` skill has the full contract):
+
+- After editing, call `run_affected_tests` with the files you changed. Piston runs the affected tests itself after every edit, and the tool waits for that run.
+- Before finishing, call `verify`. Only `Verdict: Passed` counts.
+
+When the `piston` MCP server is not connected, run `dotnet build Piston.slnx` and `dotnet test Piston.slnx` instead.

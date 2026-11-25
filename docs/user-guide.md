@@ -343,7 +343,7 @@ To set up a coding agent (Copilot CLI, Claude Code or another MCP client), follo
 | `get_changed_line_coverage` | A verdict for each changed line (see [git bases](#git-bases)), as JSON (`piston.changed-line-coverage/v2`): covered by passing tests, covered only by failing tests, uncovered, non-executable, or unknown with a reason such as stale. Lines whose code changed since it was measured (or, for a range, in a file that differs from the working tree) are always unknown; lines in unchanged C# members keep their remapped coverage. See [verdicts](agent-usage.md#changed-line-coverage-verdicts). Requires coverage. |
 | `export_coverage` | Write the coverage report as LCOV or Cobertura (`format`) to `outputPath`, which must be inside the solution directory (default `.piston/coverage/lcov.info` or `cobertura.xml`). Requires coverage. |
 | `plan_affected_tests` | Preview what Piston would build and run for `files` (or git changes, see [git bases](#git-bases)) without running anything, as JSON (`piston.affected-plan/v1`): `scope` (`full`, `projects`, `tests` or `none`), an `explanation`, the projects, any `warnings`, and with coverage the selected tests with changed lines, optional member identities and the granularity of that evidence (`run`, `class` or `test`). |
-| `run_affected_tests` | Run that plan and wait for it: the same JSON plus `run` (ID, status and counts; null when nothing is affected). For example, `base: "branch"` runs the tests affected by everything since the branch left `main`. |
+| `run_affected_tests` | The result of testing those changes: the same JSON plus `reused` and `run` (ID, status, trigger, `freshness`, counts, failed tests with messages, `newlyFailing` and `fixed` counts, and the errors of a failed build; null when nothing is affected and no run is reused). It waits for a run in progress and reuses the latest run when that run tested the files on the present source; otherwise it runs the plan and waits for it. See [faster feedback](agent-usage.md#5-faster-feedback-while-iterating). For example, `base: "branch"` covers everything since the branch left `main`. |
 | `clear_results` | Clear current test suites, last-run timestamp, saved result snapshot, coverage state, persisted coverage, and retained artifacts in the current solution directory. Clearing waits for any attachment-retention and retry-publication transaction already in progress; a run still executing its initial tests may publish new results afterwards. |
 
 Piston provides no code intelligence (diagnostics, rename, semantic search); agents
@@ -363,7 +363,7 @@ Every run, including startup and file-change runs, gets a record in the
 `piston.test-run/v1` JSON format that `get_test_run` returns. The record holds:
 
 - a unique `runId` and a sequence number;
-- the trigger (`Startup`, `Forced`, `FileChange` or `Targeted`) and, for a file-change run, the `changedFiles` that triggered it;
+- the trigger (`Startup`, `Forced`, `FileChange` or `Targeted`) and, for a file-change run, the `changedFiles` it analysed: the files that triggered it and those left untested by earlier runs that did not complete;
 - the status: `Completed`, `Incomplete`, `BuildFailed`, `Cancelled` or `Faulted` (`Queued` or `Running` while active);
 - the scope (`Full` or `Selective`), `isFiltered` and the effective filter;
 - the run context: solution, test projects, build targets, configuration, SDK, runtime and OS;

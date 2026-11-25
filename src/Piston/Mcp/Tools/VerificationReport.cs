@@ -201,14 +201,14 @@ internal static class VerificationReport
         }
     }
 
-    private static string Cap(string text)
+    internal static string Cap(string text)
     {
         var line = text.ReplaceLineEndings(" ").Trim();
         return line.Length <= MaxMessageLength ? line : line[..MaxMessageLength] + "…";
     }
 
     // Build errors synthesized from raw output put the cause at the end, so keep both ends.
-    private static string CapBuildError(string text)
+    internal static string CapBuildError(string text)
     {
         var line = text.ReplaceLineEndings(" | ").Trim();
         if (line.Length <= MaxBuildErrorLength)

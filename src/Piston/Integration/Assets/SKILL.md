@@ -59,9 +59,14 @@ Rules:
 
 ## Faster feedback while iterating
 
-Between edits, `plan_affected_tests` previews and `run_affected_tests` runs only
-the tests your change affects (from `files`, or git changes via `base` and
-`baseRef`). Finish with `verify`.
+Piston runs the tests an edit affects by itself, shortly after the edit. After
+editing, call `run_affected_tests` with the `files` you changed (or omit `files`
+to use git changes via `base` and `baseRef`). It waits for a run in progress and
+returns Piston's own run of the edit (`reused: true`) when that run tested those
+files on the present source; otherwise it runs the affected tests. The reply's
+`run` lists the failed tests, newly failing first, and the errors of a failed
+build. `plan_affected_tests` previews the selection without running anything.
+Finish with `verify`.
 
 `get_test_run("<runId>")` returns the full record behind any reply, and
 `get_test_history("<test>")` shows a test's recorded results.
