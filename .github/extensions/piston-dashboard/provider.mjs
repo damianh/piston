@@ -59,7 +59,7 @@ export function resolveExecutable(command, cwd, {
             && !relative.startsWith(`..${pathApi.sep}`));
     };
     const extensions = platform === "win32"
-        ? (path.extname(command) ? [""] : pathExt.split(";").filter(extension => [".COM", ".EXE"].includes(extension.toUpperCase())))
+        ? (path.extname(command) ? [""] : pathExt.split(";").filter(extension => [".COM", ".EXE", ".BAT", ".CMD"].includes(extension.toUpperCase())))
         : [""];
 
     for (const entry of pathValue.split(pathApi.delimiter)) {
@@ -85,6 +85,30 @@ export function resolveExecutable(command, cwd, {
     }
 
     throw new Error(`Could not resolve '${command}' from an absolute PATH entry outside worktree '${root}'.`);
+}
+
+/**
+ * How to start a resolved executable. Node cannot start a Windows batch file (the Piston tool's
+ * `piston.cmd` entry point) without cmd.exe, so batch files run through cmd.exe with every argument quoted.
+ * Characters that cmd.exe expands or cannot quote are rejected rather than escaped.
+ */
+export function commandLine(file, args, platform = process.platform, comSpec = process.env.ComSpec) {
+    if (platform !== "win32" || ![".bat", ".cmd"].includes(path.win32.extname(file).toLowerCase())) {
+        return { file, args, options: {}, wrapped: false };
+    }
+    const quote = value => {
+        if (/["%\r\n\0]/.test(value)) {
+            throw new Error(`Cannot pass '${value}' to '${file}': it contains a character cmd.exe cannot quote safely.`);
+        }
+        return `"${value}"`;
+    };
+    const command = [file, ...args].map(quote).join(" ");
+    return {
+        file: comSpec || "cmd.exe",
+        args: ["/d", "/s", "/v:off", "/c", `"${command}"`],
+        options: { windowsVerbatimArguments: true },
+        wrapped: true,
+    };
 }
 
 const changeBases = ["working", "branch", "range"];
@@ -123,13 +147,14 @@ export function openQuery(input) {
     return changesQuery({ base, baseRef });
 }
 
-export async function discover(cwd, executeCommand = execute, resolve = resolveExecutable) {
+export async function discover(cwd, executeCommand = execute, resolve = resolveExecutable, platform = process.platform) {
     try {
         let stdout;
         let failed = false;
         try {
-            ({ stdout } = await executeCommand(resolve("piston", cwd), ["dashboard", "--json"], {
-                cwd, timeout: 5000, maxBuffer: 64 * 1024, windowsHide: true,
+            const command = commandLine(resolve("piston", cwd), ["dashboard", "--json"], platform);
+            ({ stdout } = await executeCommand(command.file, command.args, {
+                cwd, timeout: 5000, maxBuffer: 64 * 1024, windowsHide: true, ...command.options,
             }));
         } catch (error) {
             if (error.code !== 1 || typeof error.stdout !== "string") throw error;
@@ -223,11 +248,14 @@ export async function startDaemon(cwd, solution, worktree, inspect = discover, c
     const log = await open(logPath, "w");
     let child;
     let failure;
+    let command;
+    const launchedAt = Date.now();
     try {
+        command = commandLine(resolve("piston", cwd), ["daemon", selected, "--no-stdio", "--config-directory", cwd], platform);
         // On Windows, detached means DETACHED_PROCESS: the daemon would have no console, so every console
         // process it starts would open a visible window. Give it a hidden console instead; it still outlives the canvas.
-        child = launch(resolve("piston", cwd), ["daemon", selected, "--no-stdio", "--config-directory", cwd], {
-            cwd, detached: platform !== "win32", stdio: ["ignore", log.fd, log.fd], windowsHide: true,
+        child = launch(command.file, command.args, {
+            cwd, detached: platform !== "win32", stdio: ["ignore", log.fd, log.fd], windowsHide: true, ...command.options,
         });
         child.once("error", error => { failure = error.message; });
         child.once("exit", code => { failure = `Piston exited during startup (code ${code}).`; });
@@ -244,7 +272,12 @@ export async function startDaemon(cwd, solution, worktree, inspect = discover, c
         }
         const state = await inspect(cwd);
         if (state.state === "connected") {
-            if (state.processId !== child.pid) {
+            // A batch launcher runs the daemon as a descendant of cmd.exe, so its PID is unknown. The launcher
+            // stays alive while the daemon runs, so accept an owner that took the worktree after this launch.
+            const ours = command.wrapped
+                ? Date.parse(state.acquiredAt) >= launchedAt - 2000
+                : state.processId === child.pid;
+            if (!ours) {
                 throw new Error("Another Piston owner started first. Retry the connection.");
             }
             try {

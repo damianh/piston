@@ -8,7 +8,7 @@ import { promisify } from "node:util";
 import { chmod, mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { changesQuery, createDashboardCanvas, discover, discoverSolutions, loopbackEndpoint, normalizeWorkingDirectory, openQuery, probe, resolveExecutable, rpc, startDaemon } from "./provider.mjs";
+import { changesQuery, commandLine, createDashboardCanvas, discover, discoverSolutions, loopbackEndpoint, normalizeWorkingDirectory, openQuery, probe, resolveExecutable, rpc, startDaemon } from "./provider.mjs";
 
 const passthroughResolver = command => command;
 
@@ -67,6 +67,56 @@ test("executable resolution skips worktree and relative PATH entries", async t =
     assert.throws(() => resolveExecutable("piston", worktree, {
         pathValue: [worktree, "relative-bin"].join(path.delimiter),
     }), /outside worktree/);
+});
+
+test("Windows batch launchers resolve from PATHEXT and run through cmd.exe with quoted arguments", async t => {
+    const root = await mkdtemp(path.join(tmpdir(), "piston-batch-test-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const bin = path.join(root, "bin");
+    const worktree = path.join(root, "worktree");
+    await mkdir(bin);
+    await mkdir(worktree);
+    await writeFile(path.join(bin, "piston.cmd"), "@echo off");
+    if (process.platform === "win32") {
+        assert.equal(resolveExecutable("piston", worktree, { pathValue: bin }), await realpath(path.join(bin, "piston.cmd")));
+    }
+
+    assert.deepEqual(commandLine("/usr/bin/piston", ["dashboard"], "linux"),
+        { file: "/usr/bin/piston", args: ["dashboard"], options: {}, wrapped: false });
+    assert.deepEqual(commandLine("C:\\tools\\piston.cmd", ["daemon", "C:\\a & b\\App.slnx"], "win32", "C:\\Windows\\cmd.exe"), {
+        file: "C:\\Windows\\cmd.exe",
+        args: ["/d", "/s", "/v:off", "/c", '""C:\\tools\\piston.cmd" "daemon" "C:\\a & b\\App.slnx""'],
+        options: { windowsVerbatimArguments: true },
+        wrapped: true,
+    });
+    for (const unsafe of ['a"b', "%PATH%", "a\nb"]) {
+        assert.throws(() => commandLine("C:\\tools\\piston.cmd", [unsafe], "win32"), /cannot quote safely/);
+    }
+});
+
+test("a daemon started by a batch launcher is ours only if it took ownership after the launch", async t => {
+    const root = await mkdtemp(path.join(tmpdir(), "piston-batch-daemon-test-"));
+    t.after(() => rm(root, { recursive: true, force: true }));
+    const worktree = path.join(root, "worktree");
+    await mkdir(path.join(worktree, ".git"), { recursive: true });
+    await writeFile(path.join(worktree, "App.slnx"), "<Solution />");
+    let launched;
+    const launch = (file, args, options) => {
+        launched = { file, args, options };
+        const child = new EventEmitter();
+        child.pid = 1;
+        child.unref = () => {};
+        return child;
+    };
+    const batch = () => "C:\\tools\\piston.cmd";
+    const state = { ...connected("http://127.0.0.1:1234/"), processId: 42, worktree, acquiredAt: new Date().toISOString() };
+    assert.equal(await startDaemon(worktree, "App.slnx", worktree, async () => state, async () => {},
+        launch, root, "win32", batch), state);
+    assert.match(launched.file, /cmd\.exe$/i);
+    assert.equal(launched.options.windowsVerbatimArguments, true);
+    await assert.rejects(startDaemon(worktree, "App.slnx", worktree,
+        async () => ({ ...state, acquiredAt: "2020-01-01T00:00:00+00:00" }), async () => {}, launch, root, "win32", batch),
+        /Another Piston owner/);
 });
 
 test("executable resolution excludes the entire worktree for nested session directories", async t => {
