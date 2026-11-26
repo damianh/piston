@@ -49,6 +49,21 @@ public sealed class PistonJsonContextTests
     }
 
     [Fact]
+    public void StateSnapshotNotification_SolutionDisplayPath_RoundtripsAndSupportsLegacyPayloads()
+    {
+        var snapshot = BuildSnapshot() with { SolutionDisplayPath = "src/App.slnf" };
+        var node = JsonSerializer.SerializeToNode(snapshot, JsonRpcSerializer.Options)!.AsObject();
+        var result = JsonSerializer.Deserialize<StateSnapshotNotification>(node.ToJsonString(), JsonRpcSerializer.Options);
+        Assert.Equal("src/App.slnf", result!.SolutionDisplayPath);
+        Assert.Equal(snapshot.SolutionPath, result.SolutionPath);
+
+        Assert.True(node.Remove("solutionDisplayPath"));
+        var legacy = JsonSerializer.Deserialize<StateSnapshotNotification>(node.ToJsonString(), JsonRpcSerializer.Options);
+        Assert.Null(legacy!.SolutionDisplayPath);
+        Assert.Equal(snapshot.SolutionPath, legacy.SolutionPath);
+    }
+
+    [Fact]
     public void StateSnapshotNotification_WireFormat_CamelCaseKeys()
     {
         var snapshot = BuildSnapshot();

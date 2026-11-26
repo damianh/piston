@@ -48,6 +48,8 @@ public sealed class PistonEngineTests : IDisposable
             await engine.StartAsync(solution, () =>
             {
                 Assert.Equal(PistonPhase.AwaitingTrust, engine.State.Phase);
+                Assert.Equal("Test.slnx", engine.State.SolutionDisplayPath);
+                Assert.Equal(solution, engine.State.SolutionPath);
                 return Task.CompletedTask;
             });
 

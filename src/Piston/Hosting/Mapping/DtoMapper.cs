@@ -837,7 +837,8 @@ public static class DtoMapper
             IsPaused: state.IsPaused,
             PausedChangeCount: state.PausedChangeCount,
             RepositoryTrustPath: state.RepositoryTrustPath,
-            HasInterruptedRun: state.HasInterruptedRun
+            HasInterruptedRun: state.HasInterruptedRun,
+            SolutionDisplayPath: state.SolutionDisplayPath
         );
 
     public static CoverageSummaryDto ToCoverageSummaryDto(CoverageReportSnapshot? report, string? solutionDirectory) =>

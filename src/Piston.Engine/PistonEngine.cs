@@ -298,6 +298,7 @@ public sealed class PistonEngine : IEngine, IAsyncDisposable
 
         try
         {
+            _state.SolutionDisplayPath = _ownership.Worktree.GetSolutionDisplayPath(solutionPath);
             _cloneIdentity = CloneIdentity.FromWorktreePath(_ownership.Worktree.RootPath);
             _state.RepositoryTrustPath = _cloneIdentity.RootPath;
             if (_repositoryTrustStore is not null && _trustOnStart)

@@ -43,5 +43,6 @@ public sealed record StateSnapshotNotification(
     bool IsPaused = false,
     int PausedChangeCount = 0,
     string? RepositoryTrustPath = null,
-    bool HasInterruptedRun = false
+    bool HasInterruptedRun = false,
+    string? SolutionDisplayPath = null
 );
