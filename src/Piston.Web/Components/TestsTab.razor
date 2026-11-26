@@ -203,10 +203,13 @@
             _ = LoadMarksAsync();
         }
 
-        _snapshot = snapshot;
-        _viewState.ResourceWaits = ResourceWaitText.ByProjectId(snapshot.ProjectResourceWaits, snapshot.SolutionPath);
-        RebuildTree();
-        InvokeAsync(StateHasChanged);
+        InvokeAsync(() =>
+        {
+            _snapshot = snapshot;
+            _viewState.ResourceWaits = ResourceWaitText.ByProjectId(snapshot.ProjectResourceWaits, snapshot.SolutionPath);
+            RebuildTree();
+            StateHasChanged();
+        });
     }
 
     // AppShell applies changed settings to the shared ViewState; re-render to reflect them.

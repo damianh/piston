@@ -3,7 +3,7 @@
 
 namespace Piston.Web.Models;
 
-/// <summary>A visible row of the test tree: a node and its depth. The tree renders a flat, virtualized list of these.</summary>
+/// <summary>A visible row of the test tree: a node and its depth. The tree renders a flat, windowed list of these.</summary>
 /// <param name="Key">
 /// Identifies the row across tree rebuilds, which create new <see cref="TestNode"/> instances on every update; keying
 /// rendered rows by it lets the tree update them in place instead of recreating them.
@@ -12,6 +12,21 @@ public sealed record TreeRow(TestNode Node, int Depth, string Key)
 {
     /// <summary>The rendered height of a row, in pixels; rows have a fixed height so the list can be virtualized.</summary>
     public const int Height = 20;
+
+    /// <summary>Rows rendered above and below the viewport, so scrolling shows rows before the window catches up.</summary>
+    public const int Overscan = 20;
+
+    /// <summary>
+    /// The range of rows to render for a viewport. It depends only on the scroll position, so data updates during a
+    /// run never move or blank the rendered window; a scroll position past the end is clamped to the last page.
+    /// </summary>
+    public static (int First, int Count) Window(int rowCount, double scrollTop, double viewportHeight, int overscan = Overscan)
+    {
+        var top = Math.Clamp(scrollTop, 0, Math.Max(0, rowCount * Height - viewportHeight));
+        var first = Math.Max(0, (int)(top / Height) - overscan);
+        var end = Math.Min(rowCount, (int)Math.Ceiling((top + viewportHeight) / Height) + overscan);
+        return (first, Math.Max(0, end - first));
+    }
 
     /// <summary>The rows shown for <paramref name="nodes"/>: each node, then the rows of its children when it is expanded.</summary>
     public static List<TreeRow> Flatten(IEnumerable<TestNode> nodes)

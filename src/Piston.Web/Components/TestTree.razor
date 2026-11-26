@@ -1,34 +1,40 @@
 @using Piston.Web.Models
 @using Piston.Protocol.Dtos
-@using Microsoft.AspNetCore.Components.Web.Virtualization
 @inject IJSRuntime JS
+@implements IAsyncDisposable
 
 <div class="flex flex-col h-full overflow-hidden">
-    @if (Nodes.Count == 0)
-    {
-        <div class="flex items-center justify-center h-full text-gray-600 text-xs">
-            No tests
-        </div>
-    }
-    else
-    {
-        <!-- Only the rows in view are rendered, so large suites stay responsive -->
-        <div class="overflow-y-auto flex-1" @ref="_scroller">
-            <Virtualize Items="_rows" ItemSize="TreeRow.Height" OverscanCount="20" Context="row">
-                <TestTreeNode @key="row.Key"
-                              Node="row.Node"
-                              Depth="row.Depth"
-                              SelectedKey="@SelectedKey"
-                              SelectedProject="@SelectedProject"
-                              SelectedNodeKey="@SelectedNodeKey"
-                              PinnedFqns="@PinnedFqns"
-                              OnSelectTest="@OnSelectTest"
-                              OnSelectNode="@OnSelectNode"
-                              OnTogglePin="@OnTogglePin"
-                              OnExpansionChanged="@ExpansionChanged" />
-            </Virtualize>
-        </div>
-    }
+    <!-- Only the rows in view are rendered, so large suites stay responsive. The window follows the scroll
+         position alone, so updates during a run patch the visible rows in place instead of shifting or blanking them. -->
+    <div class="overflow-y-auto flex-1" style="overflow-anchor: none" @ref="_scroller">
+        @if (Nodes.Count == 0)
+        {
+            <div class="flex items-center justify-center h-full text-gray-600 text-xs">
+                No tests
+            </div>
+        }
+        else
+        {
+            var (first, count) = TreeRow.Window(_rows.Count, _scrollTop, _viewportHeight);
+            <div style="box-sizing: border-box; height: @(_rows.Count * TreeRow.Height)px; padding-top: @(first * TreeRow.Height)px">
+                @for (var i = first; i < first + count; i++)
+                {
+                    var row = _rows[i];
+                    <TestTreeNode @key="row.Key"
+                                  Node="row.Node"
+                                  Depth="row.Depth"
+                                  SelectedKey="@SelectedKey"
+                                  SelectedProject="@SelectedProject"
+                                  SelectedNodeKey="@SelectedNodeKey"
+                                  PinnedFqns="@PinnedFqns"
+                                  OnSelectTest="@OnSelectTest"
+                                  OnSelectNode="@OnSelectNode"
+                                  OnTogglePin="@OnTogglePin"
+                                  OnExpansionChanged="@ExpansionChanged" />
+                }
+            </div>
+        }
+    </div>
 </div>
 
 @code {
@@ -44,8 +50,43 @@
 
     private ElementReference _scroller;
     private List<TreeRow> _rows = [];
+    private DotNetObjectReference<TestTree>? _selfRef;
+    private double _scrollTop;
+
+    // Until the browser reports the real height, render enough rows for a tall viewport.
+    private double _viewportHeight = 1200;
 
     protected override void OnParametersSet() => _rows = TreeRow.Flatten(Nodes);
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        _selfRef = DotNetObjectReference.Create(this);
+        try
+        {
+            await JS.InvokeVoidAsync("pistonScroll.observe", _scroller, _selfRef);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    /// <summary>Called by the browser when the list scrolls or resizes; re-renders only when the window changes.</summary>
+    [JSInvokable]
+    public void SetViewport(double scrollTop, double viewportHeight)
+    {
+        var before = TreeRow.Window(_rows.Count, _scrollTop, _viewportHeight);
+        _scrollTop = scrollTop;
+        _viewportHeight = viewportHeight;
+        if (TreeRow.Window(_rows.Count, _scrollTop, _viewportHeight) != before)
+        {
+            StateHasChanged();
+        }
+    }
 
     private void ExpansionChanged(TestNode node)
     {
@@ -66,5 +107,18 @@
         catch (JSDisconnectedException)
         {
         }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("pistonScroll.unobserve", _scroller);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+
+        _selfRef?.Dispose();
     }
 }
