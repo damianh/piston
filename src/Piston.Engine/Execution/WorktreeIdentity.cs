@@ -80,7 +80,8 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
             return full;
         }
 
-        var relative = Path.GetRelativePath(RootPath, ResolveLinks(full));
+        var resolved = OperatingSystem.IsMacOS() ? CanonicalizePath(full) : ResolveLinks(full);
+        var relative = Path.GetRelativePath(RootPath, resolved);
         return Path.IsPathRooted(relative) || relative == ".."
             || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
             ? full

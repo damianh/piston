@@ -246,6 +246,32 @@ public sealed class WorktreeOwnershipTests : IDisposable
     }
 
     [Fact]
+    public void SolutionDisplayPath_MacCanonicalizesEquivalentPathSpellings()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            return;
+        }
+
+        var worktree = CreateWorktree("R\u00e9po");
+        var solution = CreateSolution(Path.Combine(worktree, "src"), "App.slnx");
+        var identity = WorktreeIdentity.FromSolutionPath(solution);
+        Assert.Equal("src/App.slnx", identity.GetSolutionDisplayPath(solution));
+
+        var alternate = Path.Combine(_root, "Re\u0301po", "src", "App.slnx");
+        if (File.Exists(alternate))
+        {
+            Assert.Equal("src/App.slnx", identity.GetSolutionDisplayPath(alternate));
+        }
+
+        var alternateCase = Path.Combine(_root, "r\u00e9po", "src", "App.slnx");
+        if (File.Exists(alternateCase))
+        {
+            Assert.Equal("src/App.slnx", identity.GetSolutionDisplayPath(alternateCase));
+        }
+    }
+
+    [Fact]
     public void ExistingPathSpelling_PreservesCaseDistinctEntries()
     {
         var upper = CreateWorktree("Case");
