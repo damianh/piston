@@ -470,10 +470,16 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         || string.Equals(suite.Name, project, StringComparison.OrdinalIgnoreCase)
         || string.Equals(suite.ProjectId, project, StringComparison.OrdinalIgnoreCase);
 
-    private static bool MatchesTest(TestResult result, string query)
+    private static bool MatchesTest(TestResult result, string query) =>
+        string.Equals(result.ResultKey, query, StringComparison.Ordinal)
+        || MatchesName(result, query)
+        || (result.TargetFramework is { } framework
+            && query.EndsWith($" [{framework}]", StringComparison.Ordinal)
+            && MatchesName(result, query[..^(framework.Length + 3)]));
+
+    private static bool MatchesName(TestResult result, string query)
     {
-        if (string.Equals(result.ResultKey, query, StringComparison.Ordinal)
-            || string.Equals(result.FullyQualifiedName, query, StringComparison.Ordinal)
+        if (string.Equals(result.FullyQualifiedName, query, StringComparison.Ordinal)
             || string.Equals(result.Method, query, StringComparison.Ordinal)
             || result.FullyQualifiedName.StartsWith(query + " #", StringComparison.Ordinal))
         {
