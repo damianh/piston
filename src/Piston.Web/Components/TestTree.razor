@@ -16,7 +16,8 @@
         else
         {
             var (first, count) = TreeRow.Window(_rows.Count, _scrollTop, _viewportHeight);
-            <div style="box-sizing: border-box; height: @(_rows.Count * TreeRow.Height)px; padding-top: @(first * TreeRow.Height)px">
+            <div role="tree" aria-label="Tests" aria-multiselectable="true"
+                 style="box-sizing: border-box; height: @(_rows.Count * TreeRow.Height)px; padding-top: @(first * TreeRow.Height)px">
                 @for (var i = first; i < first + count; i++)
                 {
                     var row = _rows[i];
@@ -115,12 +116,36 @@
         }
     }
 
-    /// <summary>Viewport coordinates just below the selected row, scrolling it into view; null when it is not rendered.</summary>
+    /// <summary>
+    /// Viewport coordinates just below the first selected row, scrolling it into view, including one outside the
+    /// rendered window; null when no visible row is selected.
+    /// </summary>
     public async Task<double[]?> SelectedRowPointAsync()
     {
+        var index = -1;
+        if (Selection is { Count: > 0 })
+        {
+            for (var i = 0; i < _rows.Count && index < 0; i++)
+            {
+                if (Selection.Contains(_rows[i].Key))
+                {
+                    index = i;
+                }
+            }
+        }
+        else
+        {
+            index = TreeRow.IndexOfSelected(_rows, SelectedKey, SelectedNodeKey, SelectedProject);
+        }
+
+        if (index < 0)
+        {
+            return null;
+        }
+
         try
         {
-            return await JS.InvokeAsync<double[]?>("pistonTreeMenu.selectedRowPoint", _scroller);
+            return await JS.InvokeAsync<double[]?>("pistonTreeMenu.selectedRowPoint", _scroller, index, TreeRow.Height);
         }
         catch (JSDisconnectedException)
         {

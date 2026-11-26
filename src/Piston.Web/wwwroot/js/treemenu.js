@@ -32,13 +32,15 @@ window.pistonTreeMenu = {
         delete window._pistonTreeMenuKeys;
     },
 
-    // Where to open the menu for the keyboard: just below the selected row's label.
-    selectedRowPoint(scroller) {
-        const row = scroller?.querySelector("[data-selected]");
-        if (!row) return null;
-        row.scrollIntoView({ block: "nearest" });
-        const rect = row.getBoundingClientRect();
-        return [rect.left + 32, rect.bottom];
+    // Where to open the menu for the keyboard: just below the label of the selected row at `index`. A row outside
+    // the windowed list's rendered rows is not in the DOM, so the list scrolls to its index and measures from that.
+    selectedRowPoint(scroller, index, rowHeight) {
+        if (!scroller || index < 0) return null;
+        const top = index * rowHeight;
+        if (top < scroller.scrollTop) scroller.scrollTop = top;
+        else if (top + rowHeight > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = top + rowHeight - scroller.clientHeight;
+        const rect = scroller.getBoundingClientRect();
+        return [rect.left + 32, rect.top + top - scroller.scrollTop + rowHeight];
     },
 
     open(menu, x, y, dotnet) {

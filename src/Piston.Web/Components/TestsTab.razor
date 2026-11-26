@@ -420,6 +420,10 @@
         else if (click.Toggle)
         {
             show = selection.Toggle(click.RowKey);
+            if (!show && selection.Count == 0)
+            {
+                ClearDetails();
+            }
         }
         else
         {
@@ -430,6 +434,16 @@
         {
             ShowRow(click.Node);
         }
+    }
+
+    // Deselecting the last row deselects everything, so nothing falls back to the details pane's row.
+    private void ClearDetails()
+    {
+        _viewState.SelectedTestKey = null;
+        _viewState.SelectedTestProject = null;
+        _viewState.SelectedNodeKey = null;
+        _selectedTest = null;
+        _nodeDetail = null;
     }
 
     private void ShowRow(TestNode node)
