@@ -508,7 +508,8 @@ public sealed class FileWatcherService : IFileWatcherService
     /// Whether <paramref name="directory"/> exists and is not being deleted. On Windows a directory stays visible
     /// to <see cref="Directory.Exists"/> while its deletion is pending (until every open handle, such as the
     /// deleter's or a watcher's, closes), yet its watcher has already failed with "Access is denied". Opening it
-    /// then fails with that same error, so a zero-access open tells the two apart.
+    /// then fails with STATUS_DELETE_PENDING, which Win32 also reports as "Access is denied", so the NT status
+    /// tells a pending deletion apart from a permission failure.
     /// </summary>
     private static bool DirectoryIsPresent(string directory)
     {
@@ -528,20 +529,48 @@ public sealed class FileWatcherService : IFileWatcherService
         const int fileNotFound = 2;
         const int pathNotFound = 3;
         const int accessDenied = 5;
-        var path = Path.GetFullPath(directory);
-        if (!path.StartsWith(@"\\", StringComparison.Ordinal))
+        const int statusDeletePending = unchecked((int)0xC0000056);
+        using var handle = CreateFile(ExtendedPath(directory), 0, shareAll, IntPtr.Zero, openExisting,
+            backupSemantics, IntPtr.Zero);
+        if (!handle.IsInvalid)
         {
-            path = @"\\?\" + path;
+            return true;
         }
 
-        using var handle = CreateFile(path, 0, shareAll, IntPtr.Zero, openExisting, backupSemantics, IntPtr.Zero);
-        return !handle.IsInvalid
-            || Marshal.GetLastPInvokeError() is not (fileNotFound or pathNotFound or accessDenied);
+        return Marshal.GetLastPInvokeError() switch
+        {
+            fileNotFound or pathNotFound => false,
+            accessDenied => RtlGetLastNtStatus() != statusDeletePending,
+            _ => true,
+        };
+    }
+
+    // Lets the native open handle paths longer than MAX_PATH without the process opting in to long paths.
+    private static string ExtendedPath(string directory)
+    {
+        var path = Path.GetFullPath(directory);
+        if (path.StartsWith(@"\\?\", StringComparison.Ordinal) || path.StartsWith(@"\\.\", StringComparison.Ordinal))
+        {
+            return path;
+        }
+
+        return path.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + path[2..] : @"\\?\" + path;
     }
 
     [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
     private static extern SafeFileHandle CreateFile(
         string path, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+
+    [DllImport("ntdll.dll")]
+    private static extern int RtlGetLastNtStatus();
+
+    internal bool IsWatchingDirectory(string directory)
+    {
+        lock (_watcherLock)
+        {
+            return _directoryWatchers.ContainsKey(Path.GetFullPath(directory));
+        }
+    }
 
     internal void ReportMonitoringError(Exception error)
     {

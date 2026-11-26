@@ -460,6 +460,7 @@ public sealed class FileWatcherDebounceTests
         try
         {
             sut.Start(dir.FullName);
+            Assert.True(sut.IsWatchingDirectory(doomed));
             using (var handle = WindowsNative.CreateFile(doomed, WindowsNative.Delete, WindowsNative.ShareAll,
                        IntPtr.Zero, WindowsNative.OpenExisting, WindowsNative.BackupSemantics, IntPtr.Zero))
             {
@@ -467,8 +468,17 @@ public sealed class FileWatcherDebounceTests
                 var deleteFile = (byte)1;
                 Assert.True(WindowsNative.SetFileInformationByHandle(
                     handle, WindowsNative.FileDispositionInfo, ref deleteFile, sizeof(byte)));
-                await Task.Delay(TimeSpan.FromMilliseconds(300), _ct);
+
+                // Keep the deletion pending until the failed watcher has been handled.
+                var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(10);
+                while (sut.IsWatchingDirectory(doomed) && DateTime.UtcNow < deadline)
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(20), _ct);
+                }
+
                 Assert.True(Directory.Exists(doomed));
+                Assert.False(sut.IsWatchingDirectory(doomed));
+                Assert.Null(sut.MonitoringError);
             }
 
             var source = Path.Combine(dir.FullName, "Source.cs");
