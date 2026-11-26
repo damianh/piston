@@ -37,10 +37,16 @@ window.pistonTreeMenu = {
     selectedRowPoint(scroller, index, rowHeight) {
         if (!scroller || index < 0) return null;
         const top = index * rowHeight;
+        const before = scroller.scrollTop;
         if (top < scroller.scrollTop) scroller.scrollTop = top;
         else if (top + rowHeight > scroller.scrollTop + scroller.clientHeight) scroller.scrollTop = top + rowHeight - scroller.clientHeight;
-        const rect = scroller.getBoundingClientRect();
-        return [rect.left + 32, rect.top + top - scroller.scrollTop + rowHeight];
+        const point = () => {
+            const rect = scroller.getBoundingClientRect();
+            return [rect.left + 32, rect.top + top - scroller.scrollTop + rowHeight];
+        };
+        if (scroller.scrollTop === before) return point();
+        // Let the reveal's scroll event fire first, or it would close the menu as soon as it opens.
+        return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(point()))));
     },
 
     open(menu, x, y, dotnet) {
