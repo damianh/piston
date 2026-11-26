@@ -71,6 +71,23 @@ public sealed class TreeRowTests
     }
 
     [Fact]
+    public void Window_StaysPutWhenRowsAreAddedDuringARun()
+    {
+        Assert.Equal((0, 40), TreeRow.Window(100, 0, 400));
+        Assert.Equal((0, 40), TreeRow.Window(101, 0, 400));
+        Assert.Equal((180, 60), TreeRow.Window(1000, 4000, 400));
+        Assert.Equal((180, 60), TreeRow.Window(1001, 4000, 400));
+    }
+
+    [Fact]
+    public void Window_ClampsAScrollPositionPastTheEndToTheLastPage()
+    {
+        Assert.Equal((0, 30), TreeRow.Window(30, 2000, 400));
+        Assert.Equal((60, 40), TreeRow.Window(100, 5000, 400));
+        Assert.Equal((0, 0), TreeRow.Window(0, 300, 400));
+    }
+
+    [Fact]
     public void IndexOfSelected_DistinguishesDuplicateTestKeysByProject()
     {
         var first = Test("Shared.Test", "A.Tests");
