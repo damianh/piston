@@ -5,8 +5,8 @@
 **Keep MTP server mode as Piston's primary MTP execution path, and keep VSTest/TRX as the compatibility path.**
 The protocol gives Piston structured per-test updates and supports discovery followed by selected test-node
 execution. Captures from MSTest, NUnit, TUnit and xUnit v3 show stable node UIDs across discovery, cold runs and
-warm-host reruns of the same build. However, stability across source changes has not been established, and Piston
-currently discards the UID when it constructs a `TestResult`.
+warm-host reruns of the same build. However, stability across source changes has not been established. Piston
+uses the UID only to tell data-driven cases apart (see [Case identities](#case-identities)).
 
 Coverage runs now use server mode with support for multiple controller connections, retaining `dotnet test` as
 the fallback. In the original probe, a coverage-enabled MSTest app connected to the MTP
@@ -64,6 +64,17 @@ For all four frameworks, Piston's current MTP mapping uses `display-name` as `Fu
 that produces duplicate `ResultKey`s for `SameName` in two classes under MSTest, NUnit and TUnit; xUnit's
 fully-qualified display names avoid that particular collision. MTP node UIDs distinguish the two tests in every
 capture. This reproduces the issue in [#42](https://github.com/damianh/piston/issues/42).
+
+### Case identities
+
+Piston now qualifies display names with `location.type`. xUnit also truncates long theory arguments in display
+names, so distinct cases of one theory can still share a display name. When `location.method` declares parameters
+(`M(System.String)`) and the node has a UID, Piston appends ` #` and the first 8 lowercase hex digits of the
+SHA-256 of the UID to the identity, as in `Ns.Class.M(s: "aaa"···) #3f9a1c0e`. Every data-driven case is
+suffixed, not only colliding ones, so an identity does not depend on which other cases a run includes. Display
+names and `Method` are unchanged, and `FullyQualifiedName` filters accept the suffixed identity. Changing a
+theory's identity resets its history; tests without parameters keep their earlier identities. The suffix is only
+as stable as the adapter's UID, and the `dotnet test` fallback and VSTest/TRX results do not carry it.
 
 ### Coverage and progress
 
