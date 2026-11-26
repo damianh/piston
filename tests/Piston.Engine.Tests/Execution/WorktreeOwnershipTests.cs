@@ -103,6 +103,59 @@ public sealed class WorktreeOwnershipTests : IDisposable
     }
 
     [Theory]
+    [InlineData("App.sln", false)]
+    [InlineData("App.slnx", true)]
+    [InlineData("App.slnf", true)]
+    public void SolutionDisplayPath_IsRelativeToGitRoot_WithExtension(string name, bool gitFile)
+    {
+        var worktree = CreateWorktree("display", gitFile);
+        var top = CreateSolution(worktree, name);
+        var nested = CreateSolution(Path.Combine(worktree, "src", "Sub"), name);
+        var identity = WorktreeIdentity.FromSolutionPath(nested);
+
+        Assert.Equal(name, identity.GetSolutionDisplayPath(top));
+        Assert.Equal($"src/Sub/{name}", identity.GetSolutionDisplayPath(nested));
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Equal($"src/Sub/{name}", identity.GetSolutionDisplayPath(@"\\?\" + nested));
+        }
+    }
+
+    [Fact]
+    public void SolutionDisplayPath_WithoutGitOrOutsideRoot_KeepsFullPath()
+    {
+        var plain = CreateSolution(Path.Combine(_root, "plain-display"));
+        Assert.Equal(plain, WorktreeIdentity.FromSolutionPath(plain).GetSolutionDisplayPath(plain));
+
+        var solution = CreateSolution(CreateWorktree("display-root"));
+        var identity = WorktreeIdentity.FromSolutionPath(solution);
+        Assert.Equal(plain, identity.GetSolutionDisplayPath(plain));
+        var sibling = CreateSolution(Path.Combine(_root, "display-root-other"));
+        Assert.Equal(sibling, identity.GetSolutionDisplayPath(sibling));
+        if (OperatingSystem.IsWindows())
+        {
+            var otherDrive = Path.GetPathRoot(solution)!.StartsWith("C:", StringComparison.OrdinalIgnoreCase)
+                ? @"D:\Other\App.slnx" : @"C:\Other\App.slnx";
+            Assert.Equal(otherDrive, identity.GetSolutionDisplayPath(otherDrive));
+        }
+    }
+
+    [Fact]
+    public void SolutionDisplayPath_PreservesBackslashesInUnixFileNames()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var worktree = CreateWorktree("unix-display");
+        var solution = CreateSolution(Path.Combine(worktree, "src"), @"App\Debug.slnx");
+        var identity = WorktreeIdentity.FromSolutionPath(solution);
+
+        Assert.Equal(@"src/App\Debug.slnx", identity.GetSolutionDisplayPath(solution));
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public void WindowsIdentityAndOwnership_MatchBothPathForms(bool longPath)
@@ -148,6 +201,7 @@ public sealed class WorktreeOwnershipTests : IDisposable
         var viaLink = WorktreeIdentity.FromSolutionPath(Path.Combine(link, "src", "App.slnx"));
 
         Assert.Equal(WorktreeIdentity.FromSolutionPath(solution), viaLink);
+        Assert.Equal("src/App.slnx", viaLink.GetSolutionDisplayPath(Path.Combine(link, "src", "App.slnx")));
     }
 
     [Fact]
@@ -188,6 +242,32 @@ public sealed class WorktreeOwnershipTests : IDisposable
         else
         {
             Assert.Equal(a.Key, b.Key);
+        }
+    }
+
+    [Fact]
+    public void SolutionDisplayPath_MacCanonicalizesEquivalentPathSpellings()
+    {
+        if (!OperatingSystem.IsMacOS())
+        {
+            return;
+        }
+
+        var worktree = CreateWorktree("R\u00e9po");
+        var solution = CreateSolution(Path.Combine(worktree, "src"), "App.slnx");
+        var identity = WorktreeIdentity.FromSolutionPath(solution);
+        Assert.Equal("src/App.slnx", identity.GetSolutionDisplayPath(solution));
+
+        var alternate = Path.Combine(_root, "Re\u0301po", "src", "App.slnx");
+        if (File.Exists(alternate))
+        {
+            Assert.Equal("src/App.slnx", identity.GetSolutionDisplayPath(alternate));
+        }
+
+        var alternateCase = Path.Combine(_root, "r\u00e9po", "src", "App.slnx");
+        if (File.Exists(alternateCase))
+        {
+            Assert.Equal("src/App.slnx", identity.GetSolutionDisplayPath(alternateCase));
         }
     }
 

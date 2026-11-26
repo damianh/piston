@@ -70,6 +70,24 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
         return new WorktreeIdentity(root, Convert.ToHexStringLower(hash)[..32]);
     }
 
+    /// <summary>Repository-relative solution label, or the full path outside a Git worktree.</summary>
+    public string GetSolutionDisplayPath(string solutionPath)
+    {
+        var full = PathNormalizer.GetFullPath(solutionPath);
+        var git = Path.Combine(RootPath, ".git");
+        if (!Directory.Exists(git) && !File.Exists(git))
+        {
+            return full;
+        }
+
+        var resolved = OperatingSystem.IsMacOS() ? CanonicalizePath(full) : ResolveLinks(full);
+        var relative = Path.GetRelativePath(RootPath, resolved);
+        return Path.IsPathRooted(relative) || relative == ".."
+            || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            ? full
+            : relative.Replace(Path.DirectorySeparatorChar, '/');
+    }
+
     private static string Normalize(string path)
     {
         var trimmed = Path.TrimEndingDirectorySeparator(PathNormalizer.GetFullPath(path));

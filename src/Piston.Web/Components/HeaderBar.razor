@@ -9,10 +9,8 @@
     }
     else
     {
-        var solutionName = Snapshot.SolutionPath is not null
-            ? Path.GetFileNameWithoutExtension(Snapshot.SolutionPath)
-            : "Piston";
-        <span class="shrink-0 text-gray-400 font-semibold" title="@Snapshot.SolutionPath">⬡ @solutionName</span>
+        var solutionName = Snapshot.SolutionDisplayPath ?? Snapshot.SolutionPath ?? "Piston";
+        <span class="min-w-0 max-w-64 truncate text-gray-400 font-semibold" title="@Snapshot.SolutionPath">⬡ @solutionName</span>
     }
     <TabBar ActiveTab="@ActiveTab" OnTabSelected="OnTabSelected" />
     <div class="ml-auto mr-2 flex items-center gap-0.5">
