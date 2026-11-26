@@ -249,7 +249,8 @@ public sealed class TestRunToolTests
     public void GetTestResultMatchesCaseNameWithoutHashForTheRequestedFramework()
     {
         TestResult Case(string framework) => new("Ns.C.M(x: 1) #ba7816bf", "M(x: 1)", TestStatus.Passed,
-            TimeSpan.Zero, null, null, null, null) { Method = "Ns.C.M", TargetFramework = framework };
+            TimeSpan.Zero, null, null, null, null)
+        { Method = "Ns.C.M", TargetFramework = framework };
         var run = Run("frameworks", 2) with
         {
             Suites =
