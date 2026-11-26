@@ -4,7 +4,7 @@
 @implements IDisposable
 
 <div class="flex flex-col flex-1 overflow-hidden">
-    <HeaderBar ActiveTab="@_activeTab" OnTabSelected="SetTab" />
+    <HeaderBar ActiveTab="@_activeTab" OnTabSelected="SetTab" Tabs="@_link.Tabs" />
 
     <div class="flex-1 min-h-0 overflow-hidden">
         @if (_activeTab == DashboardTab.Tests)
@@ -23,7 +23,7 @@
         {
             <TimelineTab OnOpenTest="OpenTest" OnOpenRun="OpenRun" />
         }
-        else if (_activeTab == DashboardTab.Machine)
+        else if (_activeTab == DashboardTab.Machine && !_link.IsCanvas)
         {
             <MachineTab />
         }
@@ -36,25 +36,19 @@
     [Parameter] public KeyboardEventArgs? KeyboardEvent { get; set; }
 
     private DashboardTab _activeTab = DashboardTab.Tests;
+    private DashboardLink _link = DashboardLink.Parse(null);
 
     protected override void OnInitialized()
     {
         Client.ActivityEventReceived += OnActivityEvent;
 
         // A link such as ?tab=coverage&mode=changes&base=branch opens a tab, e.g. from the Copilot canvas.
-        var link = DashboardLink.Parse(new Uri(Nav.Uri).Query);
-        View.ApplyLink(link);
-        if (link.Tab is { } tab && Enum.TryParse<DashboardTab>(tab, ignoreCase: true, out var parsed) && Enum.IsDefined(parsed))
-        {
-            _activeTab = parsed;
-        }
-        else if (link.Mode == CoverageMode.Changes)
-        {
-            _activeTab = DashboardTab.Coverage;
-        }
+        _link = DashboardLink.Parse(new Uri(Nav.Uri).Query);
+        View.ApplyLink(_link);
+        _activeTab = _link.InitialTab;
     }
 
-    private void SetTab(DashboardTab tab) => _activeTab = tab;
+    private void SetTab(DashboardTab tab) => _activeTab = _link.SelectTab(tab);
 
     private void OpenTest(TestReference test)
     {

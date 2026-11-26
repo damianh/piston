@@ -12,7 +12,7 @@
         var solutionName = Snapshot.SolutionDisplayPath ?? Snapshot.SolutionPath ?? "Piston";
         <span class="min-w-0 max-w-64 truncate text-gray-400 font-semibold" title="@Snapshot.SolutionPath">⬡ @solutionName</span>
     }
-    <TabBar ActiveTab="@ActiveTab" OnTabSelected="OnTabSelected" />
+    <TabBar ActiveTab="@ActiveTab" OnTabSelected="OnTabSelected" Tabs="@Tabs" />
     <div class="ml-auto mr-2 flex items-center gap-0.5">
         <ThemeToggle />
         <button @ref="_settingsButton" class="p-1.5 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800"
@@ -30,6 +30,7 @@
 @code {
     [Parameter, EditorRequired] public DashboardTab ActiveTab { get; set; }
     [Parameter, EditorRequired] public EventCallback<DashboardTab> OnTabSelected { get; set; }
+    [Parameter, EditorRequired] public IReadOnlyList<DashboardTab> Tabs { get; set; } = [];
 
     private StateSnapshotNotification? Snapshot { get; set; }
 
