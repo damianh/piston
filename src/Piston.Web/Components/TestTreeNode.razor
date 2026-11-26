@@ -13,8 +13,8 @@
 }
 
 <!-- Node row: a click shows the node's details; the chevron or a double-click expands or collapses it -->
-<div class="relative flex items-center gap-1 px-2 h-5 cursor-pointer hover:bg-gray-800 @(isSelected ? "bg-gray-700" : "") @(Node.IsStale ? "opacity-50" : "")"
-     style="padding-left: @(indent + 8)px"
+<div class="relative flex items-center gap-1 px-2 cursor-pointer hover:bg-gray-800 @(isSelected ? "bg-gray-700" : "") @(Node.IsStale ? "opacity-50" : "")"
+     style="height: @(TreeRow.Height)px; padding-left: @(indent + 8)px"
      data-selected="@(isSelected ? "true" : null)"
      title="@(isTest ? null : "Show details · double-click to expand or collapse")"
      @onclick="HandleClick"
