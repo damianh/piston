@@ -69,6 +69,28 @@ public sealed class HistoryCommandTests
     }
 
     [Fact]
+    public async Task GetRunPair_ReturnsBothRunsWithPerTestResults()
+    {
+        var engine = new StubEngine
+        {
+            StoredRuns =
+            [
+                Run("r2", new StoredTestResult("A.Tests", "A.Current", TestStatus.Passed, 12, null, null)),
+                Run("r1", new StoredTestResult("A.Tests", "A.Baseline", TestStatus.Failed, 30, "boom", null)),
+            ],
+        };
+        var dispatcher = new EngineCommandDispatcher(engine);
+
+        var result = await dispatcher.HandleCommandAsync(ProtocolMethods.HistoryGetRunPair,
+            new JsonObject { ["runId"] = "r2", ["baselineId"] = "r1" }, _ct);
+
+        Assert.Equal("r2", result!["run"]!["summary"]!["runId"]!.GetValue<string>());
+        Assert.Equal("A.Current", result["run"]!["results"]![0]!["test"]!.GetValue<string>());
+        Assert.Equal("r1", result["baseline"]!["summary"]!["runId"]!.GetValue<string>());
+        Assert.Equal("boom", result["baseline"]!["results"]![0]!["errorMessage"]!.GetValue<string>());
+    }
+
+    [Fact]
     public async Task GetTestMarks_CombinesLatestFailuresWithFlakyTests()
     {
         var entry = new TestHistoryEntry("r1", DateTimeOffset.UnixEpoch, TestStatus.Passed, 5, "abc");

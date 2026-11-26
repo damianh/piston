@@ -459,6 +459,15 @@ public sealed class EngineClientService : IAsyncDisposable
         return result?.Deserialize<StoredRunDto>(JsonRpcSerializer.Options);
     }
 
+    /// <summary>A stored run and its comparison baseline with per-test results; null when the daemon is unreachable.</summary>
+    public async Task<StoredRunPairDto?> GetStoredRunPairAsync(string runId, string baselineId)
+    {
+        var result = await SendRequestAsync(
+            ProtocolMethods.HistoryGetRunPair,
+            new GetStoredRunPairCommand(runId, baselineId)).ConfigureAwait(false);
+        return result?.Deserialize<StoredRunPairDto>(JsonRpcSerializer.Options);
+    }
+
     /// <summary>Failure kinds of failing tests and the flaky tests; null when the daemon is unreachable.</summary>
     public async Task<TestMarksDto?> GetTestMarksAsync()
     {

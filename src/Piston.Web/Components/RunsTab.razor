@@ -158,6 +158,7 @@
     private StoredRunsDto? _runs;
     private string? _selectedId;
     private StoredRunDto? _run;
+    private StoredRunDto? _baseline;
     private string? _baselineId;
     private RunComparison? _comparison;
     private DateTimeOffset? _lastRunTime;
@@ -206,38 +207,61 @@
     {
         _selectedId = runId;
         _run = null;
+        _baseline = null;
         _comparison = null;
         _baselineId = Earlier().FirstOrDefault()?.RunId;
-        var run = await Client.GetStoredRunAsync(runId);
-        if (_selectedId != runId)
+        var baselineId = _baselineId;
+        if (baselineId is null)
         {
-            return;
-        }
+            var run = await Client.GetStoredRunAsync(runId);
+            if (_selectedId != runId || _baselineId is not null)
+            {
+                return;
+            }
 
-        _run = run;
-        await CompareAsync();
+            _run = run;
+            UpdateComparison();
+        }
+        else
+        {
+            var pair = await Client.GetStoredRunPairAsync(runId, baselineId);
+            if (_selectedId != runId || _baselineId != baselineId)
+            {
+                return;
+            }
+
+            _run = pair?.Run;
+            _baseline = pair?.Baseline;
+            UpdateComparison();
+        }
     }
 
     private async Task ChangeBaselineAsync(ChangeEventArgs e)
     {
         var value = e.Value?.ToString();
         _baselineId = string.IsNullOrEmpty(value) ? null : value;
-        await CompareAsync();
-    }
-
-    private async Task CompareAsync()
-    {
+        _baseline = null;
         _comparison = null;
-        if (_run is null || _baselineId is null)
+        if (_run is null || _baselineId is not { } baselineId)
         {
             return;
         }
 
-        var baselineId = _baselineId;
+        var selectedId = _selectedId;
         var baseline = await Client.GetStoredRunAsync(baselineId);
-        if (baseline is not null && _baselineId == baselineId && _run is not null)
+        if (_selectedId == selectedId && _baselineId == baselineId)
         {
-            _comparison = RunComparison.Compare(baseline, _run);
+            _baseline = baseline;
+            UpdateComparison();
+        }
+    }
+
+    private void UpdateComparison()
+    {
+        _comparison = null;
+        if (_run is not null && _baseline is not null)
+        {
+            _comparison = RunComparison.Compare(_baseline, _run);
         }
     }
 

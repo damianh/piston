@@ -108,6 +108,8 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(GetChangedLineCoverageCommand))]
 [JsonSerializable(typeof(GetChangeDiffCommand))]
 [JsonSerializable(typeof(GetStoredRunCommand))]
+[JsonSerializable(typeof(GetStoredRunPairCommand))]
+[JsonSerializable(typeof(StoredRunPairDto))]
 [JsonSerializable(typeof(GetSessionTimelineCommand))]
 [JsonSerializable(typeof(GetTestHistoryCommand))]
 [JsonSerializable(typeof(McpCallLogResponse))]
