@@ -129,7 +129,8 @@ public sealed class EngineClientService : IAsyncDisposable
     private async Task ReceiveLoopAsync(ClientWebSocket ws, CancellationToken ct)
     {
         const int InitialBufferSize = 64 * 1024;
-        const int MaxMessageSize = 16 * 1024 * 1024;
+        // A paired-run response can contain two runs that each fit the former 16 MiB limit.
+        const int MaxMessageSize = 32 * 1024 * 1024;
         var buffer = new byte[InitialBufferSize];
 
         while (!ct.IsCancellationRequested && ws.State == WebSocketState.Open)
@@ -457,6 +458,15 @@ public sealed class EngineClientService : IAsyncDisposable
     {
         var result = await SendRequestAsync(ProtocolMethods.HistoryGetRun, new GetStoredRunCommand(runId)).ConfigureAwait(false);
         return result?.Deserialize<StoredRunDto>(JsonRpcSerializer.Options);
+    }
+
+    /// <summary>A stored run and its comparison baseline with per-test results; null when the daemon is unreachable.</summary>
+    public async Task<StoredRunPairDto?> GetStoredRunPairAsync(string runId, string baselineId)
+    {
+        var result = await SendRequestAsync(
+            ProtocolMethods.HistoryGetRunPair,
+            new GetStoredRunPairCommand(runId, baselineId)).ConfigureAwait(false);
+        return result?.Deserialize<StoredRunPairDto>(JsonRpcSerializer.Options);
     }
 
     /// <summary>Failure kinds of failing tests and the flaky tests; null when the daemon is unreachable.</summary>

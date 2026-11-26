@@ -70,6 +70,9 @@ public static class ProtocolMethods
     /// <summary>Request one stored run with its per-test results.</summary>
     public const string HistoryGetRun = "history/getRun";
 
+    /// <summary>Request a stored run and its comparison baseline with per-test results.</summary>
+    public const string HistoryGetRunPair = "history/getRunPair";
+
     /// <summary>Request the failure kind of each failing test and the flaky tests.</summary>
     public const string HistoryGetTestMarks = "history/getTestMarks";
 

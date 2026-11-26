@@ -256,6 +256,21 @@ public sealed class EngineCommandDispatcher(IEngine engine) : ICommandDispatcher
                         : JsonNode.Parse(System.Text.Json.JsonSerializer.Serialize(run.ToDto(), JsonRpcSerializer.Options));
                 }
 
+            case ProtocolMethods.HistoryGetRunPair:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<GetStoredRunPairCommand>(@params);
+                    if (cmd is null || string.IsNullOrWhiteSpace(cmd.RunId) || string.IsNullOrWhiteSpace(cmd.BaselineId))
+                    {
+                        return null;
+                    }
+
+                    var result = new StoredRunPairDto(
+                        engine.GetStoredRun(cmd.RunId)?.ToDto(),
+                        engine.GetStoredRun(cmd.BaselineId)?.ToDto());
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(result, JsonRpcSerializer.Options));
+                }
+
             case ProtocolMethods.HistoryGetTestMarks:
                 {
                     var failures = engine.GetLatestFailures();
