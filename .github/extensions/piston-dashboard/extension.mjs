@@ -42,6 +42,7 @@ await joinSession({
         id: "piston-dashboard",
         displayName: "Piston",
         description: "Inspect the current worktree's Piston dashboard without starting an engine or a test run.",
+        icon: "favicon.png",
         inputSchema: openInput,
         open: async ctx => {
             try {

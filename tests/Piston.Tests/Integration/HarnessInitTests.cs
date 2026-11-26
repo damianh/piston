@@ -68,6 +68,25 @@ public sealed class HarnessInitTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData("User")]
+    [InlineData("Repo")]
+    public void Copilot_Write_InstallsDeclaredCanvasIcon(string scope)
+    {
+        var initScope = Enum.Parse<InitScope>(scope);
+        var (exitCode, _) = Run(new(Harness.Copilot, initScope, Write: true, Force: false));
+
+        Assert.Equal(0, exitCode);
+        var extension = initScope == InitScope.User
+            ? Path.Combine(_locations.CopilotHome, "extensions", "piston-dashboard")
+            : Path.Combine(_locations.RepoDirectory, ".github", "extensions", "piston-dashboard");
+        const string icon = "favicon.png";
+        Assert.Contains($"icon: \"{icon}\"", File.ReadAllText(Path.Combine(extension, "extension.mjs")), StringComparison.Ordinal);
+        Assert.Equal(
+            File.ReadAllBytes(Path.Combine(RepositoryRoot(), "src", "Piston.Web", "wwwroot", icon)),
+            File.ReadAllBytes(Path.Combine(extension, icon)));
+    }
+
     [Fact]
     public void Write_IsIdempotent()
     {
