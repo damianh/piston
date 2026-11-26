@@ -32,11 +32,15 @@ internal static class VerificationInputCoverage
 
     /// <summary>
     /// The first coverage issue, and the evaluated user inputs inside the fingerprint's boundaries (present
-    /// or not), which a project-scoped fingerprint must include wherever they are.
+    /// or not), which a project-scoped fingerprint must include wherever they are. <c>AwaitingRestore</c> is set
+    /// when the issue is that a project's restore outputs import package files its assets file does not list,
+    /// which is what evaluation observes while a restore is rewriting them; it still fails closed.
     /// </summary>
-    public static (string? Issue, IReadOnlyList<string> Inputs) Collect(string solutionPath, IEnumerable<Project> projects)
+    public static (string? Issue, IReadOnlyList<string> Inputs, bool AwaitingRestore) Collect(
+        string solutionPath, IEnumerable<Project> projects)
     {
         string? issue = null;
+        string? restoreIssue = null;
         var covered = new List<string>();
         var root = Path.GetDirectoryName(Path.GetFullPath(solutionPath))!;
         var sdkRoot = Path.GetDirectoryName(typeof(Project).Assembly.Location)!;
@@ -97,6 +101,17 @@ internal static class VerificationInputCoverage
                             IsUnder(import.ImportingElement.ContainingProject.FullPath, packageDirectory)));
                 var isInstalledPackImport = IsInstalledPackInput(importedPath,
                     import.ImportingElement.ContainingProject.FullPath, sdkRoot, userDotnetRoot);
+                if (!isRestoredPackageImport && packageRootPath is not null && IsUnder(importedPath, packageRootPath)
+                    && restoreOutputs.Contains(import.ImportingElement.ContainingProject.FullPath))
+                {
+                    // NuGet writes nuget.g.props/targets and project.assets.json separately, so evaluation racing a
+                    // restore can see imports from one restore and packages from another.
+                    restoreIssue ??= $"Restore outputs for '{project.FullPath}' import '{importedPath}', which its " +
+                        "project.assets.json does not list; a NuGet restore may be in progress or incomplete. " +
+                        "Restore the solution and verify again; verify cannot prove full verification until the " +
+                        "restore outputs agree.";
+                }
+
                 if (!isTrustedSdkToolchainImport && !isRestoredPackageImport && !isInstalledPackImport
                     && !IsUnder(importedPath, sdkRoot) && !IsUnder(importedPath, manifestsRoot))
                 {
@@ -288,7 +303,7 @@ internal static class VerificationInputCoverage
             }
         }
 
-        return (issue, covered);
+        return (restoreIssue ?? issue, covered, restoreIssue is not null);
     }
 
     private static bool IsTrustedSdkToolchainImport(ResolvedImport import, string sdkRoot)

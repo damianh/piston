@@ -62,6 +62,17 @@ public interface IImpactAnalyzer
     }
 
     /// <summary>
+    /// Evaluates coverage, also reporting whether the issue is only restore outputs that disagree with the
+    /// assets file (a restore in progress), which can clear once the restore completes.
+    /// </summary>
+    string? GetVerificationCoverageIssue(string solutionPath, out IReadOnlyList<string> testProjects,
+        out bool awaitingRestore)
+    {
+        awaitingRestore = false;
+        return GetVerificationCoverageIssue(solutionPath, out testProjects);
+    }
+
+    /// <summary>
     /// Reloads the graph when it was evaluated before a project's packages were restored (a fresh clone's first
     /// build restores them). Returns whether it reloaded.
     /// </summary>

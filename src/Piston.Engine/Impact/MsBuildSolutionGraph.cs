@@ -30,7 +30,15 @@ internal sealed class MsBuildSolutionGraph : ISolutionGraph
 
     public IReadOnlyList<string> AllProjectPaths => _allProjects;
     public IReadOnlyList<string> TestProjectPaths => _testProjects;
-    public string? VerificationCoverageIssue => VerificationInputCoverage.FindIssue(_solutionPath, _evaluated);
+    public string? VerificationCoverageIssue => VerificationCoverage.Issue;
+    public (string? Issue, bool AwaitingRestore) VerificationCoverage
+    {
+        get
+        {
+            var coverage = VerificationInputCoverage.Collect(_solutionPath, _evaluated);
+            return (coverage.Issue, coverage.AwaitingRestore);
+        }
+    }
     public SourceInputScope SourceScope => _sourceScope.Value;
 
 

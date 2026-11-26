@@ -30,8 +30,21 @@ internal sealed class ProvenanceImpactAnalyzer(IReadOnlyList<string> testProject
     }
 
     public Func<string?> VerificationCoverage { get; set; } = () => null;
+
+    /// <summary>Whether a coverage issue is only restore outputs disagreeing with the assets file.</summary>
+    public bool CoverageAwaitsRestore { get; set; }
     public int TargetFrameworkCount { get; set; } = 1;
     public string? GetVerificationCoverageIssue(string solutionPath) => VerificationCoverage();
+
+    public string? GetVerificationCoverageIssue(string solutionPath, out IReadOnlyList<string> testProjects,
+        out bool awaitingRestore)
+    {
+        var issue = VerificationCoverage();
+        awaitingRestore = issue is not null && CoverageAwaitsRestore;
+        testProjects = TestProjects.ToArray();
+        return issue;
+    }
+
     public int GetTargetFrameworkCount(string projectPath) => TargetFrameworkCount;
     public Task Initialization { get; set; } = Task.CompletedTask;
     public HashSet<string> MtpProjects { get; } = [];
