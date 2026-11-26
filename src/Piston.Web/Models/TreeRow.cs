@@ -4,7 +4,11 @@
 namespace Piston.Web.Models;
 
 /// <summary>A visible row of the test tree: a node and its depth. The tree renders a flat, virtualized list of these.</summary>
-public sealed record TreeRow(TestNode Node, int Depth)
+/// <param name="Key">
+/// Identifies the row across tree rebuilds, which create new <see cref="TestNode"/> instances on every update; keying
+/// rendered rows by it lets the tree update them in place instead of recreating them.
+/// </param>
+public sealed record TreeRow(TestNode Node, int Depth, string Key)
 {
     /// <summary>The rendered height of a row, in pixels; rows have a fixed height so the list can be virtualized.</summary>
     public const int Height = 20;
@@ -13,26 +17,39 @@ public sealed record TreeRow(TestNode Node, int Depth)
     public static List<TreeRow> Flatten(IEnumerable<TestNode> nodes)
     {
         var rows = new List<TreeRow>();
-        var stack = new Stack<(TestNode Node, int Depth)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var stack = new Stack<(TestNode Node, int Depth, string? ParentKey)>();
         foreach (var node in nodes.Reverse())
         {
-            stack.Push((node, 0));
+            stack.Push((node, 0, null));
         }
 
         while (stack.TryPop(out var item))
         {
-            rows.Add(new TreeRow(item.Node, item.Depth));
+            var key = KeyOf(item.Node, item.ParentKey);
+            for (var n = 2; !seen.Add(key); n++)
+            {
+                key = $"{KeyOf(item.Node, item.ParentKey)}#{n}";
+            }
+
+            rows.Add(new TreeRow(item.Node, item.Depth, key));
             if (item.Node.IsExpanded)
             {
                 for (var i = item.Node.Children.Count - 1; i >= 0; i--)
                 {
-                    stack.Push((item.Node.Children[i], item.Depth + 1));
+                    stack.Push((item.Node.Children[i], item.Depth + 1, key));
                 }
             }
         }
 
         return rows;
     }
+
+    // Group keys are already unique; a test can appear under several groups (e.g. pinned and its class).
+    private static string KeyOf(TestNode node, string? parentKey) =>
+        node.Kind == TestNodeKind.Test && node.Test is { } test
+            ? $"{parentKey}/{node.Project}|{test.Key}"
+            : node.ExpansionKey ?? $"{parentKey}/{node.GroupKey ?? node.Label}";
 
     /// <summary>
     /// The index of the selected row: the test with <paramref name="selectedKey"/>, or else the group with

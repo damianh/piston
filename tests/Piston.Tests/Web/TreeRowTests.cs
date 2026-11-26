@@ -49,6 +49,28 @@ public sealed class TreeRowTests
     }
 
     [Fact]
+    public void Flatten_KeysRowsTheSameWhenTheTreeIsRebuilt()
+    {
+        var first = TreeRow.Flatten(Tree(innerExpanded: true));
+        var rebuilt = TreeRow.Flatten(Tree(innerExpanded: true));
+
+        Assert.NotSame(first[2].Node, rebuilt[2].Node);
+        Assert.Equal(first.Select(r => r.Key), rebuilt.Select(r => r.Key));
+    }
+
+    [Fact]
+    public void Flatten_KeysATestUniquelyWhereverItAppears()
+    {
+        var rows = TreeRow.Flatten(
+        [
+            Group("pinned", true, Test("N.A", "A.Tests")),
+            Group("N", true, Test("N.A", "A.Tests"), Test("N.A", "B.Tests"), Test("N.A", "B.Tests")),
+        ]);
+
+        Assert.Equal(rows.Count, rows.Select(r => r.Key).Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
     public void IndexOfSelected_DistinguishesDuplicateTestKeysByProject()
     {
         var first = Test("Shared.Test", "A.Tests");
