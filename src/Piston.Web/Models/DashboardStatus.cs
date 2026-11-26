@@ -91,13 +91,6 @@ public static class DashboardStatus
         return $"Run finished: {string.Join(", ", parts)}.";
     }
 
-    /// <summary>A run of every failed test, or <see langword="null"/> when none failed.</summary>
-    public static RunTestsCommand? RunFailed(IReadOnlyList<TestSuiteDto> suites) => RunTestsCommand.ForFailed(suites);
-
-    /// <summary>The number of distinct failed tests <see cref="RunFailed"/> runs.</summary>
-    public static int FailedCount(IReadOnlyList<TestSuiteDto> suites) =>
-        RunFailed(suites)?.Tests?.Count ?? 0;
-
     private static bool IsBusy(PistonPhaseDto phase) =>
         phase is PistonPhaseDto.Analyzing or PistonPhaseDto.Building or PistonPhaseDto.Testing;
 

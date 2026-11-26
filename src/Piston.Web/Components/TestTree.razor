@@ -16,19 +16,22 @@
         else
         {
             var (first, count) = TreeRow.Window(_rows.Count, _scrollTop, _viewportHeight);
-            <div style="box-sizing: border-box; height: @(_rows.Count * TreeRow.Height)px; padding-top: @(first * TreeRow.Height)px">
+            <div role="tree" aria-label="Tests" aria-multiselectable="true"
+                 style="box-sizing: border-box; height: @(_rows.Count * TreeRow.Height)px; padding-top: @(first * TreeRow.Height)px">
                 @for (var i = first; i < first + count; i++)
                 {
                     var row = _rows[i];
                     <TestTreeNode @key="row.Key"
                                   Node="row.Node"
                                   Depth="row.Depth"
+                                  RowKey="@row.Key"
+                                  Selection="@Selection"
                                   SelectedKey="@SelectedKey"
                                   SelectedProject="@SelectedProject"
                                   SelectedNodeKey="@SelectedNodeKey"
                                   PinnedFqns="@PinnedFqns"
-                                  OnSelectTest="@OnSelectTest"
-                                  OnSelectNode="@OnSelectNode"
+                                  OnRowClick="@OnRowClick"
+                                  OnRowMenu="@OnRowMenu"
                                   OnTogglePin="@OnTogglePin"
                                   OnExpansionChanged="@ExpansionChanged" />
                 }
@@ -43,10 +46,14 @@
     [Parameter] public string? SelectedProject { get; set; }
     [Parameter] public string? SelectedNodeKey { get; set; }
     [Parameter] public HashSet<string> PinnedFqns { get; set; } = [];
-    [Parameter] public EventCallback<TestResultDto> OnSelectTest { get; set; }
-    [Parameter] public EventCallback<string> OnSelectNode { get; set; }
+    [Parameter] public TreeSelection? Selection { get; set; }
+    [Parameter] public EventCallback<TreeRowClick> OnRowClick { get; set; }
+    [Parameter] public EventCallback<TreeRowMenu> OnRowMenu { get; set; }
     [Parameter] public EventCallback<string> OnTogglePin { get; set; }
     [Parameter] public Action<TestNode>? OnExpansionChanged { get; set; }
+
+    /// <summary>The visible rows, in order; a Shift+click selects a range of them.</summary>
+    public IReadOnlyList<TreeRow> Rows => _rows;
 
     private ElementReference _scroller;
     private List<TreeRow> _rows = [];
@@ -106,6 +113,43 @@
         }
         catch (JSDisconnectedException)
         {
+        }
+    }
+
+    /// <summary>
+    /// Viewport coordinates just below the first selected row, scrolling it into view, including one outside the
+    /// rendered window; null when no visible row is selected.
+    /// </summary>
+    public async Task<double[]?> SelectedRowPointAsync()
+    {
+        var index = -1;
+        if (Selection is { Count: > 0 })
+        {
+            for (var i = 0; i < _rows.Count && index < 0; i++)
+            {
+                if (Selection.Contains(_rows[i].Key))
+                {
+                    index = i;
+                }
+            }
+        }
+        else
+        {
+            index = TreeRow.IndexOfSelected(_rows, SelectedKey, SelectedNodeKey, SelectedProject);
+        }
+
+        if (index < 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await JS.InvokeAsync<double[]?>("pistonTreeMenu.selectedRowPoint", _scroller, index, TreeRow.Height);
+        }
+        catch (JSDisconnectedException)
+        {
+            return null;
         }
     }
 

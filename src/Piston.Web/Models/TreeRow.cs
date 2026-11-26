@@ -29,7 +29,12 @@ public sealed record TreeRow(TestNode Node, int Depth, string Key)
     }
 
     /// <summary>The rows shown for <paramref name="nodes"/>: each node, then the rows of its children when it is expanded.</summary>
-    public static List<TreeRow> Flatten(IEnumerable<TestNode> nodes)
+    public static List<TreeRow> Flatten(IEnumerable<TestNode> nodes) => Flatten(nodes, includeCollapsed: false);
+
+    /// <summary>Every node's row, including those inside collapsed groups, keyed as <see cref="Flatten(IEnumerable{TestNode})"/> keys them.</summary>
+    public static List<TreeRow> FlattenAll(IEnumerable<TestNode> nodes) => Flatten(nodes, includeCollapsed: true);
+
+    private static List<TreeRow> Flatten(IEnumerable<TestNode> nodes, bool includeCollapsed)
     {
         var rows = new List<TreeRow>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -48,7 +53,7 @@ public sealed record TreeRow(TestNode Node, int Depth, string Key)
             }
 
             rows.Add(new TreeRow(item.Node, item.Depth, key));
-            if (item.Node.IsExpanded)
+            if (includeCollapsed || item.Node.IsExpanded)
             {
                 for (var i = item.Node.Children.Count - 1; i >= 0; i--)
                 {
