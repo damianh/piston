@@ -2,6 +2,8 @@
 // See LICENSE in the project root for license information.
 
 using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using Piston.Engine.Models;
 using Piston.Engine.Services;
 using Xunit;
@@ -444,6 +446,68 @@ public sealed class FileWatcherDebounceTests
             sut.Stop();
             dir.Delete(recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task DirectoryWithPendingDeletion_DoesNotFaultMonitoring()
+    {
+        // Windows fails a deleted directory's watcher while Directory.Exists still sees it: the name stays until the
+        // deleter's handle closes. Classic (non-POSIX) delete disposition holds that window open deterministically.
+        Assert.SkipUnless(OperatingSystem.IsWindows(), "Pending directory deletion is Windows behaviour.");
+        using var sut = new FileWatcherService(TimeSpan.FromMilliseconds(50));
+        var dir = Directory.CreateTempSubdirectory("piston-watcher-pending-");
+        var doomed = Directory.CreateDirectory(Path.Combine(dir.FullName, "doomed")).FullName;
+        try
+        {
+            sut.Start(dir.FullName);
+            using (var handle = WindowsNative.CreateFile(doomed, WindowsNative.Delete, WindowsNative.ShareAll,
+                       IntPtr.Zero, WindowsNative.OpenExisting, WindowsNative.BackupSemantics, IntPtr.Zero))
+            {
+                Assert.False(handle.IsInvalid);
+                var deleteFile = (byte)1;
+                Assert.True(WindowsNative.SetFileInformationByHandle(
+                    handle, WindowsNative.FileDispositionInfo, ref deleteFile, sizeof(byte)));
+                await Task.Delay(TimeSpan.FromMilliseconds(300), _ct);
+                Assert.True(Directory.Exists(doomed));
+            }
+
+            var source = Path.Combine(dir.FullName, "Source.cs");
+            var received = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            sut.FileChanged += batch =>
+            {
+                if (batch.Changes.Any(change => change.FilePath == source))
+                {
+                    _ = received.TrySetResult();
+                }
+            };
+            await File.WriteAllTextAsync(source, "// source", _ct);
+            await received.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+            Assert.Null(sut.MonitoringError);
+        }
+        finally
+        {
+            sut.Stop();
+            dir.Delete(recursive: true);
+        }
+    }
+
+    private static class WindowsNative
+    {
+        public const uint Delete = 0x00010000;
+        public const uint ShareAll = 0x00000007;
+        public const uint OpenExisting = 3;
+        public const uint BackupSemantics = 0x02000000;
+        public const int FileDispositionInfo = 4;
+
+        [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
+        public static extern SafeFileHandle CreateFile(
+            string path, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetFileInformationByHandle(
+            SafeFileHandle handle, int informationClass, ref byte information, uint size);
     }
 
     [Theory]
