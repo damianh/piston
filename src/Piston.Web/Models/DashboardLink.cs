@@ -1,6 +1,8 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Piston.Web.Components;
+
 namespace Piston.Web.Models;
 
 /// <summary>
@@ -13,10 +15,27 @@ namespace Piston.Web.Models;
 /// <param name="BaseRef">The branch, commit or range to compare against.</param>
 public sealed record DashboardLink(string? Tab, CoverageMode? Mode, string? Base, string? BaseRef)
 {
+    private static readonly IReadOnlyList<DashboardTab> WorktreeTabs =
+        [DashboardTab.Tests, DashboardTab.Coverage, DashboardTab.Runs, DashboardTab.Timeline];
+    private static readonly IReadOnlyList<DashboardTab> StandaloneTabs =
+        [.. WorktreeTabs, DashboardTab.Machine];
+
+    public bool IsCanvas { get; init; }
+
+    public IReadOnlyList<DashboardTab> Tabs => IsCanvas ? WorktreeTabs : StandaloneTabs;
+
+    public DashboardTab InitialTab => Enum.TryParse<DashboardTab>(Tab, ignoreCase: true, out var parsed) && Enum.IsDefined(parsed)
+        ? SelectTab(parsed)
+        : Mode == CoverageMode.Changes ? DashboardTab.Coverage : DashboardTab.Tests;
+
+    public DashboardTab SelectTab(DashboardTab tab) => Tabs.Contains(tab) ? tab : DashboardTab.Tests;
+
     public static DashboardLink Parse(string? query)
     {
         string? tab = null, @base = null, baseRef = null;
         CoverageMode? mode = null;
+        var isCanvas = false;
+        var canvasSeen = false;
         foreach (var pair in (query ?? "").TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
             var equals = pair.IndexOf('=', StringComparison.Ordinal);
@@ -29,6 +48,10 @@ public sealed record DashboardLink(string? Tab, CoverageMode? Mode, string? Base
 
             switch (key)
             {
+                case "pistonCanvas" when !canvasSeen:
+                    isCanvas = value == "1";
+                    canvasSeen = true;
+                    break;
                 case "tab" when value.Length is > 0 and <= 32 && value.All(char.IsAsciiLetter):
                     tab = value.ToLowerInvariant();
                     break;
@@ -45,7 +68,7 @@ public sealed record DashboardLink(string? Tab, CoverageMode? Mode, string? Base
             }
         }
 
-        return new(tab, mode, @base, baseRef);
+        return new(tab, mode, @base, baseRef) { IsCanvas = isCanvas };
 
         static string? Decode(string text)
         {

@@ -2,6 +2,7 @@
 // See LICENSE in the project root for license information.
 
 using Piston.Protocol.Dtos;
+using Piston.Web.Components;
 using Piston.Web.Models;
 using Xunit;
 
@@ -155,13 +156,51 @@ public sealed class ChangeDiffModelTests
     {
         var link = DashboardLink.Parse("?pistonCanvas=1&owner=a%3Ab&tab=Coverage&mode=changes&base=range&ref=HEAD%7E3..HEAD");
 
-        Assert.Equal(new DashboardLink("coverage", CoverageMode.Changes, "range", "HEAD~3..HEAD"), link);
+        Assert.Equal(new DashboardLink("coverage", CoverageMode.Changes, "range", "HEAD~3..HEAD") { IsCanvas = true }, link);
         Assert.Equal(
             new DashboardLink(null, null, null, null),
             DashboardLink.Parse("tab=cov%20erage&mode=1&base=staged&ref=" + new string('x', 201)));
         Assert.Equal(new DashboardLink(null, null, null, null), DashboardLink.Parse("ref=a%0Ab&mode=%ZZ"));
         Assert.Equal(new DashboardLink(null, null, null, null), DashboardLink.Parse(null));
     }
+
+    [Theory]
+    [InlineData("?pistonCanvas=1&tab=machine", true)]
+    [InlineData("?pistonCanvas=%31&tab=Machine", true)]
+    [InlineData("?pistonCanvas=1&pistonCanvas=0", true)]
+    [InlineData("?pistonCanvas=0&pistonCanvas=1", false)]
+    [InlineData("?pistonCanvas=true", false)]
+    [InlineData("?pistonCanvas=01", false)]
+    [InlineData("?pistonCanvas=%ZZ", false)]
+    [InlineData("?pistonCanvas", false)]
+    [InlineData("?owner=1", false)]
+    [InlineData(null, false)]
+    public void CanvasMarkerScopesNavigationBeforeRendering(string? query, bool isCanvas)
+    {
+        var link = DashboardLink.Parse(query);
+
+        Assert.Equal(isCanvas, link.IsCanvas);
+        Assert.Equal(!isCanvas, link.Tabs.Contains(DashboardTab.Machine));
+        Assert.Equal(isCanvas ? DashboardTab.Tests : DashboardTab.Machine, link.SelectTab(DashboardTab.Machine));
+        Assert.Equal(
+            isCanvas
+                ? [DashboardTab.Tests, DashboardTab.Coverage, DashboardTab.Runs, DashboardTab.Timeline]
+                : new[] { DashboardTab.Tests, DashboardTab.Coverage, DashboardTab.Runs, DashboardTab.Timeline, DashboardTab.Machine },
+            link.Tabs);
+    }
+
+    [Theory]
+    [InlineData("?pistonCanvas=1&tab=machine", DashboardTab.Tests)]
+    [InlineData("?pistonCanvas=1&tab=machine&mode=changes", DashboardTab.Tests)]
+    [InlineData("?tab=machine", DashboardTab.Machine)]
+    [InlineData("?pistonCanvas=1&tab=coverage&mode=changes&base=branch&ref=main", DashboardTab.Coverage)]
+    [InlineData("?pistonCanvas=1&mode=changes", DashboardTab.Coverage)]
+    [InlineData("?pistonCanvas=1&tab=timeline", DashboardTab.Timeline)]
+    [InlineData("?pistonCanvas=1&tab=runs", DashboardTab.Runs)]
+    [InlineData("?pistonCanvas=1&tab=tests&mode=changes", DashboardTab.Tests)]
+    [InlineData("?pistonCanvas=1&tab=unknown", DashboardTab.Tests)]
+    public void InitialTabRespectsPresentationScopeAndDeepLinks(string query, DashboardTab expected) =>
+        Assert.Equal(expected, DashboardLink.Parse(query).InitialTab);
 
     [Fact]
     public void ApplyingALinkSetsTheChangesView()

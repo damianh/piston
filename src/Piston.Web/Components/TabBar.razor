@@ -1,7 +1,7 @@
 @using Piston.Web.Components
 
 <div class="flex self-stretch" role="tablist">
-    @foreach (var tab in new[] { DashboardTab.Tests, DashboardTab.Coverage, DashboardTab.Runs, DashboardTab.Timeline, DashboardTab.Machine })
+    @foreach (var tab in Tabs)
     {
         var tabName = tab.ToString();
         var isActive = tab == ActiveTab;
@@ -16,4 +16,5 @@
 @code {
     [Parameter, EditorRequired] public DashboardTab ActiveTab { get; set; }
     [Parameter, EditorRequired] public EventCallback<DashboardTab> OnTabSelected { get; set; }
+    [Parameter, EditorRequired] public IReadOnlyList<DashboardTab> Tabs { get; set; } = [];
 }

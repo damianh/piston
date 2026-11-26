@@ -241,6 +241,10 @@ canvas support, ask the agent to open the **Piston** canvas (canvas ID
 the canvas-capable `piston` executable on PATH and the active session's working
 directory, not the extension source directory.
 
+The canvas stays scoped to the current worktree, with **Tests**, **Coverage**,
+**Runs**, and **Timeline** tabs. It does not show **Machine** or cross-dashboard
+links; open the standalone browser dashboard for the machine-wide overview.
+
 The canvas attaches to an existing owner of that worktree. Daemon and stdio MCP
 sessions serve the dashboard. MCP sessions use an OS-assigned `127.0.0.1` web
 port; stdio remains the MCP transport.
@@ -290,7 +294,7 @@ The **Runs** tab lists the runs kept in the [run history](#run-history-and-failu
 
 The **Timeline** tab tells the story of the daemon's session, newest first: each edit (the files that changed between runs), each run with its trigger, outcome and the tests it newly failed or fixed, and the MCP tool calls agents made in between. Identical consecutive calls collapse into one row; click a call for its parameters and result. **Agent calls** in the header shows or hides them. A run whose build failed lists its first 10 errors when you click *build failed*. Markers show when a solution was loaded and when the dashboard reconnected. The currently failing tests at the top link to the run and edit that introduced each failure; click a test to follow it through the timeline.
 
-The **Machine** tab shows live worktree owners and reports ownership-read or stale-record cleanup failures. It refreshes while open and links to another owner's local dashboard when available; it does not infer whether an owner is running tests.
+The standalone browser dashboard's **Machine** tab shows live worktree owners and reports ownership-read or stale-record cleanup failures. It refreshes while open and links to another owner's local dashboard when available; it does not infer whether an owner is running tests. This tab is not available in the Copilot canvas.
 
 Keyboard shortcuts (press `?` in the dashboard for the list): `R` runs the selection, `[` and `]` move to the previous or next failure, `1`–`4` show or hide failed, passed, skipped and not-run tests, `G` cycles the grouping, `E` expands or collapses all, and `S` sorts by duration (press again to reverse).
 

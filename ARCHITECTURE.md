@@ -99,7 +99,7 @@ directory, files over 1 MB and binary files.
 Clients receive state, test progress, build errors, and activity notifications.
 `machine/getOverview` reads machine-wide worktree owners for the dashboard. The dashboard presents current test/build state,
 run history and comparison, aggregate coverage with covering tests, a coverage-aware diff of the changes, activity,
-MCP call history and a Machine tab for the workspace overview.
+MCP call history and, in standalone browsers, a Machine tab for the workspace overview.
 
 See [README.md](README.md) for executable commands and the actual configuration
 shape. The daemon's `--stdio` JSON-RPC transport is not MCP; the stdio MCP server
@@ -133,6 +133,11 @@ own Host/Origin, and translates same-origin headers only after validation.
 It does not accept a caller-supplied upstream URL or disable the upstream guards.
 The shell forwards documented canvas theme tokens into the same-origin dashboard.
 Standalone theme storage remains separate from the canvas's host-following mode.
+The existing `pistonCanvas=1` query marker also scopes navigation before the first
+render: only Tests, Coverage, Runs and Timeline are offered. Machine deep links
+fall back to Tests, and the Machine component is never mounted or polled in the
+canvas. Standalone dashboards retain Machine and its cross-dashboard links.
+This is a presentation boundary, not API authorization.
 
 The shell inspects periodically and on refresh, shows actionable disconnected
 states even when the engine was absent at first load, and replaces the embedded
