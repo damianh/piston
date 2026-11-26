@@ -116,7 +116,7 @@ servers rather than replacing them:
 
 For the skill and canvas without `piston init`, copy this repository's
 `src/Piston/Integration/Assets/SKILL.md` to `~/.copilot/skills/piston/SKILL.md`, and
-`.github/extensions/piston-dashboard/` (without the `*.test.mjs` files) to
+`src/Piston/Integration/Assets/canvas/` (without the `*.test.mjs` files) to
 `~/.copilot/extensions/piston-dashboard/`.
 
 ### Claude Code (manual setup)

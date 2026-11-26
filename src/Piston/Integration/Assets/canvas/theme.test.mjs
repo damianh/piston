@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { runInNewContext } from "node:vm";
 
-const script = await readFile(new URL("../../../src/Piston.Web/wwwroot/js/theme.js", import.meta.url), "utf8");
+const script = await readFile(new URL("../../../../Piston.Web/wwwroot/js/theme.js", import.meta.url), "utf8");
 
 function theme(search, saved = "light") {
     let mode;

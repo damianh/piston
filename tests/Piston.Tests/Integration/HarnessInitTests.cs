@@ -208,9 +208,9 @@ public sealed class HarnessInitTests : IDisposable
     }
 
     [Fact]
-    public void CanvasAssets_AreTheRepositoryExtensionsNonTestFiles()
+    public void CanvasAssets_AreTheBundledExtensionsNonTestFiles()
     {
-        var extension = Path.Combine(RepositoryRoot(), ".github", "extensions", "piston-dashboard");
+        var extension = Path.Combine(RepositoryRoot(), "src", "Piston", "Integration", "Assets", "canvas");
         var expected = Directory.GetFiles(extension)
             .Where(f => !f.EndsWith(".test.mjs", StringComparison.Ordinal))
             .Select(Path.GetFileName)

@@ -75,11 +75,11 @@
     </AssemblyAttribute>
   </ItemGroup>
 
-  <!-- Harness integration assets installed by `piston init`. The canvas is the repository's own extension. -->
+  <!-- Harness integration assets installed by `piston init`. -->
   <ItemGroup>
     <EmbeddedResource Include="Integration\Assets\SKILL.md" LogicalName="Piston.Integration/skill/SKILL.md" />
-    <EmbeddedResource Include="..\..\.github\extensions\piston-dashboard\*"
-                      Exclude="..\..\.github\extensions\piston-dashboard\*.test.mjs"
+    <EmbeddedResource Include="Integration\Assets\canvas\*"
+                      Exclude="Integration\Assets\canvas\*.test.mjs"
                       LogicalName="Piston.Integration/canvas/%(Filename)%(Extension)"
                       Link="Integration\Assets\canvas\%(Filename)%(Extension)" />
   </ItemGroup>

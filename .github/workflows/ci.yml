@@ -40,7 +40,7 @@ jobs:
         with:
           node-version: '24'
       - name: Test canvas provider
-        run: node --test .github/extensions/piston-dashboard/provider.test.mjs .github/extensions/piston-dashboard/theme.test.mjs
+        run: node --test src/Piston/Integration/Assets/canvas/provider.test.mjs src/Piston/Integration/Assets/canvas/theme.test.mjs
 
   smoke:
     name: Smoke test samples (${{ matrix.os }})

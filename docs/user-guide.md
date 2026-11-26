@@ -231,8 +231,8 @@ piston daemon --coverage --mcp-port 5300
 
 ### Copilot canvas
 
-This repository includes a project-scoped native canvas extension at
-`.github/extensions/piston-dashboard/`, and the packed tool carries a copy:
+The packed tool carries the native canvas extension, whose source lives at
+`src/Piston/Integration/Assets/canvas/`:
 `piston init copilot --write` installs it into `~/.copilot/extensions/` for every
 project (or, with `--scope repo`, into the current repository's
 `.github/extensions/`). In a Copilot app/runtime with extension

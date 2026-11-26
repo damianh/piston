@@ -39,10 +39,11 @@ Use `daemon`, not bare `piston`/`Piston.dll` with no command: that form opens th
 
 ## Open in the canvas
 
-The project extension lives at `.github/extensions/piston-dashboard/`. It requires
-a Copilot runtime with extension canvas support and a canvas-capable `piston` on
-PATH (after source changes, use the repository's normal packed-tool installation
-flow if the installed tool is older).
+The canvas is available when the user has installed the extension, for example
+with `piston init copilot --write`. It requires a Copilot runtime with extension
+canvas support and a canvas-capable `piston` on PATH (after source changes, use
+the repository's normal packed-tool installation flow if the installed tool is
+older).
 
 1. Inspect capabilities for canvas ID `piston-dashboard`.
 2. Open it with a stable instance ID, such as `piston-panel`, and empty input `{}`.
@@ -72,8 +73,9 @@ avoid stale assets. The browser fallback opens the changes view with
 1. Stop the daemon: `dotnet src/Piston/bin/Release/net11.0/Piston.dll stop` (exits 0 once the process has gone, freeing the ports). If that fails, find the PID with `ss -ltnp | grep ':5199 '` and `kill <pid>`.
 2. If dashboard Tailwind classes changed: `cd src/Piston.Web && npm run build:css`.
 3. Rebuild Release, start the daemon again (detached), and reopen the native canvas.
-   Reload the extension after changing its provider/assets. For browser fallback,
-   reopen the discovered URL with a bumped `v`.
+   If the extension's provider/assets changed, update the installed extension
+   before reloading it. For browser fallback, reopen the discovered URL with a
+   bumped `v`.
 
 ## Diagnose
 
