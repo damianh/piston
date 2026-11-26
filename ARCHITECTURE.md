@@ -107,8 +107,9 @@ is the separate `piston mcp` command.
 
 ## Native Copilot canvas and dashboard hosting
 
-The project-scoped `.github/extensions/piston-dashboard/` extension renders the
-existing `Piston.Web` dashboard, not a second UI. `DashboardHost` shares static
+The installable `piston-dashboard` extension renders the existing `Piston.Web`
+dashboard, not a second UI. Its source lives in
+`src/Piston/Integration/Assets/canvas/`. `DashboardHost` shares static
 file serving, CSP, request guards and WebSocket routing between `DaemonHost` and
 `McpStdioHost`. The latter opts in with `--dashboard` or `.piston.json`'s
 `dashboard: true`, binding `127.0.0.1:0` and publishing the assigned address.
