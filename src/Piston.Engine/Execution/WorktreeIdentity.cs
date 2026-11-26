@@ -84,7 +84,7 @@ public sealed record WorktreeIdentity(string RootPath, string Key)
         return Path.IsPathRooted(relative) || relative == ".."
             || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
             ? full
-            : relative.Replace('\\', '/');
+            : relative.Replace(Path.DirectorySeparatorChar, '/');
     }
 
     private static string Normalize(string path)

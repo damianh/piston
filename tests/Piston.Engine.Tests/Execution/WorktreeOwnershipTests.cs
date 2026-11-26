@@ -140,6 +140,21 @@ public sealed class WorktreeOwnershipTests : IDisposable
         }
     }
 
+    [Fact]
+    public void SolutionDisplayPath_PreservesBackslashesInUnixFileNames()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var worktree = CreateWorktree("unix-display");
+        var solution = CreateSolution(Path.Combine(worktree, "src"), @"App\Debug.slnx");
+        var identity = WorktreeIdentity.FromSolutionPath(solution);
+
+        Assert.Equal(@"src/App\Debug.slnx", identity.GetSolutionDisplayPath(solution));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
