@@ -239,6 +239,57 @@ public sealed class VerificationInputCoverageTests : IDisposable
     }
 
     [Fact]
+    public void RestoreOutputsImportingPackagesTheAssetsFileDoesNotListAwaitRestore()
+    {
+        // A restore rewrites nuget.g.props/targets and project.assets.json separately, so evaluation can pair
+        // imports from the previous restore with the assets of the next one.
+        var packageRoot = Path.Combine(_root, "packages");
+        foreach (var version in new[] { "1.0.0", "2.0.0" })
+        {
+            var targets = Path.Combine(packageRoot, "sample.package", version, "build", "Package.targets");
+            _ = Directory.CreateDirectory(Path.GetDirectoryName(targets)!);
+            File.WriteAllText(targets, "<Project />");
+        }
+
+        var extensions = Path.Combine(Path.GetDirectoryName(_project)!, "obj");
+        _ = Directory.CreateDirectory(extensions);
+        var restoreTargets = Path.Combine(extensions, "Test.csproj.nuget.g.targets");
+        File.WriteAllText(Path.Combine(extensions, "project.assets.json"), JsonSerializer.Serialize(new
+        {
+            packageFolders = new Dictionary<string, object> { [packageRoot] = new { } },
+            libraries = new Dictionary<string, object>
+            {
+                ["sample.package/2.0.0"] = new { type = "package", path = "sample.package/2.0.0" },
+            },
+        }));
+        var packageProperties = $$"""
+            <PropertyGroup>
+              <NuGetPackageRoot>{{packageRoot}}{{Path.DirectorySeparatorChar}}</NuGetPackageRoot>
+              <MSBuildProjectExtensionsPath>{{extensions}}{{Path.DirectorySeparatorChar}}</MSBuildProjectExtensionsPath>
+              <ProjectAssetsFile>{{Path.Combine(extensions, "project.assets.json")}}</ProjectAssetsFile>
+            </PropertyGroup>
+            """;
+        WriteProject(packageProperties);
+
+        File.WriteAllText(restoreTargets,
+            """<Project><Import Project="$(NuGetPackageRoot)sample.package/1.0.0/build/Package.targets" /></Project>""");
+        var (issue, awaitingRestore) = new MsBuildSolutionGraph(_solution).VerificationCoverage;
+        Assert.True(awaitingRestore, issue);
+        Assert.Contains("does not list", issue);
+
+        File.WriteAllText(restoreTargets,
+            """<Project><Import Project="$(NuGetPackageRoot)sample.package/2.0.0/build/Package.targets" /></Project>""");
+        Assert.Equal((null, false), new MsBuildSolutionGraph(_solution).VerificationCoverage);
+
+        // The same package file imported by the project itself remains a user input, not a restore transition.
+        WriteProject(packageProperties +
+            """<Import Project="$(NuGetPackageRoot)sample.package/1.0.0/build/Package.targets" />""");
+        (issue, awaitingRestore) = new MsBuildSolutionGraph(_solution).VerificationCoverage;
+        Assert.False(awaitingRestore, issue);
+        Assert.Contains("cannot safely apply the package/targeting-pack exclusion", issue);
+    }
+
+    [Fact]
     public void InstalledWorkloadImportRequiresToolchainProvenance()
     {
         var dotnetRoot = Path.Combine(_root, "dotnet");

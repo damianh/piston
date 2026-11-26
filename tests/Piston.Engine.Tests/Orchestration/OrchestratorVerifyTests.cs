@@ -87,6 +87,40 @@ public sealed class OrchestratorVerifyTests : IDisposable
     }
 
     [Fact]
+    public async Task RestoreOutputsDisagreeing_ReevaluatesUntilRestoreCompletes()
+    {
+        await StartAsync();
+        _orchestrator.VerificationRestorePollInterval = TimeSpan.FromMilliseconds(10);
+        var checks = 0;
+        _impact.CoverageAwaitsRestore = true;
+        _impact.VerificationCoverage = () =>
+            Interlocked.Increment(ref checks) <= 2 ? "Restore outputs import a package the assets file does not list." : null;
+
+        var result = await _orchestrator.VerifyAsync(Timeout, CancellationToken.None);
+
+        Assert.Equal(VerificationVerdict.Passed, result.Verdict);
+        Assert.True(checks >= 3, $"coverage checks: {checks}");
+    }
+
+    [Fact]
+    public async Task RestoreOutputsThatNeverAgree_FailClosedAsNotFullScope()
+    {
+        await StartAsync();
+        var startup = _state.LastRun!;
+        _orchestrator.VerificationRestoreSettleTimeout = TimeSpan.FromMilliseconds(200);
+        _orchestrator.VerificationRestorePollInterval = TimeSpan.FromMilliseconds(10);
+        _impact.CoverageAwaitsRestore = true;
+        _impact.VerificationCoverage = () => "Restore outputs import a package the assets file does not list.";
+
+        var result = await _orchestrator.VerifyAsync(Timeout, CancellationToken.None);
+
+        Assert.Equal(VerificationVerdict.NotFullScope, result.Verdict);
+        Assert.Contains("assets file", result.Reason);
+        Assert.Null(result.Run);
+        Assert.Same(startup, _state.LastRun);
+    }
+
+    [Fact]
     public async Task ExternalInputRemovedWithoutFingerprintChange_DoesNotReuseStartupRun()
     {
         // The startup run built while an external input (e.g. an ancestor .editorconfig) existed.

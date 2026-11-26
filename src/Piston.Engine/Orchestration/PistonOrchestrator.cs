@@ -66,6 +66,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     /// <summary>Longest time <see cref="VerifyAsync"/> waits for debounced watcher changes to be raised.</summary>
     internal TimeSpan VerificationSettleTimeout { get; set; } = TimeSpan.FromSeconds(5);
 
+    // How long verify re-evaluates coverage while restore outputs disagree with the assets file before failing closed.
+    internal TimeSpan VerificationRestoreSettleTimeout { get; set; } = TimeSpan.FromSeconds(60);
+
+    internal TimeSpan VerificationRestorePollInterval { get; set; } = TimeSpan.FromMilliseconds(500);
+
     /// <summary>Resolves the .NET SDK version recorded in run context; null when unknown.</summary>
     /// <summary>The SDK version <c>dotnet</c> selects in the given directory.</summary>
     internal Func<string, string?>? SdkVersionProvider { get; set; }
@@ -444,6 +449,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         var attempts = 0;
         VerificationResult? last = null;
         TestRunRecord? pending = null;
+        DateTimeOffset? restoreDeadline = null;
         try
         {
             while (true)
@@ -459,17 +465,20 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                         VerificationSource.None, attempts, null, current);
                 }
                 string? coverageIssue;
+                bool awaitingRestore;
                 IReadOnlyList<string> requiredTestProjects;
                 try
                 {
                     var coverage = await Task.Run(
                         () =>
                         {
-                            var issue = _impactAnalyzer.GetVerificationCoverageIssue(_solutionPath, out var projects);
-                            return (Issue: issue, Projects: projects);
+                            var issue = _impactAnalyzer.GetVerificationCoverageIssue(
+                                _solutionPath, out var projects, out var restoring);
+                            return (Issue: issue, Projects: projects, AwaitingRestore: restoring);
                         }, CancellationToken.None)
                         .WaitAsync(token).ConfigureAwait(false);
                     coverageIssue = coverage.Issue;
+                    awaitingRestore = coverage.AwaitingRestore;
                     requiredTestProjects = coverage.Projects;
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -494,6 +503,17 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
                 if (coverageIssue is not null)
                 {
+                    // Restore rewrites nuget.g.props/targets and project.assets.json separately (e.g. right after a
+                    // rebase); re-evaluate until they agree instead of reporting that transient state as final.
+                    restoreDeadline ??= DateTimeOffset.UtcNow + VerificationRestoreSettleTimeout;
+                    if (awaitingRestore && !_stopping && DateTimeOffset.UtcNow < restoreDeadline)
+                    {
+                        last = new VerificationResult(VerificationVerdict.NotFullScope,
+                            coverageIssue, VerificationSource.None, attempts, null, current);
+                        await Task.Delay(VerificationRestorePollInterval, token).ConfigureAwait(false);
+                        continue;
+                    }
+
                     return new VerificationResult(VerificationVerdict.NotFullScope,
                         coverageIssue, VerificationSource.None, attempts, null, current);
                 }

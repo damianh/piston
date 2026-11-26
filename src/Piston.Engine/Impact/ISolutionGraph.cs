@@ -30,6 +30,12 @@ internal interface ISolutionGraph
     TestProjectFacts? GetTestProjectFacts(string projectPath) => null;
     string? VerificationCoverageIssue => "Build-input coverage is unavailable.";
 
+    /// <summary>
+    /// <see cref="VerificationCoverageIssue"/>, and whether it is only that restore outputs disagree with the
+    /// assets file, as they do while a restore is rewriting them.
+    /// </summary>
+    (string? Issue, bool AwaitingRestore) VerificationCoverage => (VerificationCoverageIssue, false);
+
     /// <summary>The project-scoped source inputs, or null when every file under the solution directory counts.</summary>
     Services.SourceInputScope? SourceScope => null;
 

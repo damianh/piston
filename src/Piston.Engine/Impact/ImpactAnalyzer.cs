@@ -55,13 +55,18 @@ internal sealed class ImpactAnalyzer : IImpactAnalyzer
     public string? GetVerificationCoverageIssue(string solutionPath) =>
         GetVerificationCoverageIssue(solutionPath, out _);
 
-    public string? GetVerificationCoverageIssue(string solutionPath, out IReadOnlyList<string> testProjects)
+    public string? GetVerificationCoverageIssue(string solutionPath, out IReadOnlyList<string> testProjects) =>
+        GetVerificationCoverageIssue(solutionPath, out testProjects, out _);
+
+    public string? GetVerificationCoverageIssue(string solutionPath, out IReadOnlyList<string> testProjects,
+        out bool awaitingRestore)
     {
         lock (_graphLock)
         {
             RefreshGraph(solutionPath);
             testProjects = _graph!.TestProjectPaths.ToArray();
-            return _graph!.VerificationCoverageIssue;
+            (var issue, awaitingRestore) = _graph!.VerificationCoverage;
+            return issue;
         }
     }
 
