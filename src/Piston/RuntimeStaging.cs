@@ -232,11 +232,11 @@ internal static class RuntimeStaging
                     removed.Add(directory);
                 }
             }
-            else if (IsComplete(directory))
+            else
             {
-                // Rechecked under the lock: a launcher claims a runtime under the same lock before it starts.
+                // A launcher claims a runtime under the same lock before it starts.
                 using var held = AcquireLock(root);
-                if (utcNow - LastUsedUtc(directory) <= UnusedRetention)
+                if (!IsComplete(directory) || utcNow - LastUsedUtc(directory) <= UnusedRetention)
                 {
                     continue;
                 }

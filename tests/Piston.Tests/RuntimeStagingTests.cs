@@ -211,6 +211,26 @@ public sealed class RuntimeStagingTests : IDisposable
         Assert.False(Directory.Exists(abandoned));
     }
 
+    [Fact]
+    public async Task Cleanup_ConcurrentCallsRemoveStaleRuntimes()
+    {
+        var now = DateTime.UtcNow;
+        var stale = Enumerable.Range(0, 32)
+            .Select(i => StageAged($"stale-{i}", now - TimeSpan.FromDays(30)))
+            .ToArray();
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleanups = Enumerable.Range(0, 8).Select(_ => Task.Run(async () =>
+        {
+            await start.Task;
+            RuntimeStaging.Cleanup(_runtimes, "current", now);
+        }, _ct)).ToArray();
+
+        start.SetResult();
+        await Task.WhenAll(cleanups);
+
+        Assert.All(stale, path => Assert.False(Directory.Exists(path)));
+    }
+
     private string StageAged(string name, DateTime lastUsed)
     {
         var runtime = RuntimeStaging.Stage(_source, Path.Combine(_runtimes, name));
