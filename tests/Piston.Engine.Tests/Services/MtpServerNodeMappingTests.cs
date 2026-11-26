@@ -25,7 +25,7 @@ public sealed class MtpServerNodeMappingTests
         """).RootElement;
 
     [Theory]
-    [InlineData("FullyQualifiedName", new[] { "Mt.Deep.A.Th(n: 1)", "Mt.Deep.A.Th" })]
+    [InlineData("FullyQualifiedName", new[] { "Mt.Deep.A.Th(n: 1)", "Mt.Deep.A.Th(n: 1) #ba7816bf", "Mt.Deep.A.Th" })]
     [InlineData("Name", new[] { "Mt.Deep.A.Th(n: 1)", "Th" })]
     [InlineData("ClassName", new[] { "Mt.Deep.A" })]
     [InlineData("Category", new[] { "Slow" })]
@@ -45,6 +45,8 @@ public sealed class MtpServerNodeMappingTests
         }
 
         Assert.True(Matches("FullyQualifiedName=Mt.Deep.A.Th"));
+        Assert.True(Matches("FullyQualifiedName=Mt.Deep.A.Th\\(n: 1\\) #ba7816bf"));
+        Assert.False(Matches("FullyQualifiedName=Mt.Deep.A.Th\\(n: 1\\) #00000000"));
         Assert.True(Matches("Mt.Deep.A"));
         Assert.True(Matches("Category=Slow&ClassName=Mt.Deep.A"));
         Assert.False(Matches("Category!=Slow"));
@@ -80,7 +82,7 @@ public sealed class MtpServerNodeMappingTests
 
         var result = MtpTestProcessRunner.ToTestResult(node, "/bin/Mt.dll", TestStatus.Failed);
 
-        Assert.Equal("Mt.Deep.A.Th(n: 1)", result.FullyQualifiedName);
+        Assert.Equal("Mt.Deep.A.Th(n: 1) #ba7816bf", result.FullyQualifiedName);
         Assert.Equal("Th(n: 1)", result.DisplayName);
         Assert.Equal("Mt.Deep.A.Th", result.Method);
         Assert.Equal(TestStatus.Failed, result.Status);
@@ -179,6 +181,50 @@ public sealed class MtpServerNodeMappingTests
     private static JsonElement Named(string uid, string state) => JsonDocument.Parse($$"""
         { "uid": "{{uid}}", "display-name": "Mt.A.Same", "node-type": "action", "execution-state": "{{state}}" }
         """).RootElement;
+
+    // xUnit truncates long theory arguments, so distinct cases can report the same display name.
+    private static JsonElement TruncatedCase(string uid, string state, string method = "Th(System.String)") =>
+        JsonSerializer.SerializeToElement(new Dictionary<string, string>
+        {
+            ["uid"] = uid,
+            ["display-name"] = "Mt.A.Th(s: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"···)",
+            ["location.type"] = "Mt.A",
+            ["location.method"] = method,
+            ["node-type"] = "action",
+            ["execution-state"] = state,
+        });
+
+    [Fact]
+    public void ApplyRunUpdates_GivesCasesSharingATruncatedDisplayNameDistinctStableIdentities()
+    {
+        var live = new Dictionary<string, TestResult>(StringComparer.Ordinal);
+        var discovered = new List<TestResult>();
+        Assert.True(MtpTestProcessRunner.AddDiscovered(
+            discovered, new HashSet<string>(StringComparer.Ordinal), [TruncatedCase("1", "discovered"), TruncatedCase("2", "discovered")], null, "/bin/Mt.dll"));
+
+        MtpTestProcessRunner.ApplyRunUpdates(live, [TruncatedCase("1", "failed"), TruncatedCase("2", "passed")], "/bin/Mt.dll");
+
+        var results = live.OrderBy(kv => kv.Key, StringComparer.Ordinal).Select(kv => kv.Value).ToList();
+        Assert.Equal([TestStatus.Failed, TestStatus.Passed], results.Select(t => t.Status));
+        Assert.Equal(2, results.Select(t => t.ResultKey).Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal(discovered.Select(t => t.FullyQualifiedName), results.Select(t => t.FullyQualifiedName));
+        Assert.All(results, t =>
+        {
+            Assert.Matches("^Mt\\.A\\.Th\\(s: \".*\"···\\) #[0-9a-f]{8}$", t.FullyQualifiedName);
+            Assert.StartsWith("Th(s: ", t.DisplayName, StringComparison.Ordinal);
+            Assert.Equal("Mt.A.Th", t.Method);
+        });
+    }
+
+    [Theory]
+    [InlineData("Th")]
+    [InlineData("Th()")]
+    public void ToTestResult_DoesNotSuffixTestsWithoutParameters(string method)
+    {
+        var result = TestResultFor(TruncatedCase("1", "passed", method));
+
+        Assert.DoesNotContain(" #", result.FullyQualifiedName, StringComparison.Ordinal);
+    }
 
     [Fact]
     public void AddDiscovered_KeepsDistinctNodesSharingADisplayName_AndDropsRepeatedUpdates()

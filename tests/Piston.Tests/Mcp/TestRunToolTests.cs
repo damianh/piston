@@ -245,6 +245,29 @@ public sealed class TestRunToolTests
         Assert.Equal("Ns.Cases.Add(2,3)", match.GetProperty("fullyQualifiedName").GetString());
     }
 
+    [Fact]
+    public void GetTestResultMatchesCaseNameWithoutHashForTheRequestedFramework()
+    {
+        TestResult Case(string framework) => new("Ns.C.M(x: 1) #ba7816bf", "M(x: 1)", TestStatus.Passed,
+            TimeSpan.Zero, null, null, null, null)
+        { Method = "Ns.C.M", TargetFramework = framework };
+        var run = Run("frameworks", 2) with
+        {
+            Suites =
+            [
+                new TestSuite("T", [Case("net8.0"), Case("net9.0")], DateTimeOffset.UnixEpoch, TimeSpan.Zero),
+            ],
+        };
+        var engine = new StubEngine();
+        engine.State.RecentRuns = [run];
+
+        using var doc = JsonDocument.Parse(new TestTools(engine, NullMcpCallRecorder.Instance)
+            .GetTestResult("Ns.C.M(x: 1) [net8.0]", run.RunId));
+
+        var match = Assert.Single(doc.RootElement.GetProperty("matches").EnumerateArray());
+        Assert.Equal("net8.0", match.GetProperty("targetFramework").GetString());
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

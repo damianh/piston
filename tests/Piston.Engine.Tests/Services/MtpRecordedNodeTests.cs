@@ -50,6 +50,12 @@ public sealed class MtpRecordedNodeTests
         Assert.Equal(2, sameNames.Select(test => test.Method).Distinct(StringComparer.Ordinal).Count());
         Assert.Equal(2, sameNames.Select(test => test.ResultKey).Distinct(StringComparer.Ordinal).Count());
 
+        var cases = discovered.Where(test => test.Method?.EndsWith(".Parameterized", StringComparison.Ordinal) == true).ToArray();
+        Assert.True(cases.Length >= 2);
+        Assert.Equal(cases.Length, cases.Select(test => test.ResultKey).Distinct(StringComparer.Ordinal).Count());
+        Assert.All(cases, test => Assert.Matches(" #[0-9a-f]{8}$", test.FullyQualifiedName));
+        Assert.All(sameNames, test => Assert.DoesNotContain(" #", test.FullyQualifiedName, StringComparison.Ordinal));
+
         var mappedRun = runNodes.Select(node => MtpTestProcessRunner.ToTestResult(node, "probe", TestStatus.NotRun)).ToArray();
         Assert.Contains(mappedRun, test => test.ErrorMessage is not null && test.StackTrace is not null);
         var assertion = Assert.Single(runNodes, node => Property(node, "location.method") == "AssertionFailure");
