@@ -157,7 +157,7 @@ public sealed class TreeSelectionTests
     }
 
     [Fact]
-    public void ItemsFor_OffersRunFailedOnlyForAMixOfResults()
+    public void ItemsFor_OffersRunFailedOnlyForAMixOfResultsAndNoFullNamesForProjects()
     {
         var tree = Tree();
 
@@ -166,6 +166,19 @@ public sealed class TreeSelectionTests
         Assert.Equal(["Run 3 tests", "Run 1 failed", "Copy names", "Expand all below", "Collapse all below"],
             items.Select(i => i.Label));
         Assert.DoesNotContain(TreeContextMenu.ItemsFor([tree[1]], canRun: true), i => i.Action == TreeMenuAction.RunFailed);
+    }
+
+    [Fact]
+    public void ItemsFor_OffersCopyFullNamesForSeveralTests()
+    {
+        var tree = Tree();
+        var tests = new[] { tree[0].Children[0].Children[0], tree[1].Children[0] };
+
+        var items = TreeContextMenu.ItemsFor(tests, canRun: true);
+
+        Assert.Equal(["Run 2 tests", "Run 1 failed", "Copy names", "Copy full names"], items.Select(i => i.Label));
+        Assert.Equal("One\nThree", TreeContextMenu.CopyText(tests, fullName: false));
+        Assert.Equal("N.One\nN.Three", TreeContextMenu.CopyText(tests, fullName: true));
     }
 
     [Fact]
