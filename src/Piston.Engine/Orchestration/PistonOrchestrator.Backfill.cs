@@ -35,7 +35,13 @@ public sealed partial class PistonOrchestrator
     internal Action StartBackfillDiscovery { get; set; } = () => { };
 
     /// <summary>How long a test runs before it is reported as possibly hanging; null turns the warning off.</summary>
+    /// <remarks>Used only when <see cref="TimeoutPolicy"/> is not set.</remarks>
     internal TimeSpan? HangThreshold { get; set; }
+
+    /// <summary>The test timeout and hang threshold, refreshed from the settings when each run's tests start.</summary>
+    internal TestTimeoutPolicy? TimeoutPolicy { get; set; }
+
+    private TimeSpan? EffectiveHangThreshold => TimeoutPolicy is { } policy ? policy.HangThreshold : HangThreshold;
 
     /// <summary>Persistent run history that classifies failures; null when history is off.</summary>
     internal RunHistoryStore? RunHistory { get; set; }

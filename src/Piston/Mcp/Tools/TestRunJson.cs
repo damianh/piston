@@ -93,7 +93,8 @@ public static class TestRunJson
                     ["testCount"] = p.TestCount,
                     ["noTestsReason"] = p.NoTestsReason,
                     ["timedOutTest"] = p.TimedOut?.Test,
-                    ["testTimeoutMs"] = p.TimedOut is { } timeout ? Math.Round(timeout.Limit.TotalMilliseconds, 3) : null,
+                    ["testTimeoutMs"] = p.TimedOut?.Limit is { } limit ? Math.Round(limit.TotalMilliseconds, 3) : null,
+                    ["stopped"] = p.TimedOut is { Stopped: true } ? true : null,
                     ["resources"] = Resources(p.Resources),
                     ["suspectedResourceConflict"] = p.SuspectedResourceConflict,
                 })

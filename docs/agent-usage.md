@@ -287,7 +287,7 @@ source builds and all tests pass. Every other verdict is not a pass:
 | `Passed` | Current full run, all tests passed. | Done. |
 | `TestsFailed` | Current full run; failing tests are listed (name + message). | Fix them; call `verify` again. |
 | `BuildFailed` | The full build of the current source failed; errors listed with ID/file/line. | Fix them; call `verify` again. |
-| `Incomplete` | A project crashed, produced no results, or results include duplicate IDs or `NotRun`/`Running` tests. | Inspect `get_test_run`; treat as failure. |
+| `Incomplete` | A project crashed, timed out, was stopped, produced no results, or results include duplicate IDs or `NotRun`/`Running` tests. | Inspect `get_test_run`; treat as failure. A timed-out test's stack trace shows where it hung. |
 | `Stale` | The source kept changing or runs kept being superseded; no current result after 2 retries. | Stop editing, then call `verify` again. |
 | `Cancelled` | Piston is shutting down. | Report incomplete verification. |
 | `TimedOut` | No result within `timeoutSeconds`. The run may still be queued or running. | Call `verify` again (it awaits the active run) or raise the timeout. |

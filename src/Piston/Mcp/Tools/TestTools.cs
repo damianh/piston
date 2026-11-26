@@ -25,6 +25,7 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
     public const string GetTestHistoryTool = "get_test_history";
     public const string SetTestFilterTool = "set_test_filter";
     public const string ClearResultsTool = "clear_results";
+    public const string StopTestTool = "stop_test";
 
     private const string ExpectedSolutionDescription =
         "Optional solution file or worktree directory you expect this Piston to serve. " +
@@ -553,5 +554,41 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
         sw.Stop();
         recorder.Record(ClearResultsTool, null, Result, sw.Elapsed.TotalMilliseconds, true);
         return Result;
+    }
+
+    [McpServerTool(Name = StopTestTool), Description(
+        "Stop a hanging or slow test: cancels its project's test run, the running test fails as stopped (with its " +
+        "managed stacks when they can be captured), and the rest of the run, including coverage, completes. " +
+        "Without a project, stops the project of the longest-running test.")]
+    public string StopTest(
+        [Description("Optional test project path (absolute, or relative to the solution directory) to stop.")]
+        string? project = null)
+    {
+        availability?.ThrowIfUnavailable();
+        var sw = Stopwatch.StartNew();
+        var succeeded = false;
+        string? result = null;
+        try
+        {
+            var projectPath = string.IsNullOrWhiteSpace(project)
+                ? null
+                : engine.State.SolutionPath is { } solution
+                    ? Path.GetFullPath(project, Path.GetDirectoryName(Path.GetFullPath(solution))!)
+                    : Path.GetFullPath(project);
+            var stopped = engine.StopTest(projectPath);
+            result = stopped.Stopped
+                ? $"Stopped {stopped.ProjectPath}{(stopped.TestName is { } test ? $" (running {test})" : "")}. " +
+                  "Its result is published when the run completes."
+                : projectPath is null
+                    ? "No test project is running."
+                    : $"No test run of '{projectPath}' is in progress.";
+            succeeded = true;
+            return result;
+        }
+        finally
+        {
+            sw.Stop();
+            recorder.Record(StopTestTool, project, result, sw.Elapsed.TotalMilliseconds, succeeded);
+        }
     }
 }

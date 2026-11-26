@@ -70,6 +70,15 @@ internal sealed class StubEngine : IEngine
 
     public void Stop() { }
 
+    /// <summary>Project path passed to the last <see cref="StopTest"/> call.</summary>
+    public string? LastStopTestProject { get; private set; }
+
+    public Piston.Engine.Services.StopTestResult StopTest(string? projectPath = null)
+    {
+        LastStopTestProject = projectPath;
+        return new(projectPath is not null, projectPath, projectPath is null ? null : "Ns.Hangs");
+    }
+
     /// <summary>Selection passed to the last <see cref="RunSelectedAsync"/> call.</summary>
     public TestSelection? LastSelection { get; private set; }
 

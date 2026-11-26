@@ -43,12 +43,35 @@ public sealed class TestToolsTests
         _ = Assert.ThrowsAny<Exception>(() => tools.GetTestResult("missing"));
         _ = tools.SetTestFilter("");
         _ = tools.ClearResults();
+        _ = tools.StopTest();
         _ = await tools.RunTestsAsync(ct: CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(2), _ct);
 
         Assert.Equal(
-            ["get_test_results", "get_test_run", "get_test_result", "set_test_filter", "clear_results", "run_tests"],
+            ["get_test_results", "get_test_run", "get_test_result", "set_test_filter", "clear_results", "stop_test", "run_tests"],
             recorder.ToolNames);
         Assert.All(recorder.ToolNames, name => Assert.Contains(name, advertised));
+    }
+
+    [Fact]
+    public void StopTestResolvesTheProjectFromTheSolutionDirectory()
+    {
+        var engine = new StubEngine();
+        engine.State.SolutionPath = Path.Combine(Path.GetTempPath(), "w", "App.slnx");
+        var tools = new TestTools(engine, new CapturingRecorder());
+
+        var result = tools.StopTest(Path.Combine("tests", "Hangs.Tests.csproj"));
+
+        var expected = Path.Combine(Path.GetTempPath(), "w", "tests", "Hangs.Tests.csproj");
+        Assert.Equal(expected, engine.LastStopTestProject);
+        Assert.Contains($"Stopped {expected} (running Ns.Hangs)", result);
+    }
+
+    [Fact]
+    public void StopTestWithoutARunningTestSaysSo()
+    {
+        var tools = new TestTools(new StubEngine(), new CapturingRecorder());
+
+        Assert.Equal("No test project is running.", tools.StopTest());
     }
 
     private sealed class CapturingRecorder : IMcpCallRecorder

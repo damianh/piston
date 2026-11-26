@@ -11,4 +11,8 @@ public sealed record TestRunProjectOutcomeDto(
     int TestCount,
     string? NoTestsReason,
     string? TimedOutTest,
-    double? TestTimeoutMs);
+    double? TestTimeoutMs)
+{
+    /// <summary>True when the project's run was stopped on request rather than by the test timeout.</summary>
+    public bool? Stopped { get; init; }
+}

@@ -49,6 +49,12 @@ public static class Program
             return 0;
         }
 
+        if (args[0] == "--hang")
+        {
+            HangingFixture.Hang(args[1]);
+            return 0;
+        }
+
         if (args[0] == "--spawn-output-holder")
         {
             var holderStart = new ProcessStartInfo("dotnet") { UseShellExecute = false };

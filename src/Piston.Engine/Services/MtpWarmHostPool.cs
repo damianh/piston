@@ -112,6 +112,7 @@ internal sealed class MtpWarmHostPool(MtpServerSession.StageTimeouts? timeouts =
         }
         else
         {
+            host.TrackInCurrentScope();
             log?.Invoke("MtpServer", $"{method}: warm host (pid {host.ProcessId.ToString(CultureInfo.InvariantCulture)}, request {host.Requests.ToString(CultureInfo.InvariantCulture)})");
         }
 
@@ -270,6 +271,15 @@ internal sealed class MtpWarmHostPool(MtpServerSession.StageTimeouts? timeouts =
         public int Requests { get; set; }
 
         public int ProcessId => _process?.Process.Id ?? 0;
+
+        /// <summary>Lets hang diagnostics of the current request find this reused host.</summary>
+        public void TrackInCurrentScope()
+        {
+            if (_process is { } process)
+            {
+                OwnedProcessScope.TrackInCurrent(process);
+            }
+        }
 
         public bool HasExited
         {

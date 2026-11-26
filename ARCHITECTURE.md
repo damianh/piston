@@ -372,13 +372,29 @@ Slow tests are timed from live progress: a test is timed from the first snapshot
 that reports it `Running`. The orchestrator checks running tests every second,
 publishes the longest one in the state snapshot (`LongestRunningTest`) and, past
 `hangThreshold`, flags it as possibly hanging, logs it once and records it in the
-run's `PossiblyHangingTests`. With `testTimeout` set,
-`TimeoutTestExecutionStrategy` wraps the execution strategy for each project: past
-the limit it cancels a linked token for that project only. The runners kill the
-process and return an empty result, and the decorator rebuilds the result from the
-last live snapshot: the slow test `Failed` with a timed-out message, other
-`Running` tests `NotRun`. The project's outcome is `TimedOut`, which makes the run
-`Incomplete`.
+run's `PossiblyHangingTests`. `TestTimeoutPolicy` supplies the threshold: the
+configured `hangThreshold`, else half the test timeout. The test timeout comes
+from the user settings (`tests.timeoutSeconds`, 1 minute by default) and is
+re-read when each run's test phase starts. `PistonEngine` always wraps the
+execution strategy in `TimeoutTestExecutionStrategy`, which reads the timeout
+for each project's run. Past the limit, or on `StopTest` (the dashboard's Stop
+button, `engine/stopTest`, the `stop_test` MCP tool), it captures hang
+diagnostics and then cancels a linked token for that project only.
+`OwnedProcessScope` (an `AsyncLocal`) records the processes started for the
+run, including a reused warm host. `ClrMdHangDiagnostics` inspects .NET
+processes in their job object or process group: it reads managed stacks with
+ClrMD, picks the stacks that reference the hung test's class, and writes a
+heap dump of the process running it through the diagnostics IPC channel. Both
+are staged in `.piston/hang-diagnostics` and become attachments that
+`TestArtifactStore` moves into the run's artifacts, keeping the newest three
+dumps. Without a running test there is nothing to diagnose, and the run is
+cancelled anyway when capture takes over 60 s or fails. The runners kill the
+process and return an
+empty result, and the decorator rebuilds the result from the last live
+snapshot: the slow test `Failed` with a timed-out (or stopped) message and the
+relevant stacks as its stack trace, other `Running` tests `NotRun`. The
+project's outcome is `TimedOut`, which makes the run `Incomplete`; its coverage
+counts as unmeasured.
 
 ## Worktree ownership and test resources
 
@@ -609,7 +625,7 @@ excluded by a physical file provider.
 
 The same tools are served over stdio (`piston mcp`) and the daemon's HTTP endpoint.
 Test tools (`TestTools`): `verify`, `run_tests`, `get_test_run`, `get_test_results`,
-`get_test_history`, `set_test_filter` and `clear_results`. Coverage and selection
+`get_test_history`, `set_test_filter`, `stop_test` and `clear_results`. Coverage and selection
 tools (`CoverageTools`): `get_coverage`, `get_changed_line_coverage`,
 `export_coverage`, `plan_affected_tests` and `run_affected_tests`. They use the same
 engine state and pipeline as other clients; MCP does not bypass builds.

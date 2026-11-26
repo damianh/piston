@@ -57,6 +57,13 @@ public interface IEngine : IDisposable
     void Resume() => throw new NotSupportedException("Pausing is not supported by this engine.");
 
     /// <summary>
+    /// Stops the run of <paramref name="projectPath"/>, or when null, of the project with the longest-running test.
+    /// The running test fails as stopped (with hang diagnostics) and the rest of the run goes on.
+    /// </summary>
+    Services.StopTestResult StopTest(string? projectPath = null) =>
+        throw new NotSupportedException("Stopping a test is not supported by this engine.");
+
+    /// <summary>
     /// Produces current full verification for the present source, reusing or awaiting qualifying runs
     /// before requesting a forced full run. See <see cref="Verification.VerificationPolicy"/>.
     /// </summary>

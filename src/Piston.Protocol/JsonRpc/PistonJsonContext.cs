@@ -120,6 +120,9 @@ namespace Piston.Protocol.JsonRpc;
 [JsonSerializable(typeof(UserSettingsResponse))]
 [JsonSerializable(typeof(DashboardSettings))]
 [JsonSerializable(typeof(DetailPanePosition))]
+[JsonSerializable(typeof(TestSettings))]
+[JsonSerializable(typeof(StopTestCommand))]
+[JsonSerializable(typeof(StopTestResponse))]
 
 // ── Named param records (used by RemoteEngineClient) ─────────────────────
 [JsonSerializable(typeof(StartCommandParams))]

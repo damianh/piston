@@ -109,6 +109,20 @@ public sealed class EngineCommandDispatcher(IEngine engine) : ICommandDispatcher
                 engine.Resume();
                 return null;
 
+            case ProtocolMethods.EngineStopTest:
+                {
+                    var cmd = JsonRpcSerializer.DeserializeParams<StopTestCommand>(@params);
+                    var projectPath = string.IsNullOrWhiteSpace(cmd?.ProjectPath)
+                        ? null
+                        : SolutionDirectory is { } directory
+                            ? Path.GetFullPath(cmd.ProjectPath, directory)
+                            : Path.GetFullPath(cmd.ProjectPath);
+                    var stopped = engine.StopTest(projectPath);
+                    var response = new StopTestResponse(stopped.Stopped, stopped.ProjectPath, stopped.TestName);
+                    return JsonNode.Parse(
+                        System.Text.Json.JsonSerializer.Serialize(response, JsonRpcSerializer.Options));
+                }
+
             case ProtocolMethods.CoverageGetForFile:
                 {
                     var cmd = JsonRpcSerializer.DeserializeParams<GetFileCoverageCommand>(@params);
