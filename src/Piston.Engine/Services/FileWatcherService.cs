@@ -3,6 +3,8 @@
 
 using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 using Piston.Engine.Models;
 
 namespace Piston.Engine.Services;
@@ -263,7 +265,7 @@ public sealed class FileWatcherService : IFileWatcherService
         {
             watcher?.Dispose();
             watcher = null;
-            if (Directory.Exists(directory))
+            if (DirectoryIsPresent(directory))
             {
                 failure = ex;
             }
@@ -318,7 +320,7 @@ public sealed class FileWatcherService : IFileWatcherService
         pending.Push(Path.GetFullPath(directory));
         while (pending.TryPop(out var current))
         {
-            if (!Directory.Exists(current) || !scope.MayContainInputs(current))
+            if (!DirectoryIsPresent(current) || !scope.MayContainInputs(current))
             {
                 continue;
             }
@@ -364,7 +366,7 @@ public sealed class FileWatcherService : IFileWatcherService
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
-                if (Directory.Exists(current))
+                if (DirectoryIsPresent(current))
                 {
                     ReportMonitoringError(ex);
                 }
@@ -499,7 +501,75 @@ public sealed class FileWatcherService : IFileWatcherService
 
         return isDirectoryWatcher
             && !string.Equals(directory, root, PathComparison)
-            && (!Directory.Exists(directory) || _scope?.MayContainInputs(directory) != true);
+            && (!DirectoryIsPresent(directory) || _scope?.MayContainInputs(directory) != true);
+    }
+
+    /// <summary>
+    /// Whether <paramref name="directory"/> exists and is not being deleted. On Windows a directory stays visible
+    /// to <see cref="Directory.Exists"/> while its deletion is pending (until every open handle, such as the
+    /// deleter's or a watcher's, closes), yet its watcher has already failed with "Access is denied". Opening it
+    /// then fails with STATUS_DELETE_PENDING, which Win32 also reports as "Access is denied", so the NT status
+    /// tells a pending deletion apart from a permission failure.
+    /// </summary>
+    private static bool DirectoryIsPresent(string directory)
+    {
+        if (!Directory.Exists(directory))
+        {
+            return false;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            return true;
+        }
+
+        const uint shareAll = 0x00000007; // FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE
+        const uint openExisting = 3;
+        const uint backupSemantics = 0x02000000; // FILE_FLAG_BACKUP_SEMANTICS, required to open a directory
+        const int fileNotFound = 2;
+        const int pathNotFound = 3;
+        const int accessDenied = 5;
+        const int statusDeletePending = unchecked((int)0xC0000056);
+        using var handle = CreateFile(ExtendedPath(directory), 0, shareAll, IntPtr.Zero, openExisting,
+            backupSemantics, IntPtr.Zero);
+        if (!handle.IsInvalid)
+        {
+            return true;
+        }
+
+        return Marshal.GetLastPInvokeError() switch
+        {
+            fileNotFound or pathNotFound => false,
+            accessDenied => RtlGetLastNtStatus() != statusDeletePending,
+            _ => true,
+        };
+    }
+
+    // Lets the native open handle paths longer than MAX_PATH without the process opting in to long paths.
+    private static string ExtendedPath(string directory)
+    {
+        var path = Path.GetFullPath(directory);
+        if (path.StartsWith(@"\\?\", StringComparison.Ordinal) || path.StartsWith(@"\\.\", StringComparison.Ordinal))
+        {
+            return path;
+        }
+
+        return path.StartsWith(@"\\", StringComparison.Ordinal) ? @"\\?\UNC\" + path[2..] : @"\\?\" + path;
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFile(
+        string path, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+
+    [DllImport("ntdll.dll")]
+    private static extern int RtlGetLastNtStatus();
+
+    internal bool IsWatchingDirectory(string directory)
+    {
+        lock (_watcherLock)
+        {
+            return _directoryWatchers.ContainsKey(Path.GetFullPath(directory));
+        }
     }
 
     internal void ReportMonitoringError(Exception error)
