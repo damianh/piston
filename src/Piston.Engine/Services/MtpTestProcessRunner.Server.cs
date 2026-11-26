@@ -297,9 +297,10 @@ internal static partial class MtpTestProcessRunner
     {
         var displayName = DisplayName(node) ?? string.Empty;
         var type = StringProperty(node, "location.type");
-        var name = type is { Length: > 0 }
+        var qualified = type is { Length: > 0 }
             ? TestIdentity.Qualify(type, displayName)
             : displayName;
+        var name = CaseIdentity(node, qualified);
         var duration = node.TryGetProperty("time.duration-ms", out var ms) && ms.ValueKind == JsonValueKind.Number
             ? TimeSpan.FromMilliseconds(ms.GetDouble())
             : TimeSpan.Zero;
@@ -330,7 +331,7 @@ internal static partial class MtpTestProcessRunner
 
         return new TestResult(
             name,
-            name.Equals(displayName, StringComparison.Ordinal)
+            qualified.Equals(displayName, StringComparison.Ordinal)
                 ? TestProcessRunner.DisplayNameOf(displayName)
                 : displayName,
             status,
@@ -354,6 +355,19 @@ internal static partial class MtpTestProcessRunner
             : null;
 
     private static bool IsAction(JsonElement node) => StringProperty(node, "node-type") == "action";
+
+    /// <summary>
+    /// The result identity of <paramref name="node"/> given its class-qualified display name: a data-driven case
+    /// (its <c>location.method</c> declares parameters) is suffixed with a hash of its UID, because distinct cases
+    /// can share a display name (xUnit truncates long arguments). Other tests keep the qualified display name.
+    /// </summary>
+    private static string CaseIdentity(JsonElement node, string qualified) =>
+        StringProperty(node, "location.method") is { } method
+        && method.IndexOf('(', StringComparison.Ordinal) is var paren and >= 0
+        && !method.AsSpan(paren).SequenceEqual("()")
+        && StringProperty(node, "uid") is { Length: > 0 } uid
+            ? TestIdentity.WithCase(qualified, uid)
+            : qualified;
 
     private static string? DisplayName(JsonElement node) =>
         StringProperty(node, "display-name") is { Length: > 0 } name ? name : null;
@@ -397,6 +411,12 @@ internal static partial class MtpTestProcessRunner
                 if (identity is not null && !identity.Equals(display, StringComparison.Ordinal))
                 {
                     Add(identity);
+                }
+
+                var caseIdentity = display is null ? null : CaseIdentity(node, identity ?? display);
+                if (caseIdentity is not null && !caseIdentity.Equals(identity ?? display, StringComparison.Ordinal))
+                {
+                    Add(caseIdentity);
                 }
 
                 Add(type is not null && method is not null ? $"{type}.{method}" : null);

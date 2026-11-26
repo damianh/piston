@@ -1,6 +1,9 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Security.Cryptography;
+using System.Text;
+
 namespace Piston.Engine.Services;
 
 /// <summary>
@@ -25,6 +28,14 @@ internal static class TestIdentity
         string.IsNullOrEmpty(className) || testName.StartsWith(className + ".", StringComparison.Ordinal)
             ? testName
             : $"{className}.{testName}";
+
+    /// <summary>
+    /// Suffixes a data-driven test case's identity with a short hash of its runner-assigned case ID (an MTP node
+    /// UID), e.g. <c>Ns.Class.Method(x: "aaa"···) #3f9a1c0e</c>, so cases whose display names coincide (xUnit
+    /// truncates long arguments) remain distinct.
+    /// </summary>
+    internal static string WithCase(string identity, string caseId) =>
+        $"{identity} #{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(caseId)).AsSpan(0, 4))}";
 
     /// <summary>
     /// The class name the TRX logger records for a test case (<c>TestMethod/@className</c>): the fully

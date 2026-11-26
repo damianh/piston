@@ -474,7 +474,8 @@ public sealed class TestTools(IEngine engine, IMcpCallRecorder recorder, EngineA
     {
         if (string.Equals(result.ResultKey, query, StringComparison.Ordinal)
             || string.Equals(result.FullyQualifiedName, query, StringComparison.Ordinal)
-            || string.Equals(result.Method, query, StringComparison.Ordinal))
+            || string.Equals(result.Method, query, StringComparison.Ordinal)
+            || result.FullyQualifiedName.StartsWith(query + " #", StringComparison.Ordinal))
         {
             return true;
         }
