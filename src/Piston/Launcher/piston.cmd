@@ -8,7 +8,7 @@ setlocal
 set "PISTON_RUNTIME_ID="
 set /p PISTON_RUNTIME_ID=<"%~dp0piston.runtime-id"
 if not defined PISTON_RUNTIME_ID goto missing
-set "PISTON_RUNTIMES=%LOCALAPPDATA%"
+if not defined PISTON_RUNTIMES set "PISTON_RUNTIMES=%LOCALAPPDATA%"
 if not defined PISTON_RUNTIMES set "PISTON_RUNTIMES=%TEMP%"
 set "PISTON_RUNTIME=%PISTON_RUNTIMES%\Piston\runtimes\%PISTON_RUNTIME_ID%"
 rem Stages the copy on first use and marks it used under the lock that cleanup takes, so it is never

@@ -177,7 +177,7 @@ public sealed class OrchestratorGraphRefreshTests : IAsyncLifetime
     {
         if (duringRun)
         {
-            File.WriteAllText(Path.Combine(_root, "Code.cs"), "class Edited {}");
+            File.AppendAllText(FirstProject, "\n");
             _runner.DuringRun = () => _watcher.MonitoringError = "Watcher buffer overflow.";
         }
         else
@@ -190,6 +190,7 @@ public sealed class OrchestratorGraphRefreshTests : IAsyncLifetime
         Assert.Equal(VerificationVerdict.Faulted, result.Verdict);
         Assert.Contains("Restart the daemon", result.Reason);
         Assert.Equal(duringRun ? 1 : 0, result.Attempts);
+        Assert.Equal(duringRun ? VerificationSource.Forced : VerificationSource.None, result.Source);
     }
 
     [Fact]

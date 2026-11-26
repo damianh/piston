@@ -1,12 +1,14 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Diagnostics;
 using Xunit;
 
 namespace Piston.Tests;
 
 public sealed class RuntimeStagingTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
     private readonly string _root = Directory.CreateTempSubdirectory("piston-runtime-staging-").FullName;
     private readonly string _source;
     private readonly string _runtimes;
@@ -31,6 +33,84 @@ public sealed class RuntimeStagingTests : IDisposable
         Assert.Equal("<html />", File.ReadAllText(Path.Combine(destination, "wwwroot", "index.html")));
         Assert.True(File.Exists(Path.Combine(destination, RuntimeStaging.Marker)));
         Assert.Equal([destination], Directory.GetDirectories(_runtimes));
+    }
+
+    [Fact]
+    public void ResolveRuntimeRoot_UsesOverrideOrPerUserDataAndFailsWithoutEither()
+    {
+        Assert.Equal(Path.Combine("override", "Piston", "runtimes"),
+            RuntimeStaging.ResolveRuntimeRoot("override", "user-data"));
+        Assert.Equal(Path.Combine("user-data", "Piston", "runtimes"),
+            RuntimeStaging.ResolveRuntimeRoot(null, "user-data"));
+        _ = Assert.Throws<IOException>(() => RuntimeStaging.ResolveRuntimeRoot(null, null));
+    }
+
+    [Fact]
+    public void GetDotnetHostPath_ResolvesTheRuntimeInstallation()
+    {
+        var host = RuntimeStaging.GetDotnetHostPath();
+
+        Assert.True(File.Exists(host));
+        Assert.Equal(OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet", Path.GetFileName(host));
+    }
+
+    [Fact]
+    public async Task Run_FailsWhenUnixFileLockingIsDisabled()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var stale = StageAged("stale", DateTime.UtcNow - TimeSpan.FromDays(30));
+        var start = new ProcessStartInfo(RuntimeStaging.GetDotnetHostPath())
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Piston.dll"));
+        start.ArgumentList.Add(RuntimeStaging.Command);
+        start.ArgumentList.Add(_source);
+        start.ArgumentList.Add(Path.Combine(_runtimes, "test"));
+        start.Environment["DOTNET_SYSTEM_IO_DISABLEFILELOCKING"] = "1";
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Failed to start Piston.");
+        var output = process.StandardOutput.ReadToEndAsync(_ct);
+        var error = process.StandardError.ReadToEndAsync(_ct);
+        await process.WaitForExitAsync(_ct).WaitAsync(TimeSpan.FromSeconds(30), _ct);
+
+        Assert.Equal(1, process.ExitCode);
+        Assert.Contains("not enforced", await error, StringComparison.Ordinal);
+        Assert.Empty(await output);
+        Assert.False(Directory.Exists(Path.Combine(_runtimes, "test")));
+        Assert.True(Directory.Exists(stale));
+    }
+
+    [Fact]
+    public async Task RunFromInstalledRuntime_FailsWhenUnixFileLockingIsDisabled()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var runtime = RuntimeStaging.Stage(AppContext.BaseDirectory, Path.Combine(_runtimes, "installed"));
+        var start = new ProcessStartInfo(RuntimeStaging.GetDotnetHostPath())
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        start.ArgumentList.Add(Path.Combine(runtime, "Piston.dll"));
+        start.ArgumentList.Add("--version");
+        start.Environment["DOTNET_SYSTEM_IO_DISABLEFILELOCKING"] = "1";
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Failed to start Piston.");
+        var output = process.StandardOutput.ReadToEndAsync(_ct);
+        var error = process.StandardError.ReadToEndAsync(_ct);
+        await process.WaitForExitAsync(_ct).WaitAsync(TimeSpan.FromSeconds(30), _ct);
+
+        Assert.Equal(1, process.ExitCode);
+        Assert.Contains("cannot claim the runtime copy", await error, StringComparison.Ordinal);
+        Assert.Empty(await output);
+        Assert.True(File.Exists(Path.Combine(runtime, RuntimeStaging.Marker)));
     }
 
     [Fact]
@@ -87,7 +167,6 @@ public sealed class RuntimeStagingTests : IDisposable
     [Fact]
     public void Stage_ClaimsAnExistingRuntimeSoCleanupKeepsIt()
     {
-        Assert.SkipUnless(OperatingSystem.IsWindows(), "Runtime copies are only used on Windows.");
         var now = DateTime.UtcNow;
         var runtime = StageAged("1.0.0-abc", now - TimeSpan.FromDays(30));
 
@@ -111,28 +190,45 @@ public sealed class RuntimeStagingTests : IDisposable
     [Fact]
     public void Cleanup_RemovesOnlyStaleUnusedRuntimes()
     {
-        Assert.SkipUnless(OperatingSystem.IsWindows(), "Runtime copies are only used on Windows.");
         var now = DateTime.UtcNow;
         var current = StageAged("current", now - TimeSpan.FromDays(30));
         var recent = StageAged("recent", now - TimeSpan.FromDays(1));
         var stale = StageAged("stale", now - TimeSpan.FromDays(30));
         var inUse = StageAged("in-use", now - TimeSpan.FromDays(30));
+        using var activeLease = RuntimeStaging.AcquireLease(inUse);
+        File.SetLastWriteTimeUtc(Path.Combine(inUse, RuntimeStaging.LastUsed), now - TimeSpan.FromDays(30));
         var abandoned = Directory.CreateDirectory(Path.Combine(_runtimes, "x.0123.staging")).FullName;
         Directory.SetLastWriteTimeUtc(abandoned, now - TimeSpan.FromDays(1));
         var inProgress = Directory.CreateDirectory(Path.Combine(_runtimes, "y.4567.staging")).FullName;
         var unmarked = Directory.CreateDirectory(Path.Combine(_runtimes, "unmarked")).FullName;
 
-        // A loaded assembly keeps its runtime directory from being renamed.
-        using (File.Open(Path.Combine(inUse, "Piston.dll"), FileMode.Open, FileAccess.Read, FileShare.Read))
-        {
-            RuntimeStaging.Cleanup(_runtimes, Path.GetFileName(current), now);
-        }
+        RuntimeStaging.Cleanup(_runtimes, Path.GetFileName(current), now);
 
         Assert.Equal(
             new[] { current, inProgress, inUse, recent, unmarked }.Order(StringComparer.Ordinal),
             Directory.GetDirectories(_runtimes).Order(StringComparer.Ordinal));
         Assert.False(Directory.Exists(stale));
         Assert.False(Directory.Exists(abandoned));
+    }
+
+    [Fact]
+    public async Task Cleanup_ConcurrentCallsRemoveStaleRuntimes()
+    {
+        var now = DateTime.UtcNow;
+        var stale = Enumerable.Range(0, 32)
+            .Select(i => StageAged($"stale-{i}", now - TimeSpan.FromDays(30)))
+            .ToArray();
+        var start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var cleanups = Enumerable.Range(0, 8).Select(_ => Task.Run(async () =>
+        {
+            await start.Task;
+            RuntimeStaging.Cleanup(_runtimes, "current", now);
+        }, _ct)).ToArray();
+
+        start.SetResult();
+        await Task.WhenAll(cleanups);
+
+        Assert.All(stale, path => Assert.False(Directory.Exists(path)));
     }
 
     private string StageAged(string name, DateTime lastUsed)

@@ -23,6 +23,11 @@ if (args is [RuntimeStaging.Command, .. var stageArgs])
     return RuntimeStaging.Run(stageArgs, Console.Error);
 }
 
+if (RuntimeStaging.RunFromInstalledPackage(args, Console.Error) is int runtimeExitCode)
+{
+    return runtimeExitCode;
+}
+
 // ── Shared arguments & options ─────────────────────────────────────────────────
 
 var rootSolutionArg = CreateSolutionArgument();

@@ -123,7 +123,7 @@ await RunTargetsAndExitAsync(args,
     messageOnly: ex => ex is SimpleExec.ExitCodeException or SmokeTestException or PackCheckException or ReleaseException
         or ReleaseTestFailedException);
 
-async Task SmokeDaemonAsync(string? expectedVersion = null)
+async Task SmokeDaemonAsync(string? expectedVersion = null, Action<IDictionary<string, string?>>? configureEnvironment = null)
 {
     var output = new StringBuilder();
     var webPort = FreePort();
@@ -133,10 +133,10 @@ async Task SmokeDaemonAsync(string? expectedVersion = null)
         mcpPort = FreePort();
     }
 
-    using var daemon = StartPiston(output, "daemon", samples, "--web-port", $"{webPort}", "--mcp-port", $"{mcpPort}");
+    using var daemon = StartPiston(output, configureEnvironment, "daemon", samples, "--web-port", $"{webPort}", "--mcp-port", $"{mcpPort}");
     try
     {
-        var (line, status, counts, suites) = await WaitForStartupRunAsync(daemon);
+        var (line, status, counts, suites) = await WaitForStartupRunAsync(daemon, configureEnvironment);
         Console.WriteLine($"Startup run: {line}");
         var mismatches = new List<string>();
         if (counts != expected)
@@ -161,7 +161,7 @@ async Task SmokeDaemonAsync(string? expectedVersion = null)
 
         if (expectedVersion is not null)
         {
-            var (versionStatus, _) = await ReadAsync(tool, ["status", samples]);
+            var (versionStatus, _) = await ReadAsync(tool, ["status", samples], configureEnvironment: configureEnvironment);
             if (!versionStatus.Contains(expectedVersion, StringComparison.Ordinal))
             {
                 throw new SmokeTestException($"Restarted daemon is not {expectedVersion}: {versionStatus}");
@@ -184,11 +184,12 @@ async Task SmokeDaemonAsync(string? expectedVersion = null)
     }
     finally
     {
-        await StopDaemonAsync(daemon);
+        await StopDaemonAsync(daemon, configureEnvironment);
     }
 }
 
-async Task<(string Line, string Status, Counts Counts, int Suites)> WaitForStartupRunAsync(Process daemon)
+async Task<(string Line, string Status, Counts Counts, int Suites)> WaitForStartupRunAsync(
+    Process daemon, Action<IDictionary<string, string?>>? configureEnvironment = null)
 {
     var deadline = DateTime.UtcNow + smokeTimeout;
     while (DateTime.UtcNow < deadline)
@@ -200,7 +201,7 @@ async Task<(string Line, string Status, Counts Counts, int Suites)> WaitForStart
 
         using var probeTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         var (status, _) = await ReadAsync(tool, ["status", samples], handleExitCode: _ => true,
-            ct: probeTimeout.Token);
+            configureEnvironment: configureEnvironment, ct: probeTimeout.Token);
         var latest = MyRegex().Match(status);
         var active = Regex.IsMatch(status, @"^\s*Active\s*:", RegexOptions.Multiline);
         var fields = latest.Success ? latest.Groups[1].Value.Split('|').Select(f => f.Trim()).ToArray() : [];
@@ -225,7 +226,7 @@ async Task<(string Line, string Status, Counts Counts, int Suites)> WaitForStart
     throw new TimeoutException($"Timed out after {smokeTimeout} waiting for the startup run.");
 }
 
-async Task StopDaemonAsync(Process daemon)
+async Task StopDaemonAsync(Process daemon, Action<IDictionary<string, string?>>? configureEnvironment = null)
 {
     if (daemon.HasExited)
     {
@@ -236,7 +237,8 @@ async Task StopDaemonAsync(Process daemon)
     try
     {
         LogSmokePhase("START: daemon shutdown");
-        _ = await ReadAsync(tool, ["stop", samples], handleExitCode: _ => true, ct: cts.Token);
+        _ = await ReadAsync(tool, ["stop", samples], handleExitCode: _ => true,
+            configureEnvironment: configureEnvironment, ct: cts.Token);
         await daemon.WaitForExitAsync(cts.Token);
     }
     catch (OperationCanceledException) when (cts.IsCancellationRequested)
@@ -291,7 +293,7 @@ async Task SmokeMcpAsync(string? command = null, string[]? arguments = null,
         text = string.Join('\n', result.Content.OfType<TextContentBlock>().Select(c => c.Text));
         isError = result.IsError == true;
     }
-    catch (Exception ex)
+    catch (Exception ex) when (ex is SmokeTestException or TimeoutException or IOException or McpException or OperationCanceledException)
     {
         DumpDiagnostics("piston mcp stderr", stderr);
         throw new SmokeTestException($"MCP smoke test failed during {phase}: {ex.Message}");
@@ -334,6 +336,7 @@ async Task SmokeDistributionAsync()
     {
         ["DOTNET_CLI_HOME"] = Path.Combine(root, "cli-home"),
         ["NUGET_PACKAGES"] = Path.Combine(root, "nuget-packages"),
+        ["PISTON_RUNTIMES"] = Path.Combine(root, "local-data"),
         ["DOTNET_NOLOGO"] = "true",
         ["MSBUILDDISABLENODEREUSE"] = "1",
     };
@@ -483,26 +486,16 @@ async Task SmokeDistributionAsync()
 
                 phase = "live update";
                 await ProbeUpdateAsync("mcp");
-                // Windows runs the tool from a per-version runtime copy, so a live session must survive the update.
-                // Elsewhere the old store is deleted under the process; record the outcome without failing.
                 phase = "forced run after update";
-                try
+                LogSmokePhase("START: live MCP forced run after update");
+                var result = await client.CallToolAsync("run_tests", cancellationToken: timeout.Token);
+                var text = string.Join('\n', result.Content.OfType<TextContentBlock>().Select(c => c.Text));
+                if (result.IsError == true || !text.Contains("Passed: 4, Failed: 4", StringComparison.Ordinal))
                 {
-                    LogSmokePhase("START: live MCP forced run after update");
-                    var result = await client.CallToolAsync("run_tests", cancellationToken: timeout.Token);
-                    var text = string.Join('\n', result.Content.OfType<TextContentBlock>().Select(c => c.Text));
-                    if (OperatingSystem.IsWindows()
-                        && (result.IsError == true || !text.Contains("Passed: 4, Failed: 4", StringComparison.Ordinal)))
-                    {
-                        throw new SmokeTestException($"Live MCP session could not run tests after updating:\n{text}");
-                    }
+                    throw new SmokeTestException($"Live MCP session could not run tests after updating:\n{text}");
+                }
 
-                    Console.WriteLine($"Live MCP forced run after update: isError={result.IsError == true}\n{text}");
-                }
-                catch (Exception ex) when (ex is IOException or McpException && !OperatingSystem.IsWindows())
-                {
-                    Console.WriteLine($"OBSERVATION: live MCP could not run tests after update: {ex.Message}");
-                }
+                Console.WriteLine($"Live MCP forced run after update: isError={result.IsError == true}\n{text}");
                 phase = "shutdown";
                 LogSmokePhase("DONE: live MCP forced run; START: old MCP shutdown");
             }
@@ -529,15 +522,23 @@ async Task SmokeDistributionAsync()
             mcpPort = FreePort();
         }
 
-        using (var daemon = StartPiston(daemonOutput, "daemon", samples, "--web-port", $"{webPort}", "--mcp-port", $"{mcpPort}"))
+        using (var daemon = StartPiston(daemonOutput, Configure, "daemon", samples, "--web-port", $"{webPort}", "--mcp-port", $"{mcpPort}"))
         {
             try
             {
-                _ = await WaitForStartupRunAsync(daemon);
+                try
+                {
+                    _ = await WaitForStartupRunAsync(daemon, Configure);
+                }
+                catch (Exception ex)
+                {
+                    throw new SmokeTestException($"{ex.Message}\n{daemonOutput}");
+                }
+
                 await ProbeUpdateAsync("daemon");
                 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
                 using var response = await http.GetAsync($"http://localhost:{webPort}/");
-                if (OperatingSystem.IsWindows() && !response.IsSuccessStatusCode)
+                if (!response.IsSuccessStatusCode)
                 {
                     throw new SmokeTestException($"Live daemon dashboard failed after updating: {response.StatusCode}");
                 }
@@ -551,13 +552,13 @@ async Task SmokeDistributionAsync()
             }
             finally
             {
-                await StopDaemonAsync(daemon);
+                await StopDaemonAsync(daemon, Configure);
             }
         }
 
         await ToolCommandAsync("update", newVersion);
         await CheckVersionAsync(newVersion);
-        await SmokeDaemonAsync(newVersion);
+        await SmokeDaemonAsync(newVersion, Configure);
         Console.WriteLine($"PASS: dnx MCP and stop/update/restart on {System.Runtime.InteropServices.RuntimeInformation.OSDescription}");
     }
     finally
@@ -753,7 +754,7 @@ async Task SmokeInitAsync()
     Console.WriteLine("Init smoke test passed.");
 }
 
-Process StartPiston(StringBuilder output, params string[] arguments)
+Process StartPiston(StringBuilder output, Action<IDictionary<string, string?>>? configureEnvironment, params string[] arguments)
 {
     var info = new ProcessStartInfo(tool)
     {
@@ -766,6 +767,7 @@ Process StartPiston(StringBuilder output, params string[] arguments)
         info.ArgumentList.Add(argument);
     }
 
+    configureEnvironment?.Invoke(info.Environment);
     Console.WriteLine($"> {tool} {string.Join(' ', arguments)}");
     var process = Process.Start(info) ?? throw new SmokeTestException($"Could not start {tool}.");
     process.OutputDataReceived += (_, e) => Append(output, e.Data);
@@ -1100,8 +1102,7 @@ static List<string> RuntimePackageIds(string packagePath)
         .Select(e => (string)e.Attribute("Id")!).ToList();
 }
 
-// Windows runs piston.cmd, which copies the payload out of the tool store so updates never find it in use;
-// other platforms use the portable package and the dotnet runner.
+// Windows runs piston.cmd; the portable any package stages and replaces its tool-store process on Unix.
 static void CheckPackageContents(string directory, string? expectedVersion = null)
 {
     var package = FindToolPackage(directory, expectedVersion);
@@ -1237,6 +1238,15 @@ static List<string> CheckRuntimePackage(string path, string id, string runtime, 
         problems.Add("Piston.dll is missing");
     }
 
+    if (windows || runtime == "any")
+    {
+        if (ReadEntry("piston.runtime-id") is not { } runtimeId
+            || !Regex.IsMatch(runtimeId, $@"^{Regex.Escape(version)}-[0-9a-f]{{16}}\s*$"))
+        {
+            problems.Add("piston.runtime-id must identify the version and payload");
+        }
+    }
+
     if (windows)
     {
         foreach (var script in new[] { "piston.cmd", "piston-run.cmd" })
@@ -1250,12 +1260,6 @@ static List<string> CheckRuntimePackage(string path, string id, string runtime, 
             {
                 problems.Add($"{script} must use CRLF line endings");
             }
-        }
-
-        if (ReadEntry("piston.runtime-id") is not { } runtimeId
-            || !Regex.IsMatch(runtimeId, $@"^{Regex.Escape(version)}-[0-9a-f]{{16}}\s*$"))
-        {
-            problems.Add("piston.runtime-id must identify the version and payload");
         }
 
         if (entries.Contains(prefix + "Piston.exe"))

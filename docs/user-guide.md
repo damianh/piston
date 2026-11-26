@@ -45,7 +45,7 @@ dotnet tool install DamianH.Piston --version 0.0.0-local --tool-path ./tools --s
 ```
 
 Use an actual solution path in the last command. On Windows, the command is
-`.\tools\piston.cmd` (see [Windows runtime copies](#windows-runtime-copies)). Package ID is `DamianH.Piston`, command name is `piston`, and `0.0.0-local`
+`.\tools\piston.cmd` (see [runtime copies](#runtime-copies)). Package ID is `DamianH.Piston`, command name is `piston`, and `0.0.0-local`
 is the local development package version; use the built/released version when
 it differs. The package is framework-dependent and requires the .NET 11 SDK
 and ASP.NET Core 11 runtime, plus the target solution's own SDK requirements.
@@ -82,11 +82,13 @@ and daemons keep running the version they started with, and new commands use the
 updated version. Reconnect MCP clients and restart daemons when you want them on
 the new version.
 
-On **Linux and macOS**, stop every Piston process using the installed package
-before updating. Close/disconnect stdio MCP sessions in each client, stop
-daemons with `piston stop` in each worktree, and use `piston status --all` to
-check for remaining owners. Do not use `--force` unless you intend to terminate
-the identified process.
+On **Linux and macOS**, new releases also run from per-build copies, so existing
+MCP sessions and daemons keep using their original files during an update. When
+moving from a release that runs directly from the tool store, stop its Piston
+processes before the first update to a runtime-copy release; later updates can
+run while Piston is active. Use `piston status --all` to check for remaining
+owners before that one-time migration. Do not use `--force` unless you intend
+to terminate the identified process.
 
 ```sh
 dotnet tool update --global DamianH.Piston
@@ -98,9 +100,9 @@ replace `--global` with `--tool-path ./tools`; for a local feed, also add
 `--source ./packages`. Reconnect MCP clients and restart any daemon with its
 previous options (including `--no-coverage`, if used) after updating.
 
-**Updating from a release without runtime copies on Windows:** earlier releases
-ran directly from the tool store, so the first update to a release with runtime
-copies still requires stopping their processes. Later updates do not.
+**Updating from a release without runtime copies:** earlier releases ran directly
+from the tool store, so the first update to a release with runtime copies still
+requires stopping their processes. Later updates do not.
 
 If an earlier local build was installed under the `Piston` package ID, stop its
 processes and uninstall it before installing the renamed package:
@@ -116,31 +118,32 @@ rename the package, and both IDs provide the same `piston` command.
 
 | Platform | Live update behavior and required procedure |
 |---|---|
-| Linux | Two-version validation on Ubuntu found that updating succeeds while the old process remains live. Its removed package directory makes the dashboard return 404 and a forced MCP test run return `Incomplete`. Stop/update/restart restores the dashboard and full test execution. |
-| macOS | Validation on macOS found the same behavior as Linux: updating succeeds, but the old daemon loses dashboard assets and the old MCP process cannot complete a forced test run. Stop/update/restart restores both. |
+| Linux | Runtime-copy releases keep live MCP sessions and daemons working through updates. Stop processes for the one-time migration from a release that runs directly from the tool store. |
+| macOS | Runtime-copy releases keep live MCP sessions and daemons working through updates. Stop processes for the one-time migration from a release that runs directly from the tool store. |
 | Windows | Updating succeeds while MCP sessions and daemons run; they keep serving the dashboard and running tests on their original version. |
 
-The Linux and macOS observations come from a [three-OS non-publishing release validation](https://github.com/damianh/piston/actions/runs/41178160412)
-using .NET 10 and isolated `--tool-path` installations (the same `.store` layout).
-They are not an uninterrupted-upgrade guarantee for every SDK/runtime version.
 Update success does not mean an already-running process upgraded.
 
 `dotnet run build.cs -- smoke-distribution` probes live stdio MCP and daemon
-updates with two versions in disposable tool stores. On Windows it requires the
-update to succeed and the running MCP session and daemon to keep working; on
-Linux and macOS it logs their behavior. It always requires the replacement
-CLI/MCP/daemon to work. It does not update a user's
+updates with two versions in disposable tool stores. On all platforms it
+requires the update to succeed and the running MCP session and daemon to keep
+working, as well as the replacement CLI/MCP/daemon. It does not update a user's
 global installation. With `dnx`, disconnect the client, change its pinned package
 version and reconnect; an already-running process never switches versions.
 
-#### Windows runtime copies
+#### Runtime copies
 
 On Windows the package installs a `piston.cmd` launcher instead of `piston.exe`.
-On its first start for each package build, it copies the tool to
-`%LOCALAPPDATA%\Piston\runtimes\<version>-<hash>`; every start then runs Piston from
-there with `dotnet`, so nothing in the .NET tool store stays in use. Runtime copies unused
-for 7 days are deleted when another build is first started; copies still in use are kept.
-Linux and macOS install the portable package and run from the tool store as before.
+On Linux and macOS, the portable package replaces its initial tool-store process
+with one running from a per-build runtime copy. This releases the tool-store
+files so an update can replace them without affecting the active process.
+
+Runtime copies live under the platform's local application-data directory and
+are named with the package version and payload hash. Copies unused for 7 days
+are removed when another build starts, but an active process holds a lease so
+cleanup preserves its files.
+
+#### Windows launcher
 
 Because the command is a batch file:
 

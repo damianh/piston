@@ -3,6 +3,36 @@
 
 namespace Piston.Engine.Execution;
 
+/// <summary>Verifies that a directory's filesystem enforces the locks used for process coordination.</summary>
+public static class FileLocking
+{
+    public static void VerifyEnforced(string directory)
+    {
+        var probePath = Path.Combine(directory, $"lock-probe-{Environment.ProcessId}-{Guid.NewGuid():N}");
+        var created = false;
+        try
+        {
+            using var first = ExclusiveFileLock.TryAcquire(probePath, FileMode.CreateNew)
+                ?? throw new IOException($"Could not lock new probe file '{probePath}'.");
+            created = true;
+            using var second = ExclusiveFileLock.TryAcquire(probePath, FileMode.Open);
+            if (second is not null)
+            {
+                throw new IOException(
+                    $"Exclusive file locks are not enforced in '{directory}'. Unset DOTNET_SYSTEM_IO_DISABLEFILELOCKING " +
+                    "and the System.IO.DisableFileLocking switch, or use a local filesystem.");
+            }
+        }
+        finally
+        {
+            if (created)
+            {
+                File.Delete(probePath);
+            }
+        }
+    }
+}
+
 /// <summary>
 /// Exclusive file locks held through an open <see cref="FileStream"/> with <see cref="FileShare.None"/>.
 /// Windows enforces this with sharing modes; on Unix .NET applies <c>flock(LOCK_EX)</c>, which is per open
