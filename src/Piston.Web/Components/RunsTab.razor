@@ -211,28 +211,33 @@
         _comparison = null;
         _baselineId = Earlier().FirstOrDefault()?.RunId;
         var baselineId = _baselineId;
+        StoredRunDto? run;
+        StoredRunDto? baseline = null;
         if (baselineId is null)
         {
-            var run = await Client.GetStoredRunAsync(runId);
-            if (_selectedId != runId || _baselineId is not null)
-            {
-                return;
-            }
-
-            _run = run;
-            UpdateComparison();
+            run = await Client.GetStoredRunAsync(runId);
         }
         else
         {
             var pair = await Client.GetStoredRunPairAsync(runId, baselineId);
-            if (_selectedId != runId || _baselineId != baselineId)
-            {
-                return;
-            }
+            run = pair?.Run;
+            baseline = pair?.Baseline;
+        }
 
-            _run = pair?.Run;
-            _baseline = pair?.Baseline;
+        if (_selectedId != runId)
+        {
+            return;
+        }
+
+        _run = run;
+        if (_baselineId == baselineId)
+        {
+            _baseline = baseline;
             UpdateComparison();
+        }
+        else
+        {
+            await LoadBaselineAsync();
         }
     }
 
@@ -240,6 +245,11 @@
     {
         var value = e.Value?.ToString();
         _baselineId = string.IsNullOrEmpty(value) ? null : value;
+        await LoadBaselineAsync();
+    }
+
+    private async Task LoadBaselineAsync()
+    {
         _baseline = null;
         _comparison = null;
         if (_run is null || _baselineId is not { } baselineId)

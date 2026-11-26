@@ -129,7 +129,8 @@ public sealed class EngineClientService : IAsyncDisposable
     private async Task ReceiveLoopAsync(ClientWebSocket ws, CancellationToken ct)
     {
         const int InitialBufferSize = 64 * 1024;
-        const int MaxMessageSize = 16 * 1024 * 1024;
+        // A paired-run response can contain two runs that each fit the former 16 MiB limit.
+        const int MaxMessageSize = 32 * 1024 * 1024;
         var buffer = new byte[InitialBufferSize];
 
         while (!ct.IsCancellationRequested && ws.State == WebSocketState.Open)
