@@ -15,7 +15,7 @@
         <!-- Only the rows in view are rendered, so large suites stay responsive -->
         <div class="overflow-y-auto flex-1" @ref="_scroller">
             <Virtualize Items="_rows" ItemSize="TreeRow.Height" OverscanCount="20" Context="row">
-                <TestTreeNode @key="row.Node"
+                <TestTreeNode @key="row.Key"
                               Node="row.Node"
                               Depth="row.Depth"
                               SelectedKey="@SelectedKey"
