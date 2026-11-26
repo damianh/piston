@@ -284,15 +284,17 @@ internal static class RuntimeStaging
 
     private static string GetRuntimeRoot()
     {
-        var dataRoot = Environment.GetEnvironmentVariable("PISTON_RUNTIMES");
-        if (string.IsNullOrWhiteSpace(dataRoot))
-        {
-            dataRoot = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        }
+        return ResolveRuntimeRoot(
+            Environment.GetEnvironmentVariable("PISTON_RUNTIMES"),
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.DoNotVerify));
+    }
 
+    internal static string ResolveRuntimeRoot(string? overrideRoot, string? applicationDataRoot)
+    {
+        var dataRoot = !string.IsNullOrWhiteSpace(overrideRoot) ? overrideRoot : applicationDataRoot;
         if (string.IsNullOrWhiteSpace(dataRoot))
         {
-            dataRoot = Path.GetTempPath();
+            throw new IOException("The per-user application-data directory is unavailable; set PISTON_RUNTIMES.");
         }
 
         return Path.Combine(dataRoot, "Piston", "runtimes");
@@ -300,8 +302,7 @@ internal static class RuntimeStaging
 
     private static void ExecStaged(string destination, IReadOnlyList<string> args)
     {
-        var executable = Environment.ProcessPath
-            ?? throw new IOException("The current dotnet executable path is unavailable.");
+        var executable = GetDotnetHostPath();
         var stagedAssembly = Path.Combine(destination, "Piston.dll");
         var arguments = new string[args.Count + 2];
         arguments[0] = executable;
@@ -344,6 +345,17 @@ internal static class RuntimeStaging
 
             Marshal.FreeHGlobal(argumentVector);
         }
+    }
+
+    internal static string GetDotnetHostPath()
+    {
+        var runtimeDirectory = new DirectoryInfo(RuntimeEnvironment.GetRuntimeDirectory());
+        var runtimeRoot = runtimeDirectory.Parent?.Parent?.Parent
+            ?? throw new IOException("Cannot determine Piston's .NET runtime installation.");
+        var host = Path.Combine(runtimeRoot.FullName, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+        return File.Exists(host)
+            ? host
+            : throw new IOException($"Cannot find the .NET host for Piston's runtime installation: {host}");
     }
 
     /// <summary>Serializes staging and cleanup across processes; the OS releases it if a process dies.</summary>

@@ -34,6 +34,25 @@ public sealed class RuntimeStagingTests : IDisposable
     }
 
     [Fact]
+    public void ResolveRuntimeRoot_UsesOverrideOrPerUserDataAndFailsWithoutEither()
+    {
+        Assert.Equal(Path.Combine("override", "Piston", "runtimes"),
+            RuntimeStaging.ResolveRuntimeRoot("override", "user-data"));
+        Assert.Equal(Path.Combine("user-data", "Piston", "runtimes"),
+            RuntimeStaging.ResolveRuntimeRoot(null, "user-data"));
+        Assert.Throws<IOException>(() => RuntimeStaging.ResolveRuntimeRoot(null, null));
+    }
+
+    [Fact]
+    public void GetDotnetHostPath_ResolvesTheRuntimeInstallation()
+    {
+        var host = RuntimeStaging.GetDotnetHostPath();
+
+        Assert.True(File.Exists(host));
+        Assert.Equal(OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet", Path.GetFileName(host));
+    }
+
+    [Fact]
     public void Stage_LeavesACompleteRuntimeUntouched()
     {
         var destination = RuntimeStaging.Stage(_source, Path.Combine(_runtimes, "1.0.0-abc"));
