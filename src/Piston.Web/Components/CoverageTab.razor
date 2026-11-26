@@ -6,7 +6,7 @@
 <div class="flex flex-col h-full overflow-hidden text-xs">
     @if (_coverageEnabled && _coverageError is null && (_coverageIssues.Count > 0 || _coverageInventoryPending))
     {
-        <div class="px-4 py-2 shrink-0 border-b border-yellow-900 bg-yellow-950/30 text-yellow-300"
+        <div class="px-3 py-2 shrink-0 border-b border-yellow-900 bg-yellow-950/30 text-yellow-300"
              data-testid="coverage-incomplete">
             Coverage is incomplete; totals and line verdicts include only measured data.
             @if (_coverageInventoryPending)
@@ -41,7 +41,7 @@
     }
     else
     {
-        <div class="flex items-center gap-2 px-4 py-1.5 shrink-0 bg-gray-900 border-b border-gray-800 select-none">
+        <div class="flex items-center gap-2 px-3 py-1.5 shrink-0 bg-gray-900 border-b border-gray-800 select-none">
             @ModeSwitch
             @if (View.CoverageGrouping != CoverageGrouping.Flat)
             {
@@ -92,7 +92,7 @@
         </div>
 
         <!-- Coverage totals -->
-        <div class="flex items-center gap-x-4 px-4 h-6 shrink-0 whitespace-nowrap overflow-hidden border-b border-gray-800 text-gray-500 select-none"
+        <div class="flex items-center gap-x-4 px-3 h-6 shrink-0 whitespace-nowrap overflow-hidden border-b border-gray-800 text-gray-500 select-none"
              data-testid="coverage-summary">
             @if (_summary is { Files.Count: > 0, LinesTotal: > 0 } s)
             {
