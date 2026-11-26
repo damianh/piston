@@ -122,21 +122,23 @@
         }
     </div>
 
-    <!-- Re-run every failed test -->
+    <!-- Run the selected tests and groups -->
     <div class="ml-auto flex items-center gap-2">
-        @if (RunFailedError is not null)
+        @if (RunError is not null)
         {
-            <span class="text-red-400 max-w-64 truncate" role="alert" title="@RunFailedError">@RunFailedError</span>
+            <span class="text-red-400 max-w-64 truncate" role="alert" title="@RunError">@RunError</span>
         }
         <button type="button"
                 class="flex items-center gap-1.5 h-6 px-2 rounded bg-gray-800 text-gray-200 transition-colors hover:bg-gray-700 focus:outline-hidden focus-visible:ring-1 focus-visible:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-gray-800"
-                disabled="@(FailedCount == 0 || !CanRun)"
-                title="@(FailedCount == 0 ? "No failed tests" : !CanRun ? "Piston is busy; wait for the current run to finish" : "Build and run every failed test")"
-                @onclick="OnRunFailed">
-            <svg class="w-3 h-3 text-red-400" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                disabled="@(SelectedTestCount == 0 || !CanRun)"
+                title="@(SelectedTestCount == 0
+                    ? "Select tests or groups to run · Ctrl+click or Shift+click selects several"
+                    : !CanRun ? "Piston is busy; wait for the current run to finish" : "Build and run the selected tests (R) · right-click a row for more")"
+                @onclick="OnRunSelected">
+            <svg class="w-3 h-3 text-green-400" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
                 <path d="M4.5 2.8v10.4a.6.6 0 0 0 .9.5l8.3-5.2a.6.6 0 0 0 0-1L5.4 2.3a.6.6 0 0 0-.9.5z" />
             </svg>
-            <span>Run failed@(FailedCount > 0 ? $" ({FailedCount:N0})" : "")</span>
+            <span>Run selected@(SelectedTestCount > 0 ? $" ({SelectedTestCount:N0})" : "")</span>
         </button>
     </div>
 
@@ -187,10 +189,11 @@
     [Parameter] public bool OnlyFlaky { get; set; }
     [Parameter] public EventCallback OnToggleNewFailures { get; set; }
     [Parameter] public EventCallback OnToggleFlaky { get; set; }
-    [Parameter] public int FailedCount { get; set; }
+    /// <summary>How many tests the selected rows hold.</summary>
+    [Parameter] public int SelectedTestCount { get; set; }
     [Parameter] public bool CanRun { get; set; }
-    [Parameter] public EventCallback OnRunFailed { get; set; }
-    [Parameter] public string? RunFailedError { get; set; }
+    [Parameter] public EventCallback OnRunSelected { get; set; }
+    [Parameter] public string? RunError { get; set; }
 
     private System.Timers.Timer? _debounceTimer;
 

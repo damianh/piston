@@ -23,12 +23,14 @@
                     <TestTreeNode @key="row.Key"
                                   Node="row.Node"
                                   Depth="row.Depth"
+                                  RowKey="@row.Key"
+                                  Selection="@Selection"
                                   SelectedKey="@SelectedKey"
                                   SelectedProject="@SelectedProject"
                                   SelectedNodeKey="@SelectedNodeKey"
                                   PinnedFqns="@PinnedFqns"
-                                  OnSelectTest="@OnSelectTest"
-                                  OnSelectNode="@OnSelectNode"
+                                  OnRowClick="@OnRowClick"
+                                  OnRowMenu="@OnRowMenu"
                                   OnTogglePin="@OnTogglePin"
                                   OnExpansionChanged="@ExpansionChanged" />
                 }
@@ -43,10 +45,14 @@
     [Parameter] public string? SelectedProject { get; set; }
     [Parameter] public string? SelectedNodeKey { get; set; }
     [Parameter] public HashSet<string> PinnedFqns { get; set; } = [];
-    [Parameter] public EventCallback<TestResultDto> OnSelectTest { get; set; }
-    [Parameter] public EventCallback<string> OnSelectNode { get; set; }
+    [Parameter] public TreeSelection? Selection { get; set; }
+    [Parameter] public EventCallback<TreeRowClick> OnRowClick { get; set; }
+    [Parameter] public EventCallback<TreeRowMenu> OnRowMenu { get; set; }
     [Parameter] public EventCallback<string> OnTogglePin { get; set; }
     [Parameter] public Action<TestNode>? OnExpansionChanged { get; set; }
+
+    /// <summary>The visible rows, in order; a Shift+click selects a range of them.</summary>
+    public IReadOnlyList<TreeRow> Rows => _rows;
 
     private ElementReference _scroller;
     private List<TreeRow> _rows = [];
@@ -106,6 +112,19 @@
         }
         catch (JSDisconnectedException)
         {
+        }
+    }
+
+    /// <summary>Viewport coordinates just below the selected row, scrolling it into view; null when it is not rendered.</summary>
+    public async Task<double[]?> SelectedRowPointAsync()
+    {
+        try
+        {
+            return await JS.InvokeAsync<double[]?>("pistonTreeMenu.selectedRowPoint", _scroller);
+        }
+        catch (JSDisconnectedException)
+        {
+            return null;
         }
     }
 

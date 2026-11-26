@@ -23,12 +23,11 @@ public class DashboardStatusTests
     [Fact]
     public void RunFailed_TargetsFailedTestsAndTheirProjects()
     {
-        var command = DashboardStatus.RunFailed(Suites);
+        var command = RunTestsCommand.ForFailed(Suites);
 
         Assert.NotNull(command);
         Assert.Equal(["Alpha.Tests", "Beta.Tests"], command.ProjectIds);
         Assert.Equal(["A.One", "B.One"], command.Tests!);
-        Assert.Equal(2, DashboardStatus.FailedCount(Suites));
     }
 
     [Fact]
@@ -36,8 +35,7 @@ public class DashboardStatusTests
     {
         TestSuiteDto[] suites = [Suite("Gamma.Tests", Test("C.One", TestStatusDto.Passed))];
 
-        Assert.Null(DashboardStatus.RunFailed(suites));
-        Assert.Equal(0, DashboardStatus.FailedCount(suites));
+        Assert.Null(RunTestsCommand.ForFailed(suites));
     }
 
     [Fact]
@@ -49,7 +47,7 @@ public class DashboardStatusTests
             Suite("Tests", Test("Shared.Test", TestStatusDto.Failed)) with { ProjectId = "Two/Tests.csproj" },
         ];
 
-        Assert.Equal(["One/Tests.csproj", "Two/Tests.csproj"], DashboardStatus.RunFailed(suites)!.ProjectIds);
+        Assert.Equal(["One/Tests.csproj", "Two/Tests.csproj"], RunTestsCommand.ForFailed(suites)!.ProjectIds);
     }
 
     [Fact]

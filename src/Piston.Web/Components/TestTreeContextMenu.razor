@@ -1,0 +1,72 @@
+@using Piston.Web.Models
+@inject IJSRuntime JS
+@implements IAsyncDisposable
+
+<!-- Hidden until script places it inside the viewport, so it never flashes at the wrong spot -->
+<div @ref="_menu" role="menu" aria-label="Test actions"
+     class="fixed z-50 min-w-44 py-1 rounded border border-gray-700 bg-gray-900 text-xs text-gray-200 shadow-[0_8px_24px_rgba(1,4,9,0.35)]"
+     style="left: @Css(X)px; top: @Css(Y)px; visibility: hidden"
+     @oncontextmenu:preventDefault="true">
+    @for (var i = 0; i < Items.Count; i++)
+    {
+        var item = Items[i];
+        @if (i > 0 && Items[i - 1].Group != item.Group)
+        {
+            <div role="separator" class="my-1 h-px bg-gray-800"></div>
+        }
+        <button type="button" role="menuitem"
+                class="flex w-full items-center px-3 h-6 text-left hover:bg-gray-800 focus:bg-gray-800 focus:outline-hidden disabled:text-gray-500 disabled:hover:bg-transparent disabled:cursor-not-allowed"
+                disabled="@(!item.Enabled)"
+                title="@item.Hint"
+                @onclick="() => OnSelect.InvokeAsync(item.Action)">@item.Label</button>
+    }
+</div>
+
+@code {
+    [Parameter] public required IReadOnlyList<TreeMenuItem> Items { get; set; }
+
+    /// <summary>Identifies this opening, so a late close from a menu already replaced is ignored.</summary>
+    [Parameter] public int Id { get; set; }
+    [Parameter] public double X { get; set; }
+    [Parameter] public double Y { get; set; }
+    [Parameter] public EventCallback<TreeMenuAction> OnSelect { get; set; }
+    [Parameter] public EventCallback<int> OnClose { get; set; }
+
+    private ElementReference _menu;
+    private DotNetObjectReference<TestTreeContextMenu>? _selfRef;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+        {
+            return;
+        }
+
+        _selfRef = DotNetObjectReference.Create(this);
+        try
+        {
+            await JS.InvokeVoidAsync("pistonTreeMenu.open", _menu, X, Y, _selfRef);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    [JSInvokable]
+    public Task CloseMenu() => OnClose.InvokeAsync(Id);
+
+    private static string Css(double value) => value.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("pistonTreeMenu.close", _menu);
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+
+        _selfRef?.Dispose();
+    }
+}

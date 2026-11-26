@@ -155,6 +155,7 @@ public sealed class ViewState
         SelectedNodeKey = null;
         SelectedTestKey = test.Key;
         SelectedTestProject = test.Project;
+        TreeSelection.Clear();
         RevealSelectedTest = true;
     }
 
@@ -201,6 +202,9 @@ public sealed class ViewState
     /// <see cref="TestNode.ExpansionKey"/>.
     /// </summary>
     public string? SelectedNodeKey { get; set; }
+
+    /// <summary>The rows selected in the test tree; the details pane shows the last one clicked.</summary>
+    public TreeSelection TreeSelection { get; } = new();
 
     // ── Failure navigation ──
     public int CurrentFailureIndex { get; set; } = -1;

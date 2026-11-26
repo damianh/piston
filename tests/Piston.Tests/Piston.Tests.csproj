@@ -59,6 +59,8 @@
     <Compile Include="..\..\src\Piston.Web\Models\ProjectLabels.cs" Link="Web\ProjectLabels.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\ProjectPaths.cs" Link="Web\ProjectPaths.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\TreeRow.cs" Link="Web\TreeRow.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\TreeSelection.cs" Link="Web\TreeSelection.cs" />
+    <Compile Include="..\..\src\Piston.Web\Models\TreeContextMenu.cs" Link="Web\TreeContextMenu.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\StackTraceParser.cs" Link="Web\StackTraceParser.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\StackFrameLine.cs" Link="Web\StackFrameLine.cs" />
     <Compile Include="..\..\src\Piston.Web\Models\CSharpHighlighter.cs" Link="Web\CSharpHighlighter.cs" />

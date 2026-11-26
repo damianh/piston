@@ -31,10 +31,10 @@
              OnlyFlaky="@_viewState.OnlyFlaky"
              OnToggleNewFailures="() => ToggleStatus(s => s.OnlyNewFailures = !s.OnlyNewFailures)"
              OnToggleFlaky="() => ToggleStatus(s => s.OnlyFlaky = !s.OnlyFlaky)"
-             FailedCount="@_runFailedCount"
+             SelectedTestCount="@SelectedTestCount()"
              CanRun="@CanRun"
-             OnRunFailed="RunFailedAsync"
-             RunFailedError="@_runError"
+             OnRunSelected="RunSelectionAsync"
+             RunError="@_runError"
              OnFilterChanged="SetFilter" />
 
     <WatchStripBar Snapshot="@_snapshot" OnRevealTest="RevealTestByKey" />
@@ -54,8 +54,9 @@
                       SelectedProject="@_viewState.SelectedTestProject"
                       SelectedNodeKey="@_viewState.SelectedNodeKey"
                       PinnedFqns="@_viewState.PinnedTestFqns"
-                      OnSelectTest="SelectTest"
-                      OnSelectNode="SelectNode"
+                      Selection="@_viewState.TreeSelection"
+                      OnRowClick="HandleRowClick"
+                      OnRowMenu="HandleRowMenu"
                       OnTogglePin="TogglePin"
                       OnExpansionChanged="RememberExpansion" />
         </div>
@@ -103,6 +104,17 @@
             }
         </div>
     </div>
+
+    @if (_menu is { } menu)
+    {
+        <TestTreeContextMenu @key="menu.Id"
+                             Id="@menu.Id"
+                             Items="@TreeContextMenu.ItemsFor(menu.Nodes, CanRun)"
+                             X="@menu.X"
+                             Y="@menu.Y"
+                             OnSelect="HandleMenuAction"
+                             OnClose="CloseMenu" />
+    }
 
     <!-- Status bar -->
     <SectionContent SectionName="@StatusBar.TabSection">
@@ -222,7 +234,6 @@
             _treeNodes = [];
             _displayedSuites = [];
             _failureCount = 0;
-            _runFailedCount = 0;
             _nodeDetail = null;
             return;
         }
@@ -238,7 +249,7 @@
             _snapshot.LastFileChangeTime,
             TestTreeBuilder.IsDiscovering(_snapshot));
 
-        _runFailedCount = DashboardStatus.FailedCount(_snapshot.Suites);
+        _viewState.TreeSelection.Prune(_treeNodes);
 
         _failureCount = _displayedSuites
             .SelectMany(s => s.Tests)
@@ -263,7 +274,6 @@
         UpdateNodeDetail();
     }
 
-    private int _runFailedCount;
     private string? _runError;
     private bool _runStarting;
 
@@ -292,19 +302,41 @@
             </button>
         </text>;
 
-    private Task RunFailedAsync() =>
-        _snapshot is not null && DashboardStatus.RunFailed(_snapshot.Suites) is { } command
-            ? RunAsync(command)
-            : Task.CompletedTask;
+    // The selected rows, or else the test or node the details pane shows.
+    private IReadOnlyList<TestNode> SelectedNodes()
+    {
+        if (_viewState.TreeSelection.Count > 0)
+        {
+            return _viewState.TreeSelection.Resolve(_treeNodes);
+        }
 
-    // Runs whatever the details pane shows: a group's tests, or the selected test.
+        if (_viewState.SelectedNodeKey is { } key)
+        {
+            return TestNode.Find(_treeNodes, key) is { } node ? [node] : [];
+        }
+
+        return _selectedTest is { } test
+            ? TreeRow.FlattenAll(_treeNodes)
+                .Select(r => r.Node)
+                .Where(n => n.Test?.Key == test.Key && n.Project == _viewState.SelectedTestProject)
+                .Take(1)
+                .ToList()
+            : [];
+    }
+
+    private int SelectedTestCount() => TreeSelection.TestCount(SelectedNodes());
+
+    // Runs the selected rows' tests, or whatever the details pane shows.
     private Task RunSelectionAsync()
     {
-        var command = _nodeDetail is not null
-            ? _nodeDetail.Run
-            : _selectedTest is not null && ProjectOf(_selectedTest) is { } project
-                ? new RunTestsCommand([project], [_selectedTest.FullyQualifiedName])
-                : null;
+        var command = TreeSelection.RunFor(SelectedNodes())
+            ?? (_viewState.TreeSelection.Count > 0
+                ? null
+                : _nodeDetail is not null
+                    ? _nodeDetail.Run
+                    : _selectedTest is not null && ProjectOf(_selectedTest) is { } project
+                        ? new RunTestsCommand([project], [_selectedTest.FullyQualifiedName])
+                        : null);
         return command is null ? Task.CompletedTask : RunAsync(command);
     }
 
@@ -355,11 +387,147 @@
 
     private void SelectTest(TestResultDto test)
     {
+        _viewState.TreeSelection.Clear();
+        ShowTest(test);
+    }
+
+    private void ShowTest(TestResultDto test, string? project = null)
+    {
         _viewState.SelectedNodeKey = null;
         _nodeDetail = null;
         _viewState.SelectedTestKey = test.Key;
-        _viewState.SelectedTestProject = ProjectOf(test);
+        _viewState.SelectedTestProject = project ?? ProjectOf(test);
         _selectedTest = test;
+    }
+
+    // A plain click selects only the row; Ctrl/Cmd+click toggles it; Shift+click selects the range from the anchor.
+    // The details pane follows the row clicked, unless Ctrl/Cmd+click removed it.
+    private void HandleRowClick(TreeRowClick click)
+    {
+        var selection = _viewState.TreeSelection;
+        if ((click.Range || click.Toggle) && selection.Count == 0 && _tree is not null
+            && TreeRow.IndexOfSelected(_tree.Rows, _viewState.SelectedTestKey, _viewState.SelectedNodeKey,
+                _viewState.SelectedTestProject) is >= 0 and var current)
+        {
+            selection.Select(_tree.Rows[current].Key);
+        }
+
+        var show = true;
+        if (click.Range && _tree is not null)
+        {
+            selection.ExtendTo(_tree.Rows, click.RowKey);
+        }
+        else if (click.Toggle)
+        {
+            show = selection.Toggle(click.RowKey);
+        }
+        else
+        {
+            selection.Select(click.RowKey);
+        }
+
+        if (show)
+        {
+            ShowRow(click.Node);
+        }
+    }
+
+    private void ShowRow(TestNode node)
+    {
+        if (node.Test is { } test)
+        {
+            ShowTest(test, node.Project);
+        }
+        else if (node.ExpansionKey is { } key)
+        {
+            ShowNode(key);
+        }
+    }
+
+    // ── Context menu ──
+
+    private sealed record OpenMenu(int Id, IReadOnlyList<TestNode> Nodes, double X, double Y);
+
+    private OpenMenu? _menu;
+    private int _menuCount;
+
+    // Right-clicking a row outside the selection selects just that row, as a click would.
+    private void HandleRowMenu(TreeRowMenu menu)
+    {
+        if (!_viewState.TreeSelection.Contains(menu.RowKey))
+        {
+            _viewState.TreeSelection.Select(menu.RowKey);
+            ShowRow(menu.Node);
+        }
+
+        ShowMenu(menu.X, menu.Y);
+    }
+
+    private void ShowMenu(double x, double y)
+    {
+        var nodes = SelectedNodes();
+        _menu = nodes.Count == 0 ? null : new OpenMenu(++_menuCount, nodes, x, y);
+    }
+
+    /// <summary>Opens the actions menu at the selected row, for Shift+F10 or the Menu key.</summary>
+    [JSInvokable]
+    public async Task OpenMenuAtSelection()
+    {
+        if (_tree is null || await _tree.SelectedRowPointAsync() is not [var x, var y])
+        {
+            return;
+        }
+
+        ShowMenu(x, y);
+        StateHasChanged();
+    }
+
+    private void CloseMenu(int id)
+    {
+        if (_menu?.Id == id)
+        {
+            _menu = null;
+        }
+    }
+
+    private async Task HandleMenuAction(TreeMenuAction action)
+    {
+        if (_menu is not { } menu)
+        {
+            return;
+        }
+
+        _menu = null;
+        switch (action)
+        {
+            case TreeMenuAction.Run or TreeMenuAction.RunFailed:
+                if (TreeSelection.RunFor(menu.Nodes, action == TreeMenuAction.RunFailed) is { } command)
+                {
+                    await RunAsync(command);
+                }
+
+                break;
+            case TreeMenuAction.CopyName or TreeMenuAction.CopyFullName:
+                try
+                {
+                    await JS.InvokeVoidAsync("pistonTreeMenu.copy",
+                        TreeContextMenu.CopyText(menu.Nodes, action == TreeMenuAction.CopyFullName));
+                }
+                catch (JSException)
+                {
+                }
+
+                break;
+            case TreeMenuAction.ExpandAll or TreeMenuAction.CollapseAll:
+                foreach (var node in menu.Nodes)
+                {
+                    // The menu's nodes may predate the latest rebuild; expand the current tree's instance.
+                    var current = node.ExpansionKey is { } key ? TestNode.Find(_treeNodes, key) ?? node : node;
+                    TreeContextMenu.SetExpandedBelow(current, action == TreeMenuAction.ExpandAll, RememberExpansion);
+                }
+
+                break;
+        }
     }
 
     /// <summary>Selects <paramref name="test"/>, expanding its ancestors and scrolling it into view.</summary>
@@ -381,6 +549,12 @@
     private void SelectProject(string project) => SelectNode($"suite:{project}");
 
     private void SelectNode(string key)
+    {
+        _viewState.TreeSelection.Clear();
+        ShowNode(key);
+    }
+
+    private void ShowNode(string key)
     {
         _viewState.SelectedTestKey = null;
         _viewState.SelectedTestProject = null;
@@ -556,6 +730,7 @@
         {
             await JS.InvokeVoidAsync("pistonSplitter.attach", _splitContainer, _selfRef,
                 ViewState.MinSplitPercent, ViewState.MaxSplitPercent);
+            await JS.InvokeVoidAsync("pistonTreeMenu.observeKeys", _selfRef);
         }
         catch (JSDisconnectedException)
         {
@@ -605,6 +780,7 @@
         try
         {
             await JS.InvokeVoidAsync("pistonSplitter.detach", _splitContainer);
+            await JS.InvokeVoidAsync("pistonTreeMenu.unobserveKeys");
         }
         catch (JSDisconnectedException)
         {
