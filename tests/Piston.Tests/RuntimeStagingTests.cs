@@ -1,12 +1,14 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using System.Diagnostics;
 using Xunit;
 
 namespace Piston.Tests;
 
 public sealed class RuntimeStagingTests : IDisposable
 {
+    private readonly CancellationToken _ct = TestContext.Current.CancellationToken;
     private readonly string _root = Directory.CreateTempSubdirectory("piston-runtime-staging-").FullName;
     private readonly string _source;
     private readonly string _runtimes;
@@ -40,7 +42,7 @@ public sealed class RuntimeStagingTests : IDisposable
             RuntimeStaging.ResolveRuntimeRoot("override", "user-data"));
         Assert.Equal(Path.Combine("user-data", "Piston", "runtimes"),
             RuntimeStaging.ResolveRuntimeRoot(null, "user-data"));
-        Assert.Throws<IOException>(() => RuntimeStaging.ResolveRuntimeRoot(null, null));
+        _ = Assert.Throws<IOException>(() => RuntimeStaging.ResolveRuntimeRoot(null, null));
     }
 
     [Fact]
@@ -50,6 +52,65 @@ public sealed class RuntimeStagingTests : IDisposable
 
         Assert.True(File.Exists(host));
         Assert.Equal(OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet", Path.GetFileName(host));
+    }
+
+    [Fact]
+    public async Task Run_FailsWhenUnixFileLockingIsDisabled()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var stale = StageAged("stale", DateTime.UtcNow - TimeSpan.FromDays(30));
+        var start = new ProcessStartInfo(RuntimeStaging.GetDotnetHostPath())
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        start.ArgumentList.Add(Path.Combine(AppContext.BaseDirectory, "Piston.dll"));
+        start.ArgumentList.Add(RuntimeStaging.Command);
+        start.ArgumentList.Add(_source);
+        start.ArgumentList.Add(Path.Combine(_runtimes, "test"));
+        start.Environment["DOTNET_SYSTEM_IO_DISABLEFILELOCKING"] = "1";
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Failed to start Piston.");
+        var output = process.StandardOutput.ReadToEndAsync(_ct);
+        var error = process.StandardError.ReadToEndAsync(_ct);
+        await process.WaitForExitAsync(_ct).WaitAsync(TimeSpan.FromSeconds(30), _ct);
+
+        Assert.Equal(1, process.ExitCode);
+        Assert.Contains("not enforced", await error, StringComparison.Ordinal);
+        Assert.Empty(await output);
+        Assert.False(Directory.Exists(Path.Combine(_runtimes, "test")));
+        Assert.True(Directory.Exists(stale));
+    }
+
+    [Fact]
+    public async Task RunFromInstalledRuntime_FailsWhenUnixFileLockingIsDisabled()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var runtime = RuntimeStaging.Stage(AppContext.BaseDirectory, Path.Combine(_runtimes, "installed"));
+        var start = new ProcessStartInfo(RuntimeStaging.GetDotnetHostPath())
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        start.ArgumentList.Add(Path.Combine(runtime, "Piston.dll"));
+        start.ArgumentList.Add("--version");
+        start.Environment["DOTNET_SYSTEM_IO_DISABLEFILELOCKING"] = "1";
+        using var process = Process.Start(start) ?? throw new InvalidOperationException("Failed to start Piston.");
+        var output = process.StandardOutput.ReadToEndAsync(_ct);
+        var error = process.StandardError.ReadToEndAsync(_ct);
+        await process.WaitForExitAsync(_ct).WaitAsync(TimeSpan.FromSeconds(30), _ct);
+
+        Assert.Equal(1, process.ExitCode);
+        Assert.Contains("cannot claim the runtime copy", await error, StringComparison.Ordinal);
+        Assert.Empty(await output);
+        Assert.True(File.Exists(Path.Combine(runtime, RuntimeStaging.Marker)));
     }
 
     [Fact]

@@ -3,6 +3,7 @@
 
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using Piston.Engine.Execution;
 
 namespace Piston;
 
@@ -177,6 +178,11 @@ internal static class RuntimeStaging
                 throw new IOException($"'{directory}' is not a complete runtime copy.");
             }
 
+            if (!OperatingSystem.IsWindows())
+            {
+                FileLocking.VerifyEnforced(directory);
+            }
+
             MarkUsed(directory);
             var leasePath = Path.Combine(directory, Lease);
             if (!File.Exists(leasePath))
@@ -199,6 +205,11 @@ internal static class RuntimeStaging
         if (!Directory.Exists(root))
         {
             return;
+        }
+
+        if (!OperatingSystem.IsWindows())
+        {
+            FileLocking.VerifyEnforced(root);
         }
 
         var removed = new List<string>();
@@ -228,6 +239,11 @@ internal static class RuntimeStaging
                 if (utcNow - LastUsedUtc(directory) <= UnusedRetention)
                 {
                     continue;
+                }
+
+                if (!OperatingSystem.IsWindows())
+                {
+                    FileLocking.VerifyEnforced(directory);
                 }
 
                 FileStream? lease = null;
@@ -282,12 +298,10 @@ internal static class RuntimeStaging
         File.SetLastWriteTimeUtc(Path.Combine(directory, LastUsed), DateTime.UtcNow);
     }
 
-    private static string GetRuntimeRoot()
-    {
-        return ResolveRuntimeRoot(
+    private static string GetRuntimeRoot() =>
+        ResolveRuntimeRoot(
             Environment.GetEnvironmentVariable("PISTON_RUNTIMES"),
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData, Environment.SpecialFolderOption.DoNotVerify));
-    }
 
     internal static string ResolveRuntimeRoot(string? overrideRoot, string? applicationDataRoot)
     {
@@ -361,6 +375,11 @@ internal static class RuntimeStaging
     /// <summary>Serializes staging and cleanup across processes; the OS releases it if a process dies.</summary>
     private static FileStream AcquireLock(string root)
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            FileLocking.VerifyEnforced(root);
+        }
+
         var path = Path.Combine(root, LockFile);
         var deadline = DateTime.UtcNow + LockTimeout;
         while (true)
