@@ -5,6 +5,11 @@ html, body {
     overflow: hidden;
 }
 
+/* Match the optical center of the neighboring toolbar text glyphs. */
+.pause-toggle-icon {
+    transform: translateY(1px);
+}
+
 /* Scrollbars mirror the gray-900/700/600 theme tokens. Literal values because
    WebKit does not resolve var() inside ::-webkit-scrollbar pseudo-elements. */
 ::-webkit-scrollbar {
