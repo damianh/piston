@@ -34,6 +34,10 @@ internal sealed class ProvenanceImpactAnalyzer(IReadOnlyList<string> testProject
     public string? GetVerificationCoverageIssue(string solutionPath) => VerificationCoverage();
     public int GetTargetFrameworkCount(string projectPath) => TargetFrameworkCount;
     public Task Initialization { get; set; } = Task.CompletedTask;
+
+    /// <summary>The graph's source scope; null (every file) until set, e.g. once initialization completes.</summary>
+    public SourceInputScope? SourceScope { get; set; }
+
     public HashSet<string> MtpProjects { get; } = [];
     public Task InitializeAsync(string solutionPath, CancellationToken ct) => Initialization;
 

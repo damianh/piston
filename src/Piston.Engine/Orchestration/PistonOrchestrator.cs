@@ -1302,10 +1302,13 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         {
             Status = TestRunStatus.Running,
             StartedAt = DateTimeOffset.UtcNow,
-            SourceBefore = ComputeSource(solutionDir),
             ChangedFiles = changes is null ? run.ChangedFiles : [.. changes.Select(c => c.FilePath)],
         };
         PublishActiveRun(run);
+
+        // Set once the graph has loaded: a run is verified against the scope it started with, because a graph
+        // refresh may change the scope mid-run and fingerprints over different scopes always differ.
+        SourceInputScope? sourceScope = null;
 
         BuildBaseline? builtBaseline = null;
         var artifactPublicationLockHeld = false;
@@ -1324,7 +1327,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 keepInterruptedResults?.Invoke();
             }
 
-            var finished = CompleteRun(run, status, reason, solutionDir, changeGenerationAtStart, computeAfter);
+            var finished = CompleteRun(run, status, reason, solutionDir, changeGenerationAtStart, computeAfter, sourceScope);
             if (status == TestRunStatus.Completed && testedThroughGeneration is { } generation)
             {
                 ForgetPendingChanges(generation);
@@ -1360,6 +1363,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 log0?.Write("Orchestrator", "Graph initialization complete.");
                 _graphInitTask = null;
             }
+
+            // Fingerprinted after the graph loads so the startup run uses the project scope, not every file.
+            sourceScope = SourceScopeFor(solutionDir);
+            run = run with { SourceBefore = SourceFingerprinter.TryCompute(sourceScope) };
+            PublishActiveRun(run);
 
             if (_coverageEnabled)
             {
@@ -2191,7 +2199,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     try
                     {
                         coverageSourceUnverified = run.SourceBefore is not { } before
-                            || ComputeSource(solutionDir) != before
+                            || SourceFingerprinter.TryCompute(sourceScope!) != before
                             || Interlocked.Read(ref _fileChangeGeneration) != changeGenerationAtStart
                             || ct.IsCancellationRequested;
                         var suppliedReports = coverageReportPaths.ToHashSet(StringComparer.Ordinal);
@@ -2436,11 +2444,27 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         string? reason,
         string? solutionDir = null,
         long changeGenerationAtStart = 0,
-        bool computeAfter = false)
+        bool computeAfter = false,
+        SourceInputScope? startScope = null)
     {
         var started = run.StartedAt is not null;
         var changeObserved = started && Interlocked.Read(ref _fileChangeGeneration) != changeGenerationAtStart;
-        var after = computeAfter && solutionDir is not null ? ComputeSource(solutionDir) : null;
+        SourceFingerprint? after = null;
+        SourceFingerprint? reportedAfter = null;
+        if (computeAfter && solutionDir is not null)
+        {
+            var currentScope = SourceScopeFor(solutionDir);
+            var current = SourceFingerprinter.TryCompute(currentScope);
+            after = startScope is null || startScope.HasSameInputs(currentScope)
+                ? current
+                : SourceFingerprinter.TryCompute(startScope);
+
+            // A directory scope covers every project scope's inputs, and it is checked after the current
+            // scope is fingerprinted, so an unchanged directory means the current fingerprint is what ran.
+            reportedAfter = startScope is { IsProjectScoped: false } && after == run.SourceBefore && current is not null
+                ? current
+                : after;
+        }
 
         (var freshness, var freshnessReason) = (run.SourceBefore, after) switch
         {
@@ -2460,7 +2484,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             Status = status,
             StatusReason = reason,
             CompletedAt = DateTimeOffset.UtcNow,
-            SourceAfter = after,
+            SourceAfter = reportedAfter,
             SourceChangeObserved = changeObserved,
             Freshness = freshness,
             FreshnessReason = freshnessReason,

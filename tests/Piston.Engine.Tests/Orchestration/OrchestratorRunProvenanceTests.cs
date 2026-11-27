@@ -549,6 +549,46 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     }
 
     [Fact]
+    public async Task StartupRun_FingerprintsTheScopeOfTheGraphItWaitsFor()
+    {
+        var scope = CreateProjectScope();
+        var releaseGraph = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _impact.Initialization = releaseGraph.Task;
+
+        await _orchestrator.StartAsync(SolutionPath);
+        _impact.SourceScope = scope;
+        releaseGraph.SetResult();
+        await WaitForAsync(() => _state.LastRun is { Trigger: TestRunTrigger.Startup });
+
+        var run = _state.LastRun!;
+        Assert.Equal(ResultFreshness.Current, run.Freshness);
+        Assert.Equal(SourceFingerprinter.Compute(scope), run.SourceBefore);
+        Assert.Equal(run.SourceBefore, run.SourceAfter);
+    }
+
+    [Fact]
+    public async Task ScopeNarrowedDuringRun_IsCurrentAndReportsTheNewScope()
+    {
+        await StartAndWaitForStartupRunAsync();
+        var scope = CreateProjectScope();
+        _runner.DuringRun = () => _impact.SourceScope = scope;
+
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(ResultFreshness.Current, run!.Freshness);
+        Assert.Equal(SourceFingerprinter.Compute(_root), run.SourceBefore);
+        Assert.Equal(SourceFingerprinter.Compute(scope), run.SourceAfter);
+    }
+
+    private SourceInputScope CreateProjectScope()
+    {
+        var project = Path.Combine(_root, "A", "A.csproj");
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+        File.WriteAllText(project, "<Project />");
+        return SourceInputScope.ForProjects(SolutionPath, [project], []);
+    }
+
+    [Fact]
     public async Task WatcherChangeDuringRun_CancelsAndMarksStaleEvenIfContentIsRestored()
     {
         await StartAndWaitForStartupRunAsync();
