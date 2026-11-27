@@ -401,6 +401,44 @@ public sealed class OrchestratorPauseTests
     }
 
     [Fact]
+    public async Task SelectedRunSupersededBeforeItsPipelineStarts_DoesNotReplaceTheNewerResult()
+    {
+        const string project = "/fake/A.csproj";
+        var state = new PistonState();
+        var runner = new ProjectByProjectRunner();
+        await using var orchestrator = new PistonOrchestrator(
+            new RaisingFileWatcher(), new StubBuildService(), runner, new RecordingImpactAnalyzer([project]), state);
+        await orchestrator.StartAsync(Solution);
+        _ = await WaitForRunAsync(state, r => r.Trigger == TestRunTrigger.Startup);
+        await orchestrator.AwaitPipelinesDrainedAsync(_ct);
+
+        var blocked = runner.BlockAt(project);
+        var selected = orchestrator.RunSelectedAsync(new TestSelection(["A.csproj"]));
+        await blocked.WaitAsync(Timeout, _ct);
+        orchestrator.Pause();
+        var interrupted = await selected.WaitAsync(Timeout, _ct);
+
+        // Resume notifies after admitting the continuation but before starting its pipeline.
+        Task<TestRunRecord?>? newer = null;
+        void Supersede()
+        {
+            state.StateChanged -= Supersede;
+            newer = orchestrator.RequestRunAsync();
+        }
+        state.StateChanged += Supersede;
+        orchestrator.Resume();
+
+        var forced = await newer!.WaitAsync(Timeout, _ct);
+        await orchestrator.AwaitPipelinesDrainedAsync(_ct);
+        var superseded = Assert.Single(state.RecentRuns, r => r.Trigger == TestRunTrigger.Targeted && r.RunId != interrupted.RunId);
+        Assert.Equal(TestRunStatus.Cancelled, superseded.Status);
+        Assert.Null(superseded.StartedAt);
+        Assert.Equal(TestRunStatus.Completed, forced!.Status);
+        Assert.True(superseded.Sequence < forced.Sequence);
+        Assert.Equal(forced.RunId, state.LastRun!.RunId);
+    }
+
+    [Fact]
     public async Task PausingAfterAProjectReportedNoTests_ResumeRunsItAgain()
     {
         string[] projects = ["/fake/A.csproj", "/fake/B.csproj"];
