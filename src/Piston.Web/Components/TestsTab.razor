@@ -31,9 +31,6 @@
              OnlyFlaky="@_viewState.OnlyFlaky"
              OnToggleNewFailures="() => ToggleStatus(s => s.OnlyNewFailures = !s.OnlyNewFailures)"
              OnToggleFlaky="() => ToggleStatus(s => s.OnlyFlaky = !s.OnlyFlaky)"
-             SelectedTestCount="@SelectedTestCount()"
-             CanRun="@CanRun"
-             OnRunSelected="RunSelectionAsync"
              RunError="@_runError"
              OnFilterChanged="SetFilter" />
 
@@ -323,8 +320,6 @@
                 .ToList()
             : [];
     }
-
-    private int SelectedTestCount() => TreeSelection.TestCount(SelectedNodes());
 
     // Runs the selected rows' tests, or whatever the details pane shows.
     private Task RunSelectionAsync()
