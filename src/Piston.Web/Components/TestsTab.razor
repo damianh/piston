@@ -109,7 +109,7 @@
     {
         <TestTreeContextMenu @key="menu.Id"
                              Id="@menu.Id"
-                             Items="@TreeContextMenu.ItemsFor(menu.Nodes, CanRun)"
+                             Items="@TreeContextMenu.ItemsFor(menu.Nodes, CanRun, ActiveProjectStatuses, _snapshot?.SolutionPath)"
                              X="@menu.X"
                              Y="@menu.Y"
                              OnSelect="HandleMenuAction"
@@ -464,6 +464,11 @@
 
     private OpenMenu? _menu;
     private int _menuCount;
+    private bool _stoppingProject;
+
+    private IReadOnlyDictionary<string, ProjectRunStatusDto>? ActiveProjectStatuses =>
+        !_stoppingProject && Client.IsConnected && _snapshot?.Phase == PistonPhaseDto.Testing
+            ? _snapshot.ProjectStatuses : null;
 
     // Right-clicking a row outside the selection selects just that row, as a click would.
     private void HandleRowMenu(TreeRowMenu menu)
@@ -514,6 +519,9 @@
         _menu = null;
         switch (action)
         {
+            case TreeMenuAction.StopProject:
+                await StopProjectAsync(menu.Nodes);
+                break;
             case TreeMenuAction.Run or TreeMenuAction.RunFailed:
                 if (TreeSelection.RunFor(menu.Nodes, action == TreeMenuAction.RunFailed) is { } command)
                 {
@@ -541,6 +549,35 @@
                 }
 
                 break;
+        }
+    }
+
+    private async Task StopProjectAsync(IReadOnlyList<TestNode> nodes)
+    {
+        if (_stoppingProject)
+        {
+            return;
+        }
+
+        if (TreeContextMenu.RunningProjectPath(nodes, ActiveProjectStatuses, _snapshot?.SolutionPath) is not { } path)
+        {
+            _runError = Client.IsConnected ? "That project is no longer running." : "Piston is disconnected.";
+            return;
+        }
+
+        _stoppingProject = true;
+        _runError = null;
+        try
+        {
+            _runError = await Client.StopTestAsync(path);
+        }
+        catch (Exception ex)
+        {
+            _runError = ex.Message;
+        }
+        finally
+        {
+            _stoppingProject = false;
         }
     }
 

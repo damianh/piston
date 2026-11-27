@@ -1,6 +1,8 @@
 // Copyright (c) Damian Hickey. All rights reserved.
 // See LICENSE in the project root for license information.
 
+using Piston.Protocol.Dtos;
+
 namespace Piston.Web.Models;
 
 public enum TreeMenuAction
@@ -11,6 +13,7 @@ public enum TreeMenuAction
     CopyFullName,
     ExpandAll,
     CollapseAll,
+    StopProject,
 }
 
 /// <summary>An entry of the test tree's context menu; a change of <paramref name="Group"/> starts a new section.</summary>
@@ -21,7 +24,8 @@ public static class TreeContextMenu
 {
     public const string BusyHint = "Piston is busy; wait for the current run to finish";
 
-    public static IReadOnlyList<TreeMenuItem> ItemsFor(IReadOnlyList<TestNode> nodes, bool canRun)
+    public static IReadOnlyList<TreeMenuItem> ItemsFor(IReadOnlyList<TestNode> nodes, bool canRun,
+        IReadOnlyDictionary<string, ProjectRunStatusDto>? projectStatuses = null, string? solutionPath = null)
     {
         if (nodes.Count == 0)
         {
@@ -55,7 +59,34 @@ public static class TreeContextMenu
             items.Add(new(TreeMenuAction.CollapseAll, "Collapse all below", 2));
         }
 
+        if (RunningProjectPath(nodes, projectStatuses, solutionPath) is not null)
+        {
+            items.Add(new(TreeMenuAction.StopProject, "Stop project run", 3,
+                Hint: "Stop this project's run and leave the other projects running"));
+        }
+
         return items;
+    }
+
+    internal static string? RunningProjectPath(IReadOnlyList<TestNode> nodes,
+        IReadOnlyDictionary<string, ProjectRunStatusDto>? projectStatuses, string? solutionPath)
+    {
+        if (nodes is not [var node] || TreeSelection.ProjectOf(node) is not { } id
+            || projectStatuses is null || solutionPath is null)
+        {
+            return null;
+        }
+
+        foreach (var (path, status) in projectStatuses)
+        {
+            if (status == ProjectRunStatusDto.Running
+                && string.Equals(ProjectPaths.ProjectId(path, solutionPath), id, ProjectPaths.Comparison(solutionPath)))
+            {
+                return path;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>The selected rows' names, or full names, one per line.</summary>

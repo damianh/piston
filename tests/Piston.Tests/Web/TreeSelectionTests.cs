@@ -206,6 +206,43 @@ public sealed class TreeSelectionTests
     }
 
     [Fact]
+    public void StopProject_UsesTheSelectedRunningProjectsPath_EvenWhenRunIsDisabled()
+    {
+        const string solution = @"C:\repo\App.slnx";
+        const string first = @"C:\repo\One\Tests.csproj";
+        const string second = @"C:\repo\Two\Tests.csproj";
+        var statuses = new Dictionary<string, ProjectRunStatusDto>
+        {
+            [first] = ProjectRunStatusDto.Running,
+            [second] = ProjectRunStatusDto.Running,
+        };
+        var selected = Project("two/Tests.csproj", true);
+
+        Assert.Equal(second, TreeContextMenu.RunningProjectPath([selected], statuses, solution));
+        var items = TreeContextMenu.ItemsFor([selected], false, statuses, solution);
+        Assert.True(Assert.Single(items, i => i.Action == TreeMenuAction.StopProject).Enabled);
+
+        statuses[second] = ProjectRunStatusDto.Completed;
+        Assert.Null(TreeContextMenu.RunningProjectPath([selected], statuses, solution));
+        Assert.DoesNotContain(TreeContextMenu.ItemsFor([selected], false, statuses, solution), i => i.Action == TreeMenuAction.StopProject);
+    }
+
+    [Fact]
+    public void StopProject_IsNotOfferedForTestRowsOrMultipleProjects()
+    {
+        const string solution = "/repo/App.slnx";
+        var statuses = new Dictionary<string, ProjectRunStatusDto>
+        {
+            ["/repo/A.csproj"] = ProjectRunStatusDto.Running,
+            ["/repo/B.csproj"] = ProjectRunStatusDto.Running,
+        };
+        var test = Test("N.One", "A.csproj", TestStatusDto.Running);
+
+        Assert.Null(TreeContextMenu.RunningProjectPath([test], statuses, solution));
+        Assert.Null(TreeContextMenu.RunningProjectPath([Project("A.csproj", true), Project("B.csproj", true)], statuses, solution));
+    }
+
+    [Fact]
     public void SetExpandedBelow_ExpandsEveryGroupUnderTheNode()
     {
         var tree = Tree();
