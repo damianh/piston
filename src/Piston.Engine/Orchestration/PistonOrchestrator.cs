@@ -1205,7 +1205,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
             cts = RegisterRunLocked(batch, trigger);
         }
-        return RunTrackedAsync(solutionPath, batch, trigger, selection, cts);
+
+        // Targeted callers acknowledge admission now; fingerprinting and publishing the first large
+        // snapshot can otherwise run inline before the pipeline reaches an incomplete await.
+        Task<TestRunRecord> Run() => RunTrackedAsync(solutionPath, batch, trigger, selection, cts);
+        return trigger == TestRunTrigger.Targeted ? Task.Run(Run) : Run();
     }
 
     // Makes a new run the active one, superseding the previous run. Caller holds _lifecycleLock and starts
