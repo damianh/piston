@@ -39,6 +39,27 @@ public sealed class ViewStateTests
     }
 
     [Fact]
+    public void RevealingATestNotifiesOnceAfterUpdatingTheSelection()
+    {
+        var view = new ViewState { SelectedNodeKey = "old" };
+        view.TreeSelection.Select("row");
+        var notifications = 0;
+        view.TestRevealed += () =>
+        {
+            notifications++;
+            Assert.Equal("B.Tests", view.SelectedTestProject);
+            Assert.Equal("Shared.Test", view.SelectedTestKey);
+            Assert.Null(view.SelectedNodeKey);
+            Assert.Equal(0, view.TreeSelection.Count);
+            Assert.True(view.RevealSelectedTest);
+        };
+
+        view.RevealTest(new TestReference("B.Tests", "Shared.Test"));
+
+        Assert.Equal(1, notifications);
+    }
+
+    [Fact]
     public void ARevealedRunIsTakenOnce()
     {
         var view = new ViewState();

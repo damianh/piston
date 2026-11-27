@@ -26,6 +26,8 @@
             </span>
         }
 
+        <LastRunSummary Snapshot="@Snapshot" OnRevealTest="RevealTestAsync" />
+
         @if (phase == PistonPhaseDto.Building)
         {
             var total = Snapshot.TotalBuildProjects;
@@ -143,14 +145,6 @@
             </span>
         }
 
-        @if (Snapshot.ImpactBackfill is null
-            && phase is PistonPhaseDto.Watching or PistonPhaseDto.Idle
-            && Snapshot.LastRun is { } lastRun
-            && WatchStrip.ScopeLabel(lastRun) is { } scope)
-        {
-            <span class="min-w-0 truncate" title="@(lastRun.SelectionExplanation ?? "Why the last run had this scope")">last run: @scope</span>
-        }
-
         var suites = phase == PistonPhaseDto.Testing
             ? TestTreeBuilder.WithLiveOverlay(Snapshot.Suites, Snapshot.InProgressSuites)
             : Snapshot.Suites;
@@ -193,6 +187,12 @@
 
 @code {
     public const string TabSection = "status-bar-tab";
+
+    /// <summary>Opens a test the last run fixed or newly broke in the Tests tab.</summary>
+    [Parameter] public EventCallback<TestReference> OnOpenTest { get; set; }
+
+    private Task RevealTestAsync(TestOutcomeReferenceDto test) =>
+        OnOpenTest.InvokeAsync(new TestReference(test.ProjectId ?? test.Project, test.Key));
 
     private StateSnapshotNotification? Snapshot { get; set; }
 

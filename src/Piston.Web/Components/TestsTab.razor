@@ -37,8 +37,6 @@
              RunError="@_runError"
              OnFilterChanged="SetFilter" />
 
-    <WatchStripBar Snapshot="@_snapshot" OnRevealTest="RevealTestByKey" />
-
     <!-- Main content area: test tree, resizable splitter, detail panel (docked right or bottom) -->
     <div class="@(_isBottom ? "flex flex-col" : "flex") flex-1 min-h-0 overflow-hidden"
          data-orientation="@(_isBottom ? "bottom" : "right")" @ref="_splitContainer">
@@ -153,6 +151,7 @@
         _lastHandledKeyboardEvent = KeyboardEvent;
         Client.StateChanged += OnStateChanged;
         Client.SettingsChanged += OnSettingsChanged;
+        _viewState.TestRevealed += OnTestRevealed;
 
         // The tab may mount after the latest snapshot arrived (e.g. on tab switch); start from it.
         if (Client.CurrentSnapshot is { } current)
@@ -226,6 +225,13 @@
 
     // AppShell applies changed settings to the shared ViewState; re-render to reflect them.
     private void OnSettingsChanged() => InvokeAsync(StateHasChanged);
+
+    // The status bar opened a test while this tab is shown: select it and expand and scroll to it now.
+    private void OnTestRevealed() => InvokeAsync(() =>
+    {
+        RebuildTree();
+        StateHasChanged();
+    });
 
     private void RebuildTree()
     {
@@ -551,15 +557,6 @@
         SelectTest(test);
     }
 
-    private void RevealTestByKey(TestOutcomeReferenceDto reference)
-    {
-        if (_snapshot?.Suites.Where(s => (s.ProjectId ?? s.Name) == (reference.ProjectId ?? reference.Project))
-            .SelectMany(s => s.Tests).FirstOrDefault(t => t.Key == reference.Key) is { } test)
-        {
-            RevealTest(test);
-        }
-    }
-
     private void SelectProject(string project) => SelectNode($"suite:{project}");
 
     private void SelectNode(string key)
@@ -790,6 +787,7 @@
     {
         Client.StateChanged -= OnStateChanged;
         Client.SettingsChanged -= OnSettingsChanged;
+        _viewState.TestRevealed -= OnTestRevealed;
 
         try
         {

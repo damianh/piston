@@ -157,7 +157,11 @@ public sealed class ViewState
         SelectedTestProject = test.Project;
         TreeSelection.Clear();
         RevealSelectedTest = true;
+        TestRevealed?.Invoke();
     }
+
+    /// <summary>Raised by <see cref="RevealTest"/>, so an open Tests tab reveals the test without waiting for a snapshot.</summary>
+    public event Action? TestRevealed;
 
     // ── Links into the Runs and Timeline tabs ──
 
