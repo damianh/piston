@@ -8,6 +8,25 @@ internal static class ProjectPaths
     public static StringComparison Comparison(string path) =>
         WindowsRootLength(path.Replace('\\', '/')) > 0 ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
 
+    public static bool MatchesProjectId(string projectPath, string solutionPath, string projectId)
+    {
+        // Compare roots in the same namespace, but never strip a prefix from the path sent to the daemon.
+        var solution = ComparisonPath(solutionPath);
+        return string.Equals(ProjectId(ComparisonPath(projectPath), solution), ComparisonPath(projectId), Comparison(solution));
+    }
+
+    private static string ComparisonPath(string path)
+    {
+        path = path.Replace('\\', '/');
+        if (path.StartsWith("//?/UNC/", StringComparison.OrdinalIgnoreCase))
+        {
+            return "//" + path[8..];
+        }
+
+        return path.StartsWith("//?/", StringComparison.Ordinal) && WindowsRootLength(path[4..]) == 1
+            ? path[4..] : path;
+    }
+
     public static string ProjectId(string projectPath, string solutionPath)
     {
         projectPath = projectPath.Replace('\\', '/');

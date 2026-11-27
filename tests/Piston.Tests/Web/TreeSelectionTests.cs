@@ -242,6 +242,19 @@ public sealed class TreeSelectionTests
         Assert.Null(TreeContextMenu.RunningProjectPath([Project("A.csproj", true), Project("B.csproj", true)], statuses, solution));
     }
 
+    [Theory]
+    [InlineData(@"C:\Repo\App.slnx", @"\\?\C:\Repo\CON.Tests.csproj", "CON.Tests.csproj")]
+    [InlineData(@"\\server\share\Repo\App.slnx", @"\\?\UNC\server\share\Repo\CON.Tests.csproj", "CON.Tests.csproj")]
+    [InlineData(@"\\?\C:\Repo\literal.\App.slnx", @"C:\Repo\Normal.csproj", "../Normal.csproj")]
+    [InlineData(@"\\?\UNC\server\share\Repo\literal.\App.slnx", @"\\server\share\Repo\Normal.csproj", "../Normal.csproj")]
+    [InlineData(@"\\?\C:\Repo\literal.\App.slnx", @"D:\Repo\Normal.csproj", "//?/D:/Repo/Normal.csproj")]
+    [InlineData(@"\\?\UNC\server\share\Repo\App.slnx", @"\\?\UNC\server\other\Repo\CON.Tests.csproj", "//?/UNC/server/other/Repo/CON.Tests.csproj")]
+    public void StopProject_MatchesNamespaceVariantsButSendsTheOriginalPath(string solution, string path, string id)
+    {
+        var statuses = new Dictionary<string, ProjectRunStatusDto> { [path] = ProjectRunStatusDto.Running };
+        Assert.Equal(path, TreeContextMenu.RunningProjectPath([Project(id, true)], statuses, solution));
+    }
+
     [Fact]
     public void SetExpandedBelow_ExpandsEveryGroupUnderTheNode()
     {

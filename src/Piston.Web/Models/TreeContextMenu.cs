@@ -80,7 +80,7 @@ public static class TreeContextMenu
         foreach (var (path, status) in projectStatuses)
         {
             if (status == ProjectRunStatusDto.Running
-                && string.Equals(ProjectPaths.ProjectId(path, solutionPath), id, ProjectPaths.Comparison(solutionPath)))
+                && ProjectPaths.MatchesProjectId(path, solutionPath, id))
             {
                 return path;
             }
