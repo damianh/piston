@@ -2199,7 +2199,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     try
                     {
                         coverageSourceUnverified = run.SourceBefore is not { } before
-                            || SourceFingerprinter.TryCompute(sourceScope!) != before
+                            || SourceFingerprinter.TryCompute(VerificationScope(sourceScope, SourceScopeFor(solutionDir))) != before
                             || Interlocked.Read(ref _fileChangeGeneration) != changeGenerationAtStart
                             || ct.IsCancellationRequested;
                         var suppliedReports = coverageReportPaths.ToHashSet(StringComparer.Ordinal);
@@ -2434,6 +2434,16 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     }
 
     /// <summary>
+    /// The scope a run's post-run source is compared in: its starting scope while that covers the current
+    /// scope's inputs (a directory scope covers every project scope), otherwise the current scope, so inputs
+    /// a graph refresh added mid-run are never left unverified (the fingerprints then differ: stale).
+    /// </summary>
+    private static SourceInputScope VerificationScope(SourceInputScope? startScope, SourceInputScope currentScope) =>
+        startScope is not null && (!startScope.IsProjectScoped || startScope.HasSameInputs(currentScope))
+            ? startScope
+            : currentScope;
+
+    /// <summary>
     /// Finalises a run record: captures the post-run fingerprint and decides freshness.
     /// A run is <see cref="ResultFreshness.Current"/> only when both fingerprints are available and
     /// equal and the file watcher reported no change while it executed.
@@ -2455,9 +2465,10 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         {
             var currentScope = SourceScopeFor(solutionDir);
             var current = SourceFingerprinter.TryCompute(currentScope);
-            after = startScope is null || startScope.HasSameInputs(currentScope)
+            var verifiedScope = VerificationScope(startScope, currentScope);
+            after = ReferenceEquals(verifiedScope, currentScope)
                 ? current
-                : SourceFingerprinter.TryCompute(startScope);
+                : SourceFingerprinter.TryCompute(verifiedScope);
 
             // A directory scope covers every project scope's inputs, and it is checked after the current
             // scope is fingerprinted, so an unchanged directory means the current fingerprint is what ran.
