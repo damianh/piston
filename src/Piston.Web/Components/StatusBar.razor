@@ -95,16 +95,16 @@
             var elapsed = TestNode.FormatDuration(Math.Max(0, (DateTimeOffset.UtcNow - longest.StartedAt).TotalMilliseconds));
             var shortName = WatchStrip.ShortTestName(longest.Name);
             var projectName = ProjectLabels.For(longest.ProjectPath, Snapshot.ProjectStatuses?.Keys ?? [], Snapshot.SolutionPath);
-            <span class="flex items-center gap-1.5 min-w-0 @(longest.PossiblyHanging ? "text-amber-400" : "text-gray-400")"
+            <span class="longest-test-status items-center gap-1.5 overflow-hidden @(longest.PossiblyHanging ? "text-amber-400" : "text-gray-400")"
                   data-testid="longest-running-test"
                   title="@($"Running longest: {longest.Name}{Environment.NewLine}{projectName}{(longest.PossiblyHanging ? $"{Environment.NewLine}Running longer than the hang threshold: possibly hanging" : "")}")">
-                <span class="shrink-0">@(longest.PossiblyHanging ? "⚠" : "⏱")</span>
+                <span>@(longest.PossiblyHanging ? "⚠" : "⏱")</span>
                 <span class="truncate">@shortName</span>
-                <span class="shrink-0 truncate max-w-32">@projectName</span>
-                <span class="shrink-0 tabular-nums">@elapsed</span>
+                <span class="truncate max-w-32">@projectName</span>
+                <span class="tabular-nums">@elapsed</span>
                 @if (longest.PossiblyHanging)
                 {
-                    <span class="shrink-0">possibly hanging</span>
+                    <span>possibly hanging</span>
                 }
             </span>
         }

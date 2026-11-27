@@ -10,6 +10,14 @@ html, body {
     transform: translateY(1px);
 }
 
+/* Only the test and project names give up space; reserve the timer and optional warning. */
+.longest-test-status {
+    display: grid;
+    grid-auto-flow: column;
+    grid-template-columns: auto minmax(0, max-content) minmax(0, max-content) auto;
+    min-width: min-content;
+}
+
 /* Scrollbars mirror the gray-900/700/600 theme tokens. Literal values because
    WebKit does not resolve var() inside ::-webkit-scrollbar pseudo-elements. */
 ::-webkit-scrollbar {
