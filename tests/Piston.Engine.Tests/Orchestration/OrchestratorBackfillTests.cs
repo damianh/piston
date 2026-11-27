@@ -512,6 +512,67 @@ public sealed class OrchestratorBackfillTests : IDisposable
     }
 
     [Fact]
+    public async Task StartupRunInTheProjectScope_MeasuresCoverage()
+    {
+        _orchestrator.BackfillGranularity = null;
+        _analyzer.SourceScope = SourceInputScope.ForProjects(Path.Combine(_root, "App.slnx"), [CreateProject()], []);
+
+        await StartAsync();
+
+        Assert.Equal(ResultFreshness.Current, _state.LastRun!.Freshness);
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[Project].Status);
+    }
+
+    [Fact]
+    public async Task ScopeNarrowedFromTheDirectoryDuringRun_MeasuresCoverage()
+    {
+        _orchestrator.BackfillGranularity = null;
+        await StartAsync();
+        var narrowed = SourceInputScope.ForProjects(Path.Combine(_root, "App.slnx"), [CreateProject()], []);
+        _runner.OnForegroundRun = () => _analyzer.SourceScope = narrowed;
+
+        var run = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(ResultFreshness.Current, run!.Freshness);
+        Assert.Equal(CoverageCollectionStatus.Measured, _state.ProjectCoverage[Project].Status);
+        Assert.Equal(run.RunId, _state.ProjectCoverage[Project].RunId);
+    }
+
+    [Fact]
+    public async Task ScopeWidenedByAnInputDeletedBeforeTheScan_SkipsCoverage()
+    {
+        _orchestrator.BackfillGranularity = null;
+        var project = CreateProject();
+        _analyzer.SourceScope = SourceInputScope.ForProjects(Path.Combine(_root, "App.slnx"), [project], []);
+        await StartAsync();
+        var processed = _processor.Processed.Count;
+        var shared = Path.Combine(_root, "Shared", "Shared.props");
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(shared)!);
+        File.WriteAllText(shared, "<Project />");
+        var widened = SourceInputScope.ForProjects(Path.Combine(_root, "App.slnx"), [project], [shared]);
+        _runner.OnForegroundRun = () =>
+        {
+            _analyzer.SourceScope = widened;
+            File.Delete(shared);
+        };
+
+        var run = await _orchestrator.RequestRunAsync().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+
+        Assert.Equal(run!.SourceBefore, run.SourceAfter);
+        Assert.Equal(CoverageCollectionStatus.Partial, _state.ProjectCoverage[Project].Status);
+        Assert.Contains("could not be verified", _state.ProjectCoverage[Project].Message, StringComparison.Ordinal);
+        Assert.Equal(processed, _processor.Processed.Count);
+    }
+
+    private string CreateProject()
+    {
+        var project = Path.Combine(_root, "A", "A.csproj");
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+        File.WriteAllText(project, "<Project />");
+        return project;
+    }
+
+    [Fact]
     public async Task ClearResultsForgetsProjectMeasurementState()
     {
         _orchestrator.BackfillGranularity = null;

@@ -549,6 +549,106 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
     }
 
     [Fact]
+    public async Task StartupRun_FingerprintsTheScopeOfTheGraphItWaitsFor()
+    {
+        var scope = CreateProjectScope();
+        var releaseGraph = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _impact.Initialization = releaseGraph.Task;
+
+        await _orchestrator.StartAsync(SolutionPath);
+        _impact.SourceScope = scope;
+        releaseGraph.SetResult();
+        await WaitForAsync(() => _state.LastRun is { Trigger: TestRunTrigger.Startup });
+
+        var run = _state.LastRun!;
+        Assert.Equal(ResultFreshness.Current, run.Freshness);
+        Assert.Equal(SourceFingerprinter.Compute(scope), run.SourceBefore);
+        Assert.Equal(run.SourceBefore, run.SourceAfter);
+    }
+
+    [Fact]
+    public async Task ScopeNarrowedDuringRun_IsCurrentAndReportsTheNewScope()
+    {
+        await StartAndWaitForStartupRunAsync();
+        var scope = CreateProjectScope();
+        _runner.DuringRun = () => _impact.SourceScope = scope;
+
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(ResultFreshness.Current, run!.Freshness);
+        Assert.Equal(SourceFingerprinter.Compute(_root), run.SourceBefore);
+        Assert.Equal(SourceFingerprinter.Compute(scope), run.SourceAfter);
+    }
+
+    [Fact]
+    public async Task ScopeWidenedDuringRun_IsStale()
+    {
+        var scope = CreateProjectScope();
+        _impact.SourceScope = scope;
+        await StartAndWaitForStartupRunAsync();
+        var shared = Path.Combine(_root, "Shared", "Shared.props");
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(shared)!);
+        File.WriteAllText(shared, "<Project />");
+        var widened = SourceInputScope.ForProjects(SolutionPath, [Path.Combine(_root, "A", "A.csproj")], [shared]);
+        _runner.DuringRun = () => _impact.SourceScope = widened;
+
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(ResultFreshness.Stale, run!.Freshness);
+        Assert.Equal(SourceFingerprinter.Compute(widened), run.SourceAfter);
+    }
+
+    [Fact]
+    public async Task ScopeWidenedDuringRun_ByAnInputDeletedBeforeTheScan_IsStale()
+    {
+        var scope = CreateProjectScope();
+        _impact.SourceScope = scope;
+        await StartAndWaitForStartupRunAsync();
+        var shared = Path.Combine(_root, "Shared", "Shared.props");
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(shared)!);
+        File.WriteAllText(shared, "<Project />");
+        var widened = SourceInputScope.ForProjects(SolutionPath, [Path.Combine(_root, "A", "A.csproj")], [shared]);
+        _runner.DuringRun = () =>
+        {
+            _impact.SourceScope = widened;
+            File.Delete(shared);
+        };
+
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(run!.SourceBefore, run.SourceAfter);
+        Assert.Equal(ResultFreshness.Stale, run.Freshness);
+        Assert.Equal("Source inputs changed during the run.", run.FreshnessReason);
+    }
+
+    [Fact]
+    public async Task ScopeChangedByAnEditBeforeTheRun_IsCurrent()
+    {
+        var project = Path.Combine(_root, "A", "A.csproj");
+        _ = CreateProjectScope();
+        var globbed = Path.Combine(_root, "A", "Gone.cs");
+        File.WriteAllText(globbed, "class Gone { }");
+        _impact.SourceScope = SourceInputScope.ForProjects(SolutionPath, [project], [globbed]);
+        await StartAndWaitForStartupRunAsync();
+        File.Delete(globbed);
+        var refreshed = SourceInputScope.ForProjects(SolutionPath, [project], []);
+        _impact.OnAnalyzeFullRun = () => _impact.SourceScope = refreshed;
+
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(ResultFreshness.Current, run!.Freshness);
+        Assert.Equal(SourceFingerprinter.Compute(refreshed), run.SourceBefore);
+    }
+
+    private SourceInputScope CreateProjectScope()
+    {
+        var project = Path.Combine(_root, "A", "A.csproj");
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(project)!);
+        File.WriteAllText(project, "<Project />");
+        return SourceInputScope.ForProjects(SolutionPath, [project], []);
+    }
+
+    [Fact]
     public async Task WatcherChangeDuringRun_CancelsAndMarksStaleEvenIfContentIsRestored()
     {
         await StartAndWaitForStartupRunAsync();

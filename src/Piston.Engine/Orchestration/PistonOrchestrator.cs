@@ -1310,10 +1310,13 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         {
             Status = TestRunStatus.Running,
             StartedAt = DateTimeOffset.UtcNow,
-            SourceBefore = ComputeSource(solutionDir),
             ChangedFiles = changes is null ? run.ChangedFiles : [.. changes.Select(c => c.FilePath)],
         };
         PublishActiveRun(run);
+
+        // Set once the graph has loaded: a run is verified against the scope it started with, because a graph
+        // refresh may change the scope mid-run and fingerprints over different scopes always differ.
+        SourceInputScope? sourceScope = null;
 
         BuildBaseline? builtBaseline = null;
         var artifactPublicationLockHeld = false;
@@ -1332,7 +1335,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 keepInterruptedResults?.Invoke();
             }
 
-            var finished = CompleteRun(run, status, reason, solutionDir, changeGenerationAtStart, computeAfter);
+            var finished = CompleteRun(run, status, reason, solutionDir, changeGenerationAtStart, computeAfter, sourceScope);
             if (status == TestRunStatus.Completed && testedThroughGeneration is { } generation)
             {
                 ForgetPendingChanges(generation);
@@ -1368,6 +1371,11 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 log0?.Write("Orchestrator", "Graph initialization complete.");
                 _graphInitTask = null;
             }
+
+            // Fingerprinted after the graph loads so the startup run uses the project scope, not every file.
+            sourceScope = SourceScopeFor(solutionDir);
+            run = run with { SourceBefore = SourceFingerprinter.TryCompute(sourceScope) };
+            PublishActiveRun(run);
 
             if (_coverageEnabled)
             {
@@ -1484,6 +1492,14 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             if (run.IsFullScope)
             {
                 run = run with { InputCoverageVerified = IsInputCoverageVerified(solutionPath) };
+            }
+
+            // Analysis and the input-coverage check can refresh the graph, so the scope the build will use is
+            // the run's baseline; edits made meanwhile are still caught by the watcher generation.
+            if (SourceScopeFor(solutionDir) is var analyzedScope && !analyzedScope.HasSameInputs(sourceScope))
+            {
+                sourceScope = analyzedScope;
+                run = run with { SourceBefore = SourceFingerprinter.TryCompute(analyzedScope) };
             }
 
             PublishActiveRun(run);
@@ -2199,7 +2215,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     try
                     {
                         coverageSourceUnverified = run.SourceBefore is not { } before
-                            || ComputeSource(solutionDir) != before
+                            || VerificationScope(sourceScope, SourceScopeFor(solutionDir)) is not { } verifiedScope
+                            || SourceFingerprinter.TryCompute(verifiedScope) != before
                             || Interlocked.Read(ref _fileChangeGeneration) != changeGenerationAtStart
                             || ct.IsCancellationRequested;
                         var suppliedReports = coverageReportPaths.ToHashSet(StringComparer.Ordinal);
@@ -2434,6 +2451,21 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     }
 
     /// <summary>
+    /// The scope a run's post-run source is compared in: its starting scope while that covers the current
+    /// scope's inputs (a directory scope covers every project scope), or the current scope when no starting
+    /// scope was captured. <see langword="null"/> when a graph refresh widened the scope mid-run: the added
+    /// inputs were never fingerprinted, so the run cannot be verified, whatever the hashes say.
+    /// </summary>
+    private static SourceInputScope? VerificationScope(SourceInputScope? startScope, SourceInputScope currentScope) =>
+        startScope switch
+        {
+            null => currentScope,
+            { IsProjectScoped: false } => startScope,
+            _ when startScope.HasSameInputs(currentScope) => startScope,
+            _ => null,
+        };
+
+    /// <summary>
     /// Finalises a run record: captures the post-run fingerprint and decides freshness.
     /// A run is <see cref="ResultFreshness.Current"/> only when both fingerprints are available and
     /// equal and the file watcher reported no change while it executed.
@@ -2444,15 +2476,36 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         string? reason,
         string? solutionDir = null,
         long changeGenerationAtStart = 0,
-        bool computeAfter = false)
+        bool computeAfter = false,
+        SourceInputScope? startScope = null)
     {
         var started = run.StartedAt is not null;
         var changeObserved = started && Interlocked.Read(ref _fileChangeGeneration) != changeGenerationAtStart;
-        var after = computeAfter && solutionDir is not null ? ComputeSource(solutionDir) : null;
+        SourceFingerprint? after = null;
+        SourceFingerprint? reportedAfter = null;
+        var scopeWidened = false;
+        if (computeAfter && solutionDir is not null)
+        {
+            var currentScope = SourceScopeFor(solutionDir);
+            var current = SourceFingerprinter.TryCompute(currentScope);
+            var verifiedScope = VerificationScope(startScope, currentScope);
+            scopeWidened = verifiedScope is null;
+            after = verifiedScope is null || verifiedScope.HasSameInputs(currentScope)
+                ? current
+                : SourceFingerprinter.TryCompute(verifiedScope);
+
+            // A directory scope covers every project scope's inputs, and it is checked after the current
+            // scope is fingerprinted, so an unchanged directory means the current fingerprint is what ran.
+            reportedAfter = startScope is { IsProjectScoped: false } && after == run.SourceBefore && current is not null
+                ? current
+                : after;
+        }
 
         (var freshness, var freshnessReason) = (run.SourceBefore, after) switch
         {
             _ when !started => (ResultFreshness.Unknown, "Run did not start."),
+            _ when scopeWidened =>
+                (ResultFreshness.Stale, "Source inputs changed during the run."),
             ({ } before, { } afterFp) when before != afterFp =>
                 (ResultFreshness.Stale, "Source fingerprint changed during the run."),
             _ when changeObserved =>
@@ -2468,7 +2521,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             Status = status,
             StatusReason = reason,
             CompletedAt = DateTimeOffset.UtcNow,
-            SourceAfter = after,
+            SourceAfter = reportedAfter,
             SourceChangeObserved = changeObserved,
             Freshness = freshness,
             FreshnessReason = freshnessReason,
