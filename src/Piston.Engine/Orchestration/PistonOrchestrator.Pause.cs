@@ -128,7 +128,7 @@ public sealed partial class PistonOrchestrator
         FileChangeBatch? batch = null;
         var rerunStartup = false;
         PausedContinuation? continuation = null;
-        CancellationTokenSource? cts = null;
+        RegisteredRun? registration = null;
         var solutionPath = _solutionPath;
         lock (_lifecycleLock)
         {
@@ -172,12 +172,12 @@ public sealed partial class PistonOrchestrator
             // watcher run supersedes it rather than the other way round.
             if (continuation is not null && solutionPath is not null && !_disposed)
             {
-                cts = RegisterRunLocked(batch, continuation.Trigger);
-                _activeTestPhase = new ActiveTestPhase(cts, continuation);
+                registration = RegisterRunLocked(batch, continuation.Trigger);
+                _activeTestPhase = new ActiveTestPhase(registration.Cts, continuation);
             }
             else if ((rerunStartup || batch is not null) && solutionPath is not null && !_disposed)
             {
-                cts = RegisterRunLocked(batch, rerunStartup ? TestRunTrigger.Startup : TestRunTrigger.FileChange);
+                registration = RegisterRunLocked(batch, rerunStartup ? TestRunTrigger.Startup : TestRunTrigger.FileChange);
             }
 
             PublishPauseState();
@@ -189,7 +189,7 @@ public sealed partial class PistonOrchestrator
             : batch is null ? "Processing resumed."
             : $"Processing resumed with {batch.Changes.Count} queued change(s).");
         _state.NotifyChanged();
-        if (cts is null)
+        if (registration is null)
         {
             return;
         }
@@ -197,11 +197,11 @@ public sealed partial class PistonOrchestrator
         if (continuation is not null)
         {
             var selection = new SelectedRun(continuation.RemainingTestProjects, continuation.EffectiveFilter) { Continues = continuation };
-            _ = RunTrackedAsync(solutionPath!, null, continuation.Trigger, selection, cts);
+            _ = RunTrackedAsync(solutionPath!, null, registration, selection);
         }
         else
         {
-            _ = RunTrackedAsync(solutionPath!, batch, rerunStartup ? TestRunTrigger.Startup : TestRunTrigger.FileChange, null, cts);
+            _ = RunTrackedAsync(solutionPath!, batch, registration, null);
         }
     }
 

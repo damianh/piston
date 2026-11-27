@@ -341,10 +341,9 @@ public sealed class EngineClientService : IAsyncDisposable
         {
             return await tcs.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        finally
         {
             _ = _pendingRequests.TryRemove(id, out _);
-            throw;
         }
     }
 
@@ -357,7 +356,8 @@ public sealed class EngineClientService : IAsyncDisposable
         var response = await SendForResponseAsync(ProtocolMethods.EngineRunTests, command).ConfigureAwait(false);
         return response switch
         {
-            null => "Piston did not respond. Check that the daemon is running.",
+            null when !IsConnected => "The dashboard is disconnected from Piston. Check that the daemon is running.",
+            null => "Piston did not acknowledge the run request. Check run activity before trying again.",
             { Error: { } error } => error.Message,
             _ => null,
         };

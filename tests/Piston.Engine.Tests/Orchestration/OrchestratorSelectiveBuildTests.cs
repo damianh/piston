@@ -417,6 +417,44 @@ public sealed class OrchestratorSelectiveBuildTests : IDisposable
     }
 
     [Fact]
+    public async Task RunSelected_ReturnsTheAcceptedRunBeforePublishingSlowPipelineUpdates()
+    {
+        var state = new PistonState();
+        using var orchestrator = new PistonOrchestrator(new StubFileWatcherService(), new RecordingBuildService(),
+            new RecordingTestRunner(), TempAnalyzer(new([], [], false, false)), state);
+        await StartInTempRepoAsync(orchestrator, state);
+        await orchestrator.AwaitPipelinesDrainedAsync(_ct);
+
+        using var release = new ManualResetEventSlim();
+        var publishing = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnStateChanged()
+        {
+            if (state.CurrentRun?.Trigger == TestRunTrigger.Targeted)
+            {
+                _ = publishing.TrySetResult();
+                release.Wait(_ct);
+            }
+        }
+
+        state.StateChanged += OnStateChanged;
+        // Keep the admission call separate from the task for the eventual run result.
+        var admission = Task.Factory.StartNew(() => orchestrator.RunSelectedAsync(new TestSelection([LibTestsId])),
+            _ct, TaskCreationOptions.None, TaskScheduler.Default);
+        try
+        {
+            await publishing.Task.WaitAsync(TimeSpan.FromSeconds(10), _ct);
+            var run = await admission.WaitAsync(TimeSpan.FromSeconds(3), _ct);
+            Assert.False(run.IsCompleted);
+        }
+        finally
+        {
+            release.Set();
+            state.StateChanged -= OnStateChanged;
+            _ = await admission.Unwrap().WaitAsync(TimeSpan.FromSeconds(10), _ct);
+        }
+    }
+
+    [Fact]
     public async Task RunSelected_WhileARunIsActive_IsRejectedWithoutCancellingIt()
     {
         var runner = new RecordingTestRunner { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously) };

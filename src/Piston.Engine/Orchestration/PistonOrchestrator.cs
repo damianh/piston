@@ -1113,7 +1113,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             _solutionPath, _state.LastChangedFiles));
 
         // The pause check and the run registration are atomic, so a concurrent Pause() either sees this run or queues it.
-        CancellationTokenSource? cts = null;
+        RegisteredRun? registration = null;
         var queued = false;
         lock (_lifecycleLock)
         {
@@ -1122,7 +1122,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 queued = TryQueuePausedChangeLocked(batch);
                 if (!queued)
                 {
-                    cts = RegisterRunLocked(batch, TestRunTrigger.FileChange);
+                    registration = RegisterRunLocked(batch, TestRunTrigger.FileChange);
                 }
             }
         }
@@ -1131,9 +1131,9 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         {
             _state.NotifyChanged();
         }
-        else if (cts is not null)
+        else if (registration is not null)
         {
-            _ = RunTrackedAsync(_solutionPath, batch, TestRunTrigger.FileChange, null, cts);
+            _ = RunTrackedAsync(_solutionPath, batch, registration, null);
         }
         else
         {
@@ -1189,7 +1189,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     private Task<TestRunRecord>? TryTriggerRun(
         string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, SelectedRun? selection, bool supersede)
     {
-        CancellationTokenSource cts;
+        RegisteredRun registration;
         lock (_lifecycleLock)
         {
             if (_disposed)
@@ -1203,15 +1203,22 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 return null;
             }
 
-            cts = RegisterRunLocked(batch, trigger);
+            registration = RegisterRunLocked(batch, trigger);
         }
-        return RunTrackedAsync(solutionPath, batch, trigger, selection, cts);
+
+        // Targeted callers acknowledge admission now; fingerprinting and publishing the first large
+        // snapshot can otherwise run inline before the pipeline reaches an incomplete await.
+        Task<TestRunRecord> Run() => RunTrackedAsync(solutionPath, batch, registration, selection);
+        return trigger == TestRunTrigger.Targeted ? Task.Run(Run) : Run();
     }
 
-    // Makes a new run the active one, superseding the previous run. Caller holds _lifecycleLock and starts
-    // RunTrackedAsync with the returned token source outside the lock.
-    private CancellationTokenSource RegisterRunLocked(FileChangeBatch? batch, TestRunTrigger trigger)
+    private sealed record RegisteredRun(TestRunRecord Record, CancellationTokenSource Cts);
+
+    // Assign sequence numbers in admission order, even if the pipelines start in a different order.
+    // Caller holds _lifecycleLock and starts RunTrackedAsync outside the lock.
+    private RegisteredRun RegisterRunLocked(FileChangeBatch? batch, TestRunTrigger trigger)
     {
+        var record = CreateRunRecord(trigger);
         if (_activePipelines++ == 0)
         {
             _pipelinesDrained = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1224,15 +1231,16 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         _activeRunChanges = batch?.Changes;
         _startupRunPending |= trigger == TestRunTrigger.Startup;
         oldCts?.Cancel();
-        return cts;
+        return new RegisteredRun(record, cts);
     }
 
     private async Task<TestRunRecord> RunTrackedAsync(
-        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, SelectedRun? selection, CancellationTokenSource cts)
+        string solutionPath, FileChangeBatch? batch, RegisteredRun registration, SelectedRun? selection)
     {
+        var (run, cts) = registration;
         try
         {
-            return await RunPipelineAsync(solutionPath, batch, trigger, selection, cts).ConfigureAwait(false);
+            return await RunPipelineAsync(solutionPath, batch, run, selection, cts).ConfigureAwait(false);
         }
         finally
         {
@@ -1262,9 +1270,9 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
     }
 
     private async Task<TestRunRecord> RunPipelineAsync(
-        string solutionPath, FileChangeBatch? batch, TestRunTrigger trigger, SelectedRun? selection, CancellationTokenSource newCts)
+        string solutionPath, FileChangeBatch? batch, TestRunRecord run, SelectedRun? selection, CancellationTokenSource newCts)
     {
-        var run = CreateRunRecord(trigger) with
+        run = run with
         {
             ChangedFiles = batch is null ? [] : [.. batch.Changes.Select(c => c.FilePath).Distinct(StringComparer.Ordinal)],
         };
@@ -1690,7 +1698,7 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
             // Lets a pause keep this run's progress and continue with the test projects it had not finished.
             var continues = selection?.Continues;
             var testPhase = new ActiveTestPhase(newCts, new PausedContinuation(
-                continues?.Trigger ?? trigger,
+                continues?.Trigger ?? run.Trigger,
                 testTargets ?? [],
                 NormalizeFilter(effectiveFilter),
                 continues is null ? NormalizeFilter(configuredFilter) : continues.UserFilter,
