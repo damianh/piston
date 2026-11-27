@@ -598,6 +598,29 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         Assert.Equal(SourceFingerprinter.Compute(widened), run.SourceAfter);
     }
 
+    [Fact]
+    public async Task ScopeWidenedDuringRun_ByAnInputDeletedBeforeTheScan_IsStale()
+    {
+        var scope = CreateProjectScope();
+        _impact.SourceScope = scope;
+        await StartAndWaitForStartupRunAsync();
+        var shared = Path.Combine(_root, "Shared", "Shared.props");
+        _ = Directory.CreateDirectory(Path.GetDirectoryName(shared)!);
+        File.WriteAllText(shared, "<Project />");
+        var widened = SourceInputScope.ForProjects(SolutionPath, [Path.Combine(_root, "A", "A.csproj")], [shared]);
+        _runner.DuringRun = () =>
+        {
+            _impact.SourceScope = widened;
+            File.Delete(shared);
+        };
+
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(run!.SourceBefore, run.SourceAfter);
+        Assert.Equal(ResultFreshness.Stale, run.Freshness);
+        Assert.Equal("Source inputs changed during the run.", run.FreshnessReason);
+    }
+
     private SourceInputScope CreateProjectScope()
     {
         var project = Path.Combine(_root, "A", "A.csproj");

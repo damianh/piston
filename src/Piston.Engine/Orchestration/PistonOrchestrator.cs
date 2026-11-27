@@ -2199,7 +2199,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                     try
                     {
                         coverageSourceUnverified = run.SourceBefore is not { } before
-                            || SourceFingerprinter.TryCompute(VerificationScope(sourceScope, SourceScopeFor(solutionDir))) != before
+                            || VerificationScope(sourceScope, SourceScopeFor(solutionDir)) is not { } verifiedScope
+                            || SourceFingerprinter.TryCompute(verifiedScope) != before
                             || Interlocked.Read(ref _fileChangeGeneration) != changeGenerationAtStart
                             || ct.IsCancellationRequested;
                         var suppliedReports = coverageReportPaths.ToHashSet(StringComparer.Ordinal);
@@ -2435,13 +2436,18 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
 
     /// <summary>
     /// The scope a run's post-run source is compared in: its starting scope while that covers the current
-    /// scope's inputs (a directory scope covers every project scope), otherwise the current scope, so inputs
-    /// a graph refresh added mid-run are never left unverified (the fingerprints then differ: stale).
+    /// scope's inputs (a directory scope covers every project scope), or the current scope when no starting
+    /// scope was captured. <see langword="null"/> when a graph refresh widened the scope mid-run: the added
+    /// inputs were never fingerprinted, so the run cannot be verified, whatever the hashes say.
     /// </summary>
-    private static SourceInputScope VerificationScope(SourceInputScope? startScope, SourceInputScope currentScope) =>
-        startScope is not null && (!startScope.IsProjectScoped || startScope.HasSameInputs(currentScope))
-            ? startScope
-            : currentScope;
+    private static SourceInputScope? VerificationScope(SourceInputScope? startScope, SourceInputScope currentScope) =>
+        startScope switch
+        {
+            null => currentScope,
+            { IsProjectScoped: false } => startScope,
+            _ when startScope.HasSameInputs(currentScope) => startScope,
+            _ => null,
+        };
 
     /// <summary>
     /// Finalises a run record: captures the post-run fingerprint and decides freshness.
@@ -2461,12 +2467,14 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         var changeObserved = started && Interlocked.Read(ref _fileChangeGeneration) != changeGenerationAtStart;
         SourceFingerprint? after = null;
         SourceFingerprint? reportedAfter = null;
+        var scopeWidened = false;
         if (computeAfter && solutionDir is not null)
         {
             var currentScope = SourceScopeFor(solutionDir);
             var current = SourceFingerprinter.TryCompute(currentScope);
             var verifiedScope = VerificationScope(startScope, currentScope);
-            after = ReferenceEquals(verifiedScope, currentScope)
+            scopeWidened = verifiedScope is null;
+            after = verifiedScope is null || verifiedScope.HasSameInputs(currentScope)
                 ? current
                 : SourceFingerprinter.TryCompute(verifiedScope);
 
@@ -2480,6 +2488,8 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
         (var freshness, var freshnessReason) = (run.SourceBefore, after) switch
         {
             _ when !started => (ResultFreshness.Unknown, "Run did not start."),
+            _ when scopeWidened =>
+                (ResultFreshness.Stale, "Source inputs changed during the run."),
             ({ } before, { } afterFp) when before != afterFp =>
                 (ResultFreshness.Stale, "Source fingerprint changed during the run."),
             _ when changeObserved =>
