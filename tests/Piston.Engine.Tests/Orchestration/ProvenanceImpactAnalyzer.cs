@@ -66,8 +66,14 @@ internal sealed class ProvenanceImpactAnalyzer(IReadOnlyList<string> testProject
         return PreviewResult ?? new([TestProjects[0]], [TestProjects[0]], RequiresGraphRebuild: false, IsFullRun: false);
     }
 
-    public ImpactAnalysisResult AnalyzeFullRun() =>
-        new(TestProjects, TestProjects, RequiresGraphRebuild: false, IsFullRun: true);
+    /// <summary>Called at the start of every <see cref="AnalyzeFullRun"/>, e.g. to refresh the graph's scope.</summary>
+    public Action? OnAnalyzeFullRun { get; set; }
+
+    public ImpactAnalysisResult AnalyzeFullRun()
+    {
+        OnAnalyzeFullRun?.Invoke();
+        return new(TestProjects, TestProjects, RequiresGraphRebuild: false, IsFullRun: true);
+    }
 
     public void InvalidateGraph() { }
     public IReadOnlyList<string> GetAllTestProjectPaths() => TestProjects;

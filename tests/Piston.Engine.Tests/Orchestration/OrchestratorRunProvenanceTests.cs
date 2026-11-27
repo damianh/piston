@@ -621,6 +621,25 @@ public sealed class OrchestratorRunProvenanceTests : IDisposable
         Assert.Equal("Source inputs changed during the run.", run.FreshnessReason);
     }
 
+    [Fact]
+    public async Task ScopeChangedByAnEditBeforeTheRun_IsCurrent()
+    {
+        var project = Path.Combine(_root, "A", "A.csproj");
+        _ = CreateProjectScope();
+        var globbed = Path.Combine(_root, "A", "Gone.cs");
+        File.WriteAllText(globbed, "class Gone { }");
+        _impact.SourceScope = SourceInputScope.ForProjects(SolutionPath, [project], [globbed]);
+        await StartAndWaitForStartupRunAsync();
+        File.Delete(globbed);
+        var refreshed = SourceInputScope.ForProjects(SolutionPath, [project], []);
+        _impact.OnAnalyzeFullRun = () => _impact.SourceScope = refreshed;
+
+        var run = await _orchestrator.RequestRunAsync();
+
+        Assert.Equal(ResultFreshness.Current, run!.Freshness);
+        Assert.Equal(SourceFingerprinter.Compute(refreshed), run.SourceBefore);
+    }
+
     private SourceInputScope CreateProjectScope()
     {
         var project = Path.Combine(_root, "A", "A.csproj");

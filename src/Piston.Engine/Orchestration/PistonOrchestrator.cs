@@ -1486,6 +1486,14 @@ public sealed partial class PistonOrchestrator : IPistonOrchestrator, IAsyncDisp
                 run = run with { InputCoverageVerified = IsInputCoverageVerified(solutionPath) };
             }
 
+            // Analysis and the input-coverage check can refresh the graph, so the scope the build will use is
+            // the run's baseline; edits made meanwhile are still caught by the watcher generation.
+            if (SourceScopeFor(solutionDir) is var analyzedScope && !analyzedScope.HasSameInputs(sourceScope))
+            {
+                sourceScope = analyzedScope;
+                run = run with { SourceBefore = SourceFingerprinter.TryCompute(analyzedScope) };
+            }
+
             PublishActiveRun(run);
 
             if (ct.IsCancellationRequested)
