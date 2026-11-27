@@ -1,24 +1,23 @@
-@* What started the latest run and what it changed: trigger → build → scope → outcome, with the run's time. *@
+@* The status bar's run summary. While a run is active: what triggered it and which tests it runs (the phase and
+   progress beside it say how far it got). Otherwise: the last run's trigger → build → scope → outcome, with its time. *@
 
 @if (Run is { } run)
 {
     var summary = WatchStrip.Summarize(run, SolutionDirectory);
-    var active = Snapshot?.ActiveRun is not null;
-    <div class="flex items-center gap-1.5 pl-2 pr-3 h-6 shrink-0 whitespace-nowrap overflow-hidden border-b border-gray-800 text-xs text-gray-500"
-         data-testid="watch-strip">
-        <span class="shrink-0 @(active ? "text-cyan-400" : "")" title="@(active ? "Running now" : "Last run")">@(active ? "⟳" : "◷")</span>
+    var active = Snapshot!.ActiveRun is not null;
+    <span class="flex items-center gap-1.5 min-w-0 overflow-hidden" data-testid="run-summary">
         <span class="min-w-0 truncate text-gray-300" title="@(summary.TriggerDetail ?? run.Trigger)">@summary.Trigger</span>
 
         @if (!active && run.Restored)
         {
             <span class="shrink-0 text-yellow-400" title="@run.FreshnessReason">restored · not re-verified</span>
         }
-        else if (Snapshot?.Suites.Any(s => s.Restored) == true)
+        else if (!active && Snapshot.Suites.Any(s => s.Restored))
         {
             <span class="shrink-0 text-yellow-400" title="Some preserved test suites have not been re-verified since restart">some results not re-verified</span>
         }
 
-        @if (summary.Build is { } build)
+        @if (!active && summary.Build is { } build)
         {
             <span class="shrink-0" aria-hidden="true">→</span>
             <span class="shrink-0 @(summary.BuildFailed ? "text-red-400" : "")">@build</span>
@@ -30,26 +29,21 @@
             <span class="min-w-0 truncate" title="@(run.SelectionExplanation ?? "Which tests the run ran")">@scope</span>
         }
 
-        @if (active)
-        {
-            <span class="shrink-0" aria-hidden="true">→</span>
-            <span class="shrink-0 text-cyan-400">@(Snapshot!.Phase == PistonPhaseDto.Building ? "building…" : Snapshot.Phase == PistonPhaseDto.Testing ? "testing…" : "starting…")</span>
-        }
-        else if (!summary.BuildFailed)
+        @if (!active && !summary.BuildFailed)
         {
             var fixedTests = run.FixedTests ?? [];
             var newlyFailing = run.NewlyFailingTests ?? [];
             <span class="shrink-0" aria-hidden="true">→</span>
             @if (fixedTests.Count > 0)
             {
-                <button class="shrink-0 text-green-400 hover:underline" data-testid="watch-strip-fixed"
+                <button class="shrink-0 text-green-400 hover:underline" data-testid="run-summary-fixed"
                         title="@TestList("Fixed", fixedTests)" @onclick="() => OnRevealTest.InvokeAsync(fixedTests[0])">
                     ✓ @fixedTests.Count fixed
                 </button>
             }
             @if (newlyFailing.Count > 0)
             {
-                <button class="shrink-0 text-red-400 hover:underline" data-testid="watch-strip-newly-failing"
+                <button class="shrink-0 text-red-400 hover:underline" data-testid="run-summary-newly-failing"
                         title="@TestList("Newly failing", newlyFailing)" @onclick="() => OnRevealTest.InvokeAsync(newlyFailing[0])">
                     ✗ @newlyFailing.Count newly failing
                 </button>
@@ -77,9 +71,9 @@
 
         @if (!active && summary.Duration is { } duration)
         {
-            <span class="ml-auto shrink-0 pl-2 tabular-nums" title="Time from the run starting to finishing, including its build">@duration</span>
+            <span class="shrink-0 tabular-nums" title="Time from the run starting to finishing, including its build">· @duration</span>
         }
-    </div>
+    </span>
 }
 
 @code {

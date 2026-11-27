@@ -3,7 +3,7 @@
 
 namespace Piston.Web.Models;
 
-/// <summary>What the watch strip says about a run: what triggered it, its build, its scope and what it changed.</summary>
+/// <summary>What the status bar's run summary says about a run: what triggered it, its build, its scope and what it changed.</summary>
 /// <param name="Trigger">What started the run, e.g. <c>Calc.cs saved</c>.</param>
 /// <param name="TriggerDetail">Every changed file, one per line, for the trigger's tooltip; null when not a file change.</param>
 /// <param name="Build">The build step, e.g. <c>build 4.2s</c>; null when the run had no build result (yet).</param>
