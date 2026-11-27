@@ -52,9 +52,14 @@ window.pistonTreeMenu = {
     open(menu, x, y, dotnet) {
         if (!menu) return;
         const margin = 4;
-        const { width, height } = menu.getBoundingClientRect();
-        menu.style.left = `${Math.max(margin, Math.min(x, window.innerWidth - width - margin))}px`;
-        menu.style.top = `${Math.max(margin, y + height + margin > window.innerHeight ? y - height : y)}px`;
+        const position = () => {
+            const { width, height } = menu.getBoundingClientRect();
+            menu.style.left = `${Math.max(margin, Math.min(x, window.innerWidth - width - margin))}px`;
+            menu.style.top = `${Math.max(margin, y + height + margin > window.innerHeight ? y - height : y)}px`;
+        };
+        position();
+        const resize = new ResizeObserver(position);
+        resize.observe(menu);
         menu.style.visibility = "visible";
 
         const previous = document.activeElement;
@@ -85,6 +90,7 @@ window.pistonTreeMenu = {
         window.addEventListener("resize", close);
         window.addEventListener("blur", close);
         menu._pistonClose = () => {
+            resize.disconnect();
             menu.removeEventListener("keydown", onKey);
             document.removeEventListener("pointerdown", onPointer, true);
             document.removeEventListener("scroll", onScroll, true);

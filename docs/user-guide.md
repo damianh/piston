@@ -573,9 +573,11 @@ diagnostics is limited to 60 seconds. The project's other unfinished tests are `
 results, and its outcome is `TimedOut` with `timedOutTest`. The run ends `Incomplete`, its status reason names the
 test, and coverage is published for the other projects (the timed-out project's is reported as not measured).
 
-To end a hanging test sooner, select **Stop** next to the longest-running test in the status bar, or call the
-`stop_test` MCP tool (optional `project`; without one it stops the project with the longest-running test). The
-project's run ends as for a timeout, with the same diagnostics, and the test fails with "Stopped after …: the run was
+To end a hanging test sooner, right-click its running project row in the **Project tree** and choose
+**Stop project run**. From the keyboard, select the project and press <kbd>Shift</kbd>+<kbd>F10</kbd> or the Menu key.
+Unlike toolbar **Pause**, this stops only that project; other projects continue and automatic processing is unchanged.
+You can also call the `stop_test` MCP tool (optional `project`; without one it stops the project with the longest-running test).
+The project's run ends as for a timeout, with the same diagnostics, and the test fails with "Stopped after …: the run was
 stopped on request." A project with no running test is cancelled without diagnostics.
 
 `hangThreshold` durations are seconds (`90`) or a number with a unit (`500ms`, `30s`, `5m`, `1.5h`); `0` or `"off"`

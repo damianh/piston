@@ -383,8 +383,8 @@ configured `hangThreshold`, else half the test timeout. The test timeout comes
 from the user settings (`tests.timeoutSeconds`, 1 minute by default) and is
 re-read when each run's test phase starts. `PistonEngine` always wraps the
 execution strategy in `TimeoutTestExecutionStrategy`, which reads the timeout
-for each project's run. Past the limit, or on `StopTest` (the dashboard's Stop
-button, `engine/stopTest`, the `stop_test` MCP tool), it captures hang
+for each project's run. Past the limit, or on `StopTest` (the running project
+row's **Stop project run** action, `engine/stopTest`, the `stop_test` MCP tool), it captures hang
 diagnostics and then cancels a linked token for that project only.
 `OwnedProcessScope` (an `AsyncLocal`) records the processes started for the
 run, including a reused warm host. `ClrMdHangDiagnostics` inspects .NET

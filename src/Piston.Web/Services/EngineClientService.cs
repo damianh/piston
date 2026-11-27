@@ -613,12 +613,23 @@ public sealed class EngineClientService : IAsyncDisposable
     public Task PauseAsync() => SendCommandAsync(ProtocolMethods.EnginePause);
     public Task ResumeAsync() => SendCommandAsync(ProtocolMethods.EngineResume);
 
-    /// <summary>Stops the run of the project's (or longest-running) test: the test fails as stopped and the run goes on.</summary>
-    public async Task<StopTestResponse?> StopTestAsync(string? projectPath, CancellationToken cancellationToken = default)
+    /// <summary>Requests a stop for this project only. Returns null on acceptance, otherwise the reason.</summary>
+    public async Task<string?> StopTestAsync(string projectPath, CancellationToken cancellationToken = default)
     {
-        var result = await SendRequestAsync(
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectPath);
+        var response = await SendForResponseAsync(
             ProtocolMethods.EngineStopTest, new StopTestCommand(projectPath), cancellationToken).ConfigureAwait(false);
-        return result?.Deserialize<StopTestResponse>(JsonRpcSerializer.Options);
+        if (response?.Error is { } error)
+        {
+            return error.Message;
+        }
+
+        return response?.Result?.Deserialize<StopTestResponse>(JsonRpcSerializer.Options) switch
+        {
+            { Stopped: true } => null,
+            { Stopped: false } => "That project is no longer running.",
+            _ => "Piston did not respond. Check that the daemon is running.",
+        };
     }
     public Task SetFilterAsync(string? filter) => SendCommandAsync(ProtocolMethods.EngineSetFilter, new SetFilterCommand(filter));
 

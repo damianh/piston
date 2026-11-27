@@ -97,30 +97,18 @@
             var elapsed = TestNode.FormatDuration(Math.Max(0, (DateTimeOffset.UtcNow - longest.StartedAt).TotalMilliseconds));
             var shortName = WatchStrip.ShortTestName(longest.Name);
             var projectName = ProjectLabels.For(longest.ProjectPath, Snapshot.ProjectStatuses?.Keys ?? [], Snapshot.SolutionPath);
-            <span class="flex items-center gap-1.5 min-w-0 @(longest.PossiblyHanging ? "text-amber-400" : "text-gray-400")"
+            <span class="longest-test-status items-center gap-1.5 overflow-hidden @(longest.PossiblyHanging ? "text-amber-400" : "text-gray-400")"
                   data-testid="longest-running-test"
                   title="@($"Running longest: {longest.Name}{Environment.NewLine}{projectName}{(longest.PossiblyHanging ? $"{Environment.NewLine}Running longer than the hang threshold: possibly hanging" : "")}")">
-                <span class="shrink-0">@(longest.PossiblyHanging ? "⚠" : "⏱")</span>
+                <span>@(longest.PossiblyHanging ? "⚠" : "⏱")</span>
                 <span class="truncate">@shortName</span>
-                <span class="shrink-0 truncate max-w-32">@projectName</span>
-                <span class="shrink-0 tabular-nums">@elapsed</span>
+                <span class="truncate max-w-32">@projectName</span>
+                <span class="tabular-nums">@elapsed</span>
                 @if (longest.PossiblyHanging)
                 {
-                    <span class="shrink-0">possibly hanging</span>
+                    <span>possibly hanging</span>
                 }
             </span>
-            <button type="button"
-                    class="shrink-0 px-1.5 rounded border border-gray-700 text-gray-300 hover:text-red-300 hover:border-red-400 disabled:opacity-50"
-                    data-testid="stop-test"
-                    disabled="@_stopping"
-                    title="@($"Stop {projectName}'s test run: {shortName} fails as stopped and the rest of the run goes on")"
-                    @onclick="() => StopTestAsync(longest.ProjectPath)">
-                Stop
-            </button>
-            @if (_stopError is not null)
-            {
-                <span class="shrink-0 text-red-400" role="alert">@_stopError</span>
-            }
         }
 
         @if (Snapshot.RetryStatus is { } retrying)
@@ -215,38 +203,7 @@
     private void OnStateChanged(StateSnapshotNotification snapshot)
     {
         Snapshot = snapshot;
-        if (snapshot.LongestRunningTest is null)
-        {
-            _stopError = null;
-        }
         InvokeAsync(StateHasChanged);
-    }
-
-    private bool _stopping;
-    private string? _stopError;
-
-    private async Task StopTestAsync(string projectPath)
-    {
-        _stopping = true;
-        _stopError = null;
-        try
-        {
-            var response = await Client.StopTestAsync(projectPath);
-            _stopError = response switch
-            {
-                null => "Piston did not respond",
-                { Stopped: false } => "Nothing to stop",
-                _ => null,
-            };
-        }
-        catch (Exception ex)
-        {
-            _stopError = ex.Message;
-        }
-        finally
-        {
-            _stopping = false;
-        }
     }
 
     public void Dispose()
